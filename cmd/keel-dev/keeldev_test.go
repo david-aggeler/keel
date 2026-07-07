@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	logging "github.com/david-aggeler/keel/log"
@@ -120,6 +121,28 @@ func TestRunStepLogsThroughKeelLog(t *testing.T) {
 	}
 	if !sawStart || !sawEnd {
 		t.Fatalf("expected process_start and process_end through keel/log; start=%v end=%v", sawStart, sawEnd)
+	}
+}
+
+// TestConsoleSuppressesServiceAttr proves the human console omits the
+// redundant service=keel-dev attr while JSON mode keeps it (keel/issue-3).
+func TestConsoleSuppressesServiceAttr(t *testing.T) {
+	cfg := consoleConfig(nil)
+
+	rc := &logging.RecordCapture{}
+	cfg.Writer = rc
+	logging.NewConsole(cfg).Info("hello", "k", "v")
+	if out := rc.LastRaw(); strings.Contains(out, "service=") {
+		t.Errorf("console line should omit service attr: %q", out)
+	} else if !strings.Contains(out, "k=v") {
+		t.Errorf("non-suppressed attrs must survive: %q", out)
+	}
+
+	rcJSON := &logging.RecordCapture{}
+	cfg.Writer = rcJSON
+	logging.New(cfg).Info("hello")
+	if rec := rcJSON.LastJSON(); rec["service"] != "keel-dev" {
+		t.Errorf("JSON mode must keep the service field, got %v", rec)
 	}
 }
 
