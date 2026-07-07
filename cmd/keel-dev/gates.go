@@ -76,6 +76,16 @@ func ciSteps(dir string) []step {
 		{name: "govulncheck", tool: "govulncheck", program: "govulncheck", args: []string{"./..."}},
 		// DHF-REQ: keel/requirement-12 (keel/ac-40)
 		{name: "cspell", tool: "cspell", program: "cspell", args: []string{"--no-progress", "**/*.md", "**/*.go"}},
+		// gitleaks scans the git history + working tree for committed secrets and
+		// exits non-zero on any finding (default --exit-code 1), so a leak fails
+		// the gate. --no-banner keeps the log quiet; --redact prevents any matched
+		// secret from being echoed through keel/log. The .gitleaks.toml at the
+		// repo root (auto-loaded from the source path) supplies the ruleset +
+		// keel's test-fixture allowlist. Version pin is enforced at install time
+		// (presence-only here — see pinnedTools), so this only fails loud if the
+		// tool is missing (keel/ac-45).
+		// DHF-REQ: keel/requirement-13 (keel/ac-45), keel/requirement-8
+		{name: "gitleaks", tool: "gitleaks", program: "gitleaks", args: []string{"detect", "--no-banner", "--redact"}},
 	}
 
 	if len(scripts) > 0 {

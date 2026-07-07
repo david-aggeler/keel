@@ -34,7 +34,13 @@ type toolPin struct {
 // deadcode ships no stable --version flag, so its pin is presence-only; it is
 // an advisory step anyway (keel/ac-41).
 //
-// DHF-REQ: keel/requirement-12 (keel/ac-42)
+// gitleaks is also presence-only: `go install` does not stamp its version
+// (`gitleaks version` prints "version is set by build process"), so a
+// version-substring probe is impossible. The version is pinned at the install
+// side instead (scripts/setup_user.sh installs @v8.18.4); the gate only asserts
+// presence and fails loud if it is missing (keel/ac-45, keel/requirement-13).
+//
+// DHF-REQ: keel/requirement-12 (keel/ac-42), keel/requirement-13
 var pinnedTools = map[string]toolPin{
 	"golangci-lint": {name: "golangci-lint", versionArgs: []string{"--version"}, want: "v1.64.8"},
 	"govulncheck":   {name: "govulncheck", versionArgs: []string{"--version"}, want: "v1.1.4"},
@@ -42,6 +48,7 @@ var pinnedTools = map[string]toolPin{
 	"shellcheck":    {name: "shellcheck", versionArgs: []string{"--version"}, want: "0.10.0"},
 	"shfmt":         {name: "shfmt", versionArgs: []string{"--version"}, want: "v3.10.0"},
 	"deadcode":      {name: "deadcode"},
+	"gitleaks":      {name: "gitleaks"},
 }
 
 // verifyToolPin confirms the pinned tool is on PATH and, unless the pin is
