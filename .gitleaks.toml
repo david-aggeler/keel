@@ -1,0 +1,23 @@
+# keel gitleaks configuration (keel/requirement-13, enforces keel/requirement-8).
+#
+# Base ruleset is gitleaks' full embedded default set; keel only adds an
+# allowlist for its own deliberate TEST fixtures, which carry fake secrets to
+# prove keel/log's redaction path. Those values (e.g. supersecretvalue,
+# sslpassword, fake tokens) are inert test data — never real credentials — so
+# they are scoped out by path. Real detection everywhere else stays intact.
+#
+# Bumps to this config are CR-sized. Do NOT weaken or delete the test values to
+# silence a finding — allowlist the fixture path instead.
+title = "keel gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "keel test fixtures with deliberate fake secrets (redaction tests)"
+paths = [
+  '''log/redactstring_test\.go''',
+  '''log/logging_test\.go''',
+  '''exec/.*_test\.go''',
+  '''exec/[^/]+/.*_test\.go''',
+]

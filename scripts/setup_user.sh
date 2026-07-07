@@ -118,7 +118,9 @@ else
 		echo "gitleaks already installed: $("$GITLEAKS_BIN" version) (${GITLEAKS_BIN})"
 	else
 		echo "Installing gitleaks ${GITLEAKS_VERSION} into ${GO_BIN_DIR}..."
-		go install "github.com/gitleaks/gitleaks/v8@${GITLEAKS_VERSION}"
+		# Module path is github.com/zricethezav/gitleaks — the GitHub repo moved
+		# to github.com/gitleaks but the Go module path never did.
+		go install "github.com/zricethezav/gitleaks/v8@${GITLEAKS_VERSION}"
 	fi
 
 	# --- deadcode — advisory unreachable-function report (golang.org/x/tools) ---

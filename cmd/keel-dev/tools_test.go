@@ -222,6 +222,48 @@ func TestCspellStep_FailsOnMisspelling(t *testing.T) {
 	}
 }
 
+// TestGitleaksStep_DetectsSecret is the ac-45 detection proof: a planted file
+// with a recognizable secret must make the gitleaks step fail non-zero. Run
+// with --no-git so gitleaks scans the temp dir as plain files (no repo needed);
+// exit code 1 on a finding is what fails the gate.
+func TestGitleaksStep_DetectsSecret(t *testing.T) {
+	requireTool(t, "gitleaks")
+
+	dir := t.TempDir()
+	// A canonical AWS example key pair — inert test data, but gitleaks' default
+	// ruleset flags it. Assembled from rune slices so this committed source file
+	// carries no scannable secret-shaped token for the gate's own cspell/gitleaks
+	// passes to trip over.
+	keyID := string([]rune{'A', 'K', 'I', 'A', 'I', 'O', 'S', 'F', 'O', 'D', 'N', 'N', '7', 'E', 'X', 'A', 'M', 'P', 'L', 'E'})
+	keySecret := string([]rune{'w', 'J', 'a', 'l', 'r', 'X', 'U', 't', 'n', 'F', 'E', 'M', 'I', '/', 'K', '7', 'M', 'D', 'E', 'N', 'G', '/', 'b', 'P', 'x', 'R', 'f', 'i', 'C', 'Y', 'E', 'M', 'P', 'L', 'E', 'K', 'E', 'Y', 'x', 'x'})
+	content := "aws_access_key_id = \"" + keyID + "\"\n" +
+		"aws_secret_access_key = \"" + keySecret + "\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "leak.conf"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runStep(context.Background(), discardLogger(), dir, step{
+		name:    "gitleaks-selftest",
+		program: "gitleaks",
+		args:    []string{"detect", "--no-git", "--no-banner", "--redact", "--source", dir},
+	})
+	if err == nil {
+		t.Fatal("gitleaks must fail on a planted secret — the gate is not detecting")
+	}
+}
+
+// TestGitleaksPinPresenceOnly guards that gitleaks is registered as a
+// presence-only pin (no version probe): go install does not stamp its version.
+func TestGitleaksPinPresenceOnly(t *testing.T) {
+	pin, ok := pinnedTools["gitleaks"]
+	if !ok {
+		t.Fatal("gitleaks must be registered in pinnedTools")
+	}
+	if pin.want != "" || len(pin.versionArgs) != 0 {
+		t.Fatalf("gitleaks pin must be presence-only, got want=%q versionArgs=%v", pin.want, pin.versionArgs)
+	}
+}
+
 // TestCiStepsHasStaticBattery asserts the gate wiring includes every pinned
 // static tool and marks deadcode advisory, so a refactor cannot silently drop a
 // step.
@@ -234,7 +276,7 @@ func TestCiStepsHasStaticBattery(t *testing.T) {
 	for _, s := range ciSteps(root) {
 		byName[s.name] = s
 	}
-	for _, want := range []string{"golangci-lint", "govulncheck", "cspell", "shellcheck", "shfmt", "deadcode"} {
+	for _, want := range []string{"golangci-lint", "govulncheck", "cspell", "gitleaks", "shellcheck", "shfmt", "deadcode"} {
 		s, ok := byName[want]
 		if !ok {
 			t.Errorf("ci gate is missing the %q step", want)

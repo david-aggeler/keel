@@ -61,6 +61,8 @@ case "$1" in
 esac
 exit 0`)
 	stub(t, bin, callsFile, "deadcode", "exit 0")
+	// gitleaks is presence-only (no --version probe); a clean scan exits 0.
+	stub(t, bin, callsFile, "gitleaks", "exit 0")
 
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return callsFile
