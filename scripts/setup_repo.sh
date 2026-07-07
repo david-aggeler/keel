@@ -15,8 +15,8 @@ cd "$SCRIPT_DIR/.."
 export PATH="/usr/local/go/bin:$PATH"
 
 if ! command -v go >/dev/null 2>&1; then
-  echo "go not on PATH — run scripts/setup_as_root.sh first." >&2
-  exit 1
+	echo "go not on PATH — run scripts/setup_as_root.sh first." >&2
+	exit 1
 fi
 
 echo "Building keel-dev into ./bin..."

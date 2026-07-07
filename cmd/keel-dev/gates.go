@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -24,6 +25,13 @@ type step struct {
 	// fn, when set, runs in-process instead of spawning a subprocess (used for
 	// the compiled-in lint policies; keeps CI hermetic — no external lint binary).
 	fn func(ctx context.Context, logger *slog.Logger, dir string) error
+	// tool, when set, names an entry in pinnedTools whose presence and exact
+	// version are verified before the subprocess runs (keel/ac-42) — a missing
+	// or drifted external tool fails the gate loud, never a silent skip.
+	tool string
+	// advisory marks a step whose output is surfaced through keel/log but whose
+	// failure (non-zero exit) never fails the gate (keel/ac-41: deadcode).
+	advisory bool
 }
 
 // ciSteps is the canonical gate definition: gofmt, build, vet, lint, test.
@@ -32,9 +40,18 @@ type step struct {
 // local and release paths. keel runs no GitHub Actions CI; the local gate is
 // the sole verification.
 //
-// DHF-REQ: keel/requirement-10, keel/requirement-11
-func ciSteps() []step {
-	return []step{
+// The static-tool battery (golangci-lint, govulncheck, cspell, shellcheck,
+// shfmt, advisory deadcode) is version-pinned via pinnedTools and runs after
+// the in-process checks. Each external tool is presence/version-verified before
+// it runs (keel/ac-42) so a missing or drifted tool fails loud.
+//
+// DHF-REQ: keel/requirement-10, keel/requirement-11, keel/requirement-12
+func ciSteps(dir string) []step {
+	// Shell scripts are enumerated up front so shellcheck/shfmt receive explicit
+	// paths (no shell is involved to expand a glob). Sorted for stable output.
+	scripts, _ := filepath.Glob(filepath.Join(dir, "scripts", "*.sh"))
+
+	steps := []step{
 		{
 			name:    "gofmt",
 			program: "gofmt",
@@ -52,8 +69,39 @@ func ciSteps() []step {
 		{name: "lint", fn: func(_ context.Context, _ *slog.Logger, dir string) error {
 			return runLint(dir)
 		}},
-		{name: "test", fn: runTestWithCoverage},
+		// --- static-tool battery (keel/requirement-12) ---
+		// DHF-REQ: keel/requirement-12 (keel/ac-38)
+		{name: "golangci-lint", tool: "golangci-lint", program: "golangci-lint", args: []string{"run", "./..."}},
+		// DHF-REQ: keel/requirement-12 (keel/ac-39)
+		{name: "govulncheck", tool: "govulncheck", program: "govulncheck", args: []string{"./..."}},
+		// DHF-REQ: keel/requirement-12 (keel/ac-40)
+		{name: "cspell", tool: "cspell", program: "cspell", args: []string{"--no-progress", "**/*.md", "**/*.go"}},
 	}
+
+	if len(scripts) > 0 {
+		// DHF-REQ: keel/requirement-12 (keel/ac-43)
+		steps = append(steps, step{name: "shellcheck", tool: "shellcheck", program: "shellcheck", args: scripts})
+		// DHF-REQ: keel/requirement-12 (keel/ac-44)
+		steps = append(steps, step{
+			name: "shfmt", tool: "shfmt", program: "shfmt",
+			args: append([]string{"-d"}, scripts...),
+			stdoutFails: func(out string) string {
+				diff := strings.TrimSpace(out)
+				if diff == "" {
+					return ""
+				}
+				return "shfmt found unformatted shell scripts:\n" + diff
+			},
+		})
+	}
+
+	// DHF-REQ: keel/requirement-12 (keel/ac-41) — advisory: reported, never fatal.
+	steps = append(steps, step{name: "deadcode", tool: "deadcode", program: "deadcode", args: []string{"./..."}, advisory: true})
+
+	// The coverage-floored test suite runs last: it is the most expensive step
+	// and the fast static checks should fail before it does.
+	steps = append(steps, step{name: "test", fn: runTestWithCoverage})
+	return steps
 }
 
 // runCI runs the verification gate in dir, fail-fast: the first failing step
@@ -64,7 +112,7 @@ func ciSteps() []step {
 // DHF-REQ: keel/requirement-11
 func runCI(ctx context.Context, logger *slog.Logger, dir string) error {
 	logging.Section(logger, "keel-dev ci")
-	for _, s := range ciSteps() {
+	for _, s := range ciSteps(dir) {
 		if err := runStep(ctx, logger, dir, s); err != nil {
 			return fmt.Errorf("ci gate %q failed: %w", s.name, err)
 		}
@@ -88,6 +136,18 @@ func runStep(ctx context.Context, logger *slog.Logger, dir string, s step) error
 		}
 		logger.Debug("step complete", "step", s.name, "elapsed_ms", time.Since(started).Milliseconds())
 		return nil
+	}
+
+	// Verify the pinned external tool before shelling out to it: a missing or
+	// drifted gate tool fails loud, never a silent skip (keel/ac-42).
+	if s.tool != "" {
+		pin, ok := pinnedTools[s.tool]
+		if !ok {
+			return fmt.Errorf("keel-dev: no version pin registered for gate tool %q", s.tool)
+		}
+		if err := verifyToolPin(ctx, logger, pin); err != nil {
+			return err
+		}
 	}
 
 	req := procexec.Request{
@@ -116,6 +176,18 @@ func runStep(ctx context.Context, logger *slog.Logger, dir string, s step) error
 	res, waitErr := proc.Wait()
 	if lines != nil {
 		lines.Flush()
+	}
+
+	// Advisory steps surface their output (above) but never fail the gate: a
+	// non-zero exit or spawn error is logged and swallowed (keel/ac-41).
+	if s.advisory {
+		if waitErr != nil {
+			logger.Warn("advisory step error (ignored)", "step", s.name, "error", waitErr.Error())
+		} else if res.ExitCode != 0 {
+			logger.Warn("advisory step reported findings (non-blocking)", "step", s.name, "exit_code", res.ExitCode)
+		}
+		logger.Debug("step complete", "step", s.name, "elapsed_ms", time.Since(started).Milliseconds())
+		return nil
 	}
 
 	if waitErr != nil {

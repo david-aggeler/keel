@@ -714,7 +714,7 @@ func TestRecordCapture_AllJSON_SingleLine(t *testing.T) {
 }
 
 // TestRecordCapture_AllJSON_MultipleLines asserts that AllJSON returns all
-// captured lines in emission order — the key behaviour that differentiates it
+// captured lines in emission order — the key behavior that differentiates it
 // from LastJSON (which returns only the final line).
 //
 // This test fails if AllJSON is implemented as an alias for LastJSON, or if
