@@ -1,0 +1,22 @@
+# keel verification gate — runs the canonical `keel-dev ci` sequence
+# (gofmt, go build, go vet, go test) on every push and pull request.
+#
+# DHF-REQ: keel/requirement-10
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+    tags-ignore: ["v*"] # v* tags are handled by release.yml
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - name: keel-dev ci
+        run: go run ./cmd/keel-dev ci
