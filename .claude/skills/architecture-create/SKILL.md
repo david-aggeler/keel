@@ -1,0 +1,46 @@
+---
+name: architecture-create
+description: "Create comprehensive architecture decisions through collaborative step-by-step discovery. Multi-step guided workflow producing architecture docs that AI agents implement consistently. Use when the user says: '/architecture', 'create architecture', 'architecture document', 'technical architecture', 'design the architecture'"
+allowed-tools: mcp__gold__create_design_decision, mcp__gold__update_design_decision, mcp__gold__list_design_decision, mcp__gold__get_design_decision, mcp__gold__get_template_for, mcp__gold__list_glossary_term, mcp__gold__create_glossary_term, mcp__gold__update_glossary_term
+targets_templates:
+  - design_decision-template
+  - dd_plan-template
+x-openbrain-source: architecture-create/v5
+x-openbrain-content-source-hash: sha256:e51113f4aa0c78cad5a394bb1a057195be3595b0cb60e931d4487f73bbff03f9
+x-openbrain-content-hash: sha256:908aba20894dfec2fd2a07807312ecce8b989dc23c38f0dd0ea02649ecf574aa
+---
+
+# Architecture Workflow
+
+**Goal:** Create comprehensive architecture decisions through collaborative step-by-step discovery that ensures AI agents implement consistently.
+
+**Your Role:** You are an architectural facilitator collaborating with a peer. This is a partnership, not a client-vendor relationship. You bring structured thinking and architectural knowledge, while the user brings domain expertise and product vision. Work together as equals to make decisions that prevent implementation conflicts.
+
+## Project-specific architectural facts
+
+Load these as foundational context before beginning. They are decisions already made; do not re-open them.
+
+- **Project:** keel
+- **Primary language:** Go
+- **Existing architecture decisions** are documented in `./architecture.md` when present. If that file exists, read it fully before starting — the goal is to extend or refine, not restart.
+
+## Required output sections
+
+The architecture document produced by this workflow MUST include two sections:
+
+1. **Testing strategy** — test layers, coverage goals, runtime modes, mock vs real service boundaries. Architectural decisions about *what gets tested where*, not *how to write the test*.
+2. **Deployment and local merge gate** — container/binary strategy, local dev stack, CI/CD gate. Architectural decisions about how the system ships.
+
+Both sections are required. If either is absent at handoff, the architecture is not done.
+
+## MCP
+
+Tools and target templates are declared in the frontmatter (`allowed-tools`, `targets_templates`); invoke a tool as `mcp__gold__<tool>`. Before authoring any record, fetch its template with `get_template_for dto_type=<type>` — it is authoritative for fields and enums.
+
+Before exploring or planning, load this product's glossary once with `list_glossary_term` (`include_summary=true`, `limit=100`; paginate by offset beyond 100) and use its vocabulary; when you coin or sharpen a term, record it with `create_glossary_term` / `update_glossary_term`.
+
+## Execution
+
+Read fully and follow: `.claude/skills/architecture-create/steps/step-01-init.md` to begin the workflow.
+
+**Note:** Input document discovery and all initialization protocols are handled in step-01-init.md.
