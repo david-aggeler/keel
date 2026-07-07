@@ -9,7 +9,7 @@ Rules for coding agents in this repo. Short and blunt on purpose.
 - One tag. One version. Zero external deps. No internal replaces.
 - Anonymous `go get` must always work. NEVER add GOPRIVATE, tokens,
   netrc, or Docker secrets to any build path. No exceptions.
-- keel is the shared foundation for openbrain and vela.
+- keel is a shared foundation for downstream consumers.
 
 ## Where records live
 

@@ -54,9 +54,9 @@ To re-check a tag without cutting anything (what the tag CI does):
 go run ./cmd/keel-dev verify vX.Y.Z
 ```
 
-## 3. Bump the consumers
+## 3. Bump a consumer
 
-keel is consumed by **vela** (first) and **openbrain**. In each consumer repo:
+In each consumer repo that depends on keel:
 
 ```sh
 go get github.com/david-aggeler/keel@vX.Y.Z
@@ -64,20 +64,18 @@ go mod tidy
 ```
 
 Then confirm the build is green **with no local `replace`/`use` directive** for
-keel and **no credentials** in the Docker build:
-
-- **vela** — build the module and its image; the Docker stage must resolve keel
-  anonymously (`go get` with no secrets mounted) and build green.
-- **openbrain** — until the bridge exit (keel/dd_plan-1 iteration 5), openbrain's
-  `go.work` still carries `use /projects/keel`. Migrating a consumer onto a
-  tagged keel means removing that `use` line (and any `replace`) so the tagged
-  module is resolved from the proxy, then running openbrain's full gate.
+keel and **no credentials** in the Docker build — the Docker stage must resolve
+keel anonymously (`go get` with no secrets mounted) and build green. If the
+consumer carries a transitional local `use`/`replace` pointing at a keel checkout,
+migrating it onto the tagged release means removing that directive so the tagged
+module resolves from the proxy, then running the consumer's full gate.
 
 ### Bridge exit
 
 Once keel's own pipeline is green and at least one consumer builds on a tagged
-release, remove the transitional `use /projects/keel` (and any keel `replace`)
-from openbrain's `go.work`. keel then stands alone on its own CI + release loop.
+release, remove any transitional local `use`/`replace` directive that points a
+consumer's build at a keel checkout. keel then stands alone on its own CI +
+release loop.
 
 ## Versioning
 
