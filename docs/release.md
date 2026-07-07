@@ -37,9 +37,9 @@ Only then does it:
    `go get github.com/david-aggeler/keel@vX.Y.Z` and fail loudly if it does not
    resolve. Retries a few times to absorb proxy.golang.org propagation lag.
 
-Pushing the `vX.Y.Z` tag also triggers `.github/workflows/release.yml` on the
-self-hosted runner, which independently runs `keel-dev verify vX.Y.Z` — a second,
-mechanical proof that the tag is publicly fetchable.
+keel runs no GitHub Actions CI — the `release` verb's own clean-cache fetch check
+(step 7) is the proof that the tag is publicly fetchable. To re-check a tag later,
+run `keel-dev verify vX.Y.Z` (see below).
 
 ### Prerequisites
 

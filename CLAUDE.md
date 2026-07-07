@@ -42,8 +42,8 @@ Small change? Still a CR. Docs-only? Still a CR (merge_gate: docs).
 
 - Run `go run ./cmd/keel-dev ci`. That is THE gate: gofmt, build, vet,
   in-process lint policies, tests with a total-coverage floor (85%).
-- CI and the release preflight run the same command. Do not re-list
-  checks anywhere else.
+- The local gate and the release preflight run the same command. Do not
+  re-list checks anywhere else. keel runs no GitHub Actions CI.
 - Release: `keel-dev release vX.Y.Z`. It refuses on dirty tree, existing
   tag, or red gate. Then tag → gh release → anonymous-fetch check.
 - Doc: `docs/release.md`.

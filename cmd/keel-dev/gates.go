@@ -27,9 +27,10 @@ type step struct {
 }
 
 // ciSteps is the canonical gate definition: gofmt, build, vet, lint, test.
-// CI (.github/workflows) and the release preflight both run this exact sequence
-// via `keel-dev ci`, so the gate lives in one place and never drifts between
-// local, CI, and release paths.
+// Developers and the release preflight both run this exact sequence via
+// `keel-dev ci`, so the gate lives in one place and never drifts between the
+// local and release paths. keel runs no GitHub Actions CI; the local gate is
+// the sole verification.
 //
 // DHF-REQ: keel/requirement-10, keel/requirement-11
 func ciSteps() []step {
