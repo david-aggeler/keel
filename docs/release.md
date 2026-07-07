@@ -25,7 +25,7 @@ preflight step fails:
 2. **Clean tree** — `git status --porcelain` must be empty.
 3. **Tag absent** — `vX.Y.Z` must not already exist locally.
 4. **Green gate** — the full `keel-dev ci` sequence (gofmt, `go build ./...`,
-   `go vet ./...`, `go test ./...`) must pass.
+   `go vet ./...`, the compiled-in lint policies, `go test ./...`) must pass.
 
 Only then does it:
 
