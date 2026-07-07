@@ -77,8 +77,12 @@ Small change? Still a CR. Docs-only? Still a CR (merge_gate: docs).
 
 ## Code conventions
 
-- Code was MOVED from openbrain `pkg/`. Error prefixes keep old package
-  names (`procexec:`, `codexcli:`). Don't churn them without cause.
+- Code was MOVED from openbrain `pkg/`. Keep the move diff readable in
+  git history; don't reformat moved code without cause.
+- Error prefixes are the keel package path: `keel/exec:`,
+  `keel/exec/codex:`, `keel/exec/claude:`. (Normalized under CR-6; the
+  old openbrain names `procexec:`/`codexcli:`/`claudecli:` are gone.
+  Never use bare `exec:` — that is stdlib os/exec's prefix.)
 - Import aliases are deliberate: `logging "…/keel/log"`,
   `procexec "…/keel/exec"`. They avoid stdlib collisions. Keep them.
 - `DHF-REQ:` / `DHF-TEST:` comments point at gold records. keel-owned

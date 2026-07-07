@@ -54,7 +54,7 @@ type Process struct {
 // DHF-REQ: openbrain/requirement-565, keel/requirement-1
 func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 	if req.Program == "" {
-		return nil, errors.New("procexec: program is required")
+		return nil, errors.New("keel/exec: program is required")
 	}
 
 	cmd := exec.CommandContext(ctx, req.Program, req.Args...)
@@ -93,7 +93,7 @@ func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 
 	started := time.Now()
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("procexec: start %s: %w", req.Program, err)
+		return nil, fmt.Errorf("keel/exec: start %s: %w", req.Program, err)
 	}
 
 	p := &Process{
@@ -114,7 +114,7 @@ func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 // Wait blocks until the process exits and returns its captured result.
 func (p *Process) Wait() (Result, error) {
 	if p == nil {
-		return Result{ExitCode: -1}, errors.New("procexec: nil process")
+		return Result{ExitCode: -1}, errors.New("keel/exec: nil process")
 	}
 
 	p.once.Do(func() {
