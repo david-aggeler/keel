@@ -1,26 +1,19 @@
 # AGENTS.md
 
-Read `CLAUDE.md` at the repo root — it is the single source of guidance for
-all coding agents working in keel (module layout, gold dev records, the
-transitional openbrain bridge, conventions).
+Read `CLAUDE.md`. It is the rulebook. This file is the short version.
 
-Non-negotiables, restated for emphasis:
-
-- **Change control is two-tier** (see "Change control" in CLAUDE.md):
-  behavior/surface/contract changes go through a gold `change_request`
-  approved *before* code; cosmetic/docs/test-only deltas go through the
-  quick-change path (`issue` + `issue_fix`, no CR). Every change gets a
-  record and a merge SHA. CRs close only after a literal AC-by-AC
-  conformance check with evidence.
-- **Gate:** `go run ./cmd/keel-dev ci` (gofmt, build, vet, in-process lint
-  policies, test with an enforced total-coverage floor). CI and the release
-  preflight run this same command — do not re-list checks elsewhere.
-- **keel-dev output discipline:** all run output through keel/log (three
-  sinks: console + daily human `.log` + `.jsonl` under `.logs/`); child
-  process output only via the lineLogWriter; `os.Stdout`/`os.Stderr` outside
-  the logger-construction allowlist fails lint (no-raw-stdout-stream).
-- **Hermetic tests:** stub binaries for the codex/claude adapters; live
-  smokes are env-gated (`CODEXCLI_LIVE_SMOKE=1`, `CLAUDECLI_LIVE_SMOKE=1`)
-  and always skip in CI.
-- **Public module:** never introduce GOPRIVATE/tokens/netrc/Docker secrets
-  on any build path; one `go.mod`, one tag, zero external deps.
+- One public module. Anonymous `go get` must work. NO credentials on any
+  build path. Ever.
+- Dev records live in gold (product `keel`), not in markdown files.
+- EVERY code change goes through a CR. No exceptions, no quick-change
+  path. CR approved BEFORE code; closed with the merge SHA only after
+  checking the diff against every AC with written evidence. Defects get
+  an issue first; the fix still runs under a CR. Never fix silently.
+- The gate is `go run ./cmd/keel-dev ci`. Same command in CI and release
+  preflight. Don't invent other gates.
+- All keel-dev output through keel/log, three sinks (console + `.logs/`
+  human `.log` + `.jsonl`). Child output only via lineLogWriter. Handing
+  os.Stdout to a subprocess fails lint.
+- Tests hermetic. Adapters test against stubs. Live smokes are env-gated
+  (`CODEXCLI_LIVE_SMOKE=1`, `CLAUDECLI_LIVE_SMOKE=1`) and skip in CI.
+- Coverage floor 85% total, gate-enforced. Target ~90%.
