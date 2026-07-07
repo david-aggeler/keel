@@ -11,28 +11,34 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	logging "github.com/david-aggeler/keel/log"
 )
 
+// version is stamped via -ldflags "-X main.version=vX.Y.Z"; "dev" otherwise.
+// The git commit is resolved from build info by keel/log's ResolveGitCommit.
+var version = ""
+
 const usage = `keel-dev — keel's development CLI
 
 Usage:
-  keel-dev [flags] <verb> [args]
+  keel-dev <verb> [args] [flags]
 
 Verbs:
-  ci                 Run the verification gate: gofmt, go build, go vet, go test.
+  ci                 Run the verification gate: gofmt, build, vet, lint, test.
   release vX.Y.Z     Cut a release: preflight (clean tree + green ci) -> annotated
                      tag -> GitHub release -> anonymous go-get verification.
   verify vX.Y.Z      Re-verify (with retry) that an existing tag resolves
                      anonymously via the default Go toolchain. Tag-CI entrypoint.
   help               Show this help.
 
-Flags:
+Flags (accepted before or after the verb):
   --json             Emit machine-readable JSON logs instead of the human console.
   -v, --verbose      Include debug-level detail (child stdout, per-step timing).
 
@@ -43,74 +49,155 @@ func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
-// run parses global flags, builds the keel/log logger, and dispatches the verb.
-// It returns the process exit code. Kept separate from main so tests can drive
-// the whole CLI surface.
+// run parses flags (position-independent), builds the keel/log logger, and
+// dispatches the verb. It returns the process exit code. Kept separate from
+// main so tests can drive the whole CLI surface.
 func run(argv []string) int {
 	var (
 		jsonMode bool
 		verbose  bool
-		rest     []string
+		words    []string
 	)
-	for i := 0; i < len(argv); i++ {
-		switch argv[i] {
+	for _, arg := range argv {
+		switch arg {
 		case "--json":
 			jsonMode = true
 		case "-v", "--verbose":
 			verbose = true
 		case "-h", "--help":
-			fmt.Fprintln(os.Stderr, usage)
+			printUsage()
 			return 0
 		default:
-			rest = argv[i:]
-			i = len(argv)
+			if len(arg) > 1 && arg[0] == '-' {
+				// Unknown flags are an error, never silently dropped: a gate
+				// tool that ignores what it was asked to do is worse than one
+				// that refuses.
+				fmt.Fprintf(os.Stderr, "keel-dev: unknown flag %q\n\n", arg)
+				printUsage()
+				return 2
+			}
+			words = append(words, arg)
 		}
 	}
 
-	if len(rest) == 0 {
-		// Static help text is not run output; run output flows through keel/log.
-		fmt.Fprintln(os.Stderr, usage)
+	if len(words) == 0 {
+		printUsage()
 		return 2
+	}
+
+	verb, args := words[0], words[1:]
+	if verb == "help" {
+		printUsage()
+		return 0
+	}
+
+	// Every verb operates on the keel module root, never on whatever directory
+	// keel-dev happens to be invoked from. Resolved before the logger so the
+	// .logs sinks anchor at the root too.
+	root, err := findModuleRoot(".")
+	if err != nil {
+		return exitFor(newLogger(jsonMode, slog.LevelInfo), err)
 	}
 
 	level := slog.LevelInfo
 	if verbose {
 		level = slog.LevelDebug
 	}
-	logger := newLogger(jsonMode, level)
+	logger, closeSinks := newLoggerWithFiles(jsonMode, level, filepath.Join(root, ".logs"))
+	defer closeSinks()
+
+	// DHF-REQ: keel/requirement-11 — human-mode banner + build identity through
+	// keel/log's own presentation surface (Header, LogBuildIdentity).
+	logging.Header(logger, "keel-dev "+verb, version)
+	logging.LogBuildIdentity(logger, version, "")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	verb, args := rest[0], rest[1:]
 	switch verb {
 	case "ci":
-		return exitFor(logger, runCI(ctx, logger, "."))
+		if len(args) != 0 {
+			logger.Error("ci takes no arguments", "got", fmt.Sprintf("%q", args))
+			return 2
+		}
+		return exitFor(logger, runCI(ctx, logger, root))
 	case "release":
 		if len(args) != 1 {
 			logger.Error("release requires exactly one argument: the semver tag (e.g. v0.1.0)")
 			return 2
 		}
-		return exitFor(logger, runRelease(ctx, logger, ".", args[0]))
+		return exitFor(logger, runRelease(ctx, logger, root, args[0]))
 	case "verify":
 		if len(args) != 1 {
 			logger.Error("verify requires exactly one argument: the semver tag (e.g. v0.1.0)")
 			return 2
 		}
 		return exitFor(logger, runVerify(ctx, logger, args[0]))
-	case "help":
-		fmt.Fprintln(os.Stderr, usage)
-		return 0
 	default:
 		logger.Error("unknown verb", "verb", verb)
-		fmt.Fprintln(os.Stderr, usage)
+		printUsage()
 		return 2
 	}
 }
 
-// newLogger builds keel-dev's logger from keel/log — the human console handler
-// by default, or the G1 JSON handler when --json is set.
-func newLogger(jsonMode bool, level slog.Level) *slog.Logger {
+// printUsage writes the static help text. Help is documentation, not run
+// output; run output (gate progress, results, errors) flows through keel/log.
+func printUsage() {
+	fmt.Fprintln(os.Stderr, usage)
+}
+
+// newLoggerWithFiles builds keel-dev's three-sink logger from keel/log:
+//
+//  1. console on stdout — human handler by default, G1 JSON with --json;
+//  2. daily human-readable .log under logDir;
+//  3. daily JSON Lines .jsonl under logDir.
+//
+// The returned closer releases both file handlers; call it once at exit.
+// File-sink open failures degrade to console-only (a gate that cannot write
+// its own log file should still gate) — the failure is reported on the logger.
+//
+// DHF-REQ: keel/requirement-11
+func newLoggerWithFiles(jsonMode bool, level slog.Leveler, logDir string) (*slog.Logger, func()) {
+	cfg := logging.Config{Service: "keel-dev", Level: level, Writer: os.Stdout}
+
+	var closers []io.Closer
+	var sinkErrs []error
+	if h, err := logging.NewHumanFileHandler(logDir, "keel-dev"); err == nil {
+		cfg.HumanFileHandler = h
+		if c, ok := h.(io.Closer); ok {
+			closers = append(closers, c)
+		}
+	} else {
+		sinkErrs = append(sinkErrs, fmt.Errorf("human file sink: %w", err))
+	}
+	if h, err := logging.NewJSONFileHandler(logDir, "keel-dev"); err == nil {
+		cfg.JSONFileHandler = h
+		if c, ok := h.(io.Closer); ok {
+			closers = append(closers, c)
+		}
+	} else {
+		sinkErrs = append(sinkErrs, fmt.Errorf("json file sink: %w", err))
+	}
+
+	var logger *slog.Logger
+	if jsonMode {
+		logger = logging.New(cfg)
+	} else {
+		logger = logging.NewConsole(cfg)
+	}
+	for _, err := range sinkErrs {
+		logger.Warn("log sink unavailable; continuing console-only", "error", err.Error())
+	}
+	return logger, func() {
+		for _, c := range closers {
+			_ = c.Close()
+		}
+	}
+}
+
+// newLogger builds a console-only keel/log logger (bootstrap path, before the
+// module root — and thus the .logs directory — is known).
+func newLogger(jsonMode bool, level slog.Leveler) *slog.Logger {
 	cfg := logging.Config{Service: "keel-dev", Level: level, Writer: os.Stdout}
 	if jsonMode {
 		return logging.New(cfg)
