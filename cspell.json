@@ -1,0 +1,19 @@
+{
+  "version": "0.2",
+  "language": "en-US",
+  "dictionaryDefinitions": [
+    {
+      "name": "keel-project-words",
+      "path": "./project-words.txt",
+      "addWords": true
+    }
+  ],
+  "dictionaries": ["keel-project-words"],
+  "ignorePaths": [
+    ".claude/**",
+    "bin/**",
+    ".logs/**",
+    "node_modules/**"
+  ],
+  "words": []
+}

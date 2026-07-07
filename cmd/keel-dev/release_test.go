@@ -42,6 +42,26 @@ case "$1 $2" in
 esac
 exit 0`)
 
+	// Static-tool battery stubs: the version gate (keel/ac-42) probes each
+	// tool's --version, so the stubs must echo the pinned version substring and
+	// otherwise exit 0. deadcode is presence-only (no --version probe).
+	stub(t, bin, callsFile, "golangci-lint", `
+case "$1" in
+  --version) echo "golangci-lint has version v1.64.8" ;;
+esac
+exit 0`)
+	stub(t, bin, callsFile, "govulncheck", `
+case "$1" in
+  --version) echo "Scanner: govulncheck@v1.1.4" ;;
+esac
+exit 0`)
+	stub(t, bin, callsFile, "cspell", `
+case "$1" in
+  --version) echo "10.0.0" ;;
+esac
+exit 0`)
+	stub(t, bin, callsFile, "deadcode", "exit 0")
+
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return callsFile
 }

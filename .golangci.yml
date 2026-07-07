@@ -1,0 +1,23 @@
+# keel golangci-lint configuration (curated, kept deliberately small).
+#
+# The default linter set already passes clean on this repo; this file makes the
+# enabled set explicit so the gate asserts a known battery rather than whatever
+# the installed golangci-lint defaults to. Bumps to this set are CR-sized.
+#
+# DHF-REQ: keel/requirement-12 (keel/ac-38)
+run:
+  timeout: 5m
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gosimple
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

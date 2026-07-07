@@ -13,8 +13,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
 
 if [[ "${EUID}" -ne 0 ]]; then
-  echo "Run this script as root."
-  exit 1
+	echo "Run this script as root."
+	exit 1
 fi
 
 # Developer login that owns user-scoped state (~/.gopath toolchain cache, etc.).
@@ -27,24 +27,26 @@ bash ./scripts/install_go.sh
 echo "Ensuring Go is on the zsh system PATH..."
 # shellcheck disable=SC2043 # single path intentional; loop kept for future expansion
 for SYSFILE in /etc/zsh/zshenv; do
-  touch "$SYSFILE"
-  if ! grep -q 'usr/local/go/bin' "$SYSFILE" 2>/dev/null; then
-    # shellcheck disable=SC2016 # intentional: write the literal $PATH into the rc, do not expand it now
-    echo 'export PATH=$PATH:/usr/local/go/bin' >>"$SYSFILE"
-  fi
+	touch "$SYSFILE"
+	if ! grep -q 'usr/local/go/bin' "$SYSFILE" 2>/dev/null; then
+		# shellcheck disable=SC2016 # intentional: write the literal $PATH into the rc, do not expand it now
+		echo 'export PATH=$PATH:/usr/local/go/bin' >>"$SYSFILE"
+	fi
 done
 
-echo "Installing just + shellcheck via apt-get..."
-# `just` runs keel's Justfile; `shellcheck` lints these bootstrap scripts.
+echo "Installing just + shellcheck + Node toolchain via apt-get..."
+# `just` runs keel's Justfile; `shellcheck` lints these bootstrap scripts;
+# `nodejs`/`npm` provide the Node runtime that scripts/setup_user.sh needs to
+# install cspell (the keel-dev ci spell-check tool).
 # Pin to the distro package; the version assertion below guards drift.
 EXPECTED_SHELLCHECK_VERSION="0.10.0"
 apt-get update -qq
-apt-get install -y just shellcheck
+apt-get install -y just shellcheck nodejs npm
 
 installed_sc_ver="$(shellcheck --version | awk '/^version:/{print $2}')"
 if [[ "$installed_sc_ver" != "$EXPECTED_SHELLCHECK_VERSION" ]]; then
-  echo "WARN: shellcheck version mismatch: installed=${installed_sc_ver} expected=${EXPECTED_SHELLCHECK_VERSION}" >&2
-  echo "      Update EXPECTED_SHELLCHECK_VERSION in setup_as_root.sh if the new version is intentional." >&2
+	echo "WARN: shellcheck version mismatch: installed=${installed_sc_ver} expected=${EXPECTED_SHELLCHECK_VERSION}" >&2
+	echo "      Update EXPECTED_SHELLCHECK_VERSION in setup_as_root.sh if the new version is intentional." >&2
 fi
 
 echo ""
