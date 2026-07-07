@@ -100,7 +100,7 @@ type resultEvent struct {
 // DHF-REQ: keel/requirement-2, openbrain/requirement-615
 func Run(ctx context.Context, req Request) (*Result, error) {
 	if req.Prompt == "" {
-		return nil, fmt.Errorf("claudecli: empty prompt")
+		return nil, fmt.Errorf("keel/exec/claude: empty prompt")
 	}
 	bin := req.Bin
 	if bin == "" {
@@ -153,20 +153,20 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 	}
 
 	if err := stdout.Err(); err != nil {
-		return nil, fmt.Errorf("claudecli: read stdout: %w — stderr: %s", err, bytes.TrimSpace(stderr.Bytes()))
+		return nil, fmt.Errorf("keel/exec/claude: read stdout: %w — stderr: %s", err, bytes.TrimSpace(stderr.Bytes()))
 	}
 
 	out := bytes.TrimSpace(stdout.ResultRaw())
 	if len(out) == 0 {
 		if runErr != nil {
-			return nil, fmt.Errorf("claudecli: %s: %w — stderr: %s", bin, runErr, bytes.TrimSpace(stderr.Bytes()))
+			return nil, fmt.Errorf("keel/exec/claude: %s: %w — stderr: %s", bin, runErr, bytes.TrimSpace(stderr.Bytes()))
 		}
-		return nil, fmt.Errorf("claudecli: empty stdout from %s", bin)
+		return nil, fmt.Errorf("keel/exec/claude: empty stdout from %s", bin)
 	}
 
 	var ev resultEvent
 	if err := json.Unmarshal(out, &ev); err != nil {
-		return nil, fmt.Errorf("claudecli: parse result JSON: %w — first 200 bytes: %q", err, truncateBytes(out, 200))
+		return nil, fmt.Errorf("keel/exec/claude: parse result JSON: %w — first 200 bytes: %q", err, truncateBytes(out, 200))
 	}
 
 	res := &Result{
@@ -179,7 +179,7 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 		Raw:        json.RawMessage(append([]byte(nil), out...)),
 	}
 	if runErr != nil && !ev.IsError {
-		return res, fmt.Errorf("claudecli: %s exited non-zero with non-error result: %w", bin, runErr)
+		return res, fmt.Errorf("keel/exec/claude: %s exited non-zero with non-error result: %w", bin, runErr)
 	}
 	return res, nil
 }

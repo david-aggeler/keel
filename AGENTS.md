@@ -17,3 +17,5 @@ Read `CLAUDE.md`. It is the rulebook. This file is the short version.
 - Tests hermetic. Adapters test against stubs. Live smokes are env-gated
   (`CODEXCLI_LIVE_SMOKE=1`, `CLAUDECLI_LIVE_SMOKE=1`) and skip in CI.
 - Coverage floor 85% total, gate-enforced. Target ~90%.
+- Error prefixes = keel package path (`keel/exec:`, `keel/exec/codex:`,
+  `keel/exec/claude:`). Never bare `exec:` (stdlib collision).

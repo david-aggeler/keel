@@ -94,7 +94,7 @@ type Request struct {
 // DHF-REQ: keel/requirement-7, openbrain/requirement-181, keel/requirement-2
 func Run(ctx context.Context, req Request) (*Result, error) {
 	if req.Prompt == "" {
-		return nil, fmt.Errorf("codexcli: empty prompt")
+		return nil, fmt.Errorf("keel/exec/codex: empty prompt")
 	}
 	bin := req.Bin
 	if bin == "" {
@@ -119,7 +119,7 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 	// stdin from the null device so codex can never hang waiting for input.
 	devNull, err := os.Open(os.DevNull)
 	if err != nil {
-		return nil, fmt.Errorf("codexcli: open %s: %w", os.DevNull, err)
+		return nil, fmt.Errorf("keel/exec/codex: open %s: %w", os.DevNull, err)
 	}
 	defer devNull.Close()
 
@@ -151,7 +151,7 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("codexcli: start %s: %w", bin, err)
+		return nil, fmt.Errorf("keel/exec/codex: start %s: %w", bin, err)
 	}
 
 	processResult, waitErr := proc.Wait()
@@ -162,19 +162,19 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 	scanErr := stdout.Err()
 
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return res, fmt.Errorf("codexcli: %s: %w — stderr: %s",
+		return res, fmt.Errorf("keel/exec/codex: %s: %w — stderr: %s",
 			bin, ctxErr, strings.TrimSpace(processResult.Stderr))
 	}
 	if scanErr != nil {
-		return res, fmt.Errorf("codexcli: read stdout: %w — stderr: %s",
+		return res, fmt.Errorf("keel/exec/codex: read stdout: %w — stderr: %s",
 			scanErr, strings.TrimSpace(processResult.Stderr))
 	}
 	if res.ExitCode != 0 && len(res.Events) == 0 {
-		return nil, fmt.Errorf("codexcli: %s exited %d with no events — stderr: %s",
+		return nil, fmt.Errorf("keel/exec/codex: %s exited %d with no events — stderr: %s",
 			bin, res.ExitCode, strings.TrimSpace(processResult.Stderr))
 	}
 	if waitErr != nil && len(res.Events) == 0 {
-		return nil, fmt.Errorf("codexcli: %s wait: %w — stderr: %s",
+		return nil, fmt.Errorf("keel/exec/codex: %s wait: %w — stderr: %s",
 			bin, waitErr, strings.TrimSpace(processResult.Stderr))
 	}
 
@@ -334,10 +334,10 @@ func Version(ctx context.Context, bin string) (string, error) {
 		Logger:  logging.Discard(),
 	})
 	if err != nil {
-		return "", fmt.Errorf("codexcli: %s --version: %w", bin, err)
+		return "", fmt.Errorf("keel/exec/codex: %s --version: %w", bin, err)
 	}
 	if _, err := proc.Wait(); err != nil {
-		return "", fmt.Errorf("codexcli: %s --version: %w", bin, err)
+		return "", fmt.Errorf("keel/exec/codex: %s --version: %w", bin, err)
 	}
 	return strings.TrimSpace(out.String()), nil
 }
