@@ -16,7 +16,8 @@ import (
 
 // fetchAttempts / fetchDelay bound the post-release verification retry: a freshly
 // pushed tag can take a short while to propagate to proxy.golang.org.
-const (
+// Vars, not consts, so the hermetic tests can exercise the retry loop.
+var (
 	fetchAttempts = 6
 	fetchDelay    = 15 * time.Second
 )
@@ -187,21 +188,23 @@ func verifyAnonymousFetch(ctx context.Context, logger *slog.Logger, version stri
 	return nil
 }
 
-// runCmd launches a subprocess through keel/exec, mirroring its output to the
-// terminal and logging the START/END lifecycle through keel/log. Returns an
+// runCmd launches a subprocess through keel/exec, surfacing its output live as
+// keel/log records (keel/ac-35) and logging the START/END lifecycle. Returns an
 // error on a non-zero exit.
 func runCmd(ctx context.Context, logger *slog.Logger, dir, program string, args ...string) error {
+	lines := newLineLogWriter(logger, program, "stdout")
 	proc, err := procexec.ProcessStart(ctx, procexec.Request{
 		Program: program,
 		Args:    args,
 		Dir:     dir,
-		Stdout:  os.Stdout,
+		Stdout:  lines,
 		Logger:  logger,
 	})
 	if err != nil {
 		return err
 	}
 	res, waitErr := proc.Wait()
+	lines.Flush()
 	if waitErr != nil {
 		return waitErr
 	}

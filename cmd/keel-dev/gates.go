@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"time"
 
@@ -52,7 +51,7 @@ func ciSteps() []step {
 		{name: "lint", fn: func(_ context.Context, _ *slog.Logger, dir string) error {
 			return runLint(dir)
 		}},
-		{name: "test", program: "go", args: []string{"test", "./..."}},
+		{name: "test", fn: runTestWithCoverage},
 	}
 }
 
@@ -96,12 +95,17 @@ func runStep(ctx context.Context, logger *slog.Logger, dir string, s step) error
 		Dir:     dir,
 		Logger:  logger,
 	}
+	// Child output travels through keel/log, never as a raw terminal stream
+	// (keel/ac-35, keel/issue-2): line-wise records for live progress, except
+	// where the step inspects stdout itself.
 	var capture *strings.Builder
+	var lines *lineLogWriter
 	if s.stdoutFails != nil {
 		capture = &strings.Builder{}
 		req.Stdout = capture
 	} else {
-		req.Stdout = os.Stdout
+		lines = newLineLogWriter(logger, s.name, "stdout")
+		req.Stdout = lines
 	}
 
 	proc, err := procexec.ProcessStart(ctx, req)
@@ -109,6 +113,9 @@ func runStep(ctx context.Context, logger *slog.Logger, dir string, s step) error
 		return err
 	}
 	res, waitErr := proc.Wait()
+	if lines != nil {
+		lines.Flush()
+	}
 
 	if waitErr != nil {
 		return fmt.Errorf("%s %s: %w", s.program, strings.Join(s.args, " "), waitErr)

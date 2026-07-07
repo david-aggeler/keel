@@ -21,9 +21,15 @@ import (
 //
 //   - no-stdlib-log: the stdlib "log" package must not be imported anywhere in
 //     the module (log/slog is fine) — diagnostics flow through keel/log.
+//
 //   - no-raw-fmt-output: cmd/keel-dev must not print run output via
 //     fmt.Print*/Fprint* (ac-29: no raw fmt fallback); the static usage text in
 //     main.go is the single allowlisted exception.
+//
+//   - no-raw-stdout-stream: cmd/keel-dev must not reference os.Stdout/os.Stderr
+//     outside logger construction and the usage-text printer (keel/ac-36) —
+//     handing the raw stream to a child bypasses the keel/log console sink and
+//     its redaction path (keel/issue-2).
 //
 // DHF-REQ: keel/requirement-10, keel/requirement-11
 func runLint(dir string) error {
@@ -36,6 +42,12 @@ func runLint(dir string) error {
 	violations = append(violations, v...)
 
 	v, err = scanNoRawFmtOutput(filepath.Join(dir, "cmd", "keel-dev"))
+	if err != nil {
+		return err
+	}
+	violations = append(violations, v...)
+
+	v, err = scanNoRawStdoutStream(filepath.Join(dir, "cmd", "keel-dev"))
 	if err != nil {
 		return err
 	}
@@ -105,6 +117,52 @@ func scanNoRawFmtOutput(dir string) ([]string, error) {
 				fmt.Sprintf("  no-raw-fmt-output: %s:%d calls fmt.%s — route run output through keel/log", filepath.Base(path), pos.Line, sel.Sel.Name))
 			return true
 		})
+	})
+	return violations, err
+}
+
+// stdoutAllowlist names the only functions in cmd/keel-dev permitted to touch
+// os.Stdout/os.Stderr: logger construction (the writers keel/log wraps) and the
+// static usage-text printer. Everything else must go through the logger.
+var stdoutAllowlist = map[string]bool{
+	"newLogger":          true,
+	"newLoggerWithFiles": true,
+	"printUsage":         true,
+	"run":                true, // unknown-flag refusal precedes logger construction
+}
+
+// scanNoRawStdoutStream reports os.Stdout/os.Stderr references in cmd/keel-dev
+// outside the allowlist (keel/ac-36). A tree without cmd/keel-dev has nothing
+// to scan.
+func scanNoRawStdoutStream(dir string) ([]string, error) {
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return nil, nil
+	}
+	var violations []string
+	err := walkGoFiles(dir, func(path string, file *ast.File, fset *token.FileSet) {
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			if filepath.Base(path) == "main.go" && stdoutAllowlist[fn.Name.Name] {
+				continue
+			}
+			ast.Inspect(fn, func(n ast.Node) bool {
+				sel, ok := n.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				pkg, ok := sel.X.(*ast.Ident)
+				if !ok || pkg.Name != "os" || (sel.Sel.Name != "Stdout" && sel.Sel.Name != "Stderr") {
+					return true
+				}
+				pos := fset.Position(sel.Pos())
+				violations = append(violations,
+					fmt.Sprintf("  no-raw-stdout-stream: %s:%d references os.%s in %s — surface output through keel/log (lineLogWriter)", filepath.Base(path), pos.Line, sel.Sel.Name, fn.Name.Name))
+				return true
+			})
+		}
 	})
 	return violations, err
 }
