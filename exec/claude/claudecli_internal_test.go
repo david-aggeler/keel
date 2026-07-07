@@ -4,11 +4,53 @@ package claude
 // keel/change_request-4 (keel/ac-37).
 
 import (
+	"context"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	logging "github.com/david-aggeler/keel/log"
 )
+
+// TestRun_LiveSmoke drives the REAL claude binary end-to-end: wrapper spawns
+// `claude -p`, streams its actual stream-json stdout, and parses the result
+// event — proving wiring against a live claude, NOT any specific model output.
+//
+// Mirror of the codex adapter's live smoke (keel/issue-5): guarded behind
+// CLAUDECLI_LIVE_SMOKE, so CI always SKIPs and the suite never needs a real
+// claude install or network. Run locally with CLAUDECLI_LIVE_SMOKE=1.
+//
+// Assertions are deliberately lenient: non-empty result text, at least one
+// agentic turn, and non-zero token usage — wiring facts, not model content.
+//
+// DHF-TEST: keel/requirement-2
+func TestRun_LiveSmoke(t *testing.T) {
+	if os.Getenv("CLAUDECLI_LIVE_SMOKE") == "" {
+		t.Skip("set CLAUDECLI_LIVE_SMOKE=1 to run the live claude smoke test")
+	}
+
+	res, err := Run(context.Background(), Request{
+		Prompt:          "Reply with exactly the word: PONG",
+		Timeout:         3 * time.Minute,
+		SkipPermissions: true,
+	})
+	if err != nil {
+		t.Fatalf("Run against real claude: %v", err)
+	}
+	if res == nil {
+		t.Fatal("Run returned nil Result")
+	}
+	if strings.TrimSpace(res.Text) == "" {
+		t.Error("result text is empty; want the model's reply")
+	}
+	if res.NumTurns < 1 {
+		t.Errorf("NumTurns = %d; want >= 1", res.NumTurns)
+	}
+	if res.Usage.TotalInput() == 0 {
+		t.Error("token usage is zero; result event not parsed from real claude")
+	}
+}
 
 func TestTruncateBytes(t *testing.T) {
 	if got := truncateBytes([]byte("short"), 10); got != "short" {
