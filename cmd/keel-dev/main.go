@@ -158,7 +158,7 @@ func printUsage() {
 //
 // DHF-REQ: keel/requirement-11
 func newLoggerWithFiles(jsonMode bool, level slog.Leveler, logDir string) (*slog.Logger, func()) {
-	cfg := logging.Config{Service: "keel-dev", Level: level, Writer: os.Stdout}
+	cfg := consoleConfig(level)
 
 	var closers []io.Closer
 	var sinkErrs []error
@@ -198,11 +198,24 @@ func newLoggerWithFiles(jsonMode bool, level slog.Leveler, logDir string) (*slog
 // newLogger builds a console-only keel/log logger (bootstrap path, before the
 // module root — and thus the .logs directory — is known).
 func newLogger(jsonMode bool, level slog.Leveler) *slog.Logger {
-	cfg := logging.Config{Service: "keel-dev", Level: level, Writer: os.Stdout}
+	cfg := consoleConfig(level)
 	if jsonMode {
 		return logging.New(cfg)
 	}
 	return logging.NewConsole(cfg)
+}
+
+// consoleConfig is keel-dev's base logger config. The service attr is
+// suppressed on the human console only (keel/log ConsoleOmitKeys, keel/issue-3)
+// — a single-service CLI repeating service=keel-dev per line is noise. JSON
+// mode and both .logs file sinks keep the field.
+func consoleConfig(level slog.Leveler) logging.Config {
+	return logging.Config{
+		Service:         "keel-dev",
+		Level:           level,
+		Writer:          os.Stdout,
+		ConsoleOmitKeys: []string{"service"},
+	}
 }
 
 // exitFor maps a verb's error to a process exit code, logging the failure
