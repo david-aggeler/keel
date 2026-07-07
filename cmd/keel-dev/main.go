@@ -40,10 +40,7 @@ Verbs:
 
 Flags (accepted before or after the verb):
   --json             Emit machine-readable JSON logs instead of the human console.
-  -v, --verbose      Include debug-level detail (child stdout, per-step timing).
-
-Record operations (issue, CR, requirement) are not handled here: use
-openbrain-client from PATH.`
+  -v, --verbose      Include debug-level detail (child stdout, per-step timing).`
 
 func main() {
 	os.Exit(run(os.Args[1:]))
