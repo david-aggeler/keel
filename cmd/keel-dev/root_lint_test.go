@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,6 +70,62 @@ func TestLintNoRawFmtOutput(t *testing.T) {
 	}
 }
 
+// TestLintNoRawStdoutStream proves the ac-36 policy flags os.Stdout/os.Stderr
+// references outside the main.go allowlist and names the offending function.
+func TestLintNoRawStdoutStream(t *testing.T) {
+	dir := t.TempDir()
+	keeldev := filepath.Join(dir, "cmd", "keel-dev")
+	if err := os.MkdirAll(keeldev, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, keeldev, "stream.go",
+		"package main\n\nimport (\n\t\"io\"\n\t\"os\"\n)\n\nfunc handOff() io.Writer { return os.Stdout }\n")
+	err := runLint(dir)
+	if err == nil || !strings.Contains(err.Error(), "no-raw-stdout-stream") || !strings.Contains(err.Error(), "handOff") {
+		t.Fatalf("raw stdout handoff should fail lint naming the function, got %v", err)
+	}
+
+	// The same reference inside an allowlisted main.go function passes.
+	writeFile(t, keeldev, "stream.go",
+		"package main\n\nimport \"io\"\n\nvar _ io.Writer\n")
+	writeFile(t, keeldev, "main.go",
+		"package main\n\nimport (\n\t\"io\"\n\t\"os\"\n)\n\nfunc newLogger() io.Writer { return os.Stdout }\n")
+	if err := runLint(dir); err != nil {
+		t.Fatalf("allowlisted os.Stdout in newLogger should pass, got %v", err)
+	}
+}
+
+// TestCoverageFloorFails proves the ac-37 gate rejects a total below the floor.
+func TestCoverageFloorFails(t *testing.T) {
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", `
+case "$1 $2" in
+  "tool cover") echo "total:	(statements)	10.0%" ;;
+esac
+exit 0`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	err := runTestWithCoverage(context.Background(), discardLogger(), t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "below the 85.0% floor") {
+		t.Fatalf("want coverage-floor failure, got %v", err)
+	}
+}
+
+func TestParseCoverageTotal(t *testing.T) {
+	if _, err := parseCoverageTotal("garbage\n"); err == nil {
+		t.Error("missing total line should error")
+	}
+	if _, err := parseCoverageTotal("total:\t(statements)\tnot-a-number%\n"); err == nil {
+		t.Error("unparseable percentage should error")
+	}
+	got, err := parseCoverageTotal("foo 1%\ntotal:\t(statements)\t88.7%\n")
+	if err != nil || got != 88.7 {
+		t.Errorf("parse = %v, %v; want 88.7, nil", got, err)
+	}
+}
+
 // TestLintSelf holds keel's own tree to its own lint policies.
 func TestLintSelf(t *testing.T) {
 	root, err := findModuleRoot(".")
@@ -86,5 +143,39 @@ func TestRunRejectsUnknownFlagAndExtraArgs(t *testing.T) {
 	}
 	if code := run([]string{"ci", "extra"}); code != 2 {
 		t.Fatalf("ci with an argument should exit 2, got %d", code)
+	}
+}
+
+// TestRunDispatch covers the verb dispatch and exit-code contract end to end
+// (help, missing verb, unknown verb, arg-count refusals, and a verify run
+// against the stub toolchain — flags accepted after the verb per ac-34).
+func TestRunDispatch(t *testing.T) {
+	cases := []struct {
+		name string
+		argv []string
+		want int
+	}{
+		{"no args", nil, 2},
+		{"help verb", []string{"help"}, 0},
+		{"help flag", []string{"--help"}, 0},
+		{"unknown verb", []string{"frobnicate"}, 2},
+		{"release missing arg", []string{"release"}, 2},
+		{"release two args", []string{"release", "v1.0.0", "v2.0.0"}, 2},
+		{"verify missing arg", []string{"verify"}, 2},
+		{"verify bad version", []string{"verify", "not-semver"}, 1},
+	}
+	for _, c := range cases {
+		if got := run(c.argv); got != c.want {
+			t.Errorf("%s: run(%v) = %d, want %d", c.name, c.argv, got, c.want)
+		}
+	}
+}
+
+// TestRunVerifyVerbHappyPath drives the whole CLI surface (flag after verb,
+// three-sink logger, module root resolution) with a stub go on PATH.
+func TestRunVerifyVerbHappyPath(t *testing.T) {
+	stubTools(t, false, false)
+	if code := run([]string{"verify", "v9.9.9", "--json"}); code != 0 {
+		t.Fatalf("verify verb = %d, want 0", code)
 	}
 }
