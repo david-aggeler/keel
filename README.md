@@ -1,7 +1,7 @@
 # keel
 
 Shared Go foundation for process execution and logging, consumed by
-[openbrain] and [vela]. One public module, one tag, one version:
+downstream Go services. One public module, one tag, one version:
 
 ```
 go get github.com/david-aggeler/keel
@@ -36,6 +36,3 @@ Dev-process records (requirements, change requests, epics) live in the
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE).
-
-[openbrain]: https://github.com/david-aggeler/openbrain
-[vela]: https://github.com/david-aggeler/vela
