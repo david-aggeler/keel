@@ -29,6 +29,25 @@ source of truth for the moved code; openbrain's `pkg/logging`,
 consumers' import target until iteration 4, then get deleted. Bridge
 exit is iteration 5 (see `keel/dd_plan-1` in gold).
 
+## Change control (owner-ratified 2026-07-07)
+
+Two tiers; every code change gets a gold record and a merge SHA either way:
+
+- **change_request** (draft→approved→in_progress→…→closed): anything that
+  changes behavior, adds/removes surface, touches contracts, the gate
+  definition, or the release loop. The CR's value is ex-ante: scope
+  negotiation, decisions table, owner approval before code, AC mapping at
+  close. **Before closing a CR, perform a literal AC-by-AC conformance
+  check** — map the diff to each AC and record the evidence; a green gate
+  alone is not conformance (CR-2 was reopened for exactly this).
+- **Quick-change** (issue + issue_fix, `change_request: null`): cosmetic,
+  docs, or test-only deltas with no scope to negotiate and no AC impact.
+  The issue carries evidence; the issue_fix carries root cause, fix,
+  verification, and the commit SHA.
+
+Post-merge defects found by anyone: file an issue first, then fix under
+the right tier. Never fix silently.
+
 ## Conventions
 
 - **Move heritage:** code was moved content-faithfully from openbrain
