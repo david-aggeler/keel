@@ -1,15 +1,3 @@
-// Package claudecli wraps headless `claude -p` invocations: prompt in,
-// final text plus token/cost/turn metrics out.
-//
-// It exists for skill-optimization harnesses (CR-0249 and successors):
-// measuring how a materialized skill triggers and what it costs requires
-// many structured `claude -p` calls, and shelling out ad hoc loses the
-// usage metrics the JSON output format carries. The wrapper pins stream-json
-// output, curates progress events, parses the final result event, and surfaces
-// tokens, cost, turns, and duration as typed fields.
-//
-// The zero value of Request is not usable — Prompt is required; Dir
-// selects which project's .claude/ tree the headless session discovers.
 package claude
 
 import (
@@ -53,12 +41,17 @@ type Request struct {
 	Logger *slog.Logger
 }
 
-// Usage mirrors the usage block of the claude -p result event.
+// Usage mirrors the usage block of the claude -p result event. See
+// [Usage.TotalInput] for the combined prompt volume across the token classes.
 type Usage struct {
-	InputTokens              int `json:"input_tokens"`
-	OutputTokens             int `json:"output_tokens"`
+	// InputTokens is the count of fresh (uncached) prompt input tokens.
+	InputTokens int `json:"input_tokens"`
+	// OutputTokens is the count of generated output tokens.
+	OutputTokens int `json:"output_tokens"`
+	// CacheCreationInputTokens is input tokens written to the prompt cache.
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	// CacheReadInputTokens is input tokens served from the prompt cache.
+	CacheReadInputTokens int `json:"cache_read_input_tokens"`
 }
 
 // TotalInput returns fresh + cache-created + cache-read input tokens — the

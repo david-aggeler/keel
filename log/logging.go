@@ -1,7 +1,3 @@
-// Package logging provides structured JSON logging with the G1 field schema
-// committed in the homelab interface spec: ts (RFC3339Nano), level (lowercase),
-// msg, service, plus contextual fields. This is the shared module imported by
-// all four services (mcp-server, vault-indexer, webdav-server, web-ui).
 package log
 
 import (
@@ -21,15 +17,30 @@ import (
 	"time"
 )
 
-// Config holds the parameters for constructing a production logger.
+// Config holds the parameters for constructing a production logger. The zero
+// value is usable: Service is blank, the level defaults to Info, and output
+// goes to os.Stdout with no file sinks. All fields are optional.
 type Config struct {
-	Service      string
-	Level        slog.Leveler
-	Writer       io.Writer
-	FileWriter   io.Writer
-	FileLevel    slog.Leveler
-	HumanLogDir  string
-	ForceColor   bool
+	// Service is the value stamped into the "service" field of every record.
+	Service string
+	// Level is the minimum severity emitted to the primary sink. Nil → Info.
+	Level slog.Leveler
+	// Writer is the primary sink destination. Nil → os.Stdout. Set it to a
+	// bytes.Buffer (or any io.Writer) to capture output in tests.
+	Writer io.Writer
+	// FileWriter, when non-nil, adds a second JSON sink at FileLevel writing to
+	// this destination alongside the primary Writer. Used by [New] only.
+	FileWriter io.Writer
+	// FileLevel is the minimum severity for the FileWriter sink. Nil → Debug.
+	FileLevel slog.Leveler
+	// HumanLogDir, when non-empty, makes [NewConsole] open a fresh daily human
+	// file per call. It leaks a descriptor per call and is only safe for
+	// one-shot loggers; prefer HumanFileHandler for long-lived loggers.
+	HumanLogDir string
+	// ForceColor forces ANSI color on the console sink even when the writer is
+	// not a terminal. Ignored when NO_COLOR is set or DisableColor is true.
+	ForceColor bool
+	// DisableColor suppresses ANSI color on the console sink unconditionally.
 	DisableColor bool
 
 	// ConsoleOmitKeys suppresses selected attrs from the human console sink.
@@ -666,9 +677,12 @@ func safeLogService(service string) string {
 
 const ruleWidth = 70
 
-// FieldRow is one aligned label/value row rendered by Fields.
+// FieldRow is one aligned label/value row rendered by [Fields].
 type FieldRow struct {
+	// Label is the left-hand column text; the widest Label in a batch sets the
+	// alignment width for all rows.
 	Label string
+	// Value is the right-hand value, rendered with fmt's default %v verb.
 	Value any
 }
 
@@ -724,7 +738,8 @@ type RecordCapture struct {
 	buf bytes.Buffer
 }
 
-// write is called by the handler; it's the io.Writer target.
+// Write appends raw handler output to the capture buffer. It is the
+// [io.Writer] the JSON handler emits into; it is safe for concurrent use.
 func (rc *RecordCapture) Write(p []byte) (int, error) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
