@@ -31,6 +31,11 @@ import (
 //     handing the raw stream to a child bypasses the keel/log console sink and
 //     its redaction path (keel/issue-2).
 //
+//   - no-undocumented-exports: every exported identifier in the library
+//     packages (log, exec, exec/claude, exec/codex) must carry a doc comment —
+//     go doc is keel's sole consumer-facing behavioral contract, so an
+//     undocumented export is a hole in it (keel/ac-46, keel/ac-49).
+//
 // DHF-REQ: keel/requirement-10, keel/requirement-11
 func runLint(dir string) error {
 	var violations []string
@@ -48,6 +53,12 @@ func runLint(dir string) error {
 	violations = append(violations, v...)
 
 	v, err = scanNoRawStdoutStream(filepath.Join(dir, "cmd", "keel-dev"))
+	if err != nil {
+		return err
+	}
+	violations = append(violations, v...)
+
+	v, err = scanNoUndocumentedExports(dir)
 	if err != nil {
 		return err
 	}
@@ -166,6 +177,166 @@ func scanNoRawStdoutStream(dir string) ([]string, error) {
 		}
 	})
 	return violations, err
+}
+
+// libraryDocDirs are the module-root-relative library package roots whose
+// exported identifiers must each carry a doc comment (keel/ac-49). cmd/keel-dev
+// is intentionally excluded: it is the internal devtool, not part of keel's
+// consumer-facing API. exec is walked recursively, so exec/claude and exec/codex
+// are covered.
+var libraryDocDirs = []string{"log", "exec"}
+
+// scanNoUndocumentedExports reports every exported identifier (function, type,
+// method on an exported type, struct field, const, or var) in keel's library
+// packages that lacks a doc comment. go doc is the sole behavioral contract keel
+// offers its consumers (keel/ac-46), so an undocumented export is a hole in that
+// contract; this machine-enforces the floor that a comment exists (keel/ac-49).
+// Comment quality remains a review concern. Test files are skipped by walkGoFiles.
+func scanNoUndocumentedExports(root string) ([]string, error) {
+	var violations []string
+	for _, sub := range libraryDocDirs {
+		dir := filepath.Join(root, sub)
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			continue
+		}
+		err := walkGoFiles(dir, func(path string, file *ast.File, fset *token.FileSet) {
+			for _, decl := range file.Decls {
+				violations = append(violations, undocumentedInDecl(root, path, fset, decl)...)
+			}
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return violations, nil
+}
+
+// undocumentedInDecl reports the exported identifiers declared by one top-level
+// declaration that carry no doc comment.
+func undocumentedInDecl(root, path string, fset *token.FileSet, decl ast.Decl) []string {
+	var out []string
+	report := func(pos token.Pos, kind, name string) {
+		p := fset.Position(pos)
+		out = append(out, fmt.Sprintf("  no-undocumented-exports: %s:%d exported %s %s has no doc comment — go doc is keel's consumer contract (keel/ac-46, keel/ac-49)",
+			relPath(root, path), p.Line, kind, name))
+	}
+	switch d := decl.(type) {
+	case *ast.FuncDecl:
+		if !d.Name.IsExported() {
+			return nil
+		}
+		if d.Recv != nil {
+			// Methods on an unexported type are not part of the API surface, so
+			// only require a doc when the receiver type is exported.
+			if !receiverTypeExported(d.Recv) {
+				return nil
+			}
+			if !hasDoc(d.Doc) {
+				report(d.Pos(), "method", receiverTypeName(d.Recv)+"."+d.Name.Name)
+			}
+			return out
+		}
+		if !hasDoc(d.Doc) {
+			report(d.Pos(), "func", d.Name.Name)
+		}
+	case *ast.GenDecl:
+		// A doc comment on the GenDecl itself (d.Doc) covers every spec in the
+		// group — the conventional carrier for grouped const/var/type blocks.
+		for _, spec := range d.Specs {
+			switch s := spec.(type) {
+			case *ast.TypeSpec:
+				if !s.Name.IsExported() {
+					continue
+				}
+				if !hasDoc(s.Doc) && !hasDoc(d.Doc) {
+					report(s.Pos(), "type", s.Name.Name)
+				}
+				if st, ok := s.Type.(*ast.StructType); ok {
+					out = append(out, undocumentedFields(root, path, fset, s.Name.Name, st)...)
+				}
+			case *ast.ValueSpec:
+				kind := "var"
+				if d.Tok == token.CONST {
+					kind = "const"
+				}
+				for _, name := range s.Names {
+					if !name.IsExported() {
+						continue
+					}
+					if !hasDoc(s.Doc) && !hasDoc(s.Comment) && !hasDoc(d.Doc) {
+						report(name.Pos(), kind, name.Name)
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// undocumentedFields reports exported struct fields with no doc comment. A field
+// is documented by either a preceding doc comment or a trailing line comment;
+// embedded (anonymous) fields are skipped — their own type carries the doc.
+func undocumentedFields(root, path string, fset *token.FileSet, typeName string, st *ast.StructType) []string {
+	var out []string
+	if st.Fields == nil {
+		return nil
+	}
+	for _, field := range st.Fields.List {
+		if len(field.Names) == 0 {
+			continue
+		}
+		documented := hasDoc(field.Doc) || hasDoc(field.Comment)
+		for _, name := range field.Names {
+			if !name.IsExported() || documented {
+				continue
+			}
+			p := fset.Position(name.Pos())
+			out = append(out, fmt.Sprintf("  no-undocumented-exports: %s:%d exported field %s.%s has no doc comment — go doc is keel's consumer contract (keel/ac-46, keel/ac-49)",
+				relPath(root, path), p.Line, typeName, name.Name))
+		}
+	}
+	return out
+}
+
+// hasDoc reports whether a comment group carries any non-whitespace text.
+func hasDoc(cg *ast.CommentGroup) bool {
+	return cg != nil && strings.TrimSpace(cg.Text()) != ""
+}
+
+// receiverBaseType unwraps a method receiver expression to its base type
+// identifier, stripping a leading pointer and any generic type parameters
+// (*Foo[T] → Foo). Returns nil when the base is not a plain identifier.
+func receiverBaseType(recv *ast.FieldList) *ast.Ident {
+	if recv == nil || len(recv.List) == 0 {
+		return nil
+	}
+	t := recv.List[0].Type
+	if star, ok := t.(*ast.StarExpr); ok {
+		t = star.X
+	}
+	switch e := t.(type) {
+	case *ast.IndexExpr:
+		t = e.X
+	case *ast.IndexListExpr:
+		t = e.X
+	}
+	id, _ := t.(*ast.Ident)
+	return id
+}
+
+// receiverTypeExported reports whether a method's receiver base type is exported.
+func receiverTypeExported(recv *ast.FieldList) bool {
+	id := receiverBaseType(recv)
+	return id != nil && id.IsExported()
+}
+
+// receiverTypeName returns the method receiver's base type name (without pointer
+// or type parameters), or "" when it is not a plain identifier.
+func receiverTypeName(recv *ast.FieldList) string {
+	if id := receiverBaseType(recv); id != nil {
+		return id.Name
+	}
+	return ""
 }
 
 // walkGoFiles parses every non-test .go file under root (skipping vendor,
