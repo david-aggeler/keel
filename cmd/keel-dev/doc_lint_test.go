@@ -17,26 +17,26 @@ import (
 func TestLintNoUndocumentedExports(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
-	logdir := filepath.Join(dir, "log")
-	if err := os.MkdirAll(logdir, 0o755); err != nil {
+	logDir := filepath.Join(dir, "log")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	// An exported func with no doc comment fails, naming the identifier.
-	writeFile(t, logdir, "widget.go", "package log\n\nfunc Widget() {}\n")
+	writeFile(t, logDir, "widget.go", "package log\n\nfunc Widget() {}\n")
 	err := runLint(dir)
 	if err == nil || !strings.Contains(err.Error(), "no-undocumented-exports") || !strings.Contains(err.Error(), "Widget") {
 		t.Fatalf("undocumented exported func should fail lint naming it, got %v", err)
 	}
 
 	// With a doc comment it passes.
-	writeFile(t, logdir, "widget.go", "package log\n\n// Widget does a thing.\nfunc Widget() {}\n")
+	writeFile(t, logDir, "widget.go", "package log\n\n// Widget does a thing.\nfunc Widget() {}\n")
 	if err := runLint(dir); err != nil {
 		t.Fatalf("documented exported func should pass lint, got %v", err)
 	}
 
 	// The check also covers exported struct fields (ac-46's field clause).
-	writeFile(t, logdir, "widget.go", "package log\n\n// Widget holds config.\ntype Widget struct {\n\tName string\n}\n")
+	writeFile(t, logDir, "widget.go", "package log\n\n// Widget holds config.\ntype Widget struct {\n\tName string\n}\n")
 	err = runLint(dir)
 	if err == nil || !strings.Contains(err.Error(), "no-undocumented-exports") || !strings.Contains(err.Error(), "Name") {
 		t.Fatalf("undocumented exported struct field should fail lint naming it, got %v", err)
@@ -47,8 +47,8 @@ func TestLintNoUndocumentedExports(t *testing.T) {
 	if err := os.MkdirAll(keeldev, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, logdir, "widget.go", "package log\n\n// Widget holds config.\ntype Widget struct {\n\t// Name is the widget name.\n\tName string\n}\n")
-	writeFile(t, keeldev, "undoc.go", "package main\n\nfunc Exported() {}\n")
+	writeFile(t, logDir, "widget.go", "package log\n\n// Widget holds config.\ntype Widget struct {\n\t// Name is the widget name.\n\tName string\n}\n")
+	writeFile(t, keeldev, "exported.go", "package main\n\nfunc Exported() {}\n")
 	if err := runLint(dir); err != nil {
 		t.Fatalf("cmd/keel-dev undocumented export must not trip the library doc check, got %v", err)
 	}
