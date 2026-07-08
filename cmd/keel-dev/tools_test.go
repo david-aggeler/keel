@@ -122,7 +122,7 @@ func TestRunStepToolGate_Missing(t *testing.T) {
 	scrubPATH(t)
 	// deadcode is a real pinnedTools entry; on a scrubbed PATH it is absent.
 	err := runStep(context.Background(), discardLogger(), ".", step{
-		name: "deadcode", tool: "deadcode", program: "deadcode", args: []string{"./..."}, advisory: true,
+		name: "deadcode", tool: "deadcode", program: "deadcode", args: []string{"-test", "./..."}, advisory: true,
 	})
 	if err == nil {
 		t.Fatal("advisory step must still fail when its pinned tool is missing")

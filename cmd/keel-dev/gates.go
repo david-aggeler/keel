@@ -106,7 +106,12 @@ func ciSteps(dir string) []step {
 	}
 
 	// DHF-REQ: keel/requirement-12 (keel/ac-41) — advisory: reported, never fatal.
-	steps = append(steps, step{name: "deadcode", tool: "deadcode", program: "deadcode", args: []string{"./..."}, advisory: true})
+	// -test counts each package's tests as reachability roots (keel/issue-9): keel
+	// is a library module with one binary (keel-dev), so log/ and exec/ public API
+	// that keel-dev's main never calls — but the packages' own tests and external
+	// consumers (vela, openbrain) do — is not genuinely dead. A function is reported
+	// only when unused by main AND untested.
+	steps = append(steps, step{name: "deadcode", tool: "deadcode", program: "deadcode", args: []string{"-test", "./..."}, advisory: true})
 
 	// The coverage-floored test suite runs last: it is the most expensive step
 	// and the fast static checks should fail before it does.
