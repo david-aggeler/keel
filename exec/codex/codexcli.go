@@ -1,12 +1,3 @@
-// Package codexcli wraps headless `codex exec --json` invocations: prompt in,
-// a streaming JSONL event log out.
-//
-// Codex streams a multi-line JSONL event sequence on stdout. The wrapper reads
-// stdout line-by-line as the process runs, decoding each event and delivering it
-// via OnEvent before the process exits — true streaming, not buffered replay.
-//
-// The zero value of Request is not usable — Prompt is required; Dir selects
-// the working directory the codex process runs in.
 package codex
 
 import (

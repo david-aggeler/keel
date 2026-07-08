@@ -17,26 +17,50 @@ import (
 	logging "github.com/david-aggeler/keel/log"
 )
 
-// Request describes a plain external command launch.
+// Request describes a plain external command launch. Only Program is required;
+// the zero value of every other field is a usable default.
 type Request struct {
-	Program       string
-	Args          []string
-	Dir           string
-	Env           []string
-	Stdin         io.Reader
-	Stdout        io.Writer
-	Stderr        io.Writer
-	Logger        *slog.Logger
+	// Program is the binary to run, resolved via PATH when not an absolute path.
+	Program string
+	// Args are the command arguments (argv without the program name).
+	Args []string
+	// Dir is the child's working directory. Empty means the current process
+	// working directory.
+	Dir string
+	// Env is the child's full environment as "KEY=VALUE" entries. Nil inherits
+	// the parent process environment unchanged.
+	Env []string
+	// Stdin, when non-nil, is connected to the child's standard input.
+	Stdin io.Reader
+	// Stdout, when non-nil, receives a verbatim copy of the child's stdout in
+	// addition to the captured [Result.Stdout] and the line-wise debug log.
+	Stdout io.Writer
+	// Stderr, when non-nil, receives a verbatim copy of the child's stderr in
+	// addition to the captured [Result.Stderr] and the line-wise info log.
+	Stderr io.Writer
+	// Logger receives the START/END lifecycle and per-line output records. Nil
+	// uses slog.Default.
+	Logger *slog.Logger
+	// SensitiveArgs marks argv indices whose values must be masked as [REDACTED]
+	// in the logged command line (e.g. a token passed positionally).
 	SensitiveArgs map[int]bool
-	Configure     func(*exec.Cmd)
+	// Configure, when non-nil, is called with the prepared [os/exec.Cmd] just
+	// before it starts — the escape hatch for setting a process group, custom
+	// Cancel, WaitDelay, or other fields keel/exec does not model directly.
+	Configure func(*exec.Cmd)
 }
 
-// Result reports the observed outcome of a launched process.
+// Result reports the observed outcome of a launched process, filled in by
+// [Process.Wait] once the child has exited.
 type Result struct {
+	// ExitCode is the child's exit status (-1 if it never produced one).
 	ExitCode int
+	// Duration is the wall-clock time from start to reap.
 	Duration time.Duration
-	Stdout   string
-	Stderr   string
+	// Stdout is the full captured standard output.
+	Stdout string
+	// Stderr is the full captured standard error.
+	Stderr string
 }
 
 // Process is a started subprocess supervised by ProcessStart.
@@ -51,6 +75,15 @@ type Process struct {
 	once    sync.Once
 }
 
+// ProcessStart launches the command described by req and returns a running
+// [Process] without waiting for it to finish. It emits the "process start"
+// lifecycle record, wires stdout/stderr through the capturing, mirroring,
+// redacting writers, and starts the child; cancelling ctx kills the process.
+// Call [Process.Wait] to block for completion and obtain the [Result].
+//
+// It returns an error ("keel/exec: …") when Program is empty or the child fails
+// to start; a non-zero exit is not an error here — it is reported by Wait.
+//
 // DHF-REQ: openbrain/requirement-565, keel/requirement-1
 func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 	if req.Program == "" {
