@@ -1,3 +1,6 @@
 openbrain-client.local.yaml
 .logs
 bin/
+.claude/legacy/
+# gitignored sandbox for `openbrain-client init --dev` (KD10, CR-0249)
+consumer-claude/
