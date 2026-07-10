@@ -5,7 +5,8 @@ Rules for coding agents in this repo. Short and blunt on purpose.
 ## What keel is
 
 - ONE public Go module: `github.com/david-aggeler/keel`. Apache-2.0.
-- Subpackages: `log`, `exec`, `exec/claude`, `exec/codex`, `cmd/keel-dev`.
+- Subpackages: `log`, `exec`, `exec/claude`, `exec/codex`, `cmd/keel-dev`,
+  plus approved dev/example binaries such as `cmd/keel-demo`.
 - One tag. One version. Zero external deps. No internal replaces.
 - Anonymous `go get` must always work. NEVER add GOPRIVATE, tokens,
   netrc, or Docker secrets to any build path. No exceptions.
@@ -88,5 +89,6 @@ Small change? Still a CR. Docs-only? Still a CR (merge_gate: docs).
 - `DHF-REQ:` / `DHF-TEST:` comments point at gold records. keel-owned
   refs use `keel/requirement-N`; consumer obligations keep
   `openbrain/...` refs.
-- keel ships exactly ONE CLI: keel-dev. No SoR client code in keel —
-  record ops use `openbrain-client` from PATH.
+- keel-dev is the development/release CLI. Approved dev/example binaries may
+  exist outside keel-dev when backed by SoR requirements. No SoR client code in
+  keel — record ops use `openbrain-client` from PATH.
