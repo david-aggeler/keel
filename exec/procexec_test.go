@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -117,20 +118,35 @@ func TestProcessStartLogsStructuredLifecycleAndRedactsSensitiveArgs(t *testing.T
 	if got, ok := during["stream"].(string); !ok || got != "stdout" {
 		t.Fatalf("process_output stream = %#v, want stdout", during["stream"])
 	}
-	if got, ok := during["data"].(string); !ok || !strings.Contains(got, "during stdout\n") {
+	if got, ok := during["data"].(string); !ok || got != "during stdout" {
 		t.Fatalf("process_output data = %#v, want streamed stdout", during["data"])
 	}
 	if got, ok := during["level"].(string); !ok || got != "DEBUG" {
 		t.Fatalf("stdout process_output level = %#v, want DEBUG", during["level"])
 	}
-	if got, ok := stderr["level"].(string); !ok || got != "INFO" {
-		t.Fatalf("stderr process_output level = %#v, want INFO", stderr["level"])
+	if got, ok := stderr["level"].(string); !ok || got != "ERROR" {
+		t.Fatalf("stderr process_output level = %#v, want ERROR", stderr["level"])
 	}
 	if got, ok := end["exit_code"].(float64); !ok || got != 0 {
 		t.Fatalf("process_end exit_code = %#v, want 0", end["exit_code"])
 	}
 	if got, ok := end["elapsed_ms"].(float64); !ok || got < 0 {
 		t.Fatalf("process_end elapsed_ms = %#v, want non-negative duration", end["elapsed_ms"])
+	}
+}
+
+// DHF-TEST: keel/requirement-24
+func TestRequestLoggerContractIncludesErrorForStderrRouting(t *testing.T) {
+	loggerField, ok := reflect.TypeOf(procexec.Request{}).FieldByName("Logger")
+	if !ok {
+		t.Fatal("Request.Logger field missing")
+	}
+	errorMethod, ok := loggerField.Type.MethodByName("Error")
+	if !ok {
+		t.Fatal("Request.Logger contract does not require Error; stderr process_output can bypass the caller logger")
+	}
+	if got := errorMethod.Type.String(); got != "func(string, ...interface {})" {
+		t.Fatalf("Request.Logger Error method type = %s, want func(string, ...interface {})", got)
 	}
 }
 
@@ -161,6 +177,62 @@ func TestProcessStartHumanLifecycleShowsFullCommandWithoutEllipsis(t *testing.T)
 	}
 	if !strings.Contains(logged, "INFO") || !strings.Contains(logged, "process start") || !strings.Contains(logged, "process end") {
 		t.Fatalf("human lifecycle output = %q, want concise severity-tagged lifecycle lines", logged)
+	}
+}
+
+// DHF-TEST: keel/requirement-24
+func TestProcessStartLogsChildOutputAsCleanPerLineRecords(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := logging.New(logging.Config{
+		Service: "procexec-test",
+		Level:   slog.LevelDebug,
+		Console: logging.ConsoleJSON,
+		Writer:  &logBuf,
+	})
+
+	proc, err := procexec.ProcessStart(context.Background(), procexec.Request{
+		Logger:  logger,
+		Program: "sh",
+		Args: []string{
+			"-c",
+			"printf 'out one\\n\\nout two'; printf 'err one\\n\\nerr two' >&2",
+		},
+	})
+	if err != nil {
+		t.Fatalf("ProcessStart returned error: %v", err)
+	}
+	if _, err := proc.Wait(); err != nil {
+		t.Fatalf("Wait returned error: %v", err)
+	}
+
+	records := parseJSONLogRecords(t, logBuf.String())
+	got := make(map[string][]string)
+	for _, record := range records {
+		if eventType, _ := record["event_type"].(string); eventType != "process_output" {
+			continue
+		}
+		stream, _ := record["stream"].(string)
+		data, _ := record["data"].(string)
+		level, _ := record["level"].(string)
+		if strings.Contains(data, "\n") {
+			t.Fatalf("process_output data retained embedded newline: %#v", record)
+		}
+		if strings.TrimSpace(data) == "" {
+			t.Fatalf("process_output logged empty/blank data: %#v", record)
+		}
+		if stream == "stdout" && level != "DEBUG" {
+			t.Fatalf("stdout process_output level = %q, want DEBUG; record=%#v", level, record)
+		}
+		if stream == "stderr" && level != "ERROR" {
+			t.Fatalf("stderr process_output level = %q, want ERROR; record=%#v", level, record)
+		}
+		got[stream] = append(got[stream], data)
+	}
+	if strings.Join(got["stdout"], "|") != "out one|out two" {
+		t.Fatalf("stdout process_output records = %#v, want clean lines", got["stdout"])
+	}
+	if strings.Join(got["stderr"], "|") != "err one|err two" {
+		t.Fatalf("stderr process_output records = %#v, want clean lines", got["stderr"])
 	}
 }
 

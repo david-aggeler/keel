@@ -454,6 +454,12 @@ func (h *sparseAIHandler) Handle(_ context.Context, r slog.Record) error {
 		if attr.Equal(slog.Attr{}) || attr.Key == "" || attr.Key == "module" {
 			continue
 		}
+		if attr.Key == "banner" && event == "log" {
+			if attr.Value.Kind() == slog.KindString && strings.TrimSpace(attr.Value.String()) != "" {
+				event = attr.Value.String()
+			}
+			continue
+		}
 		if attr.Key == "event_type" {
 			if attr.Value.Kind() == slog.KindString && strings.TrimSpace(attr.Value.String()) != "" {
 				event = attr.Value.String()
@@ -585,6 +591,12 @@ func (h *consoleHandler) Handle(_ context.Context, r slog.Record) error {
 	})
 
 	var b strings.Builder
+	if h.writeBanner(&b, r, boundAttrs, recordAttrs) {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		_, err := io.WriteString(h.w, b.String())
+		return err
+	}
 	writeConsoleTimestamp(&b, r.Time, h.color)
 	b.WriteByte(' ')
 	writeConsoleLevel(&b, r.Level, h.color)
@@ -619,6 +631,62 @@ func (h *consoleHandler) Handle(_ context.Context, r slog.Record) error {
 	defer h.mu.Unlock()
 	_, err := io.WriteString(h.w, b.String())
 	return err
+}
+
+func (h *consoleHandler) writeBanner(b *strings.Builder, r slog.Record, boundAttrs []slog.Attr, recordAttrs []slog.Attr) bool {
+	banner := bannerAttr(h.groups, boundAttrs, recordAttrs)
+	switch banner {
+	case "header":
+		title := bannerText("title", h.groups, boundAttrs, recordAttrs)
+		version := bannerText("version", h.groups, boundAttrs, recordAttrs)
+		if version != "" {
+			title = strings.TrimSpace(title + " " + version)
+		}
+		writeConsoleBannerLine(b, r.Time, r.Level, h.color, strings.Repeat("=", ruleWidth))
+		writeConsoleBannerLine(b, r.Time, r.Level, h.color, title)
+		writeConsoleBannerLine(b, r.Time, r.Level, h.color, strings.Repeat("=", ruleWidth))
+		return true
+	case "section":
+		name := bannerText("name", h.groups, boundAttrs, recordAttrs)
+		writeConsoleBannerLine(b, r.Time, r.Level, h.color, strings.Repeat("-", ruleWidth))
+		writeConsoleBannerLine(b, r.Time, r.Level, h.color, name)
+		return true
+	default:
+		return false
+	}
+}
+
+func writeConsoleBannerLine(b *strings.Builder, t time.Time, level slog.Level, color bool, msg string) {
+	writeConsoleTimestamp(b, t, color)
+	b.WriteByte(' ')
+	writeConsoleLevel(b, level, color)
+	b.WriteString("  ")
+	b.WriteString(RedactString(msg))
+	b.WriteByte('\n')
+}
+
+func bannerAttr(groups []string, boundAttrs []slog.Attr, recordAttrs []slog.Attr) string {
+	for _, attrs := range [][]slog.Attr{boundAttrs, recordAttrs} {
+		for _, attr := range attrs {
+			attr = replaceForOpenBrain(groups, attr)
+			if attr.Key == "banner" && attr.Value.Kind() == slog.KindString {
+				return attr.Value.String()
+			}
+		}
+	}
+	return ""
+}
+
+func bannerText(key string, groups []string, boundAttrs []slog.Attr, recordAttrs []slog.Attr) string {
+	for _, attrs := range [][]slog.Attr{boundAttrs, recordAttrs} {
+		for _, attr := range attrs {
+			attr = replaceForOpenBrain(groups, attr)
+			if attr.Key == key && attr.Value.Kind() == slog.KindString {
+				return attr.Value.String()
+			}
+		}
+	}
+	return ""
 }
 
 func (h *consoleHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
@@ -1134,27 +1202,22 @@ type FieldRow struct {
 	Value any
 }
 
-// DHF-REQ: openbrain/requirement-151
-// Header logs a ruled human-mode banner through the provided logger.
+// DHF-REQ: openbrain/requirement-151, keel/requirement-24
+// Header logs a structured banner through the provided logger.
 func Header(logger *slog.Logger, title string, version string) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	logger.Info(strings.Repeat("=", ruleWidth))
-	if version != "" {
-		title += " " + version
-	}
-	logger.Info(title)
-	logger.Info(strings.Repeat("=", ruleWidth))
+	logger.Info(title, "banner", "header", "title", title, "version", version)
 }
 
-// DHF-REQ: openbrain/requirement-151
-// Section logs a ruled human-mode section header through the provided logger.
+// DHF-REQ: openbrain/requirement-151, keel/requirement-24
+// Section logs a structured section banner through the provided logger.
 func Section(logger *slog.Logger, name string) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	logger.Info(strings.Repeat("-", ruleWidth) + " " + name)
+	logger.Info(name, "banner", "section", "name", name)
 }
 
 // DHF-REQ: openbrain/requirement-151
