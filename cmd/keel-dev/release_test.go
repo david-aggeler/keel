@@ -125,6 +125,23 @@ func TestRunReleaseHappyPath(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-25
+func TestRunReleaseSectionNamesPhaseOnly(t *testing.T) {
+	logger, cap := testLogger("keel-dev")
+	err := runRelease(context.Background(), logger, t.TempDir(), "not-semver")
+	if err == nil {
+		t.Fatal("bad version should fail after emitting the release section")
+	}
+
+	rec := cap.LastJSON()
+	if rec["banner"] != "section" {
+		t.Fatalf("last record banner = %#v, want section; record=%#v", rec["banner"], rec)
+	}
+	if rec["msg"] != "release not-semver" {
+		t.Fatalf("release section = %#v, want phase-only section", rec["msg"])
+	}
+}
+
 // TestRunReleaseRefusesDirtyTree proves preflight aborts before any tag when
 // the tree is dirty (keel/ac-21).
 func TestRunReleaseRefusesDirtyTree(t *testing.T) {
