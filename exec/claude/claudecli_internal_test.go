@@ -5,6 +5,7 @@ package claude
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"strings"
 	"testing"
@@ -12,6 +13,16 @@ import (
 
 	logging "github.com/david-aggeler/keel/log"
 )
+
+func testLogger(service string) (*logging.Logger, *logging.RecordCapture) {
+	cap := &logging.RecordCapture{}
+	return logging.New(logging.Config{
+		Service: service,
+		Level:   slog.LevelDebug,
+		Console: logging.ConsoleJSON,
+		Writer:  cap,
+	}), cap
+}
 
 // TestRun_LiveSmoke drives the REAL claude binary end-to-end: wrapper spawns
 // `claude -p`, streams its actual stream-json stdout, and parses the result
@@ -62,7 +73,7 @@ func TestTruncateBytes(t *testing.T) {
 }
 
 func TestClaudeStreamWriterErrFlushesTrailingLine(t *testing.T) {
-	logger, cap := logging.NewForTesting("t")
+	logger, cap := testLogger("t")
 	w := &claudeStreamWriter{logger: logger}
 
 	// Unterminated trailing event must be consumed by Err().
@@ -110,7 +121,7 @@ func TestClaudeStreamWriterLineTooLong(t *testing.T) {
 }
 
 func TestConsumeLineEdges(t *testing.T) {
-	logger, cap := logging.NewForTesting("t")
+	logger, cap := testLogger("t")
 	w := &claudeStreamWriter{logger: logger}
 
 	w.consumeLine([]byte("   "))          // blank: ignored

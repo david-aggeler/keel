@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -16,6 +15,12 @@ import (
 	procexec "github.com/david-aggeler/keel/exec"
 	logging "github.com/david-aggeler/keel/log"
 )
+
+type processLogger interface {
+	Debug(msg string, args ...any)
+	Info(msg string, args ...any)
+	InfoContext(ctx context.Context, msg string, args ...any)
+}
 
 // Event is one decoded JSONL line from the codex event stream.
 type Event struct {
@@ -72,7 +77,7 @@ type Request struct {
 	OnEvent func(Event)
 	// Logger receives the shared process lifecycle and raw output records. Nil
 	// uses slog.Default through the process facility.
-	Logger *slog.Logger
+	Logger processLogger
 }
 
 // Run executes one `codex exec --json` call, streaming events as they arrive.

@@ -217,7 +217,12 @@ func TestRun_UsesProcessStartWithClaudeStreamAdapterAndPreservesResult(t *testin
 	stub := writeArgvStub(t, stream, 0, argvFile)
 
 	var logBuf bytes.Buffer
-	logger := logging.New(logging.Config{Service: "claudecli-test", Writer: &logBuf, Level: slog.LevelDebug})
+	logger := logging.New(logging.Config{
+		Service: "claudecli-test",
+		Level:   slog.LevelDebug,
+		Console: logging.ConsoleJSON,
+		Writer:  &logBuf,
+	})
 	res, err := Run(context.Background(), Request{
 		Prompt: "summarize the branch",
 		Dir:    dir,
