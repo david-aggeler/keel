@@ -475,7 +475,7 @@ func (h *sparseAIHandler) Handle(_ context.Context, r slog.Record) error {
 		Message string         `json:"message"`
 		Fields  map[string]any `json:"fields"`
 	}{
-		Level:   strings.ToLower(r.Level.String()),
+		Level:   r.Level.String(),
 		Event:   event,
 		Message: RedactString(r.Message),
 		Fields:  fields,
