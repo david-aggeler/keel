@@ -19,6 +19,7 @@ import (
 
 type processLogger interface {
 	Debug(msg string, args ...any)
+	Error(msg string, args ...any)
 	Info(msg string, args ...any)
 	InfoContext(ctx context.Context, msg string, args ...any)
 }
@@ -42,7 +43,7 @@ type Request struct {
 	// addition to the captured [Result.Stdout] and the line-wise debug log.
 	Stdout io.Writer
 	// Stderr, when non-nil, receives a verbatim copy of the child's stderr in
-	// addition to the captured [Result.Stderr] and the line-wise info log.
+	// addition to the captured [Result.Stderr] and the line-wise error log.
 	Stderr io.Writer
 	// Logger receives the START/END lifecycle and per-line output records. Nil
 	// uses slog.Default.
@@ -158,6 +159,10 @@ func (p *Process) Wait() (Result, error) {
 
 	p.once.Do(func() {
 		p.waitErr = <-p.waitCh
+		// cmd.Wait has returned, so all output has been copied to the capture
+		// writers; emit any trailing unterminated line before building Result.
+		p.stdout.flush()
+		p.stderr.flush()
 	})
 
 	result := Result{
@@ -177,27 +182,33 @@ func (p *Process) Wait() (Result, error) {
 type captureWriter struct {
 	mu         sync.Mutex
 	buf        bytes.Buffer
+	pending    bytes.Buffer
 	stream     io.Writer
 	logger     processLogger
 	streamName string
 }
 
-// DHF-REQ: openbrain/requirement-602
+// DHF-REQ: openbrain/requirement-602, keel/requirement-24
 func (w *captureWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	w.buf.Write(p)
 	if w.logger != nil {
-		log := w.logger.Debug
-		if w.streamName == "stderr" {
-			log = w.logger.Info
+		// os/exec does not guarantee a logical child line arrives in one Write,
+		// so carry any unterminated fragment across calls and only emit complete
+		// newline-delimited lines; the trailing partial is flushed at completion.
+		w.pending.Write(p)
+		for {
+			data := w.pending.Bytes()
+			idx := bytes.IndexByte(data, '\n')
+			if idx < 0 {
+				break
+			}
+			line := string(data[:idx])
+			w.pending.Next(idx + 1)
+			w.logLine(line)
 		}
-		log("process output",
-			"event_type", "process_output",
-			"stream", w.streamName,
-			"data", logging.RedactString(string(p)),
-		)
 	}
 	if w.stream != nil {
 		if _, err := w.stream.Write(p); err != nil {
@@ -205,6 +216,38 @@ func (w *captureWriter) Write(p []byte) (int, error) {
 		}
 	}
 	return len(p), nil
+}
+
+// flush emits any final unterminated line still buffered after the process has
+// stopped writing. Callers must invoke it once the child's output is complete.
+// DHF-REQ: keel/requirement-24
+func (w *captureWriter) flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.logger == nil || w.pending.Len() == 0 {
+		return
+	}
+	line := w.pending.String()
+	w.pending.Reset()
+	w.logLine(line)
+}
+
+// logLine records one child-output line: trailing CR trimmed, blank lines
+// dropped, stdout at Debug and stderr at Error. The caller holds w.mu.
+func (w *captureWriter) logLine(line string) {
+	line = strings.TrimRight(line, "\r")
+	if strings.TrimSpace(line) == "" {
+		return
+	}
+	log := w.logger.Debug
+	if w.streamName == "stderr" {
+		log = w.logger.Error
+	}
+	log("process output",
+		"event_type", "process_output",
+		"stream", w.streamName,
+		"data", logging.RedactString(line),
+	)
 }
 
 func (w *captureWriter) String() string {
