@@ -58,11 +58,22 @@ func TestCommandModelDispatchHelpAndUsageErrors(t *testing.T) {
 		t.Fatalf("command Usage = %q", got)
 	}
 
-	if err := root.Dispatch(context.Background(), []string{"ci", "--fast"}); err != nil {
+	if err := root.Dispatch(context.Background(), []string{"ci", "extra"}); err != nil {
 		t.Fatalf("Dispatch(ci): %v", err)
 	}
-	if strings.Join(called, " ") != "--fast" {
-		t.Fatalf("handler args = %q, want --fast", strings.Join(called, " "))
+	if strings.Join(called, " ") != "extra" {
+		t.Fatalf("handler args = %q, want extra", strings.Join(called, " "))
+	}
+
+	// An unrecognized flag-shaped argument is a usage error (exit 2), never
+	// coerced into a positional handler argument. DHF-REQ: keel/requirement-21
+	flagErr := root.Dispatch(context.Background(), []string{"ci", "--fast"})
+	var flagUsage UsageError
+	if !errors.As(flagErr, &flagUsage) {
+		t.Fatalf("Dispatch(ci --fast) error = %T, want UsageError", flagErr)
+	}
+	if flagUsage.ExitCode() != 2 {
+		t.Fatalf("unknown-flag exit = %d, want 2", flagUsage.ExitCode())
 	}
 
 	var help bytes.Buffer
@@ -130,7 +141,7 @@ func TestCommandHelpersCoverNestedAndErrorPaths(t *testing.T) {
 				Name:  "parent",
 				Short: "Parent command.",
 				Subcommands: []*CommandSpec{
-					{Name: "beta", Short: "Second.", Handler: func(_ context.Context, args []string) error {
+					{Name: "beta", Short: "Second.", Flags: []FlagSpec{{Name: "flag", Short: "Declared flag."}}, Handler: func(_ context.Context, args []string) error {
 						called = append(called, args...)
 						return nil
 					}},
@@ -177,6 +188,14 @@ func TestCommandHelpersCoverNestedAndErrorPaths(t *testing.T) {
 	}
 	if strings.Join(called, " ") != "--flag" {
 		t.Fatalf("nested handler args = %q, want --flag", strings.Join(called, " "))
+	}
+
+	// A declared flag is accepted; an undeclared flag-shaped token is rejected
+	// with exit 2 rather than coerced. DHF-REQ: keel/requirement-21
+	nope := root.Dispatch(context.Background(), []string{"parent", "beta", "--nope"})
+	var nopeUsage UsageError
+	if !errors.As(nope, &nopeUsage) || nopeUsage.ExitCode() != 2 {
+		t.Fatalf("Dispatch(parent beta --nope) = %v (%T), want UsageError exit 2", nope, nope)
 	}
 
 	specs := SimpleSpecs("tool group", map[string]string{"b": "Bee.", "a": "Aye."})

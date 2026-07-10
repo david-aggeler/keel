@@ -225,7 +225,43 @@ func (c *CommandSpec) Dispatch(ctx context.Context, args []string) error {
 	if node.Handler == nil {
 		return UsageError{Err: fmt.Errorf("%s", node.Usage(matched))}
 	}
+	if err := node.rejectUnknownFlags(matched, remaining); err != nil {
+		return err
+	}
 	return node.Handler(ctx, remaining)
+}
+
+// rejectUnknownFlags returns a UsageError for any flag-shaped remaining token
+// that the resolved command does not declare, so an unrecognized flag maps to
+// exit 2 rather than being coerced into a positional argument.
+func (c *CommandSpec) rejectUnknownFlags(matched, remaining []string) error {
+	for _, arg := range remaining {
+		if len(arg) < 2 || arg[0] != '-' {
+			continue
+		}
+		if arg == "--" {
+			break
+		}
+		name := strings.TrimLeft(arg, "-")
+		if eq := strings.IndexByte(name, '='); eq >= 0 {
+			name = name[:eq]
+		}
+		if c.hasFlag(name) {
+			continue
+		}
+		return UsageError{Err: fmt.Errorf("unknown flag %q\n%s", arg, c.Usage(matched))}
+	}
+	return nil
+}
+
+// hasFlag reports whether the command declares a flag with the given name.
+func (c *CommandSpec) hasFlag(name string) bool {
+	for _, f := range c.Flags {
+		if f.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *CommandSpec) match(path []string) (*CommandSpec, []string, []string) {
