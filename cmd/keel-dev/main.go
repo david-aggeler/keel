@@ -107,11 +107,12 @@ func run(argv []string) int {
 	}
 	logger, closeSinks := buildLogger(jsonMode, level, filepath.Join(root, ".logs"))
 	defer closeSinks()
+	slogLogger := logger.Slog()
 
 	// DHF-REQ: keel/requirement-11 — human-mode banner + build identity through
 	// keel/log's own presentation surface (Header, LogBuildIdentity).
-	logging.Header(logger, "keel-dev "+verb, version)
-	logging.LogBuildIdentity(logger, version, "")
+	logging.Header(slogLogger, "keel-dev "+verb, version)
+	logging.LogBuildIdentity(slogLogger, version, "")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -119,24 +120,24 @@ func run(argv []string) int {
 	switch verb {
 	case "ci":
 		if len(args) != 0 {
-			logger.Error("ci takes no arguments", "got", fmt.Sprintf("%q", args))
+			slogLogger.Error("ci takes no arguments", "got", fmt.Sprintf("%q", args))
 			return 2
 		}
-		return exitFor(logger, runCI(ctx, logger, root))
+		return exitFor(slogLogger, runCIWithRunLog(ctx, slogLogger, logger, root))
 	case "release":
 		if len(args) != 1 {
-			logger.Error("release requires exactly one argument: the semver tag (e.g. v0.1.0)")
+			slogLogger.Error("release requires exactly one argument: the semver tag (e.g. v0.1.0)")
 			return 2
 		}
-		return exitFor(logger, runRelease(ctx, logger, root, args[0]))
+		return exitFor(slogLogger, runRelease(ctx, slogLogger, root, args[0]))
 	case "verify":
 		if len(args) != 1 {
-			logger.Error("verify requires exactly one argument: the semver tag (e.g. v0.1.0)")
+			slogLogger.Error("verify requires exactly one argument: the semver tag (e.g. v0.1.0)")
 			return 2
 		}
-		return exitFor(logger, runVerify(ctx, logger, args[0]))
+		return exitFor(slogLogger, runVerify(ctx, slogLogger, args[0]))
 	default:
-		logger.Error("unknown verb", "verb", verb)
+		slogLogger.Error("unknown verb", "verb", verb)
 		printUsage()
 		return 2
 	}
@@ -159,7 +160,7 @@ func printUsage() {
 // its own log file should still gate) — the failure is reported on the logger.
 //
 // DHF-REQ: keel/requirement-11, keel/requirement-19
-func buildLogger(jsonMode bool, level slog.Leveler, logDir string) (*slog.Logger, func()) {
+func buildLogger(jsonMode bool, level slog.Leveler, logDir string) (*logging.Logger, func()) {
 	cfg := loggerConfig(level)
 	if jsonMode {
 		cfg.Console = logging.ConsoleJSON
@@ -170,7 +171,7 @@ func buildLogger(jsonMode bool, level slog.Leveler, logDir string) (*slog.Logger
 	cfg.JSONLDir = logDir
 	cfg.PerRun = true
 	logger := logging.New(cfg)
-	return logger.Slog(), func() { _ = logger.Close() }
+	return logger, func() { _ = logger.Close() }
 }
 
 // newLogger builds a console-only keel/log logger (bootstrap path, before the
@@ -204,10 +205,19 @@ func loggerConfig(level slog.Leveler) logging.Config {
 // DHF-REQ: keel/requirement-18
 func exitFor(logger *slog.Logger, err error) int {
 	if err != nil {
-		logger.Error("keel-dev failed", "error", logging.RedactErr(err).Error())
 		var usage usageError
 		if errors.As(err, &usage) {
+			logger.Error("keel-dev failed", "error", logging.RedactErr(err).Error())
 			return 2
+		}
+		var opErr *logging.OperationalError
+		if errors.As(err, &opErr) {
+			logger.Error("keel-dev failed", slog.Any("err", opErr))
+			if opErr.ExitCode != 0 {
+				return opErr.ExitCode
+			}
+		} else {
+			logger.Error("keel-dev failed", "error", logging.RedactErr(err).Error())
 		}
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
