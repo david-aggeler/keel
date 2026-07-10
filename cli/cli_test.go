@@ -116,6 +116,7 @@ func TestParseGlobalConfigTreatsModeAndNoHeaderAsSharedCore(t *testing.T) {
 
 // DHF-TEST: keel/requirement-21
 func TestCommandHelpersCoverNestedAndErrorPaths(t *testing.T) {
+	var called []string
 	root := &CommandSpec{
 		Name: "tool",
 		Config: Config{
@@ -129,7 +130,10 @@ func TestCommandHelpersCoverNestedAndErrorPaths(t *testing.T) {
 				Name:  "parent",
 				Short: "Parent command.",
 				Subcommands: []*CommandSpec{
-					{Name: "beta", Short: "Second."},
+					{Name: "beta", Short: "Second.", Handler: func(_ context.Context, args []string) error {
+						called = append(called, args...)
+						return nil
+					}},
 					{Name: "alpha", Short: "First."},
 				},
 			},
@@ -167,6 +171,12 @@ func TestCommandHelpersCoverNestedAndErrorPaths(t *testing.T) {
 	}
 	if err := root.Dispatch(context.Background(), []string{"parent"}); err == nil {
 		t.Fatal("command without handler should return UsageError")
+	}
+	if err := root.Dispatch(context.Background(), []string{"parent", "beta", "--flag"}); err != nil {
+		t.Fatalf("nested leaf dispatch: %v", err)
+	}
+	if strings.Join(called, " ") != "--flag" {
+		t.Fatalf("nested handler args = %q, want --flag", strings.Join(called, " "))
 	}
 
 	specs := SimpleSpecs("tool group", map[string]string{"b": "Bee.", "a": "Aye."})

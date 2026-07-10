@@ -212,20 +212,35 @@ func (c *CommandSpec) Child(name string) (*CommandSpec, bool) {
 	return nil, false
 }
 
-// Dispatch invokes the matching top-level command handler.
+// Dispatch invokes the deepest matching command handler.
 func (c *CommandSpec) Dispatch(ctx context.Context, args []string) error {
 	c.InheritConfig()
 	if len(args) == 0 {
 		return UsageError{Err: fmt.Errorf("%s", c.Usage(nil))}
 	}
-	child, ok := c.Child(args[0])
-	if !ok {
+	node, matched, remaining := c.match(args)
+	if len(matched) == 0 {
 		return UsageError{Err: fmt.Errorf("unknown command %q\n%s", args[0], c.Usage(nil))}
 	}
-	if child.Handler == nil {
-		return UsageError{Err: fmt.Errorf("%s", child.Usage([]string{child.Name}))}
+	if node.Handler == nil {
+		return UsageError{Err: fmt.Errorf("%s", node.Usage(matched))}
 	}
-	return child.Handler(ctx, args[1:])
+	return node.Handler(ctx, remaining)
+}
+
+func (c *CommandSpec) match(path []string) (*CommandSpec, []string, []string) {
+	node := c
+	var matched []string
+	for len(path) > 0 {
+		child, ok := node.Child(path[0])
+		if !ok {
+			break
+		}
+		node = child
+		matched = append(matched, path[0])
+		path = path[1:]
+	}
+	return node, matched, path
 }
 
 // RenderRootHelp writes generated root help.
