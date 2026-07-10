@@ -152,13 +152,13 @@ func printUsage() {
 //
 //  1. console on stdout — human handler by default, G1 JSON with --json;
 //  2. daily human-readable .log under logDir;
-//  3. daily JSON Lines .jsonl under logDir.
+//  3. per-run JSON Lines .jsonl under logDir.
 //
 // The returned closer releases both file handlers; call it once at exit.
 // File-sink open failures degrade to console-only (a gate that cannot write
 // its own log file should still gate) — the failure is reported on the logger.
 //
-// DHF-REQ: keel/requirement-11
+// DHF-REQ: keel/requirement-11, keel/requirement-19
 func buildLogger(jsonMode bool, level slog.Leveler, logDir string) (*slog.Logger, func()) {
 	cfg := loggerConfig(level)
 	if jsonMode {
@@ -168,6 +168,7 @@ func buildLogger(jsonMode bool, level slog.Leveler, logDir string) (*slog.Logger
 	}
 	cfg.TextDir = logDir
 	cfg.JSONLDir = logDir
+	cfg.PerRun = true
 	logger := logging.New(cfg)
 	return logger.Slog(), func() { _ = logger.Close() }
 }

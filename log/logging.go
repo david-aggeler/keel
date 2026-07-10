@@ -81,8 +81,10 @@ type Config struct {
 //
 // DHF-REQ: keel/requirement-16
 type Logger struct {
-	base    *slog.Logger
-	closers []io.Closer
+	base       *slog.Logger
+	closers    []io.Closer
+	runLogPath string
+	runLog     *lineCountingWriteCloser
 }
 
 // ctxKey is the context key for storing a *slog.Logger.
@@ -187,17 +189,21 @@ func New(cfg Config) *Logger {
 			}
 		}
 	}
+	var runLogPath string
+	var runLog *lineCountingWriteCloser
 	if cfg.JSONFileHandler != nil {
 		handlers = append(handlers, cfg.JSONFileHandler)
 		if c, ok := cfg.JSONFileHandler.(io.Closer); ok {
 			closers = append(closers, c)
 		}
 	} else if cfg.JSONLDir != "" {
-		if h, err := newJSONFileHandler(cfg.JSONLDir, cfg.Service); err == nil {
+		if h, path, counter, err := newJSONFileHandler(cfg.JSONLDir, cfg.Service, cfg.PerRun); err == nil {
 			handlers = append(handlers, h)
 			if c, ok := h.(io.Closer); ok {
 				closers = append(closers, c)
 			}
+			runLogPath = path
+			runLog = counter
 		}
 	}
 	if len(handlers) == 0 {
@@ -211,7 +217,7 @@ func New(cfg Config) *Logger {
 	if len(handlers) > 1 {
 		h = multiHandler{handlers: handlers}
 	}
-	return &Logger{base: slog.New(h).With("service", cfg.Service), closers: closers}
+	return &Logger{base: slog.New(h).With("service", cfg.Service), closers: closers, runLogPath: runLogPath, runLog: runLog}
 }
 
 func (l *Logger) slog() *slog.Logger {
@@ -223,6 +229,29 @@ func (l *Logger) slog() *slog.Logger {
 
 // Slog returns the wrapped slog logger for APIs that have not migrated yet.
 func (l *Logger) Slog() *slog.Logger { return l.slog() }
+
+// RunLogPath returns the JSONL run-log path selected by Config.PerRun, or the
+// JSONL file path for the current logger when JSONLDir is configured.
+//
+// DHF-REQ: keel/requirement-19
+func (l *Logger) RunLogPath() string {
+	if l == nil {
+		return ""
+	}
+	return l.runLogPath
+}
+
+// RunLogLine returns the 1-based line number of the last JSONL record written
+// by this logger. It returns zero when no JSONL sink is configured or no record
+// has been written yet.
+//
+// DHF-REQ: keel/requirement-19
+func (l *Logger) RunLogLine() int {
+	if l == nil || l.runLog == nil {
+		return 0
+	}
+	return l.runLog.Line()
+}
 
 // Debug emits a DEBUG record.
 func (l *Logger) Debug(msg string, args ...any) { l.slog().Debug(msg, args...) }
@@ -258,12 +287,12 @@ func (l *Logger) ErrorContext(ctx context.Context, msg string, args ...any) {
 
 // With returns a logger carrying the supplied attrs.
 func (l *Logger) With(args ...any) *Logger {
-	return &Logger{base: l.slog().With(args...), closers: l.closers}
+	return &Logger{base: l.slog().With(args...), closers: l.closers, runLogPath: l.runLogPath, runLog: l.runLog}
 }
 
 // WithGroup returns a logger that groups subsequent attrs under name.
 func (l *Logger) WithGroup(name string) *Logger {
-	return &Logger{base: l.slog().WithGroup(name), closers: l.closers}
+	return &Logger{base: l.slog().WithGroup(name), closers: l.closers, runLogPath: l.runLogPath, runLog: l.runLog}
 }
 
 // Event emits an INFO record with event_type set to verb.
@@ -717,24 +746,53 @@ type humanFileHandler struct {
 //
 // DHF-REQ: openbrain/change_request-441
 func NewJSONFileHandler(dir string, service string) (slog.Handler, error) {
-	return newJSONFileHandler(dir, service)
+	h, _, _, err := newJSONFileHandler(dir, service, false)
+	return h, err
 }
 
-func newJSONFileHandler(dir string, service string) (slog.Handler, error) {
+func newJSONFileHandler(dir string, service string, perRun bool) (slog.Handler, string, *lineCountingWriteCloser, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return nil, err
+		return nil, "", nil, err
 	}
-	f, err := os.OpenFile(JSONLogPath(dir, service), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	path := JSONLogPath(dir, service)
+	flag := os.O_CREATE | os.O_WRONLY | os.O_APPEND
+	if perRun {
+		path = PerRunJSONLogPath(dir)
+		flag = os.O_CREATE | os.O_WRONLY | os.O_EXCL
+	}
+	f, err := os.OpenFile(path, flag, 0o600)
 	if err != nil {
-		return nil, err
+		return nil, "", nil, err
 	}
+	w := &lineCountingWriteCloser{WriteCloser: f}
 	return &jsonFileHandler{
-		Handler: slog.NewJSONHandler(f, &slog.HandlerOptions{
+		Handler: slog.NewJSONHandler(w, &slog.HandlerOptions{
 			Level:       slog.LevelDebug,
 			ReplaceAttr: replaceForOpenBrain,
 		}),
-		close: f.Close,
-	}, nil
+		close: w.Close,
+	}, path, w, nil
+}
+
+type lineCountingWriteCloser struct {
+	io.WriteCloser
+	mu    sync.Mutex
+	lines int
+}
+
+// DHF-REQ: keel/requirement-19
+func (w *lineCountingWriteCloser) Write(p []byte) (int, error) {
+	n, err := w.WriteCloser.Write(p)
+	w.mu.Lock()
+	w.lines += bytes.Count(p[:n], []byte{'\n'})
+	w.mu.Unlock()
+	return n, err
+}
+
+func (w *lineCountingWriteCloser) Line() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.lines
 }
 
 type jsonFileHandler struct {
@@ -880,6 +938,14 @@ func HumanLogPath(dir string, service string) string {
 // JSONLogPath returns today's JSON Lines daily log path for service.
 func JSONLogPath(dir string, service string) string {
 	return filepath.Join(dir, safeLogService(service)+"-"+time.Now().Format("2006-01-02")+".jsonl")
+}
+
+// PerRunJSONLogPath returns a new per-invocation JSON Lines log path under dir.
+//
+// DHF-REQ: keel/requirement-19
+func PerRunJSONLogPath(dir string) string {
+	stamp := time.Now().UTC().Format("20060102T150405.000000000Z")
+	return filepath.Join(dir, stamp+"-"+fmt.Sprintf("%d", os.Getpid())+".jsonl")
 }
 
 func pruneHumanLogs(dir string, service string, keep int) error {
