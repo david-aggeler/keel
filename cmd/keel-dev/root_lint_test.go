@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/david-aggeler/keel/cli"
 )
 
 func TestFindModuleRoot(t *testing.T) {
@@ -216,9 +219,55 @@ func TestRunDispatch(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-21
+func TestKeelDevUsesGeneratedCommandTreeHelp(t *testing.T) {
+	tree := commandTree()
+
+	for _, path := range [][]string{
+		{"ci"},
+		{"release"},
+		{"verify"},
+	} {
+		var help bytes.Buffer
+		tree.RenderTopicHelp(&help, path)
+		got := help.String()
+		if !strings.Contains(got, strings.Join(path, " ")+" commands:") {
+			t.Fatalf("topic %v missing generated heading:\n%s", path, got)
+		}
+		if !strings.Contains(got, "keel-dev "+strings.Join(path, " ")) {
+			t.Fatalf("topic %v missing generated usage:\n%s", path, got)
+		}
+	}
+
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"const usage", "switch verb"} {
+		if strings.Contains(string(src), forbidden) {
+			t.Fatalf("keel-dev migrated help/dispatch must not contain %q", forbidden)
+		}
+	}
+}
+
+// DHF-TEST: keel/requirement-21
+func TestVersionStringDefaultsAndUsesStampedVersion(t *testing.T) {
+	old := version
+	t.Cleanup(func() { version = old })
+
+	version = ""
+	if got := versionString(); got != "dev" {
+		t.Fatalf("default version = %q, want dev", got)
+	}
+	version = "v1.2.3"
+	if got := versionString(); got != "v1.2.3" {
+		t.Fatalf("stamped version = %q, want v1.2.3", got)
+	}
+}
+
 // DHF-TEST: keel/requirement-18
 func TestExitForMapsUsageChildAndGenericErrors(t *testing.T) {
-	if got := exitFor(discardLogger(), usageError("bad args")); got != 2 {
+	if got := exitFor(discardLogger(), cli.NewUsageError("bad args")); got != 2 {
 		t.Fatalf("usage error exit = %d, want 2", got)
 	}
 
