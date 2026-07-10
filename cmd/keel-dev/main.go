@@ -12,11 +12,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	logging "github.com/david-aggeler/keel/log"
@@ -40,7 +42,7 @@ Verbs:
   help               Show this help.
 
 Flags (accepted before or after the verb):
-  --json             Emit machine-readable JSON logs instead of the human console.
+  --mode MODE        Console mode: human, ai, or json. Default: human.
   -v, --verbose      Include debug-level detail (child stdout, per-step timing).`
 
 type usageError string
@@ -56,14 +58,22 @@ func main() {
 // main so tests can drive the whole CLI surface.
 func run(argv []string) int {
 	var (
-		jsonMode bool
-		verbose  bool
-		words    []string
+		mode    = "human"
+		verbose bool
+		words   []string
 	)
-	for _, arg := range argv {
+	for i := 0; i < len(argv); i++ {
+		arg := argv[i]
 		switch arg {
-		case "--json":
-			jsonMode = true
+		case "--mode":
+			if i+1 >= len(argv) {
+				fmt.Fprintln(os.Stderr, "keel-dev: --mode requires one of: human, ai, json")
+				fmt.Fprintln(os.Stderr)
+				printUsage()
+				return 2
+			}
+			i++
+			mode = argv[i]
 		case "-v", "--verbose":
 			verbose = true
 		case "-h", "--help":
@@ -82,6 +92,12 @@ func run(argv []string) int {
 		}
 	}
 
+	if _, err := consoleForMode(mode); err != nil {
+		fmt.Fprintf(os.Stderr, "keel-dev: %v\n\n", err)
+		printUsage()
+		return 2
+	}
+
 	if len(words) == 0 {
 		printUsage()
 		return 2
@@ -98,14 +114,14 @@ func run(argv []string) int {
 	// .logs sinks anchor at the root too.
 	root, err := findModuleRoot(".")
 	if err != nil {
-		return exitFor(newLogger(jsonMode, slog.LevelInfo), err)
+		return exitFor(newLogger(mode, slog.LevelInfo, os.Stdout), err)
 	}
 
 	level := slog.LevelInfo
 	if verbose {
 		level = slog.LevelDebug
 	}
-	logger, closeSinks := buildLogger(jsonMode, level, filepath.Join(root, ".logs"))
+	logger, closeSinks := buildLogger(mode, level, filepath.Join(root, ".logs"))
 	defer closeSinks()
 	slogLogger := logger.Slog()
 
@@ -151,7 +167,7 @@ func printUsage() {
 
 // buildLogger builds keel-dev's three-sink logger from keel/log:
 //
-//  1. console on stdout — human handler by default, G1 JSON with --json;
+//  1. console on stdout — human by default; sparse-AI or JSON via --mode;
 //  2. daily human-readable .log under logDir;
 //  3. per-run JSON Lines .jsonl under logDir.
 //
@@ -159,14 +175,10 @@ func printUsage() {
 // File-sink open failures degrade to console-only (a gate that cannot write
 // its own log file should still gate) — the failure is reported on the logger.
 //
-// DHF-REQ: keel/requirement-11, keel/requirement-19
-func buildLogger(jsonMode bool, level slog.Leveler, logDir string) (*logging.Logger, func()) {
+// DHF-REQ: keel/requirement-11, keel/requirement-19, keel/requirement-25
+func buildLogger(mode string, level slog.Leveler, logDir string) (*logging.Logger, func()) {
 	cfg := loggerConfig(level)
-	if jsonMode {
-		cfg.Console = logging.ConsoleJSON
-	} else {
-		cfg.Console = logging.ConsolePlain
-	}
+	cfg.Console, _ = consoleForMode(mode)
 	cfg.TextDir = logDir
 	cfg.JSONLDir = logDir
 	cfg.PerRun = true
@@ -176,14 +188,25 @@ func buildLogger(jsonMode bool, level slog.Leveler, logDir string) (*logging.Log
 
 // newLogger builds a console-only keel/log logger (bootstrap path, before the
 // module root — and thus the .logs directory — is known).
-func newLogger(jsonMode bool, level slog.Leveler) *slog.Logger {
+func newLogger(mode string, level slog.Leveler, writer io.Writer) *slog.Logger {
 	cfg := loggerConfig(level)
-	if jsonMode {
-		cfg.Console = logging.ConsoleJSON
-	} else {
-		cfg.Console = logging.ConsolePlain
-	}
+	cfg.Console, _ = consoleForMode(mode)
+	cfg.Writer = writer
 	return logging.New(cfg).Slog()
+}
+
+// DHF-REQ: keel/requirement-25
+func consoleForMode(mode string) (logging.Console, error) {
+	switch strings.ToLower(mode) {
+	case "human":
+		return logging.ConsolePlain, nil
+	case "ai":
+		return logging.ConsoleSparseAI, nil
+	case "json":
+		return logging.ConsoleJSON, nil
+	default:
+		return "", fmt.Errorf("unknown --mode %q: expected human, ai, or json", mode)
+	}
 }
 
 // loggerConfig is keel-dev's base logger config. The service attr is
