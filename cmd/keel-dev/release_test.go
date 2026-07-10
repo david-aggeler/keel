@@ -219,6 +219,8 @@ echo "dsn postgres://user:hunter2@db/x"`)
 }
 
 // TestLineLogWriterFlushAndCR covers the unterminated-line and CRLF paths.
+//
+// DHF-TEST: keel/requirement-20
 func TestLineLogWriterFlushAndCR(t *testing.T) {
 	logger, cap := testLogger("keel-dev")
 	w := newLineLogWriter(logger, "step", "stdout")
@@ -238,8 +240,8 @@ func TestLineLogWriterFlushAndCR(t *testing.T) {
 		t.Fatalf("want [one partial], got %v", msgs)
 	}
 	for _, rec := range cap.AllJSON() {
-		if level, _ := rec["level"].(string); level != "debug" {
-			t.Fatalf("stdout child output level = %#v, want debug", rec["level"])
+		if level, _ := rec["level"].(string); level != "DEBUG" {
+			t.Fatalf("stdout child output level = %#v, want DEBUG", rec["level"])
 		}
 		if event, _ := rec["event_type"].(string); event != "process_output" {
 			t.Fatalf("stdout child output event_type = %#v, want process_output", rec["event_type"])
@@ -247,7 +249,7 @@ func TestLineLogWriterFlushAndCR(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-17
+// DHF-TEST: keel/requirement-17, keel/requirement-20
 func TestLineLogWriterKeepsStderrAtInfo(t *testing.T) {
 	logger, cap := testLogger("keel-dev")
 	w := newLineLogWriter(logger, "step", "stderr")
@@ -259,8 +261,8 @@ func TestLineLogWriterKeepsStderrAtInfo(t *testing.T) {
 	if msg, _ := rec["msg"].(string); msg != "failure detail" {
 		t.Fatalf("stderr child output msg = %#v, want failure detail", rec["msg"])
 	}
-	if level, _ := rec["level"].(string); level != "info" {
-		t.Fatalf("stderr child output level = %#v, want info", rec["level"])
+	if level, _ := rec["level"].(string); level != "INFO" {
+		t.Fatalf("stderr child output level = %#v, want INFO", rec["level"])
 	}
 	if event, _ := rec["event_type"].(string); event != "process_output" {
 		t.Fatalf("stderr child output event_type = %#v, want process_output", rec["event_type"])
