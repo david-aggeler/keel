@@ -213,7 +213,7 @@ func TestSparseAIConsoleEmitsCuratedEventsAndKeepsDebugChildOutputInFiles(t *tes
 	if err != nil {
 		t.Fatalf("read jsonl sink: %v", err)
 	}
-	if !strings.Contains(string(jsonBytes), `"level":"debug"`) || !strings.Contains(string(jsonBytes), `"data":"noise"`) {
+	if !strings.Contains(string(jsonBytes), `"level":"DEBUG"`) || !strings.Contains(string(jsonBytes), `"data":"noise"`) {
 		t.Fatalf("jsonl sink = %q, want debug child output record", string(jsonBytes))
 	}
 }
@@ -247,6 +247,7 @@ func TestConsoleJSONRemainsVerboseRecordRendering(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-20
 func TestJSONOutput_HasG1Fields(t *testing.T) {
 	logger, capture := newJSONCaptureLogger("mcp")
 
@@ -265,12 +266,12 @@ func TestJSONOutput_HasG1Fields(t *testing.T) {
 		t.Errorf("ts = %q, does not match RFC3339Nano pattern", ts)
 	}
 
-	// level must be lowercase.
+	// level must be uppercase.
 	level, ok := got["level"].(string)
 	if !ok || level == "" {
 		t.Error("missing or empty 'level' field")
-	} else if level != "info" {
-		t.Errorf("level = %q, want lowercase 'info'", level)
+	} else if level != "INFO" {
+		t.Errorf("level = %q, want uppercase 'INFO'", level)
 	}
 
 	// msg must be present.
@@ -286,16 +287,17 @@ func TestJSONOutput_HasG1Fields(t *testing.T) {
 	}
 }
 
-func TestJSONOutput_LevelIsLowercase(t *testing.T) {
+// DHF-TEST: keel/requirement-20
+func TestJSONOutput_LevelIsUppercase(t *testing.T) {
 	tests := []struct {
 		name  string
 		logFn func(*slog.Logger)
 		want  string
 	}{
-		{"debug", func(l *slog.Logger) { l.Debug("d") }, "debug"},
-		{"info", func(l *slog.Logger) { l.Info("i") }, "info"},
-		{"warn", func(l *slog.Logger) { l.Warn("w") }, "warn"},
-		{"error", func(l *slog.Logger) { l.Error("e") }, "error"},
+		{"debug", func(l *slog.Logger) { l.Debug("d") }, "DEBUG"},
+		{"info", func(l *slog.Logger) { l.Info("i") }, "INFO"},
+		{"warn", func(l *slog.Logger) { l.Warn("w") }, "WARN"},
+		{"error", func(l *slog.Logger) { l.Error("e") }, "ERROR"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -457,6 +459,7 @@ func TestRecordCapture_Reset(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-20
 func TestJSONOutput_NoTimeField(t *testing.T) {
 	// The G1 schema uses "ts", not "time". Verify "time" is absent.
 	logger, capture := newJSONCaptureLogger("mcp")
@@ -476,6 +479,88 @@ func TestJSONOutput_NoTimeField(t *testing.T) {
 	}
 	if _, ok := m["ts"]; !ok {
 		t.Error("JSON output missing 'ts' key")
+	}
+}
+
+// DHF-TEST: keel/requirement-20
+func TestModuleContextAppearsOnlyInFileSinks(t *testing.T) {
+	var console bytes.Buffer
+	textDir := t.TempDir()
+	jsonlDir := t.TempDir()
+	logger := logging.New(logging.Config{
+		Service:  "svc",
+		Level:    slog.LevelDebug,
+		Console:  logging.ConsolePlain,
+		Writer:   &console,
+		TextDir:  textDir,
+		JSONLDir: jsonlDir,
+	}).With("module", "keel/exec")
+	t.Cleanup(func() { _ = logger.Close() })
+
+	logger.Info("module context", "operation", "run")
+
+	if got := console.String(); strings.Contains(got, "module=keel/exec") {
+		t.Fatalf("console included module context reserved for file sinks: %q", got)
+	}
+
+	textData, err := os.ReadFile(logging.HumanLogPath(textDir, "svc"))
+	if err != nil {
+		t.Fatalf("read human file sink: %v", err)
+	}
+	if got := string(textData); !strings.Contains(got, "module=keel/exec") {
+		t.Fatalf("human file sink missing module context: %q", got)
+	}
+
+	jsonData, err := os.ReadFile(logging.JSONLogPath(jsonlDir, "svc"))
+	if err != nil {
+		t.Fatalf("read JSONL file sink: %v", err)
+	}
+	var record map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(jsonData), &record); err != nil {
+		t.Fatalf("parse JSONL file sink: %v; body=%q", err, string(jsonData))
+	}
+	if record["module"] != "keel/exec" {
+		t.Fatalf("JSONL file sink module = %#v, want keel/exec; record=%#v", record["module"], record)
+	}
+}
+
+// DHF-TEST: keel/requirement-20
+func TestSourceInFilesDefaultsOffAndCanBeEnabled(t *testing.T) {
+	defaultDir := t.TempDir()
+	defaultLogger := logging.New(logging.Config{
+		Service: "svc",
+		Console: logging.ConsoleNone,
+		TextDir: defaultDir,
+	})
+	defaultLogger.Info("default source")
+	if err := defaultLogger.Close(); err != nil {
+		t.Fatalf("close default logger: %v", err)
+	}
+	defaultData, err := os.ReadFile(logging.HumanLogPath(defaultDir, "svc"))
+	if err != nil {
+		t.Fatalf("read default human file sink: %v", err)
+	}
+	if got := string(defaultData); strings.Contains(got, "logging_test.go") {
+		t.Fatalf("SourceInFiles default emitted caller source: %q", got)
+	}
+
+	sourceDir := t.TempDir()
+	sourceLogger := logging.New(logging.Config{
+		Service:       "svc",
+		Console:       logging.ConsoleNone,
+		TextDir:       sourceDir,
+		SourceInFiles: true,
+	})
+	sourceLogger.Info("source enabled")
+	if err := sourceLogger.Close(); err != nil {
+		t.Fatalf("close source logger: %v", err)
+	}
+	sourceData, err := os.ReadFile(logging.HumanLogPath(sourceDir, "svc"))
+	if err != nil {
+		t.Fatalf("read source human file sink: %v", err)
+	}
+	if got := string(sourceData); !strings.Contains(got, "logging_test.go") {
+		t.Fatalf("SourceInFiles=true missing caller source: %q", got)
 	}
 }
 
@@ -718,13 +803,13 @@ func TestConsoleOutput_WritesRollingHumanFileAtDebugAndRetainsTen(t *testing.T) 
 		t.Fatalf("read current human log %s: %v", today, err)
 	}
 	got := string(body)
-	if !strings.Contains(got, "\tDEBU\t") || !strings.Contains(got, "debug detail") {
+	if !strings.Contains(got, "\tDEBUG\t") || !strings.Contains(got, "debug detail") {
 		t.Fatalf("file sink did not capture DEBUG detail: %q", got)
 	}
 	if !strings.Contains(got, "\tINFO\t") || !strings.Contains(got, "run started") {
 		t.Fatalf("file sink did not capture INFO detail: %q", got)
 	}
-	if !regexp.MustCompile(`\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\t(?:DEBU|INFO)\topenbrain-dev\s+\t`).MatchString(got) {
+	if !regexp.MustCompile(`\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\t(?:DEBUG|INFO)\topenbrain-dev\s+\t`).MatchString(got) {
 		t.Fatalf("file sink does not use full timestamp, level, padded source tabs: %q", got)
 	}
 }
@@ -819,7 +904,7 @@ func TestLoggerFansOutToConsoleHumanFileAndJSONFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read human log: %v", err)
 	}
-	if got := string(humanData); !strings.Contains(got, "debug detail") || !strings.Contains(got, "\tDEBU\t") {
+	if got := string(humanData); !strings.Contains(got, "debug detail") || !strings.Contains(got, "\tDEBUG\t") {
 		t.Fatalf("human file did not capture DEBUG text detail: %q", got)
 	}
 
@@ -835,7 +920,7 @@ func TestLoggerFansOutToConsoleHumanFileAndJSONFile(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
 		t.Fatalf("JSONL first line is not JSON: %v; line=%q", err, lines[0])
 	}
-	if first["msg"] != "debug detail" || first["level"] != "debug" || first["token"] != "[REDACTED]" {
+	if first["msg"] != "debug detail" || first["level"] != "DEBUG" || first["token"] != "[REDACTED]" {
 		t.Fatalf("JSON file did not capture DEBUG structured redacted record: %#v", first)
 	}
 }
@@ -953,7 +1038,7 @@ func TestRecordCapture_AllJSON_MultipleLines(t *testing.T) {
 
 	// Assert order and content of each line.
 	wantMsgs := []string{"line-one", "line-two", "line-three"}
-	wantLevels := []string{"info", "warn", "error"}
+	wantLevels := []string{"INFO", "WARN", "ERROR"}
 	for i, want := range wantMsgs {
 		if got[i]["msg"] != want {
 			t.Errorf("AllJSON[%d][msg] = %v, want %q", i, got[i]["msg"], want)

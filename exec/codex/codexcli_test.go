@@ -230,7 +230,7 @@ func TestRun_LeavesThreadIDEmptyWhenThreadStartedAbsent(t *testing.T) {
 // events for OnEvent, while process start/end lifecycle records are emitted
 // uniformly by the process facility.
 //
-// DHF-TEST: keel/requirement-2, openbrain/requirement-602
+// DHF-TEST: keel/requirement-2, keel/requirement-20, openbrain/requirement-602
 func TestRun_UsesSharedProcessLifecycleLogging(t *testing.T) {
 	dir := t.TempDir()
 	argvFile := filepath.Join(dir, "argv.txt")
@@ -288,8 +288,8 @@ func TestRun_UsesSharedProcessLifecycleLogging(t *testing.T) {
 	if data, ok := output["data"].(string); !ok || !strings.Contains(data, `"thread.started"`) {
 		t.Fatalf("process_output data = %#v, want raw codex stdout to remain observable", output["data"])
 	}
-	if got, ok := output["level"].(string); !ok || got != "debug" {
-		t.Fatalf("codex stdout process_output level = %#v, want debug", output["level"])
+	if got, ok := output["level"].(string); !ok || got != "DEBUG" {
+		t.Fatalf("codex stdout process_output level = %#v, want DEBUG", output["level"])
 	}
 }
 
