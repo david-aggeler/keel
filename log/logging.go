@@ -21,9 +21,7 @@ import (
 type Console string
 
 const (
-	// ConsoleSparseAI emits the sparse human console used by agent-oriented
-	// runs. The rendering currently shares the plain formatter; requirement-17
-	// owns the narrower sparse-AI rendering behavior.
+	// ConsoleSparseAI emits sparse JSON events used by agent-oriented runs.
 	ConsoleSparseAI Console = "sparse-ai"
 	// ConsolePlain emits the human-readable console formatter.
 	ConsolePlain Console = "plain"
@@ -169,6 +167,8 @@ func New(cfg Config) *Logger {
 			Level:       level,
 			ReplaceAttr: replaceForOpenBrain,
 		}))
+	case ConsoleSparseAI:
+		handlers = append(handlers, newSparseAIHandler(w, level))
 	default:
 		handlers = append(handlers, newConsoleHandler(w, level, colorEnabled(w, cfg.ForceColor, cfg.DisableColor), cfg.ConsoleOmitKeys))
 	}
@@ -331,6 +331,141 @@ func (h multiHandler) WithGroup(name string) slog.Handler {
 		next.handlers = append(next.handlers, handler.WithGroup(name))
 	}
 	return next
+}
+
+type sparseAIHandler struct {
+	mu     *sync.Mutex
+	w      io.Writer
+	level  slog.Leveler
+	attrs  []slog.Attr
+	groups []string
+}
+
+func newSparseAIHandler(w io.Writer, level slog.Leveler) slog.Handler {
+	return &sparseAIHandler{mu: &sync.Mutex{}, w: w, level: level}
+}
+
+func (h *sparseAIHandler) Enabled(_ context.Context, level slog.Level) bool {
+	min := slog.LevelInfo
+	if h.level != nil {
+		min = h.level.Level()
+	}
+	return level >= min
+}
+
+// DHF-REQ: keel/requirement-17
+func (h *sparseAIHandler) Handle(_ context.Context, r slog.Record) error {
+	attrs := make([]slog.Attr, 0, len(h.attrs)+r.NumAttrs())
+	attrs = append(attrs, h.attrs...)
+	r.Attrs(func(a slog.Attr) bool {
+		attrs = append(attrs, a)
+		return true
+	})
+
+	event := "log"
+	fields := make(map[string]any)
+	for _, attr := range attrs {
+		attr = replaceForOpenBrain(h.groups, attr)
+		if attr.Equal(slog.Attr{}) || attr.Key == "" {
+			continue
+		}
+		if attr.Key == "event_type" {
+			if attr.Value.Kind() == slog.KindString && strings.TrimSpace(attr.Value.String()) != "" {
+				event = attr.Value.String()
+			}
+			continue
+		}
+		fields[attr.Key] = sparseFieldValue(attr.Value)
+	}
+
+	payload := struct {
+		Level   string         `json:"level"`
+		Event   string         `json:"event"`
+		Message string         `json:"message"`
+		Fields  map[string]any `json:"fields"`
+	}{
+		Level:   strings.ToLower(r.Level.String()),
+		Event:   event,
+		Message: RedactString(r.Message),
+		Fields:  fields,
+	}
+
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(payload); err != nil {
+		return err
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	_, err := h.w.Write(b.Bytes())
+	return err
+}
+
+func (h *sparseAIHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	next := h.clone()
+	next.attrs = slicesClone(h.attrs)
+	for _, attr := range attrs {
+		attr = replaceForOpenBrain(h.groups, attr)
+		if attr.Equal(slog.Attr{}) || attr.Key == "" {
+			continue
+		}
+		next.attrs = append(next.attrs, attr)
+	}
+	return next
+}
+
+func (h *sparseAIHandler) WithGroup(name string) slog.Handler {
+	if name == "" {
+		return h
+	}
+	next := h.clone()
+	next.groups = append(slicesClone(h.groups), name)
+	return next
+}
+
+func (h *sparseAIHandler) clone() *sparseAIHandler {
+	return &sparseAIHandler{
+		mu:     h.mu,
+		w:      h.w,
+		level:  h.level,
+		attrs:  h.attrs,
+		groups: h.groups,
+	}
+}
+
+func sparseFieldValue(v slog.Value) any {
+	v = v.Resolve()
+	switch v.Kind() {
+	case slog.KindString:
+		return RedactString(v.String())
+	case slog.KindBool:
+		return v.Bool()
+	case slog.KindDuration:
+		return v.Duration().String()
+	case slog.KindFloat64:
+		return v.Float64()
+	case slog.KindInt64:
+		return v.Int64()
+	case slog.KindTime:
+		return v.Time().Format(time.RFC3339Nano)
+	case slog.KindUint64:
+		return v.Uint64()
+	case slog.KindGroup:
+		attrs := v.Group()
+		out := make(map[string]any, len(attrs))
+		for _, attr := range attrs {
+			attr = replaceForOpenBrain(nil, attr)
+			if attr.Equal(slog.Attr{}) || attr.Key == "" {
+				continue
+			}
+			out[attr.Key] = sparseFieldValue(attr.Value)
+		}
+		return out
+	default:
+		return RedactString(fmt.Sprint(v.Any()))
+	}
 }
 
 type consoleHandler struct {
