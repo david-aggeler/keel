@@ -71,18 +71,20 @@ else
 		go install golang.org/x/tools/gopls@latest
 	fi
 
-	# --- golangci-lint (errcheck, staticcheck, unused, ineffassign, gosimple) ---
-	GOLANGCI_LINT_VERSION="v1.64.8"
+	# --- golangci-lint (errcheck, govet, staticcheck, unused, ineffassign) ---
+	# v2 line: the module path gained a /v2 suffix and gosimple folded into
+	# staticcheck. Config is .golangci.yml v2 schema.
+	GOLANGCI_LINT_VERSION="v2.0.2"
 	GOLANGCI_LINT_BIN="${GO_BIN_DIR}/golangci-lint"
 	if [[ -x "$GOLANGCI_LINT_BIN" ]]; then
 		echo "golangci-lint already installed: $("$GOLANGCI_LINT_BIN" --version | head -n1) (${GOLANGCI_LINT_BIN})"
 	else
 		echo "Installing golangci-lint ${GOLANGCI_LINT_VERSION} into ${GO_BIN_DIR}..."
-		go install "github.com/golangci/golangci-lint/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}"
+		go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}"
 	fi
 
 	# --- govulncheck — stdlib/dependency vulnerability scan ---
-	GOVULNCHECK_VERSION="v1.1.4"
+	GOVULNCHECK_VERSION="v1.3.0"
 	GOVULNCHECK_BIN="${GO_BIN_DIR}/govulncheck"
 	if [[ -x "$GOVULNCHECK_BIN" ]]; then
 		echo "govulncheck already installed: $("$GOVULNCHECK_BIN" --version | head -n1) (${GOVULNCHECK_BIN})"
@@ -112,7 +114,7 @@ else
 	fi
 
 	# --- gitleaks — secret scanner (enforces keel/requirement-8: no secrets) ---
-	GITLEAKS_VERSION="v8.18.4"
+	GITLEAKS_VERSION="v8.21.2"
 	GITLEAKS_BIN="${GO_BIN_DIR}/gitleaks"
 	if [[ -x "$GITLEAKS_BIN" ]]; then
 		echo "gitleaks already installed: $("$GITLEAKS_BIN" version) (${GITLEAKS_BIN})"
@@ -149,15 +151,18 @@ fi
 # Not a Go tool; installed as an npm global. Needs Node — scripts/setup_as_root.sh
 # installs nodejs + npm.
 # ---------------------------------------------------------------------------
-CSPELL_VERSION="10.0.0"
+CSPELL_VERSION="10.0.1"
 CSPELL_BIN="$(command -v cspell 2>/dev/null || true)"
-if [[ -n "$CSPELL_BIN" ]]; then
+if [[ -n "$CSPELL_BIN" ]] && cspell --version 2>/dev/null | grep -qF "$CSPELL_VERSION"; then
 	echo "cspell already installed: $(cspell --version 2>&1 | head -n1) (${CSPELL_BIN})"
+elif command -v pnpm >/dev/null 2>&1; then
+	echo "Installing cspell ${CSPELL_VERSION} via pnpm add -g..."
+	pnpm add -g "cspell@${CSPELL_VERSION}"
 elif command -v npm >/dev/null 2>&1; then
 	echo "Installing cspell ${CSPELL_VERSION} via npm install -g..."
 	npm install -g "cspell@${CSPELL_VERSION}"
 else
-	echo "WARN: npm not found — skipping cspell. Run scripts/setup_as_root.sh (installs nodejs+npm), then re-run." >&2
+	echo "WARN: pnpm/npm not found — skipping cspell. Run scripts/setup_as_root.sh (installs nodejs+npm), then re-run." >&2
 fi
 
 # ---------------------------------------------------------------------------
