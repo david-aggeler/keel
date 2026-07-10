@@ -159,6 +159,10 @@ func (p *Process) Wait() (Result, error) {
 
 	p.once.Do(func() {
 		p.waitErr = <-p.waitCh
+		// cmd.Wait has returned, so all output has been copied to the capture
+		// writers; emit any trailing unterminated line before building Result.
+		p.stdout.flush()
+		p.stderr.flush()
 	})
 
 	result := Result{
@@ -178,6 +182,7 @@ func (p *Process) Wait() (Result, error) {
 type captureWriter struct {
 	mu         sync.Mutex
 	buf        bytes.Buffer
+	pending    bytes.Buffer
 	stream     io.Writer
 	logger     processLogger
 	streamName string
@@ -190,16 +195,19 @@ func (w *captureWriter) Write(p []byte) (int, error) {
 
 	w.buf.Write(p)
 	if w.logger != nil {
-		log := w.logger.Debug
-		if w.streamName == "stderr" {
-			log = w.logger.Error
-		}
-		for _, line := range cleanProcessOutputLines(string(p)) {
-			log("process output",
-				"event_type", "process_output",
-				"stream", w.streamName,
-				"data", logging.RedactString(line),
-			)
+		// os/exec does not guarantee a logical child line arrives in one Write,
+		// so carry any unterminated fragment across calls and only emit complete
+		// newline-delimited lines; the trailing partial is flushed at completion.
+		w.pending.Write(p)
+		for {
+			data := w.pending.Bytes()
+			idx := bytes.IndexByte(data, '\n')
+			if idx < 0 {
+				break
+			}
+			line := string(data[:idx])
+			w.pending.Next(idx + 1)
+			w.logLine(line)
 		}
 	}
 	if w.stream != nil {
@@ -210,18 +218,36 @@ func (w *captureWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func cleanProcessOutputLines(s string) []string {
-	s = strings.TrimRight(s, "\r\n")
-	parts := strings.Split(s, "\n")
-	lines := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimRight(part, "\r")
-		if strings.TrimSpace(part) == "" {
-			continue
-		}
-		lines = append(lines, part)
+// flush emits any final unterminated line still buffered after the process has
+// stopped writing. Callers must invoke it once the child's output is complete.
+// DHF-REQ: keel/requirement-24
+func (w *captureWriter) flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.logger == nil || w.pending.Len() == 0 {
+		return
 	}
-	return lines
+	line := w.pending.String()
+	w.pending.Reset()
+	w.logLine(line)
+}
+
+// logLine records one child-output line: trailing CR trimmed, blank lines
+// dropped, stdout at Debug and stderr at Error. The caller holds w.mu.
+func (w *captureWriter) logLine(line string) {
+	line = strings.TrimRight(line, "\r")
+	if strings.TrimSpace(line) == "" {
+		return
+	}
+	log := w.logger.Debug
+	if w.streamName == "stderr" {
+		log = w.logger.Error
+	}
+	log("process output",
+		"event_type", "process_output",
+		"stream", w.streamName,
+		"data", logging.RedactString(line),
+	)
 }
 
 func (w *captureWriter) String() string {
