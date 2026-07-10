@@ -10,9 +10,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
@@ -40,6 +42,10 @@ Verbs:
 Flags (accepted before or after the verb):
   --json             Emit machine-readable JSON logs instead of the human console.
   -v, --verbose      Include debug-level detail (child stdout, per-step timing).`
+
+type usageError string
+
+func (e usageError) Error() string { return string(e) }
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -193,9 +199,19 @@ func loggerConfig(level slog.Leveler) logging.Config {
 
 // exitFor maps a verb's error to a process exit code, logging the failure
 // through keel/log so nothing is surfaced via a raw fmt fallback.
+//
+// DHF-REQ: keel/requirement-18
 func exitFor(logger *slog.Logger, err error) int {
 	if err != nil {
 		logger.Error("keel-dev failed", "error", logging.RedactErr(err).Error())
+		var usage usageError
+		if errors.As(err, &usage) {
+			return 2
+		}
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return exitErr.ExitCode()
+		}
 		return 1
 	}
 	return 0
