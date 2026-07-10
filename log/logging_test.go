@@ -89,6 +89,54 @@ func TestNewConfigExposesFourSinkLoggerSurface(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-19
+func TestNewConfigPerRunJSONLSinkUsesInvocationFileAndTracksLines(t *testing.T) {
+	jsonlDir := t.TempDir()
+	logger := logging.New(logging.Config{
+		Service:  "svc",
+		Console:  logging.ConsoleNone,
+		JSONLDir: jsonlDir,
+		PerRun:   true,
+	})
+	t.Cleanup(func() {
+		if err := logger.Close(); err != nil {
+			t.Fatalf("Close returned error: %v", err)
+		}
+	})
+
+	logger.Info("first")
+	if got := logger.RunLogLine(); got != 1 {
+		t.Fatalf("RunLogLine after first record = %d, want 1", got)
+	}
+	logger.Info("second")
+	if got := logger.RunLogLine(); got != 2 {
+		t.Fatalf("RunLogLine after second record = %d, want 2", got)
+	}
+
+	path := logger.RunLogPath()
+	if path == "" {
+		t.Fatal("RunLogPath is empty; want per-run JSONL path")
+	}
+	if filepath.Dir(path) != jsonlDir {
+		t.Fatalf("RunLogPath dir = %q, want %q", filepath.Dir(path), jsonlDir)
+	}
+	if !strings.HasSuffix(filepath.Base(path), ".jsonl") || strings.Contains(filepath.Base(path), "svc-") {
+		t.Fatalf("RunLogPath base = %q, want per-run <timestamp>-<run>.jsonl rather than daily service file", filepath.Base(path))
+	}
+	if matches, err := filepath.Glob(filepath.Join(jsonlDir, "*.jsonl")); err != nil || len(matches) != 1 || matches[0] != path {
+		t.Fatalf("jsonl matches = %v, err = %v; want only %q", matches, err, path)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read run log: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("run log lines = %d (%q), want 2 whole-record lines", len(lines), string(data))
+	}
+}
+
 // DHF-TEST: keel/requirement-17
 func TestSparseAIConsoleEmitsCuratedEventsAndKeepsDebugChildOutputInFiles(t *testing.T) {
 	var console bytes.Buffer
