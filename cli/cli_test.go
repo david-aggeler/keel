@@ -198,6 +198,20 @@ func TestCommandHelpersCoverNestedAndErrorPaths(t *testing.T) {
 		t.Fatalf("Dispatch(parent beta --nope) = %v (%T), want UsageError exit 2", nope, nope)
 	}
 
+	// The --name=value form is resolved against declared flags the same way:
+	// a declared flag is accepted, an undeclared one is rejected with exit 2.
+	if err := root.Dispatch(context.Background(), []string{"parent", "beta", "--flag=x"}); err != nil {
+		t.Fatalf("declared --flag=x should be accepted: %v", err)
+	}
+	if got := called[len(called)-1]; got != "--flag=x" {
+		t.Fatalf("handler last arg = %q, want --flag=x", got)
+	}
+	badEq := root.Dispatch(context.Background(), []string{"parent", "beta", "--nope=1"})
+	var badEqUsage UsageError
+	if !errors.As(badEq, &badEqUsage) || badEqUsage.ExitCode() != 2 {
+		t.Fatalf("Dispatch(parent beta --nope=1) = %v (%T), want UsageError exit 2", badEq, badEq)
+	}
+
 	specs := SimpleSpecs("tool group", map[string]string{"b": "Bee.", "a": "Aye."})
 	if len(specs) != 2 || specs[0].Name != "a" || specs[1].Use != "tool group b" {
 		t.Fatalf("SimpleSpecs = %#v", specs)
