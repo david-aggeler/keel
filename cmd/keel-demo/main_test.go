@@ -6,12 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/david-aggeler/keel/cli"
 	logging "github.com/david-aggeler/keel/log"
 )
 
@@ -63,7 +63,7 @@ func TestKeelDemoRunsEveryModeAndSurfacesLogAndExecFeatures(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-26
+// DHF-TEST: keel/requirement-26, keel/requirement-28
 func TestKeelDemoHelpTreeRendersTopLevelAndNestedPerMode(t *testing.T) {
 	for _, mode := range []string{"human", "ai", "json"} {
 		t.Run(mode, func(t *testing.T) {
@@ -87,6 +87,13 @@ func TestKeelDemoHelpTreeRendersTopLevelAndNestedPerMode(t *testing.T) {
 				}
 			}
 
+			if mode == "human" {
+				for _, notWant := range []string{"INFO", "====", `"event_type":"help"`, `"level":"INFO"`} {
+					if strings.Contains(top, notWant) || strings.Contains(nested, notWant) {
+						t.Fatalf("human help used log rendering marker %q\ntop:\n%s\nnested:\n%s", notWant, top, nested)
+					}
+				}
+			}
 			if mode == "json" {
 				assertEveryLineIsJSON(t, top)
 				assertEveryLineIsJSON(t, nested)
@@ -94,31 +101,6 @@ func TestKeelDemoHelpTreeRendersTopLevelAndNestedPerMode(t *testing.T) {
 			if mode == "ai" {
 				assertSparseAIEvents(t, top)
 				assertSparseAIEvents(t, nested)
-			}
-		})
-	}
-}
-
-// DHF-TEST: keel/requirement-26
-func TestShowHelpDirectCoversTopLevelAndNestedModes(t *testing.T) {
-	for _, mode := range []string{"human", "ai", "json"} {
-		t.Run(mode, func(t *testing.T) {
-			var top bytes.Buffer
-			topLogger := testLogger(t, mode, &top)
-			if code := showHelp(topLogger, cliConfig{mode: mode, help: true}); code != 0 {
-				t.Fatalf("showHelp top-level returned %d, want 0", code)
-			}
-			if !strings.Contains(top.String(), "workflow inspect") {
-				t.Fatalf("top-level help missing nested command:\n%s", top.String())
-			}
-
-			var nested bytes.Buffer
-			nestedLogger := testLogger(t, mode, &nested)
-			if code := showHelp(nestedLogger, cliConfig{mode: mode, help: true, args: []string{"workflow"}}); code != 0 {
-				t.Fatalf("showHelp nested returned %d, want 0", code)
-			}
-			if !strings.Contains(nested.String(), "workflow replay") {
-				t.Fatalf("nested help missing subcommand:\n%s", nested.String())
 			}
 		})
 	}
@@ -148,54 +130,25 @@ func TestRunShowcaseDirectReturnsStructuredFailure(t *testing.T) {
 	}
 }
 
-func TestParseArgsAndExitMapping(t *testing.T) {
-	cfg, err := parseArgs([]string{"--mode", "json", "workflow", "--help"})
-	if err != nil {
-		t.Fatalf("parseArgs returned error: %v", err)
+// DHF-TEST: keel/requirement-28
+func TestKeelDemoUsesSharedCLIForUsageErrors(t *testing.T) {
+	out, code := runDemo(t, "--unknown")
+	if code != 2 {
+		t.Fatalf("unknown global flag exit = %d, want 2\noutput:\n%s", code, out)
 	}
-	if cfg.mode != "json" || !cfg.help || len(cfg.args) != 1 || cfg.args[0] != "workflow" {
-		t.Fatalf("parseArgs returned unexpected config: %+v", cfg)
-	}
-	if _, err := parseArgs([]string{"--mode", "bogus"}); err == nil {
-		t.Fatal("parseArgs accepted an unknown mode")
-	}
-	if _, err := parseArgs([]string{"--unknown"}); err == nil {
-		t.Fatal("parseArgs accepted an unknown flag")
-	}
-
-	var out bytes.Buffer
-	logger := testLogger(t, "ai", &out)
-	if code := exitFor(logger, nil); code != 0 {
-		t.Fatalf("exitFor(nil) = %d, want 0", code)
-	}
-	if code := exitFor(logger, usageError("bad usage")); code != 2 {
-		t.Fatalf("exitFor(usageError) = %d, want 2", code)
-	}
-	if code := exitFor(logger, errors.New("plain failure")); code != 1 {
-		t.Fatalf("exitFor(generic) = %d, want 1", code)
+	if !strings.Contains(out, `unknown command "--unknown"`) && !strings.Contains(out, `unknown flag "--unknown"`) {
+		t.Fatalf("unknown flag did not report a shared CLI usage error:\n%s", out)
 	}
 }
 
-func TestModuleRootHelpers(t *testing.T) {
-	root, err := findModuleRoot(".")
-	if err != nil {
-		t.Fatalf("findModuleRoot returned error: %v", err)
+func TestExitCodeMapping(t *testing.T) {
+	var out bytes.Buffer
+	logger := testLogger(t, "ai", &out)
+	if code := exitCodeFor(logger, nil); code != 0 {
+		t.Fatalf("exitCodeFor(nil) = %d, want 0", code)
 	}
-	if !filepath.IsAbs(root) {
-		t.Fatalf("findModuleRoot returned non-absolute root %q", root)
-	}
-	data, err := os.ReadFile(filepath.Join(root, "go.mod"))
-	if err != nil {
-		t.Fatalf("findModuleRoot returned root without readable go.mod %q: %v", root, err)
-	}
-	if !declaresKeel(string(data)) {
-		t.Fatalf("findModuleRoot returned non-keel module root %q", root)
-	}
-	if !declaresKeel("module github.com/david-aggeler/keel\n") {
-		t.Fatal("declaresKeel rejected the keel module")
-	}
-	if declaresKeel("module example.com/other\n") {
-		t.Fatal("declaresKeel accepted a foreign module")
+	if code := exitCodeFor(logger, errors.New("plain failure")); code != 1 {
+		t.Fatalf("exitCodeFor(generic) = %d, want 1", code)
 	}
 }
 
@@ -228,14 +181,14 @@ func runDemo(t *testing.T, args ...string) (string, int) {
 
 func testLogger(t *testing.T, mode string, out *bytes.Buffer) *logging.Logger {
 	t.Helper()
-	console, err := consoleForMode(mode)
+	parsed, err := cli.ParseMode(mode)
 	if err != nil {
-		t.Fatalf("consoleForMode(%q): %v", mode, err)
+		t.Fatalf("ParseMode(%q): %v", mode, err)
 	}
 	logger := logging.New(logging.Config{
 		Service:  "keel-demo-test",
 		Level:    slog.LevelDebug,
-		Console:  console,
+		Console:  consoleForSharedMode(parsed),
 		Writer:   out,
 		TextDir:  t.TempDir(),
 		JSONLDir: t.TempDir(),
