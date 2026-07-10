@@ -525,6 +525,52 @@ func TestModuleContextAppearsOnlyInFileSinks(t *testing.T) {
 }
 
 // DHF-TEST: keel/requirement-20
+func TestGroupedModuleContextAppearsOnlyInFileSinks(t *testing.T) {
+	var console bytes.Buffer
+	textDir := t.TempDir()
+	jsonlDir := t.TempDir()
+	logger := logging.New(logging.Config{
+		Service:  "svc",
+		Level:    slog.LevelDebug,
+		Console:  logging.ConsolePlain,
+		Writer:   &console,
+		TextDir:  textDir,
+		JSONLDir: jsonlDir,
+	}).WithGroup("ctx").With("module", "keel/exec")
+	t.Cleanup(func() { _ = logger.Close() })
+
+	logger.Info("grouped module context", "operation", "run")
+
+	if got := console.String(); strings.Contains(got, "module=") || strings.Contains(got, "ctx.module") || strings.Contains(got, "keel/exec") {
+		t.Fatalf("console included grouped module context reserved for file sinks: %q", got)
+	}
+
+	textData, err := os.ReadFile(logging.HumanLogPath(textDir, "svc"))
+	if err != nil {
+		t.Fatalf("read human file sink: %v", err)
+	}
+	if got := string(textData); !strings.Contains(got, "keel/exec") || !strings.Contains(got, "ctx.module=keel/exec") {
+		t.Fatalf("human file sink missing grouped module context: %q", got)
+	}
+
+	jsonData, err := os.ReadFile(logging.JSONLogPath(jsonlDir, "svc"))
+	if err != nil {
+		t.Fatalf("read JSONL file sink: %v", err)
+	}
+	var record map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(jsonData), &record); err != nil {
+		t.Fatalf("parse JSONL file sink: %v; body=%q", err, string(jsonData))
+	}
+	group, ok := record["ctx"].(map[string]any)
+	if !ok {
+		t.Fatalf("JSONL file sink ctx = %#v, want object; record=%#v", record["ctx"], record)
+	}
+	if group["module"] != "keel/exec" {
+		t.Fatalf("JSONL file sink ctx.module = %#v, want keel/exec; record=%#v", group["module"], record)
+	}
+}
+
+// DHF-TEST: keel/requirement-20
 func TestSourceInFilesDefaultsOffAndCanBeEnabled(t *testing.T) {
 	defaultDir := t.TempDir()
 	defaultLogger := logging.New(logging.Config{
