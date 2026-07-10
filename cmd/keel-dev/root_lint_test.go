@@ -182,6 +182,45 @@ func TestLintSelf(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-27
+func TestBuildToolingCoversAdmittedBinaries(t *testing.T) {
+	root, err := findModuleRoot(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	justfile, err := os.ReadFile(filepath.Join(root, "Justfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	setupRepo, err := os.ReadFile(filepath.Join(root, "scripts", "setup_repo.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, src := range []struct {
+		name string
+		body string
+	}{
+		{name: "Justfile", body: string(justfile)},
+		{name: "scripts/setup_repo.sh", body: string(setupRepo)},
+	} {
+		for _, want := range []string{
+			"go build -o bin/keel-dev ./cmd/keel-dev",
+			"go build -o bin/keel-demo ./cmd/keel-demo",
+		} {
+			if !strings.Contains(src.body, want) {
+				t.Fatalf("%s missing admitted binary build command %q", src.name, want)
+			}
+		}
+	}
+	for _, want := range []string{"./bin/keel-dev", "./bin/keel-demo"} {
+		if !strings.Contains(string(setupRepo), want) {
+			t.Fatalf("scripts/setup_repo.sh completion message missing %s", want)
+		}
+	}
+}
+
 func TestRunRejectsUnknownFlagAndExtraArgs(t *testing.T) {
 	if code := run([]string{"ci", "--jsn"}); code != 2 {
 		t.Fatalf("unknown flag should exit 2, got %d", code)
