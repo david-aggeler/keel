@@ -1,4 +1,6 @@
 openbrain-client.local.yaml
+# local MCP server config (per-machine; not part of the module)
+.mcp.json
 .logs
 bin/
 # run-queue per-unit worktrees are rooted under <repo>/worktrees/; never track them
