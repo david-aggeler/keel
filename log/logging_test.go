@@ -208,7 +208,7 @@ func TestNewConfigPerRunJSONLSinkUsesInvocationFileAndTracksLines(t *testing.T) 
 	}
 }
 
-// DHF-TEST: keel/requirement-17
+// DHF-TEST: keel/requirement-17, keel/requirement-20
 func TestSparseAIConsoleEmitsCuratedEventsAndKeepsDebugChildOutputInFiles(t *testing.T) {
 	var console bytes.Buffer
 	textDir := t.TempDir()
@@ -239,8 +239,8 @@ func TestSparseAIConsoleEmitsCuratedEventsAndKeepsDebugChildOutputInFiles(t *tes
 	if err := json.Unmarshal([]byte(lines[0]), &sparse); err != nil {
 		t.Fatalf("sparse console line is not JSON: %q: %v", lines[0], err)
 	}
-	if got, _ := sparse["level"].(string); got != "info" {
-		t.Fatalf("sparse level = %q, want info", got)
+	if got, _ := sparse["level"].(string); got != "INFO" {
+		t.Fatalf("sparse level = %q, want INFO", got)
 	}
 	if got, _ := sparse["event"].(string); got != "step" {
 		t.Fatalf("sparse event = %q, want step", got)
