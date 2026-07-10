@@ -172,6 +172,38 @@ func TestRunStepNonAdvisory_FailsOnNonZero(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-25
+func TestRunStepQuietStderrDowngradesBenignToolProgress(t *testing.T) {
+	dir := t.TempDir()
+	script := "#!/bin/sh\nprintf '%s\\n' 'benign progress' >&2\n"
+	tool := filepath.Join(dir, "quiet-tool")
+	if err := os.WriteFile(tool, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	logger, cap := testLogger("keel-dev")
+	if err := runStep(context.Background(), logger, ".", step{
+		name: "quiet-tool", program: tool, quietStderr: true,
+	}); err != nil {
+		t.Fatalf("quiet stderr step should pass, got %v", err)
+	}
+
+	var sawDowngraded bool
+	for _, rec := range cap.AllJSON() {
+		if rec["event_type"] == "process_output" && rec["stream"] == "stderr" && rec["data"] == "benign progress" {
+			if rec["level"] == "ERROR" {
+				t.Fatalf("quiet stderr progress surfaced at ERROR: %#v", rec)
+			}
+			if rec["level"] == "INFO" {
+				sawDowngraded = true
+			}
+		}
+	}
+	if !sawDowngraded {
+		t.Fatalf("did not find downgraded stderr progress record; records=%#v", cap.AllJSON())
+	}
+}
+
 // TestCspellStep_FailsOnMisspelling is the anti-vacuous-pass guard: with the
 // repo's committed cspell.json, a file containing a word that is in no
 // dictionary MUST fail the cspell step. This proves the spell-check step
@@ -286,6 +318,9 @@ func TestCiStepsHasStaticBattery(t *testing.T) {
 		}
 		if s.tool == "" {
 			t.Errorf("step %q must be version-pinned (tool unset)", want)
+		}
+		if !s.quietStderr {
+			t.Errorf("step %q must quiet benign stderr progress", want)
 		}
 	}
 	if !byName["deadcode"].advisory {

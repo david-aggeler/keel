@@ -183,6 +183,9 @@ func TestRunRejectsUnknownFlagAndExtraArgs(t *testing.T) {
 	if code := run([]string{"ci", "--jsn"}); code != 2 {
 		t.Fatalf("unknown flag should exit 2, got %d", code)
 	}
+	if code := run([]string{"ci", "--mode", "bogus"}); code != 2 {
+		t.Fatalf("unknown mode should exit 2, got %d", code)
+	}
 	if code := run([]string{"ci", "extra"}); code != 2 {
 		t.Fatalf("ci with an argument should exit 2, got %d", code)
 	}
@@ -236,7 +239,7 @@ func TestExitForMapsUsageChildAndGenericErrors(t *testing.T) {
 // three-sink logger, module root resolution) with a stub go on PATH.
 func TestRunVerifyVerbHappyPath(t *testing.T) {
 	stubTools(t, false, false)
-	if code := run([]string{"verify", "v9.9.9", "--json"}); code != 0 {
+	if code := run([]string{"verify", "v9.9.9", "--mode", "json"}); code != 0 {
 		t.Fatalf("verify verb = %d, want 0", code)
 	}
 }
