@@ -18,36 +18,15 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 
+	"github.com/david-aggeler/keel/cli"
 	logging "github.com/david-aggeler/keel/log"
 )
 
 // version is stamped via -ldflags "-X main.version=vX.Y.Z"; "dev" otherwise.
 // The git commit is resolved from build info by keel/log's ResolveGitCommit.
 var version = ""
-
-const usage = `keel-dev — keel's development CLI
-
-Usage:
-  keel-dev <verb> [args] [flags]
-
-Verbs:
-  ci                 Run the verification gate: gofmt, build, vet, lint, test.
-  release vX.Y.Z     Cut a release: preflight (clean tree + green ci) -> annotated
-                     tag -> GitHub release -> anonymous go-get verification.
-  verify vX.Y.Z      Re-verify (with retry) that an existing tag resolves
-                     anonymously via the default Go toolchain. Tag-CI entrypoint.
-  help               Show this help.
-
-Flags (accepted before or after the verb):
-  --mode MODE        Console mode: human, ai, or json. Default: human.
-  -v, --verbose      Include debug-level detail (child stdout, per-step timing).`
-
-type usageError string
-
-func (e usageError) Error() string { return string(e) }
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -57,56 +36,35 @@ func main() {
 // dispatches the verb. It returns the process exit code. Kept separate from
 // main so tests can drive the whole CLI surface.
 func run(argv []string) int {
-	var (
-		mode    = "human"
-		verbose bool
-		words   []string
-	)
-	for i := 0; i < len(argv); i++ {
-		arg := argv[i]
-		switch arg {
-		case "--mode":
-			if i+1 >= len(argv) {
-				fmt.Fprintln(os.Stderr, "keel-dev: --mode requires one of: human, ai, json")
-				fmt.Fprintln(os.Stderr)
-				printUsage()
-				return 2
-			}
-			i++
-			mode = argv[i]
-		case "-v", "--verbose":
-			verbose = true
-		case "-h", "--help":
-			printUsage()
-			return 0
-		default:
-			if len(arg) > 1 && arg[0] == '-' {
-				// Unknown flags are an error, never silently dropped: a gate
-				// tool that ignores what it was asked to do is worse than one
-				// that refuses.
-				fmt.Fprintf(os.Stderr, "keel-dev: unknown flag %q\n\n", arg)
-				printUsage()
-				return 2
-			}
-			words = append(words, arg)
-		}
-	}
-
-	if _, err := consoleForMode(mode); err != nil {
-		fmt.Fprintf(os.Stderr, "keel-dev: %v\n\n", err)
-		printUsage()
+	tree := commandTree()
+	cfg, words, err := cli.ParseGlobalConfig(argv)
+	mode := string(cfg.Mode)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "keel-dev: "+err.Error())
+		fmt.Fprintln(os.Stderr)
+		printUsage(tree)
 		return 2
 	}
 
-	if len(words) == 0 {
-		printUsage()
-		return 2
-	}
-
-	verb, args := words[0], words[1:]
-	if verb == "help" {
-		printUsage()
+	if cfg.Version {
+		fmt.Fprintln(os.Stdout, versionString())
 		return 0
+	}
+	if cfg.Help && len(words) == 0 {
+		printUsage(tree)
+		return 0
+	}
+	if len(words) > 0 && words[0] == "help" {
+		tree.RenderTopicHelp(os.Stderr, words[1:])
+		return 0
+	}
+	if cfg.Help {
+		tree.RenderTopicHelp(os.Stderr, words)
+		return 0
+	}
+	if len(words) == 0 {
+		printUsage(tree)
+		return 2
 	}
 
 	// Every verb operates on the keel module root, never on whatever directory
@@ -118,7 +76,7 @@ func run(argv []string) int {
 	}
 
 	level := slog.LevelInfo
-	if verbose {
+	if cfg.Verbose {
 		level = slog.LevelDebug
 	}
 	logger, closeSinks := buildLogger(mode, level, filepath.Join(root, ".logs"))
@@ -127,42 +85,21 @@ func run(argv []string) int {
 
 	// DHF-REQ: keel/requirement-11 — human-mode banner + build identity through
 	// keel/log's own presentation surface (Header, LogBuildIdentity).
-	logging.Header(slogLogger, "keel-dev "+verb, version)
-	logging.LogBuildIdentity(slogLogger, version, "")
+	if !cfg.NoHeader {
+		logging.Header(slogLogger, "keel-dev "+words[0], version)
+		logging.LogBuildIdentity(slogLogger, version, "")
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	switch verb {
-	case "ci":
-		if len(args) != 0 {
-			slogLogger.Error("ci takes no arguments", "got", fmt.Sprintf("%q", args))
-			return 2
-		}
-		return exitFor(slogLogger, runCIWithRunLog(ctx, slogLogger, logger, root))
-	case "release":
-		if len(args) != 1 {
-			slogLogger.Error("release requires exactly one argument: the semver tag (e.g. v0.1.0)")
-			return 2
-		}
-		return exitFor(slogLogger, runRelease(ctx, slogLogger, root, args[0]))
-	case "verify":
-		if len(args) != 1 {
-			slogLogger.Error("verify requires exactly one argument: the semver tag (e.g. v0.1.0)")
-			return 2
-		}
-		return exitFor(slogLogger, runVerify(ctx, slogLogger, args[0]))
-	default:
-		slogLogger.Error("unknown verb", "verb", verb)
-		printUsage()
-		return 2
-	}
+	return exitFor(slogLogger, tree.Dispatch(withRunState(ctx, slogLogger, logger, root), words))
 }
 
 // printUsage writes the static help text. Help is documentation, not run
 // output; run output (gate progress, results, errors) flows through keel/log.
-func printUsage() {
-	fmt.Fprintln(os.Stderr, usage)
+func printUsage(tree *cli.CommandSpec) {
+	tree.RenderRootHelp(os.Stderr)
 }
 
 // buildLogger builds keel-dev's three-sink logger from keel/log:
@@ -197,12 +134,16 @@ func newLogger(mode string, level slog.Leveler, writer io.Writer) *slog.Logger {
 
 // DHF-REQ: keel/requirement-25
 func consoleForMode(mode string) (logging.Console, error) {
-	switch strings.ToLower(mode) {
-	case "human":
+	parsed, err := cli.ParseMode(mode)
+	if err != nil {
+		return "", err
+	}
+	switch parsed {
+	case cli.ModeHuman:
 		return logging.ConsolePlain, nil
-	case "ai":
+	case cli.ModeAI:
 		return logging.ConsoleSparseAI, nil
-	case "json":
+	case cli.ModeJSON:
 		return logging.ConsoleJSON, nil
 	default:
 		return "", fmt.Errorf("unknown --mode %q: expected human, ai, or json", mode)
@@ -228,10 +169,10 @@ func loggerConfig(level slog.Leveler) logging.Config {
 // DHF-REQ: keel/requirement-18
 func exitFor(logger *slog.Logger, err error) int {
 	if err != nil {
-		var usage usageError
+		var usage cli.UsageError
 		if errors.As(err, &usage) {
 			logger.Error("keel-dev failed", "error", logging.RedactErr(err).Error())
-			return 2
+			return usage.ExitCode()
 		}
 		var opErr *logging.OperationalError
 		if errors.As(err, &opErr) {
