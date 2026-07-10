@@ -178,8 +178,8 @@ func isSensitiveAttrKey(key string) bool {
 
 // New creates a production logger from the four-sink Config model.
 //
-// DHF-REQ: keel/requirement-16, keel/requirement-22, openbrain/requirement-602
-func New(cfg Config) *Logger {
+// DHF-REQ: keel/requirement-16, keel/requirement-22, keel/requirement-29, openbrain/requirement-602
+func New(cfg Config) (*Logger, error) {
 	level := cfg.Level
 	if level == nil {
 		level = slog.LevelInfo
@@ -214,11 +214,13 @@ func New(cfg Config) *Logger {
 			closers = append(closers, c)
 		}
 	} else if cfg.TextDir != "" {
-		if h, err := newHumanFileHandler(cfg.TextDir, cfg.Service, cfg.SourceInFiles); err == nil {
-			handlers = append(handlers, h)
-			if c, ok := h.(io.Closer); ok {
-				closers = append(closers, c)
-			}
+		h, err := newHumanFileHandler(cfg.TextDir, cfg.Service, cfg.SourceInFiles)
+		if err != nil {
+			return nil, fmt.Errorf("keel/log: open text sink: %w", err)
+		}
+		handlers = append(handlers, h)
+		if c, ok := h.(io.Closer); ok {
+			closers = append(closers, c)
 		}
 	}
 	var runLogPath string
@@ -229,14 +231,17 @@ func New(cfg Config) *Logger {
 			closers = append(closers, c)
 		}
 	} else if cfg.JSONLDir != "" {
-		if h, path, counter, err := newJSONFileHandler(cfg.JSONLDir, cfg.Service, cfg.PerRun); err == nil {
-			handlers = append(handlers, h)
-			if c, ok := h.(io.Closer); ok {
-				closers = append(closers, c)
-			}
-			runLogPath = path
-			runLog = counter
+		h, path, counter, err := newJSONFileHandler(cfg.JSONLDir, cfg.Service, cfg.PerRun)
+		if err != nil {
+			closeAll(closers)
+			return nil, fmt.Errorf("keel/log: open jsonl sink: %w", err)
 		}
+		handlers = append(handlers, h)
+		if c, ok := h.(io.Closer); ok {
+			closers = append(closers, c)
+		}
+		runLogPath = path
+		runLog = counter
 	}
 	for _, h := range cfg.Handlers {
 		if h == nil {
@@ -258,7 +263,13 @@ func New(cfg Config) *Logger {
 	if len(handlers) > 1 {
 		h = multiHandler{handlers: handlers}
 	}
-	return &Logger{base: slog.New(h).With("service", cfg.Service), closers: closers, runLogPath: runLogPath, runLog: runLog, sourceInFiles: cfg.SourceInFiles}
+	return &Logger{base: slog.New(h).With("service", cfg.Service), closers: closers, runLogPath: runLogPath, runLog: runLog, sourceInFiles: cfg.SourceInFiles}, nil
+}
+
+func closeAll(closers []io.Closer) {
+	for i := len(closers) - 1; i >= 0; i-- {
+		_ = closers[i].Close()
+	}
 }
 
 func (l *Logger) slog() *slog.Logger {

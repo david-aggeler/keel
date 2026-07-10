@@ -62,9 +62,19 @@ func (h *captureHandler) WithGroup(name string) slog.Handler {
 	return &next
 }
 
-func newJSONCaptureLogger(service string) (*slog.Logger, *logging.RecordCapture) {
+func mustNewLogger(t testing.TB, cfg logging.Config) *logging.Logger {
+	t.Helper()
+	logger, err := logging.New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return logger
+}
+
+func newJSONCaptureLogger(t testing.TB, service string) (*slog.Logger, *logging.RecordCapture) {
+	t.Helper()
 	rc := &logging.RecordCapture{}
-	return logging.New(logging.Config{
+	return mustNewLogger(t, logging.Config{
 		Service: service,
 		Level:   slog.LevelDebug,
 		Console: logging.ConsoleJSON,
@@ -72,9 +82,10 @@ func newJSONCaptureLogger(service string) (*slog.Logger, *logging.RecordCapture)
 	}).Slog(), rc
 }
 
-func newConsoleCaptureLogger(service string) (*slog.Logger, *logging.RecordCapture) {
+func newConsoleCaptureLogger(t testing.TB, service string) (*slog.Logger, *logging.RecordCapture) {
+	t.Helper()
 	rc := &logging.RecordCapture{}
-	return logging.New(logging.Config{
+	return mustNewLogger(t, logging.Config{
 		Service: service,
 		Level:   slog.LevelDebug,
 		Console: logging.ConsolePlain,
@@ -83,12 +94,51 @@ func newConsoleCaptureLogger(service string) (*slog.Logger, *logging.RecordCaptu
 }
 
 func TestNewConfigJSONCaptureHelper_ReturnsLoggerAndCapture(t *testing.T) {
-	logger, capture := newJSONCaptureLogger("mcp")
+	logger, capture := newJSONCaptureLogger(t, "mcp")
 	if logger == nil {
 		t.Fatal("newJSONCaptureLogger returned nil logger")
 	}
 	if capture == nil {
 		t.Fatal("newJSONCaptureLogger returned nil capture")
+	}
+}
+
+// DHF-TEST: keel/requirement-29
+func TestNewConfigReturnsErrorWhenFileSinkCannotOpen(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  func(string) logging.Config
+	}{
+		{
+			name: "TextDir",
+			cfg: func(blocker string) logging.Config {
+				return logging.Config{Service: "svc", Console: logging.ConsoleNone, TextDir: blocker}
+			},
+		},
+		{
+			name: "JSONLDir",
+			cfg: func(blocker string) logging.Config {
+				return logging.Config{Service: "svc", Console: logging.ConsoleNone, JSONLDir: blocker}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			blocker := filepath.Join(t.TempDir(), "not-a-directory")
+			if err := os.WriteFile(blocker, []byte("file blocks log directory"), 0o600); err != nil {
+				t.Fatalf("write blocker: %v", err)
+			}
+
+			logger, err := logging.New(tc.cfg(blocker))
+			if err == nil {
+				if logger != nil {
+					_ = logger.Close()
+				}
+				t.Fatalf("New returned nil error for a blocked %s", tc.name)
+			}
+			if logger != nil {
+				t.Fatalf("New returned logger %v with error %v; want no logger", logger, err)
+			}
+		})
 	}
 }
 
@@ -98,7 +148,7 @@ func TestNewConfigExposesFourSinkLoggerSurface(t *testing.T) {
 	textDir := t.TempDir()
 	jsonlDir := t.TempDir()
 
-	logger := logging.New(logging.Config{
+	logger := mustNewLogger(t, logging.Config{
 		Service:       "svc",
 		Level:         slog.LevelDebug,
 		Console:       logging.ConsolePlain,
@@ -137,7 +187,7 @@ func TestNewConfigFansOutToAdditionalHandlers(t *testing.T) {
 	var console bytes.Buffer
 	extra := newCaptureHandler()
 
-	logger := logging.New(logging.Config{
+	logger := mustNewLogger(t, logging.Config{
 		Service:  "svc",
 		Console:  logging.ConsoleJSON,
 		Writer:   &console,
@@ -163,7 +213,7 @@ func TestNewConfigFansOutToAdditionalHandlers(t *testing.T) {
 // DHF-TEST: keel/requirement-19
 func TestNewConfigPerRunJSONLSinkUsesInvocationFileAndTracksLines(t *testing.T) {
 	jsonlDir := t.TempDir()
-	logger := logging.New(logging.Config{
+	logger := mustNewLogger(t, logging.Config{
 		Service:  "svc",
 		Console:  logging.ConsoleNone,
 		JSONLDir: jsonlDir,
@@ -214,7 +264,7 @@ func TestSparseAIConsoleEmitsCuratedEventsAndKeepsDebugChildOutputInFiles(t *tes
 	textDir := t.TempDir()
 	jsonlDir := t.TempDir()
 
-	logger := logging.New(logging.Config{
+	logger := mustNewLogger(t, logging.Config{
 		Service:  "svc",
 		Level:    slog.LevelInfo,
 		Console:  logging.ConsoleSparseAI,
@@ -292,7 +342,7 @@ func TestSparseAIConsoleEmitsCuratedEventsAndKeepsDebugChildOutputInFiles(t *tes
 // DHF-TEST: keel/requirement-17
 func TestConsoleJSONRemainsVerboseRecordRendering(t *testing.T) {
 	var console bytes.Buffer
-	logger := logging.New(logging.Config{
+	logger := mustNewLogger(t, logging.Config{
 		Service: "svc",
 		Level:   slog.LevelInfo,
 		Console: logging.ConsoleJSON,
@@ -320,7 +370,7 @@ func TestConsoleJSONRemainsVerboseRecordRendering(t *testing.T) {
 
 // DHF-TEST: keel/requirement-20
 func TestJSONOutput_HasG1Fields(t *testing.T) {
-	logger, capture := newJSONCaptureLogger("mcp")
+	logger, capture := newJSONCaptureLogger(t, "mcp")
 
 	logger.Info("test message")
 
@@ -372,7 +422,7 @@ func TestJSONOutput_LevelIsUppercase(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			logger, capture := newJSONCaptureLogger("mcp")
+			logger, capture := newJSONCaptureLogger(t, "mcp")
 			tc.logFn(logger)
 			got := capture.LastJSON()
 			if got == nil {
@@ -386,7 +436,7 @@ func TestJSONOutput_LevelIsUppercase(t *testing.T) {
 }
 
 func TestContextualFields_AppearInJSON(t *testing.T) {
-	logger, capture := newJSONCaptureLogger("mcp")
+	logger, capture := newJSONCaptureLogger(t, "mcp")
 
 	child := logger.With("req_id", "abc-123", "product", "openbrain", "memory_id", 42)
 	child.Info("contextual test")
@@ -408,7 +458,7 @@ func TestLogger_IsTransparentNotAFilter(t *testing.T) {
 	// discipline enforced by audits, not by the logger. This test proves
 	// the logger is transparent: logging "content" as an attribute key
 	// MUST appear in the output.
-	logger, capture := newJSONCaptureLogger("mcp")
+	logger, capture := newJSONCaptureLogger(t, "mcp")
 
 	logger.Info("test", "content", "secret-memory-body")
 
@@ -511,7 +561,7 @@ func TestRedactErr_NilIsNil(t *testing.T) {
 }
 
 func TestRecordCapture_Reset(t *testing.T) {
-	logger, capture := newJSONCaptureLogger("mcp")
+	logger, capture := newJSONCaptureLogger(t, "mcp")
 
 	logger.Info("first")
 	capture.Reset()
@@ -533,7 +583,7 @@ func TestRecordCapture_Reset(t *testing.T) {
 // DHF-TEST: keel/requirement-20
 func TestJSONOutput_NoTimeField(t *testing.T) {
 	// The G1 schema uses "ts", not "time". Verify "time" is absent.
-	logger, capture := newJSONCaptureLogger("mcp")
+	logger, capture := newJSONCaptureLogger(t, "mcp")
 	logger.Info("check time key")
 
 	raw := capture.LastRaw()
@@ -558,7 +608,7 @@ func TestModuleContextAppearsOnlyInFileSinks(t *testing.T) {
 	var console bytes.Buffer
 	textDir := t.TempDir()
 	jsonlDir := t.TempDir()
-	logger := logging.New(logging.Config{
+	logger := mustNewLogger(t, logging.Config{
 		Service:  "svc",
 		Level:    slog.LevelDebug,
 		Console:  logging.ConsolePlain,
@@ -600,7 +650,7 @@ func TestGroupedModuleContextAppearsOnlyInFileSinks(t *testing.T) {
 	var console bytes.Buffer
 	textDir := t.TempDir()
 	jsonlDir := t.TempDir()
-	logger := logging.New(logging.Config{
+	logger := mustNewLogger(t, logging.Config{
 		Service:  "svc",
 		Level:    slog.LevelDebug,
 		Console:  logging.ConsolePlain,
@@ -644,7 +694,7 @@ func TestGroupedModuleContextAppearsOnlyInFileSinks(t *testing.T) {
 // DHF-TEST: keel/requirement-20
 func TestSourceInFilesDefaultsOffAndCanBeEnabled(t *testing.T) {
 	defaultDir := t.TempDir()
-	defaultLogger := logging.New(logging.Config{
+	defaultLogger := mustNewLogger(t, logging.Config{
 		Service: "svc",
 		Console: logging.ConsoleNone,
 		TextDir: defaultDir,
@@ -662,7 +712,7 @@ func TestSourceInFilesDefaultsOffAndCanBeEnabled(t *testing.T) {
 	}
 
 	sourceDir := t.TempDir()
-	sourceLogger := logging.New(logging.Config{
+	sourceLogger := mustNewLogger(t, logging.Config{
 		Service:       "svc",
 		Console:       logging.ConsoleNone,
 		TextDir:       sourceDir,
@@ -685,7 +735,7 @@ func TestSourceInFilesDefaultsOffAndCanBeEnabled(t *testing.T) {
 func TestJSONOutput_FileSinkRetainsDebugWhenConsoleUsesInfo(t *testing.T) {
 	var console bytes.Buffer
 	var file bytes.Buffer
-	logger := logging.New(logging.Config{
+	logger := mustNewLogger(t, logging.Config{
 		Service: "openbrain-client",
 		Level:   slog.LevelInfo,
 		Console: logging.ConsoleJSON,
@@ -718,7 +768,7 @@ func TestJSONOutput_FileSinkRetainsDebugWhenConsoleUsesInfo(t *testing.T) {
 // DHF-TEST: keel/requirement-5, openbrain/requirement-151
 func TestConsoleOutput_HumanReadableAndRedacted(t *testing.T) {
 	capture := &logging.RecordCapture{}
-	logger := logging.New(logging.Config{Console: logging.ConsolePlain,
+	logger := mustNewLogger(t, logging.Config{Console: logging.ConsolePlain,
 		Service:         "cli",
 		Level:           slog.LevelDebug,
 		Writer:          capture,
@@ -751,7 +801,7 @@ func TestConsoleOutput_HumanReadableAndRedacted(t *testing.T) {
 // DHF-TEST: openbrain/requirement-151, openbrain/requirement-32
 func TestConsoleOutput_OmitsConfiguredContextKeysButJSONRetainsThem(t *testing.T) {
 	var consoleBuf bytes.Buffer
-	consoleLogger := logging.New(logging.Config{Console: logging.ConsolePlain,
+	consoleLogger := mustNewLogger(t, logging.Config{Console: logging.ConsolePlain,
 		Service:         "openbrain-client",
 		Level:           slog.LevelDebug,
 		Writer:          &consoleBuf,
@@ -769,7 +819,7 @@ func TestConsoleOutput_OmitsConfiguredContextKeysButJSONRetainsThem(t *testing.T
 		t.Fatalf("console output dropped per-event attr: %q", consoleRaw)
 	}
 
-	jsonLogger, jsonCapture := newJSONCaptureLogger("openbrain-client")
+	jsonLogger, jsonCapture := newJSONCaptureLogger(t, "openbrain-client")
 	jsonLogger.With("cr", "openbrain/change_request-394", "verb", "dev").Info("disk check", "free_mib", 2048)
 	got := jsonCapture.LastJSON()
 	for _, key := range []string{"service", "cr", "verb", "free_mib"} {
@@ -782,7 +832,7 @@ func TestConsoleOutput_OmitsConfiguredContextKeysButJSONRetainsThem(t *testing.T
 // DHF-TEST: openbrain/requirement-151
 func TestConsoleOutput_UsesStructuredHumanRunStyle(t *testing.T) {
 	var buf bytes.Buffer
-	logger := logging.New(logging.Config{Console: logging.ConsolePlain,
+	logger := mustNewLogger(t, logging.Config{Console: logging.ConsolePlain,
 		Service: "openbrain-dev",
 		Level:   slog.LevelDebug,
 		Writer:  &buf,
@@ -833,7 +883,7 @@ func TestConsoleOutput_UsesStructuredHumanRunStyle(t *testing.T) {
 // DHF-TEST: keel/requirement-24
 func TestConsoleOutput_RendersBannersByConsoleMode(t *testing.T) {
 	var plain bytes.Buffer
-	plainLogger := logging.New(logging.Config{
+	plainLogger := mustNewLogger(t, logging.Config{
 		Console: logging.ConsolePlain,
 		Service: "keel-dev",
 		Level:   slog.LevelDebug,
@@ -861,7 +911,7 @@ func TestConsoleOutput_RendersBannersByConsoleMode(t *testing.T) {
 	}
 
 	var sparse bytes.Buffer
-	sparseLogger := logging.New(logging.Config{
+	sparseLogger := mustNewLogger(t, logging.Config{
 		Console: logging.ConsoleSparseAI,
 		Service: "keel-dev",
 		Writer:  &sparse,
@@ -883,7 +933,7 @@ func TestConsoleOutput_RendersBannersByConsoleMode(t *testing.T) {
 	}
 
 	var jsonBuf bytes.Buffer
-	jsonLogger := logging.New(logging.Config{
+	jsonLogger := mustNewLogger(t, logging.Config{
 		Console: logging.ConsoleJSON,
 		Service: "keel-dev",
 		Writer:  &jsonBuf,
@@ -910,7 +960,7 @@ func TestConsoleOutput_LevelThresholdAndColorGating(t *testing.T) {
 	t.Setenv("NO_COLOR", "")
 
 	var plain bytes.Buffer
-	plainLogger := logging.New(logging.Config{Console: logging.ConsolePlain,
+	plainLogger := mustNewLogger(t, logging.Config{Console: logging.ConsolePlain,
 		Service: "cli",
 		Level:   slog.LevelInfo,
 		Writer:  &plain,
@@ -929,7 +979,7 @@ func TestConsoleOutput_LevelThresholdAndColorGating(t *testing.T) {
 	}
 
 	var colored bytes.Buffer
-	colorLogger := logging.New(logging.Config{Console: logging.ConsolePlain,
+	colorLogger := mustNewLogger(t, logging.Config{Console: logging.ConsolePlain,
 		Service:      "cli",
 		Level:        slog.LevelDebug,
 		Writer:       &colored,
@@ -943,7 +993,7 @@ func TestConsoleOutput_LevelThresholdAndColorGating(t *testing.T) {
 
 	t.Setenv("NO_COLOR", "1")
 	var noColor bytes.Buffer
-	noColorLogger := logging.New(logging.Config{Console: logging.ConsolePlain,
+	noColorLogger := mustNewLogger(t, logging.Config{Console: logging.ConsolePlain,
 		Service:    "cli",
 		Level:      slog.LevelDebug,
 		Writer:     &noColor,
@@ -965,7 +1015,7 @@ func TestConsoleOutput_WritesRollingHumanFileAtDebugAndRetainsTen(t *testing.T) 
 	}
 
 	var console bytes.Buffer
-	logger := logging.New(logging.Config{Console: logging.ConsolePlain,
+	logger := mustNewLogger(t, logging.Config{Console: logging.ConsolePlain,
 		Service: "openbrain-dev",
 		Level:   slog.LevelInfo,
 		Writer:  &console,
@@ -1023,7 +1073,7 @@ func TestHumanFileHandler_SharedAcrossLoggersAndCloseable(t *testing.T) {
 	// handler — the leak-free path. None of these opens a new file.
 	for i := 0; i < 5; i++ {
 		var console bytes.Buffer
-		logger := logging.New(logging.Config{Console: logging.ConsolePlain,
+		logger := mustNewLogger(t, logging.Config{Console: logging.ConsolePlain,
 			Service:          "openbrain-dev",
 			Level:            slog.LevelInfo,
 			Writer:           &console,
@@ -1075,7 +1125,7 @@ func TestLoggerFansOutToConsoleHumanFileAndJSONFile(t *testing.T) {
 	t.Cleanup(func() { _ = jsonHandler.(io.Closer).Close() })
 
 	var console bytes.Buffer
-	logger := logging.New(logging.Config{Console: logging.ConsolePlain,
+	logger := mustNewLogger(t, logging.Config{Console: logging.ConsolePlain,
 		Service:          "openbrain-client",
 		Level:            slog.LevelInfo,
 		Writer:           &console,
@@ -1126,8 +1176,8 @@ func twoDigit(n int) string {
 
 // DHF-TEST: keel/requirement-5
 func TestConsoleAndJSON_RedactAttributeValuesIdentically(t *testing.T) {
-	jsonLogger, jsonCapture := newJSONCaptureLogger("cli")
-	consoleLogger, consoleCapture := newConsoleCaptureLogger("cli")
+	jsonLogger, jsonCapture := newJSONCaptureLogger(t, "cli")
+	consoleLogger, consoleCapture := newConsoleCaptureLogger(t, "cli")
 
 	secret := "Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig"
 	jsonLogger.Info("auth failed", "authorization", secret)
@@ -1154,8 +1204,8 @@ func TestAllHandlers_RedactSensitiveTokenAttributes(t *testing.T) {
 		name      string
 		newLogger func() (*slog.Logger, *logging.RecordCapture)
 	}{
-		{"json", func() (*slog.Logger, *logging.RecordCapture) { return newJSONCaptureLogger("cli") }},
-		{"console", func() (*slog.Logger, *logging.RecordCapture) { return newConsoleCaptureLogger("cli") }},
+		{"json", func() (*slog.Logger, *logging.RecordCapture) { return newJSONCaptureLogger(t, "cli") }},
+		{"console", func() (*slog.Logger, *logging.RecordCapture) { return newConsoleCaptureLogger(t, "cli") }},
 	}
 
 	for _, tc := range tests {
@@ -1188,7 +1238,7 @@ func TestAllHandlers_RedactSensitiveTokenAttributes(t *testing.T) {
 // TestRecordCapture_AllJSON_Empty asserts that AllJSON returns an empty (not nil)
 // slice when the capture buffer is empty.
 func TestRecordCapture_AllJSON_Empty(t *testing.T) {
-	_, capture := newJSONCaptureLogger("mcp")
+	_, capture := newJSONCaptureLogger(t, "mcp")
 	got := capture.AllJSON()
 	// An empty buffer has no lines to return. Allow nil or empty slice.
 	if len(got) != 0 {
@@ -1199,7 +1249,7 @@ func TestRecordCapture_AllJSON_Empty(t *testing.T) {
 // TestRecordCapture_AllJSON_SingleLine asserts that after one log call,
 // AllJSON returns a slice of length 1 whose only element is the parsed JSON.
 func TestRecordCapture_AllJSON_SingleLine(t *testing.T) {
-	logger, capture := newJSONCaptureLogger("web-ui")
+	logger, capture := newJSONCaptureLogger(t, "web-ui")
 	logger.Info("hello")
 
 	got := capture.AllJSON()
@@ -1218,7 +1268,7 @@ func TestRecordCapture_AllJSON_SingleLine(t *testing.T) {
 // This test fails if AllJSON is implemented as an alias for LastJSON, or if
 // it reverses order, or if it drops any intermediate line.
 func TestRecordCapture_AllJSON_MultipleLines(t *testing.T) {
-	logger, capture := newJSONCaptureLogger("web-ui")
+	logger, capture := newJSONCaptureLogger(t, "web-ui")
 	logger.Info("line-one")
 	logger.Warn("line-two")
 	logger.Error("line-three")
@@ -1244,7 +1294,7 @@ func TestRecordCapture_AllJSON_MultipleLines(t *testing.T) {
 // TestRecordCapture_AllJSON_AfterReset asserts that after Reset(), AllJSON
 // returns only lines logged after the reset.
 func TestRecordCapture_AllJSON_AfterReset(t *testing.T) {
-	logger, capture := newJSONCaptureLogger("web-ui")
+	logger, capture := newJSONCaptureLogger(t, "web-ui")
 	logger.Info("before-reset")
 	capture.Reset()
 	logger.Warn("after-reset")
@@ -1262,7 +1312,7 @@ func TestRecordCapture_AllJSON_AfterReset(t *testing.T) {
 // least one line, AllJSON()[last] and LastJSON() decode to the same content.
 // This verifies the two methods are reading the same buffer and not diverging.
 func TestRecordCapture_AllJSON_LastJSONAgreement(t *testing.T) {
-	logger, capture := newJSONCaptureLogger("web-ui")
+	logger, capture := newJSONCaptureLogger(t, "web-ui")
 	logger.Info("first")
 	logger.Error("second")
 

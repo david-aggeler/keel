@@ -16,12 +16,16 @@ import (
 
 func testLogger(service string) (*logging.Logger, *logging.RecordCapture) {
 	cap := &logging.RecordCapture{}
-	return logging.New(logging.Config{
+	logger, err := logging.New(logging.Config{
 		Service: service,
 		Level:   slog.LevelDebug,
 		Console: logging.ConsoleJSON,
 		Writer:  cap,
-	}), cap
+	})
+	if err != nil {
+		panic(err)
+	}
+	return logger, cap
 }
 
 // TestRun_LiveSmoke drives the REAL claude binary end-to-end: wrapper spawns
