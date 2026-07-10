@@ -237,4 +237,32 @@ func TestLineLogWriterFlushAndCR(t *testing.T) {
 	if len(msgs) != 2 || msgs[0] != "one" || msgs[1] != "partial" {
 		t.Fatalf("want [one partial], got %v", msgs)
 	}
+	for _, rec := range cap.AllJSON() {
+		if level, _ := rec["level"].(string); level != "debug" {
+			t.Fatalf("stdout child output level = %#v, want debug", rec["level"])
+		}
+		if event, _ := rec["event_type"].(string); event != "process_output" {
+			t.Fatalf("stdout child output event_type = %#v, want process_output", rec["event_type"])
+		}
+	}
+}
+
+// DHF-TEST: keel/requirement-17
+func TestLineLogWriterKeepsStderrAtInfo(t *testing.T) {
+	logger, cap := testLogger("keel-dev")
+	w := newLineLogWriter(logger, "step", "stderr")
+	if _, err := w.Write([]byte("failure detail\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := cap.LastJSON()
+	if msg, _ := rec["msg"].(string); msg != "failure detail" {
+		t.Fatalf("stderr child output msg = %#v, want failure detail", rec["msg"])
+	}
+	if level, _ := rec["level"].(string); level != "info" {
+		t.Fatalf("stderr child output level = %#v, want info", rec["level"])
+	}
+	if event, _ := rec["event_type"].(string); event != "process_output" {
+		t.Fatalf("stderr child output event_type = %#v, want process_output", rec["event_type"])
+	}
 }
