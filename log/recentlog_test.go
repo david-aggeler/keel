@@ -47,6 +47,29 @@ func TestRecentBuffer_LevelFilterAndLimit(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-20
+func TestRecentBuffer_AddNormalizesLevelForFiltering(t *testing.T) {
+	b := NewRecentBuffer(10)
+	b.Add(RecentEntry{Level: "warn", Message: "lower-warn"})
+	b.Add(RecentEntry{Level: "ErRoR", Message: "mixed-error"})
+
+	errs := b.Entries(0, "ERROR")
+	if len(errs) != 1 || errs[0].Message != "mixed-error" {
+		t.Fatalf("error filter = %+v, want mixed-error entry", errs)
+	}
+	if errs[0].Level != "ERROR" {
+		t.Fatalf("error level = %q, want ERROR", errs[0].Level)
+	}
+
+	warns := b.Entries(0, "warn")
+	if len(warns) != 1 || warns[0].Message != "lower-warn" {
+		t.Fatalf("warn filter = %+v, want lower-warn entry", warns)
+	}
+	if warns[0].Level != "WARN" {
+		t.Fatalf("warn level = %q, want WARN", warns[0].Level)
+	}
+}
+
 func TestRecentBuffer_EmptyAndClamp(t *testing.T) {
 	b := NewRecentBuffer(0) // clamped to 1, must not panic
 	if got := b.Entries(0, ""); len(got) != 0 {

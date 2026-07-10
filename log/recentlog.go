@@ -57,11 +57,13 @@ func NewRecentBuffer(capacity int) *RecentBuffer {
 	}
 }
 
+// DHF-REQ: keel/requirement-20
 // Add inserts an entry, evicting the oldest when full. The entry is expected to
 // be already redacted (the recentHandler does this at capture time).
 func (b *RecentBuffer) Add(e RecentEntry) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	e.Level = strings.ToUpper(strings.TrimSpace(e.Level))
 	b.buf[b.head] = e
 	b.head = (b.head + 1) % b.capacity
 	if b.count < b.capacity {
