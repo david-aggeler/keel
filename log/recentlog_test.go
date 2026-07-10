@@ -8,7 +8,7 @@ import (
 func TestRecentBuffer_NewestFirstAndWraparound(t *testing.T) {
 	b := NewRecentBuffer(3)
 	for _, m := range []string{"a", "b", "c", "d", "e"} {
-		b.Add(RecentEntry{Level: "warn", Message: m})
+		b.Add(RecentEntry{Level: "WARN", Message: m})
 	}
 	got := b.Entries(0, "")
 	if len(got) != 3 {
@@ -23,12 +23,13 @@ func TestRecentBuffer_NewestFirstAndWraparound(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-20
 func TestRecentBuffer_LevelFilterAndLimit(t *testing.T) {
 	b := NewRecentBuffer(10)
-	b.Add(RecentEntry{Level: "warn", Message: "w1"})
-	b.Add(RecentEntry{Level: "error", Message: "e1"})
-	b.Add(RecentEntry{Level: "warn", Message: "w2"})
-	b.Add(RecentEntry{Level: "error", Message: "e2"})
+	b.Add(RecentEntry{Level: "WARN", Message: "w1"})
+	b.Add(RecentEntry{Level: "ERROR", Message: "e1"})
+	b.Add(RecentEntry{Level: "WARN", Message: "w2"})
+	b.Add(RecentEntry{Level: "ERROR", Message: "e2"})
 
 	errs := b.Entries(0, "error")
 	if len(errs) != 2 || errs[0].Message != "e2" || errs[1].Message != "e1" {
@@ -46,19 +47,43 @@ func TestRecentBuffer_LevelFilterAndLimit(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-20
+func TestRecentBuffer_AddNormalizesLevelForFiltering(t *testing.T) {
+	b := NewRecentBuffer(10)
+	b.Add(RecentEntry{Level: "warn", Message: "lower-warn"})
+	b.Add(RecentEntry{Level: "ErRoR", Message: "mixed-error"})
+
+	errs := b.Entries(0, "ERROR")
+	if len(errs) != 1 || errs[0].Message != "mixed-error" {
+		t.Fatalf("error filter = %+v, want mixed-error entry", errs)
+	}
+	if errs[0].Level != "ERROR" {
+		t.Fatalf("error level = %q, want ERROR", errs[0].Level)
+	}
+
+	warns := b.Entries(0, "warn")
+	if len(warns) != 1 || warns[0].Message != "lower-warn" {
+		t.Fatalf("warn filter = %+v, want lower-warn entry", warns)
+	}
+	if warns[0].Level != "WARN" {
+		t.Fatalf("warn level = %q, want WARN", warns[0].Level)
+	}
+}
+
 func TestRecentBuffer_EmptyAndClamp(t *testing.T) {
 	b := NewRecentBuffer(0) // clamped to 1, must not panic
 	if got := b.Entries(0, ""); len(got) != 0 {
 		t.Fatalf("empty buffer = %+v, want []", got)
 	}
-	b.Add(RecentEntry{Level: "warn", Message: "x"})
-	b.Add(RecentEntry{Level: "warn", Message: "y"})
+	b.Add(RecentEntry{Level: "WARN", Message: "x"})
+	b.Add(RecentEntry{Level: "WARN", Message: "y"})
 	got := b.Entries(0, "")
 	if len(got) != 1 || got[0].Message != "y" {
 		t.Fatalf("cap-1 buffer = %+v, want [y]", got)
 	}
 }
 
+// DHF-TEST: keel/requirement-20
 func TestTeeRecent_CapturesWarnErrorOnly(t *testing.T) {
 	base, _ := newForTesting("mcp-server")
 	buf := NewRecentBuffer(100)
@@ -73,11 +98,11 @@ func TestTeeRecent_CapturesWarnErrorOnly(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("captured %d entries, want 2 (warn+error only): %+v", len(got), got)
 	}
-	if got[0].Level != "error" || got[0].Message != "error msg" {
-		t.Errorf("newest = %+v, want error/error msg", got[0])
+	if got[0].Level != "ERROR" || got[0].Message != "error msg" {
+		t.Errorf("newest = %+v, want ERROR/error msg", got[0])
 	}
-	if got[1].Level != "warn" || got[1].Message != "warn msg" {
-		t.Errorf("oldest = %+v, want warn/warn msg", got[1])
+	if got[1].Level != "WARN" || got[1].Message != "warn msg" {
+		t.Errorf("oldest = %+v, want WARN/warn msg", got[1])
 	}
 	if got[0].Service != "mcp-server" {
 		t.Errorf("service = %q, want mcp-server", got[0].Service)

@@ -14,7 +14,7 @@
 //
 // [New] is the single public logger constructor. File sinks opened by [New] are
 // owned by the returned [Logger] and released by [Logger.Close]. All sinks share
-// one field schema — ts (RFC3339Nano), level (lowercase), msg, service — so the
+// one field schema — ts (RFC3339Nano), level (uppercase), msg, service — so the
 // JSON and human renderings of a record always agree.
 //
 // # Redaction at the boundary

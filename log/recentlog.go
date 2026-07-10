@@ -29,7 +29,7 @@ const DefaultRecentCapacity = 256
 // RecentEntry is one retained warn/error log record in /diag-ready form.
 type RecentEntry struct {
 	Time    string            `json:"time"`            // RFC3339Nano emit time
-	Level   string            `json:"level"`           // lowercase: "warn" | "error"
+	Level   string            `json:"level"`           // uppercase: "WARN" | "ERROR"
 	Service string            `json:"service"`         // emitting service
 	Message string            `json:"message"`         // redacted
 	Attrs   map[string]string `json:"attrs,omitempty"` // redacted key→value (service omitted)
@@ -57,11 +57,13 @@ func NewRecentBuffer(capacity int) *RecentBuffer {
 	}
 }
 
+// DHF-REQ: keel/requirement-20
 // Add inserts an entry, evicting the oldest when full. The entry is expected to
 // be already redacted (the recentHandler does this at capture time).
 func (b *RecentBuffer) Add(e RecentEntry) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	e.Level = strings.ToUpper(strings.TrimSpace(e.Level))
 	b.buf[b.head] = e
 	b.head = (b.head + 1) % b.capacity
 	if b.count < b.capacity {
@@ -70,12 +72,12 @@ func (b *RecentBuffer) Add(e RecentEntry) {
 }
 
 // Entries returns retained entries newest-first. level filters to a single
-// level ("warn" or "error"; case-insensitive); empty returns all levels. limit
+// level ("WARN" or "ERROR"; case-insensitive); empty returns all levels. limit
 // caps the result count; limit ≤ 0 returns every retained (matching) entry.
 func (b *RecentBuffer) Entries(limit int, level string) []RecentEntry {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	level = strings.ToLower(strings.TrimSpace(level))
+	level = strings.ToUpper(strings.TrimSpace(level))
 	out := make([]RecentEntry, 0, b.count)
 	for i := 0; i < b.count; i++ {
 		// Walk backwards from the most-recent write. +2*capacity keeps the
@@ -128,11 +130,12 @@ func (h *recentHandler) Handle(ctx context.Context, r slog.Record) error {
 	return h.inner.Handle(ctx, r)
 }
 
+// DHF-REQ: keel/requirement-20
 // toEntry renders a warn/error record into a redacted RecentEntry.
 func (h *recentHandler) toEntry(r slog.Record) RecentEntry {
-	level := "warn"
+	level := "WARN"
 	if r.Level >= slog.LevelError {
-		level = "error"
+		level = "ERROR"
 	}
 	e := RecentEntry{
 		Time:    r.Time.Format(time.RFC3339Nano),
