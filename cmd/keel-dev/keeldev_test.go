@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -104,6 +105,52 @@ func TestRunCIGofmtGate(t *testing.T) {
 	writeFile(t, dir, "keel_test_pkg.go", "package p\n\nvar    Y = 2\n")
 	if err := runCI(context.Background(), discardLogger(), dir); err == nil {
 		t.Fatal("unformatted module should fail ci, got nil")
+	}
+}
+
+// DHF-TEST: keel/requirement-18
+func TestRunCIFailureCarriesStructuredOperationalError(t *testing.T) {
+	requireTool(t, "gofmt")
+
+	dir := t.TempDir()
+	writeModule(t, dir)
+	writeFile(t, dir, "bad.go", "package p\n\nvar    Y = 2\n")
+
+	logDir := t.TempDir()
+	logger := logging.New(logging.Config{
+		Service:  "keel-dev",
+		Console:  logging.ConsoleNone,
+		JSONLDir: logDir,
+		PerRun:   true,
+	})
+	t.Cleanup(func() {
+		if err := logger.Close(); err != nil {
+			t.Fatalf("Close returned error: %v", err)
+		}
+	})
+
+	err := runCIWithRunLog(context.Background(), logger.Slog(), logger, dir)
+	if err == nil {
+		t.Fatal("unformatted module should fail ci, got nil")
+	}
+	var opErr *logging.OperationalError
+	if !errors.As(err, &opErr) {
+		t.Fatalf("runCI error type = %T, want OperationalError: %v", err, err)
+	}
+	if opErr.Task != "ci:gofmt" {
+		t.Fatalf("OperationalError task = %q, want ci:gofmt", opErr.Task)
+	}
+	if opErr.LogFile == "" || opErr.LogFile != logger.RunLogPath() {
+		t.Fatalf("OperationalError log file = %q, want %q", opErr.LogFile, logger.RunLogPath())
+	}
+	if opErr.StartLine <= 0 {
+		t.Fatalf("OperationalError start line = %d, want positive line number", opErr.StartLine)
+	}
+	if opErr.ExitCode != 1 {
+		t.Fatalf("OperationalError exit code = %d, want 1", opErr.ExitCode)
+	}
+	if !strings.Contains(opErr.Hint, opErr.LogFile) || !strings.Contains(opErr.Hint, "line") {
+		t.Fatalf("OperationalError hint = %q, want log-file line coordinate", opErr.Hint)
 	}
 }
 
