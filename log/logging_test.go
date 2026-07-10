@@ -2,6 +2,7 @@ package log_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -18,6 +19,48 @@ import (
 
 // rfc3339NanoRegex matches a subset of RFC3339Nano timestamps.
 var rfc3339NanoRegex = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}`)
+
+type captureHandler struct {
+	state  *captureState
+	attrs  map[string]any
+	groups []string
+}
+
+type captureState struct {
+	records []slog.Record
+	attrs   map[string]any
+}
+
+func newCaptureHandler() *captureHandler {
+	return &captureHandler{state: &captureState{attrs: map[string]any{}}}
+}
+
+func (h *captureHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
+	h.state.records = append(h.state.records, r.Clone())
+	for k, v := range h.attrs {
+		h.state.attrs[k] = v
+	}
+	return nil
+}
+
+func (h *captureHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	next := &captureHandler{state: h.state, attrs: make(map[string]any, len(h.attrs)+len(attrs)), groups: h.groups}
+	for k, v := range h.attrs {
+		next.attrs[k] = v
+	}
+	for _, attr := range attrs {
+		next.attrs[attr.Key] = attr.Value.Any()
+	}
+	return next
+}
+
+func (h *captureHandler) WithGroup(name string) slog.Handler {
+	next := *h
+	next.groups = append(append([]string(nil), h.groups...), name)
+	return &next
+}
 
 func newJSONCaptureLogger(service string) (*slog.Logger, *logging.RecordCapture) {
 	rc := &logging.RecordCapture{}
@@ -86,6 +129,34 @@ func TestNewConfigExposesFourSinkLoggerSurface(t *testing.T) {
 	}
 	if matches, err := filepath.Glob(filepath.Join(jsonlDir, "*.jsonl")); err != nil || len(matches) != 1 {
 		t.Fatalf("jsonl sink matches = %v, err = %v; want one .jsonl file", matches, err)
+	}
+}
+
+// DHF-TEST: keel/requirement-22
+func TestNewConfigFansOutToAdditionalHandlers(t *testing.T) {
+	var console bytes.Buffer
+	extra := newCaptureHandler()
+
+	logger := logging.New(logging.Config{
+		Service:  "svc",
+		Console:  logging.ConsoleJSON,
+		Writer:   &console,
+		Handlers: []slog.Handler{extra},
+	})
+
+	logger.Info("hello", "answer", 42)
+
+	if strings.TrimSpace(console.String()) == "" {
+		t.Fatal("console sink was empty; want built-in sink to remain active")
+	}
+	if len(extra.state.records) != 1 {
+		t.Fatalf("extra handler records = %d, want 1", len(extra.state.records))
+	}
+	if got := extra.state.attrs["service"]; got != "svc" {
+		t.Fatalf("extra handler service attr = %#v, want svc", got)
+	}
+	if got := extra.state.records[0].Message; got != "hello" {
+		t.Fatalf("extra handler message = %q, want hello", got)
 	}
 }
 
