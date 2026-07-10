@@ -135,10 +135,31 @@ func replaceForOpenBrain(groups []string, a slog.Attr) slog.Attr {
 
 func replaceForConsole(groups []string, a slog.Attr) slog.Attr {
 	a = replaceForOpenBrain(groups, a)
-	if a.Key == "module" {
+	if isContextKey(a.Key) {
 		return slog.Attr{}
 	}
 	return a
+}
+
+func isContextKey(key string) bool {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return false
+	}
+	if i := strings.LastIndexByte(key, '.'); i >= 0 {
+		key = key[i+1:]
+	}
+	return key == "module" || key == slog.SourceKey
+}
+
+func groupedKey(groups []string, key string) string {
+	if len(groups) == 0 {
+		return key
+	}
+	parts := make([]string, 0, len(groups)+1)
+	parts = append(parts, groups...)
+	parts = append(parts, key)
+	return strings.Join(parts, ".")
 }
 
 func isSensitiveAttrKey(key string) bool {
@@ -542,10 +563,10 @@ func (h *consoleHandler) Enabled(_ context.Context, level slog.Level) bool {
 
 // DHF-REQ: openbrain/requirement-151, openbrain/requirement-152, keel/requirement-20
 func (h *consoleHandler) Handle(_ context.Context, r slog.Record) error {
-	attrs := make([]slog.Attr, 0, len(h.attrs)+r.NumAttrs())
-	attrs = append(attrs, h.attrs...)
+	boundAttrs := slicesClone(h.attrs)
+	recordAttrs := make([]slog.Attr, 0, r.NumAttrs())
 	r.Attrs(func(a slog.Attr) bool {
-		attrs = append(attrs, a)
+		recordAttrs = append(recordAttrs, a)
 		return true
 	})
 
@@ -554,15 +575,27 @@ func (h *consoleHandler) Handle(_ context.Context, r slog.Record) error {
 	b.WriteByte(' ')
 	writeConsoleLevel(&b, r.Level, h.color)
 	b.WriteString("  ")
-	message, skipKeys := h.consoleMessage(r.Message, attrs)
+	message, skipKeys := h.consoleMessage(r.Message, boundAttrs, recordAttrs)
 	b.WriteString(RedactString(message))
-	for _, attr := range attrs {
+	for _, attr := range boundAttrs {
 		attr = replaceForOpenBrain(h.groups, attr)
-		if attr.Equal(slog.Attr{}) || attr.Key == "" || attr.Key == "module" || h.omits(attr.Key) || skipKeys[attr.Key] {
+		key := attr.Key
+		if attr.Equal(slog.Attr{}) || attr.Key == "" || isContextKey(key) || h.omits(key) || skipKeys[key] {
 			continue
 		}
 		b.WriteByte(' ')
-		b.WriteString(attr.Key)
+		b.WriteString(key)
+		b.WriteByte('=')
+		b.WriteString(formatConsoleValue(attr.Value))
+	}
+	for _, attr := range recordAttrs {
+		attr = replaceForOpenBrain(h.groups, attr)
+		key := groupedKey(h.groups, attr.Key)
+		if attr.Equal(slog.Attr{}) || attr.Key == "" || isContextKey(attr.Key) || h.omits(key) || skipKeys[key] {
+			continue
+		}
+		b.WriteByte(' ')
+		b.WriteString(key)
 		b.WriteByte('=')
 		b.WriteString(formatConsoleValue(attr.Value))
 	}
@@ -578,8 +611,10 @@ func (h *consoleHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	next := h.clone()
 	next.attrs = slicesClone(h.attrs)
 	for _, attr := range attrs {
-		attr = replaceForOpenBrain(h.groups, attr)
-		if attr.Equal(slog.Attr{}) || attr.Key == "" || attr.Key == "module" || next.omits(attr.Key) {
+		attr = replaceForOpenBrain(nil, attr)
+		attr.Key = groupedKey(h.groups, attr.Key)
+		key := attr.Key
+		if attr.Equal(slog.Attr{}) || attr.Key == "" || isContextKey(attr.Key) || next.omits(key) {
 			continue
 		}
 		next.attrs = append(next.attrs, attr)
@@ -616,14 +651,15 @@ func (h *consoleHandler) omits(key string) bool {
 	return ok
 }
 
-func (h *consoleHandler) consoleMessage(msg string, attrs []slog.Attr) (string, map[string]bool) {
+func (h *consoleHandler) consoleMessage(msg string, boundAttrs []slog.Attr, recordAttrs []slog.Attr) (string, map[string]bool) {
 	skip := map[string]bool{}
 	if msg != "codex progress" {
 		return msg, skip
 	}
 	detail := ""
-	for _, attr := range attrs {
-		attr = replaceForOpenBrain(h.groups, attr)
+	for _, attr := range boundAttrs {
+		attr = replaceForOpenBrain(nil, attr)
+		key := attr.Key
 		switch attr.Key {
 		case "detail":
 			if attr.Value.Kind() == slog.KindString {
@@ -631,9 +667,24 @@ func (h *consoleHandler) consoleMessage(msg string, attrs []slog.Attr) (string, 
 			} else {
 				detail = formatConsoleValue(attr.Value)
 			}
-			skip["detail"] = true
+			skip[key] = true
 		case "event_type":
-			skip["event_type"] = true
+			skip[key] = true
+		}
+	}
+	for _, attr := range recordAttrs {
+		attr = replaceForOpenBrain(h.groups, attr)
+		key := groupedKey(h.groups, attr.Key)
+		switch attr.Key {
+		case "detail":
+			if attr.Value.Kind() == slog.KindString {
+				detail = attr.Value.String()
+			} else {
+				detail = formatConsoleValue(attr.Value)
+			}
+			skip[key] = true
+		case "event_type":
+			skip[key] = true
 		}
 	}
 	if strings.TrimSpace(detail) == "" {
@@ -865,18 +916,24 @@ func (h *humanFileHandler) Enabled(_ context.Context, level slog.Level) bool {
 
 // DHF-REQ: openbrain/requirement-152, keel/requirement-20
 func (h *humanFileHandler) Handle(_ context.Context, r slog.Record) error {
-	attrs := make([]slog.Attr, 0, len(h.attrs)+r.NumAttrs())
-	attrs = append(attrs, h.attrs...)
+	boundAttrs := slicesClone(h.attrs)
+	recordAttrs := make([]slog.Attr, 0, r.NumAttrs())
 	r.Attrs(func(a slog.Attr) bool {
-		attrs = append(attrs, a)
+		recordAttrs = append(recordAttrs, a)
 		return true
 	})
-	source := sourceFromAttrs(attrs)
+	source := sourceFromAttrs(nil, boundAttrs)
+	if source == "" {
+		source = sourceFromAttrs(h.groups, recordAttrs)
+	}
 	if source == "" && h.source {
 		source = sourceFromPC(r.PC)
 	}
 	if source == "" {
-		source = serviceFromAttrs(attrs)
+		source = serviceFromAttrs(boundAttrs)
+		if source == "" {
+			source = serviceFromAttrs(recordAttrs)
+		}
 	}
 
 	var b strings.Builder
@@ -887,13 +944,25 @@ func (h *humanFileHandler) Handle(_ context.Context, r slog.Record) error {
 	b.WriteString(fmt.Sprintf("%-26s", source))
 	b.WriteByte('\t')
 	b.WriteString(RedactString(r.Message))
-	for _, attr := range attrs {
-		attr = replaceForOpenBrain(h.groups, attr)
+	for _, attr := range boundAttrs {
+		attr = replaceForOpenBrain(nil, attr)
+		key := attr.Key
 		if attr.Equal(slog.Attr{}) || attr.Key == "" || attr.Key == "service" {
 			continue
 		}
 		b.WriteByte(' ')
-		b.WriteString(attr.Key)
+		b.WriteString(key)
+		b.WriteByte('=')
+		b.WriteString(formatConsoleValue(attr.Value))
+	}
+	for _, attr := range recordAttrs {
+		attr = replaceForOpenBrain(h.groups, attr)
+		key := groupedKey(h.groups, attr.Key)
+		if attr.Equal(slog.Attr{}) || attr.Key == "" || attr.Key == "service" {
+			continue
+		}
+		b.WriteByte(' ')
+		b.WriteString(key)
 		b.WriteByte('=')
 		b.WriteString(formatConsoleValue(attr.Value))
 	}
@@ -909,7 +978,9 @@ func (h *humanFileHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	next := h.clone()
 	next.attrs = slicesClone(h.attrs)
 	for _, attr := range attrs {
-		next.attrs = append(next.attrs, replaceForOpenBrain(h.groups, attr))
+		attr = replaceForOpenBrain(nil, attr)
+		attr.Key = groupedKey(h.groups, attr.Key)
+		next.attrs = append(next.attrs, attr)
 	}
 	return next
 }
@@ -949,10 +1020,16 @@ func (h *humanFileHandler) clone() *humanFileHandler {
 }
 
 // DHF-REQ: keel/requirement-20
-func sourceFromAttrs(attrs []slog.Attr) string {
+func sourceFromAttrs(groups []string, attrs []slog.Attr) string {
 	for _, attr := range attrs {
-		if (attr.Key == "module" || attr.Key == slog.SourceKey) && attr.Value.Kind() == slog.KindString {
+		attr.Value = attr.Value.Resolve()
+		if isContextKey(attr.Key) && attr.Value.Kind() == slog.KindString {
 			return attr.Value.String()
+		}
+		if attr.Value.Kind() == slog.KindGroup {
+			if source := sourceFromAttrs(append(slicesClone(groups), attr.Key), attr.Value.Group()); source != "" {
+				return source
+			}
 		}
 	}
 	return ""
