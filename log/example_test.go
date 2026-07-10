@@ -23,7 +23,7 @@ func ExampleNew() {
 	var rec map[string]any
 	_ = json.Unmarshal(buf.Bytes(), &rec)
 	fmt.Println(rec["service"], rec["level"], rec["msg"], rec["port"])
-	// Output: demo info service starting 8080
+	// Output: demo INFO service starting 8080
 }
 
 // ExampleRedactString shows the redaction contract every keel/log sink applies
