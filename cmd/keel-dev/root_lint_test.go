@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -168,6 +169,25 @@ func TestRunDispatch(t *testing.T) {
 		if got := run(c.argv); got != c.want {
 			t.Errorf("%s: run(%v) = %d, want %d", c.name, c.argv, got, c.want)
 		}
+	}
+}
+
+// DHF-TEST: keel/requirement-18
+func TestExitForMapsUsageChildAndGenericErrors(t *testing.T) {
+	if got := exitFor(discardLogger(), usageError("bad args")); got != 2 {
+		t.Fatalf("usage error exit = %d, want 2", got)
+	}
+
+	err := exec.Command("sh", "-c", "exit 7").Run()
+	if err == nil {
+		t.Fatal("stub command succeeded; want exit error")
+	}
+	if got := exitFor(discardLogger(), err); got != 7 {
+		t.Fatalf("child exit error exit = %d, want 7", got)
+	}
+
+	if got := exitFor(discardLogger(), os.ErrInvalid); got != 1 {
+		t.Fatalf("generic error exit = %d, want 1", got)
 	}
 }
 

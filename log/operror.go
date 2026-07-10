@@ -17,11 +17,18 @@ import (
 // Metadata through RedactString. Non-string metadata values are emitted via
 // slog.Any WITHOUT redaction — callers MUST NOT place secrets (DSNs, bearer
 // tokens) in non-string metadata. (KD8.)
+//
+// DHF-REQ: keel/requirement-18
 type OperationalError struct {
-	Op       string         // operation/handler name, e.g. "link_blocks"
-	Message  string         // human-facing summary, e.g. "cross-product link rejected"
-	Err      error          // underlying cause; may be nil
-	Metadata map[string]any // structured context; string values are redacted in LogValue
+	Op        string         // operation/handler name, e.g. "link_blocks"
+	Message   string         // human-facing summary, e.g. "cross-product link rejected"
+	Err       error          // underlying cause; may be nil
+	Task      string         // failing task label, e.g. "ci:vet"
+	LogFile   string         // run-log file carrying the task's records
+	StartLine int            // 1-based line number of the task's first run-log record
+	ExitCode  int            // process exit code to return for this failure
+	Hint      string         // human instruction pointing at LogFile and StartLine
+	Metadata  map[string]any // structured context; string values are redacted in LogValue
 }
 
 // Error renders Op, Message, and Err, skipping empty segments. NOT redacted —
@@ -59,6 +66,11 @@ var reservedLogKeys = map[string]struct{}{
 	"op":         {},
 	"message":    {},
 	"root_cause": {},
+	"task":       {},
+	"log_file":   {},
+	"start_line": {},
+	"exit_code":  {},
+	"hint":       {},
 }
 
 // LogValue implements slog.LogValuer. It emits a GroupValue nested under the
@@ -67,6 +79,8 @@ var reservedLogKeys = map[string]struct{}{
 // Metadata keys op/message/root_cause are reserved and silently dropped to avoid
 // colliding with the carrier's own fields.
 // Returns an empty GroupValue when called on a nil receiver.
+//
+// DHF-REQ: keel/requirement-18
 func (e *OperationalError) LogValue() slog.Value {
 	if e == nil {
 		return slog.GroupValue()
@@ -80,6 +94,21 @@ func (e *OperationalError) LogValue() slog.Value {
 	}
 	if e.Err != nil {
 		attrs = append(attrs, slog.String("root_cause", RedactString(e.Err.Error())))
+	}
+	if e.Task != "" {
+		attrs = append(attrs, slog.String("task", e.Task))
+	}
+	if e.LogFile != "" {
+		attrs = append(attrs, slog.String("log_file", RedactString(e.LogFile)))
+	}
+	if e.StartLine > 0 {
+		attrs = append(attrs, slog.Int("start_line", e.StartLine))
+	}
+	if e.ExitCode != 0 {
+		attrs = append(attrs, slog.Int("exit_code", e.ExitCode))
+	}
+	if e.Hint != "" {
+		attrs = append(attrs, slog.String("hint", RedactString(e.Hint)))
 	}
 	for k, v := range e.Metadata {
 		if _, reserved := reservedLogKeys[k]; reserved {
