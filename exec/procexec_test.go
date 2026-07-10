@@ -54,7 +54,12 @@ func TestProcessStartPlainCommandStreamsCapturesAndReturnsExitCode(t *testing.T)
 // DHF-TEST: keel/requirement-1, openbrain/requirement-602
 func TestProcessStartLogsStructuredLifecycleAndRedactsSensitiveArgs(t *testing.T) {
 	var logBuf bytes.Buffer
-	logger := logging.New(logging.Config{Service: "procexec-test", Writer: &logBuf, Level: slog.LevelDebug})
+	logger := logging.New(logging.Config{
+		Service: "procexec-test",
+		Level:   slog.LevelDebug,
+		Console: logging.ConsoleJSON,
+		Writer:  &logBuf,
+	})
 	longArg := strings.Repeat("long-visible-argument-", 12)
 	secret := "super-secret-token"
 
@@ -132,7 +137,7 @@ func TestProcessStartLogsStructuredLifecycleAndRedactsSensitiveArgs(t *testing.T
 // DHF-TEST: keel/requirement-1
 func TestProcessStartHumanLifecycleShowsFullCommandWithoutEllipsis(t *testing.T) {
 	var logBuf bytes.Buffer
-	logger := logging.NewConsole(logging.Config{Service: "procexec-test", Writer: &logBuf, DisableColor: true})
+	logger := logging.New(logging.Config{Console: logging.ConsolePlain, Service: "procexec-test", Writer: &logBuf, DisableColor: true})
 	longArg := strings.Repeat("visible-human-argument-", 12)
 
 	proc, err := procexec.ProcessStart(context.Background(), procexec.Request{

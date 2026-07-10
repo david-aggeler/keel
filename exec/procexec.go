@@ -17,6 +17,12 @@ import (
 	logging "github.com/david-aggeler/keel/log"
 )
 
+type processLogger interface {
+	Debug(msg string, args ...any)
+	Info(msg string, args ...any)
+	InfoContext(ctx context.Context, msg string, args ...any)
+}
+
 // Request describes a plain external command launch. Only Program is required;
 // the zero value of every other field is a usable default.
 type Request struct {
@@ -40,7 +46,7 @@ type Request struct {
 	Stderr io.Writer
 	// Logger receives the START/END lifecycle and per-line output records. Nil
 	// uses slog.Default.
-	Logger *slog.Logger
+	Logger processLogger
 	// SensitiveArgs marks argv indices whose values must be masked as [REDACTED]
 	// in the logged command line (e.g. a token passed positionally).
 	SensitiveArgs map[int]bool
@@ -69,7 +75,7 @@ type Process struct {
 	started time.Time
 	stdout  *captureWriter
 	stderr  *captureWriter
-	logger  *slog.Logger
+	logger  processLogger
 	waitErr error
 	waitCh  chan error
 	once    sync.Once
@@ -172,7 +178,7 @@ type captureWriter struct {
 	mu         sync.Mutex
 	buf        bytes.Buffer
 	stream     io.Writer
-	logger     *slog.Logger
+	logger     processLogger
 	streamName string
 }
 

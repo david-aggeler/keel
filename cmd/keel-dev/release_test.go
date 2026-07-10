@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	logging "github.com/david-aggeler/keel/log"
 )
 
 // stubTools builds a bin directory of fake git/gh/go/gofmt executables and
@@ -194,7 +192,7 @@ func TestRunCmdRoutesChildOutputThroughLogger(t *testing.T) {
 echo "dsn postgres://user:hunter2@db/x"`)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	logger, cap := logging.NewForTesting("keel-dev")
+	logger, cap := testLogger("keel-dev")
 	if err := runCmd(context.Background(), logger, ".", "chatty"); err != nil {
 		t.Fatalf("runCmd: %v", err)
 	}
@@ -222,7 +220,7 @@ echo "dsn postgres://user:hunter2@db/x"`)
 
 // TestLineLogWriterFlushAndCR covers the unterminated-line and CRLF paths.
 func TestLineLogWriterFlushAndCR(t *testing.T) {
-	logger, cap := logging.NewForTesting("keel-dev")
+	logger, cap := testLogger("keel-dev")
 	w := newLineLogWriter(logger, "step", "stdout")
 	if _, err := w.Write([]byte("one\r\npartial")); err != nil {
 		t.Fatal(err)

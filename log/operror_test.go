@@ -158,7 +158,7 @@ func TestOperationalError_UnwrapChain(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestOperationalError_LogValue(t *testing.T) {
-	logger, capture := logging.NewForTesting("test-svc")
+	logger, capture := newJSONCaptureLogger("test-svc")
 
 	opErr := &logging.OperationalError{
 		Op:      "link_blocks",
@@ -229,7 +229,7 @@ func TestOperationalError_LogValue(t *testing.T) {
 
 func TestOperationalError_LogValue_NilErr_NoRootCause(t *testing.T) {
 	// When Err is nil, root_cause must not appear in the emitted group.
-	logger, capture := logging.NewForTesting("test-svc")
+	logger, capture := newJSONCaptureLogger("test-svc")
 
 	opErr := &logging.OperationalError{
 		Op:      "validate_dto",
@@ -262,7 +262,7 @@ func TestOperationalError_LogValue_NilErr_NoRootCause(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestOperationalError_LogValue_RedactsRootCause(t *testing.T) {
-	logger, capture := logging.NewForTesting("test-svc")
+	logger, capture := newJSONCaptureLogger("test-svc")
 
 	rawErr := errors.New("connect postgres://admin:s3cret@db.host:5432/mydb — auth header: Bearer abc123")
 	opErr := &logging.OperationalError{
@@ -310,7 +310,7 @@ func TestOperationalError_LogValue_RedactsRootCause(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestOperationalError_LogValue_RedactsStringMetadata(t *testing.T) {
-	logger, capture := logging.NewForTesting("test-svc")
+	logger, capture := newJSONCaptureLogger("test-svc")
 
 	opErr := &logging.OperationalError{
 		Op:      "http_call",
@@ -367,7 +367,7 @@ func TestOperationalError_LogValue_RedactsStringMetadata(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestOperationalError_FieldSetParityVsFlat(t *testing.T) {
-	logger, capture := logging.NewForTesting("test-svc")
+	logger, capture := newJSONCaptureLogger("test-svc")
 
 	// Shared context values (mirrors the MakeLinkHandler cross-product rejection).
 	const (
@@ -496,7 +496,7 @@ func TestOperationalError_NilReceiver(t *testing.T) {
 	})
 
 	t.Run("logging via slog.Any does not panic", func(t *testing.T) {
-		logger, capture := logging.NewForTesting("test-svc")
+		logger, capture := newJSONCaptureLogger("test-svc")
 
 		// Must not panic.
 		logger.Warn("test nil carrier", slog.Any("err", (*logging.OperationalError)(nil)))
@@ -536,7 +536,7 @@ func TestOperationalError_AllEmpty(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestOperationalError_LogValue_ReservedKeyCollision(t *testing.T) {
-	logger, capture := logging.NewForTesting("test-svc")
+	logger, capture := newJSONCaptureLogger("test-svc")
 
 	opErr := &logging.OperationalError{
 		Op:      "carrier_op",
