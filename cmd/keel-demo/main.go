@@ -5,150 +5,127 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 
+	"github.com/david-aggeler/keel/cli"
 	procexec "github.com/david-aggeler/keel/exec"
 	logging "github.com/david-aggeler/keel/log"
 )
 
 const version = "demo"
 
-type cliConfig struct {
-	mode string
-	help bool
-	args []string
-}
-
-type usageError string
-
-func (e usageError) Error() string { return string(e) }
-
 func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
 func run(argv []string) int {
-	cfg, err := parseArgs(argv)
+	tree := commandTree()
+	cfg, words, err := cli.ParseGlobalConfig(argv)
+	mode := cfg.Mode
 	if err != nil {
-		logger, closeLogger := buildLogger("human")
-		defer closeLogger()
-		logger.Error("keel-demo failed", "error", err.Error())
+		fmt.Fprintln(os.Stderr, "keel-demo: "+err.Error())
+		fmt.Fprintln(os.Stderr)
+		tree.RenderRootHelp(os.Stderr)
 		return 2
 	}
-
-	logger, closeLogger := buildLogger(cfg.mode)
+	if len(words) > 0 && words[0] == "help" {
+		return renderHelp(tree, mode, words[1:])
+	}
+	if cfg.Help {
+		return renderHelp(tree, mode, words)
+	}
+	logger, closeLogger := buildLogger(mode)
 	defer closeLogger()
-
-	if cfg.help {
-		return showHelp(logger, cfg)
+	if len(words) == 0 {
+		return exitCodeFor(logger, runShowcase(context.Background(), logger, string(mode)))
 	}
-	if len(cfg.args) > 0 {
-		return exitFor(logger, usageError(fmt.Sprintf("unknown keel-demo command %q", cfg.args[0])))
-	}
-	return exitFor(logger, runShowcase(context.Background(), logger, cfg.mode))
+	return exitCodeFor(logger, tree.Dispatch(context.Background(), words))
 }
 
-func parseArgs(argv []string) (cliConfig, error) {
-	cfg := cliConfig{mode: "human"}
-	for i := 0; i < len(argv); i++ {
-		arg := argv[i]
-		switch arg {
-		case "--mode":
-			if i+1 >= len(argv) {
-				return cfg, usageError("--mode requires one of: human, ai, json")
-			}
-			i++
-			cfg.mode = argv[i]
-		case "-h", "--help", "help":
-			cfg.help = true
-		default:
-			if strings.HasPrefix(arg, "-") {
-				return cfg, usageError(fmt.Sprintf("unknown flag %q", arg))
-			}
-			cfg.args = append(cfg.args, arg)
-		}
+// DHF-REQ: keel/requirement-28
+func commandTree() *cli.CommandSpec {
+	tree := &cli.CommandSpec{
+		Name: "keel-demo",
+		Config: cli.Config{
+			Program:      "keel-demo",
+			RootSummary:  "keel-demo runs the log and exec showcase.",
+			Usage:        "keel-demo [--mode human|ai|json]",
+			HelpUsage:    "keel-demo help [command]",
+			CommandUsage: "keel-demo <command> --help",
+			GlobalFlags: []cli.FlagSpec{
+				{Name: "mode", Value: "human|ai|json", Default: "human", Short: "Console mode."},
+			},
+			ModeHelp: []string{
+				"human renders plain console output.",
+				"ai emits sparse AI-readable records.",
+				"json emits full JSON log records.",
+			},
+			Trailing: "Workflow subcommands: workflow inspect, workflow replay. Run keel-demo help workflow for nested command details.",
+		},
+		Subcommands: []*cli.CommandSpec{
+			{
+				Name:  "workflow",
+				Short: "Parent command with nested help.",
+				Subcommands: []*cli.CommandSpec{
+					{Name: "inspect", Use: "workflow inspect", Short: "Preview a captured run tree."},
+					{Name: "replay", Use: "workflow replay", Short: "Replay a saved demo transcript."},
+				},
+			},
+		},
 	}
-	if _, err := consoleForMode(cfg.mode); err != nil {
-		return cfg, err
-	}
-	return cfg, nil
+	tree.InheritConfig()
+	return tree
 }
 
-func buildLogger(mode string) (*logging.Logger, func()) {
-	console, err := consoleForMode(mode)
-	if err != nil {
-		console = logging.ConsolePlain
+// DHF-REQ: keel/requirement-28
+func renderHelp(tree *cli.CommandSpec, mode cli.Mode, path []string) int {
+	var help bytes.Buffer
+	tree.RenderTopicHelp(&help, path)
+	if mode == cli.ModeHuman {
+		fmt.Fprint(os.Stdout, help.String())
+		return 0
 	}
-	logDir := ".logs"
-	if root, err := findModuleRoot("."); err == nil {
-		logDir = filepath.Join(root, ".logs")
+	logger, closeLogger := buildLogger(mode)
+	defer closeLogger()
+	command := "keel-demo"
+	if len(path) > 0 {
+		command += " " + strings.Join(path, " ")
 	}
+	logger.Event("help", "keel-demo help", "command", command, "help", help.String(), "mode", string(mode))
+	return 0
+}
+
+func buildLogger(mode cli.Mode) (*logging.Logger, func()) {
 	logger := logging.New(logging.Config{
 		Service:         "keel-demo",
 		Level:           slog.LevelDebug,
-		Console:         console,
+		Console:         consoleForSharedMode(mode),
 		Writer:          os.Stdout,
-		TextDir:         logDir,
-		JSONLDir:        logDir,
+		TextDir:         ".logs",
+		JSONLDir:        ".logs",
 		PerRun:          true,
 		ConsoleOmitKeys: []string{"service"},
 	})
 	return logger, func() { _ = logger.Close() }
 }
 
-func consoleForMode(mode string) (logging.Console, error) {
-	switch strings.ToLower(mode) {
-	case "human":
-		return logging.ConsolePlain, nil
-	case "ai":
-		return logging.ConsoleSparseAI, nil
-	case "json":
-		return logging.ConsoleJSON, nil
+func consoleForSharedMode(mode cli.Mode) logging.Console {
+	switch mode {
+	case cli.ModeHuman:
+		return logging.ConsolePlain
+	case cli.ModeAI:
+		return logging.ConsoleSparseAI
+	case cli.ModeJSON:
+		return logging.ConsoleJSON
 	default:
-		return "", fmt.Errorf("unknown --mode %q: expected human, ai, or json", mode)
+		return logging.ConsolePlain
 	}
-}
-
-// DHF-REQ: keel/requirement-26
-func showHelp(logger *logging.Logger, cfg cliConfig) int {
-	slogLogger := logger.Slog()
-	if len(cfg.args) > 0 && cfg.args[0] == "workflow" {
-		logging.Header(slogLogger, "keel-demo workflow help", version)
-		logging.Section(slogLogger, "workflow")
-		logging.Fields(slogLogger, []logging.FieldRow{
-			{Label: "workflow inspect", Value: "preview a captured run tree"},
-			{Label: "workflow replay", Value: "replay a saved demo transcript"},
-		})
-		slogLogger.Info("nested command help",
-			"event_type", "help",
-			"command", "workflow",
-			"subcommands", []string{"inspect", "replay"},
-			"mode", cfg.mode,
-		)
-		return 0
-	}
-
-	logging.Header(slogLogger, "keel-demo help", version)
-	logging.Section(slogLogger, "commands")
-	logging.Fields(slogLogger, []logging.FieldRow{
-		{Label: "keel-demo", Value: "run the log and exec showcase"},
-		{Label: "workflow", Value: "parent command with nested help"},
-		{Label: "workflow inspect", Value: "preview a captured run tree"},
-		{Label: "workflow replay", Value: "replay a saved demo transcript"},
-	})
-	slogLogger.Info("top-level command help",
-		"event_type", "help",
-		"command", "keel-demo",
-		"subcommands", []string{"workflow", "workflow inspect", "workflow replay"},
-		"mode", cfg.mode,
-	)
-	return 0
 }
 
 // DHF-REQ: keel/requirement-26
@@ -204,19 +181,19 @@ func runShowcase(ctx context.Context, logger *logging.Logger, mode string) error
 	return opErr
 }
 
-func exitFor(logger *logging.Logger, err error) int {
+func exitCodeFor(logger *logging.Logger, err error) int {
 	if err == nil {
 		return 0
 	}
 	if logger == nil {
-		logger, closeLogger := buildLogger("human")
+		logger, closeLogger := buildLogger(cli.ModeHuman)
 		defer closeLogger()
-		return exitFor(logger, err)
+		return exitCodeFor(logger, err)
 	}
-	var usage usageError
+	var usage cli.UsageError
 	if errors.As(err, &usage) {
 		logger.Error("keel-demo failed", "error", err.Error())
-		return 2
+		return usage.ExitCode()
 	}
 	var opErr *logging.OperationalError
 	if errors.As(err, &opErr) {
@@ -228,36 +205,4 @@ func exitFor(logger *logging.Logger, err error) int {
 	}
 	logger.Error("keel-demo failed", "error", logging.RedactErr(err).Error())
 	return 1
-}
-
-func findModuleRoot(dir string) (string, error) {
-	dir, err := filepath.Abs(dir)
-	if err != nil {
-		return "", err
-	}
-	start := dir
-	for {
-		data, err := os.ReadFile(filepath.Join(dir, "go.mod"))
-		if err == nil {
-			if declaresKeel(string(data)) {
-				return dir, nil
-			}
-			return "", fmt.Errorf("go.mod at %s does not declare module github.com/david-aggeler/keel", dir)
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", fmt.Errorf("no go.mod found walking up from %s", start)
-		}
-		dir = parent
-	}
-}
-
-func declaresKeel(gomod string) bool {
-	for _, line := range strings.Split(gomod, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "module ") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "module ")) == "github.com/david-aggeler/keel"
-		}
-	}
-	return false
 }
