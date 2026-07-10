@@ -11,7 +11,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -100,7 +99,7 @@ func run(argv []string) int {
 	if verbose {
 		level = slog.LevelDebug
 	}
-	logger, closeSinks := newLoggerWithFiles(jsonMode, level, filepath.Join(root, ".logs"))
+	logger, closeSinks := buildLogger(jsonMode, level, filepath.Join(root, ".logs"))
 	defer closeSinks()
 
 	// DHF-REQ: keel/requirement-11 — human-mode banner + build identity through
@@ -143,7 +142,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, usage)
 }
 
-// newLoggerWithFiles builds keel-dev's three-sink logger from keel/log:
+// buildLogger builds keel-dev's three-sink logger from keel/log:
 //
 //  1. console on stdout — human handler by default, G1 JSON with --json;
 //  2. daily human-readable .log under logDir;
@@ -154,59 +153,36 @@ func printUsage() {
 // its own log file should still gate) — the failure is reported on the logger.
 //
 // DHF-REQ: keel/requirement-11
-func newLoggerWithFiles(jsonMode bool, level slog.Leveler, logDir string) (*slog.Logger, func()) {
-	cfg := consoleConfig(level)
-
-	var closers []io.Closer
-	var sinkErrs []error
-	if h, err := logging.NewHumanFileHandler(logDir, "keel-dev"); err == nil {
-		cfg.HumanFileHandler = h
-		if c, ok := h.(io.Closer); ok {
-			closers = append(closers, c)
-		}
-	} else {
-		sinkErrs = append(sinkErrs, fmt.Errorf("human file sink: %w", err))
-	}
-	if h, err := logging.NewJSONFileHandler(logDir, "keel-dev"); err == nil {
-		cfg.JSONFileHandler = h
-		if c, ok := h.(io.Closer); ok {
-			closers = append(closers, c)
-		}
-	} else {
-		sinkErrs = append(sinkErrs, fmt.Errorf("json file sink: %w", err))
-	}
-
-	var logger *slog.Logger
+func buildLogger(jsonMode bool, level slog.Leveler, logDir string) (*slog.Logger, func()) {
+	cfg := loggerConfig(level)
 	if jsonMode {
-		logger = logging.New(cfg)
+		cfg.Console = logging.ConsoleJSON
 	} else {
-		logger = logging.NewConsole(cfg)
+		cfg.Console = logging.ConsolePlain
 	}
-	for _, err := range sinkErrs {
-		logger.Warn("log sink unavailable; continuing console-only", "error", err.Error())
-	}
-	return logger, func() {
-		for _, c := range closers {
-			_ = c.Close()
-		}
-	}
+	cfg.TextDir = logDir
+	cfg.JSONLDir = logDir
+	logger := logging.New(cfg)
+	return logger.Slog(), func() { _ = logger.Close() }
 }
 
 // newLogger builds a console-only keel/log logger (bootstrap path, before the
 // module root — and thus the .logs directory — is known).
 func newLogger(jsonMode bool, level slog.Leveler) *slog.Logger {
-	cfg := consoleConfig(level)
+	cfg := loggerConfig(level)
 	if jsonMode {
-		return logging.New(cfg)
+		cfg.Console = logging.ConsoleJSON
+	} else {
+		cfg.Console = logging.ConsolePlain
 	}
-	return logging.NewConsole(cfg)
+	return logging.New(cfg).Slog()
 }
 
-// consoleConfig is keel-dev's base logger config. The service attr is
+// loggerConfig is keel-dev's base logger config. The service attr is
 // suppressed on the human console only (keel/log ConsoleOmitKeys, keel/issue-3)
 // — a single-service CLI repeating service=keel-dev per line is noise. JSON
 // mode and both .logs file sinks keep the field.
-func consoleConfig(level slog.Leveler) logging.Config {
+func loggerConfig(level slog.Leveler) logging.Config {
 	return logging.Config{
 		Service:         "keel-dev",
 		Level:           level,

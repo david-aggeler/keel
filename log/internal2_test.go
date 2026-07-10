@@ -5,6 +5,7 @@ package log
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"strings"
 	"testing"
@@ -12,7 +13,7 @@ import (
 )
 
 func TestBuildIdentity(t *testing.T) {
-	l, rc := NewForTesting("svc")
+	l, rc := newForTesting("svc")
 	LogBuildIdentity(l, "", "")
 	rec := rc.LastJSON()
 	if rec["version"] != "dev" {
@@ -54,19 +55,24 @@ func TestStartDailyBuildIdentityStops(t *testing.T) {
 	}
 }
 
-func TestNewWithFileWriterAndSinkHandlers(t *testing.T) {
+func TestNewWithJSONLAndSinkHandlers(t *testing.T) {
 	dir := t.TempDir()
 	primary := &RecordCapture{}
 	file := &RecordCapture{}
 
-	// FileWriter branch of New.
-	l := New(Config{Service: "svc", Writer: primary, FileWriter: file})
+	// JSONL handler composition branch of New.
+	l := New(Config{
+		Service:         "svc",
+		Console:         ConsoleJSON,
+		Writer:          primary,
+		JSONFileHandler: newTestJSONHandler(file),
+	})
 	l.Info("both sinks")
 	if primary.LastJSON() == nil || file.LastJSON() == nil {
 		t.Fatal("record missing from a sink")
 	}
 
-	// Human+JSON handler composition branches of New and NewConsole.
+	// Human+JSON handler composition branches of New.
 	hh, err := NewHumanFileHandler(dir, "svc")
 	if err != nil {
 		t.Fatal(err)
@@ -75,28 +81,34 @@ func TestNewWithFileWriterAndSinkHandlers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, l := range []*slog.Logger{
+	for _, l := range []*Logger{
 		New(Config{Service: "svc", Writer: &RecordCapture{}, HumanFileHandler: hh, JSONFileHandler: jh}),
 		New(Config{Service: "svc", Writer: &RecordCapture{}, HumanFileHandler: hh}),
 		New(Config{Service: "svc", Writer: &RecordCapture{}, JSONFileHandler: jh}),
-		NewConsole(Config{Service: "svc", Writer: &RecordCapture{}, HumanFileHandler: hh, JSONFileHandler: jh}),
-		NewConsole(Config{Service: "svc", Writer: &RecordCapture{}, JSONFileHandler: jh}),
-		NewConsole(Config{Service: "svc", Writer: &RecordCapture{}, HumanLogDir: dir}),
+		New(Config{Service: "svc", Writer: &RecordCapture{}, TextDir: dir}),
 	} {
 		l.Info("compose")
 	}
 
 	// WithGroup on the composed handlers.
-	lg, rc := NewConsoleForTesting("svc")
+	rc := &RecordCapture{}
+	lg := New(Config{Service: "svc", Level: slog.LevelDebug, Console: ConsolePlain, Writer: rc})
 	lg.WithGroup("grp").Info("grouped", "k", "v")
 	if out := rc.LastRaw(); !strings.Contains(out, "grouped") {
 		t.Errorf("grouped record lost: %q", out)
 	}
-	lj, rcj := NewForTesting("svc")
+	lj, rcj := newForTesting("svc")
 	lj.WithGroup("grp").Info("grouped", "k", "v")
 	if rcj.LastJSON() == nil {
 		t.Error("grouped JSON record lost")
 	}
+}
+
+func newTestJSONHandler(w io.Writer) slog.Handler {
+	return slog.NewJSONHandler(w, &slog.HandlerOptions{
+		Level:       slog.LevelDebug,
+		ReplaceAttr: replaceForOpenBrain,
+	})
 }
 
 func TestRecentBufferEdges(t *testing.T) {
@@ -104,7 +116,7 @@ func TestRecentBufferEdges(t *testing.T) {
 	if buf.Len() != 0 {
 		t.Fatal("fresh buffer not empty")
 	}
-	base, _ := NewForTesting("svc")
+	base, _ := newForTesting("svc")
 	l := TeeRecent(base, buf, "svc")
 	l = l.With("k", "v") // exercise WithAttrs on the tee handler
 	l = l.WithGroup("grp")

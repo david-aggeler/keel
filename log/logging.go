@@ -17,26 +17,46 @@ import (
 	"time"
 )
 
+// Console selects the process console rendering for [New].
+type Console string
+
+const (
+	// ConsoleSparseAI emits the sparse human console used by agent-oriented
+	// runs. The rendering currently shares the plain formatter; requirement-17
+	// owns the narrower sparse-AI rendering behavior.
+	ConsoleSparseAI Console = "sparse-ai"
+	// ConsolePlain emits the human-readable console formatter.
+	ConsolePlain Console = "plain"
+	// ConsoleJSON emits verbose JSON records to the console writer.
+	ConsoleJSON Console = "json"
+	// ConsoleNone disables the console sink.
+	ConsoleNone Console = "none"
+)
+
 // Config holds the parameters for constructing a production logger. The zero
 // value is usable: Service is blank, the level defaults to Info, and output
-// goes to os.Stdout with no file sinks. All fields are optional.
+// goes to os.Stdout with the sparse-AI console and no file sinks. All fields are
+// optional.
 type Config struct {
 	// Service is the value stamped into the "service" field of every record.
 	Service string
 	// Level is the minimum severity emitted to the primary sink. Nil → Info.
 	Level slog.Leveler
-	// Writer is the primary sink destination. Nil → os.Stdout. Set it to a
-	// bytes.Buffer (or any io.Writer) to capture output in tests.
+	// Console selects the console rendering. Empty → ConsoleSparseAI.
+	Console Console
+	// Writer is the console sink destination. Nil → os.Stdout. Set it to a
+	// bytes.Buffer (or any io.Writer) to capture console output in tests.
 	Writer io.Writer
-	// FileWriter, when non-nil, adds a second JSON sink at FileLevel writing to
-	// this destination alongside the primary Writer. Used by [New] only.
-	FileWriter io.Writer
-	// FileLevel is the minimum severity for the FileWriter sink. Nil → Debug.
-	FileLevel slog.Leveler
-	// HumanLogDir, when non-empty, makes [NewConsole] open a fresh daily human
-	// file per call. It leaks a descriptor per call and is only safe for
-	// one-shot loggers; prefer HumanFileHandler for long-lived loggers.
-	HumanLogDir string
+	// TextDir, when non-empty, opens a daily human-readable .log file sink.
+	TextDir string
+	// JSONLDir, when non-empty, opens a daily JSON Lines .jsonl file sink.
+	JSONLDir string
+	// PerRun is reserved for per-run file naming. Daily files remain the current
+	// behavior until requirement-19 changes the file sink internals.
+	PerRun bool
+	// SourceInFiles keeps the source column enabled for text file sinks. Source
+	// capture is currently caller-driven through attrs.
+	SourceInFiles bool
 	// ForceColor forces ANSI color on the console sink even when the writer is
 	// not a terminal. Ignored when NO_COLOR is set or DisableColor is true.
 	ForceColor bool
@@ -47,18 +67,24 @@ type Config struct {
 	// Machine JSON logging is intentionally unaffected.
 	ConsoleOmitKeys []string
 
-	// HumanFileHandler is a pre-opened human rolling-file handler (see
-	// NewHumanFileHandler) to compose alongside the console sink. When set, the
-	// daily file is NOT opened by NewConsole — the caller owns the handler for
-	// the invocation lifetime and closes it once. Takes precedence over
-	// HumanLogDir, which opens (and leaks) a fresh file per NewConsole call and
-	// is only safe for one-shot loggers.
+	// HumanFileHandler is a pre-opened human rolling-file handler. It is kept
+	// for internal tests and advanced composition; prefer TextDir for normal
+	// construction.
 	HumanFileHandler slog.Handler
 
-	// JSONFileHandler is a pre-opened JSON Lines rolling-file handler (see
-	// NewJSONFileHandler) to compose alongside the primary sink. The caller owns
-	// the handler for the invocation lifetime and closes it once.
+	// JSONFileHandler is a pre-opened JSON Lines rolling-file handler. It is kept
+	// for internal tests and advanced composition; prefer JSONLDir for normal
+	// construction.
 	JSONFileHandler slog.Handler
+}
+
+// Logger is keel/log's public logger. It wraps slog while owning any file sinks
+// opened by [New].
+//
+// DHF-REQ: keel/requirement-16
+type Logger struct {
+	base    *slog.Logger
+	closers []io.Closer
 }
 
 // ctxKey is the context key for storing a *slog.Logger.
@@ -118,10 +144,10 @@ func isSensitiveAttrKey(key string) bool {
 		strings.HasSuffix(k, "_pat")
 }
 
-// New creates a production logger writing JSON to stdout with the G1 field
-// schema: ts, level (lowercase), msg, service.
-// DHF-REQ: openbrain/requirement-602
-func New(cfg Config) *slog.Logger {
+// New creates a production logger from the four-sink Config model.
+//
+// DHF-REQ: keel/requirement-16, openbrain/requirement-602
+func New(cfg Config) *Logger {
 	level := cfg.Level
 	if level == nil {
 		level = slog.LevelInfo
@@ -130,64 +156,142 @@ func New(cfg Config) *slog.Logger {
 	if w == nil {
 		w = os.Stdout
 	}
-	var h slog.Handler = slog.NewJSONHandler(w, &slog.HandlerOptions{
-		Level:       level,
-		ReplaceAttr: replaceForOpenBrain,
-	})
-	if cfg.FileWriter != nil {
-		fileLevel := cfg.FileLevel
-		if fileLevel == nil {
-			fileLevel = slog.LevelDebug
+
+	handlers := make([]slog.Handler, 0, 3)
+	console := cfg.Console
+	if console == "" {
+		console = ConsoleSparseAI
+	}
+	switch console {
+	case ConsoleNone:
+	case ConsoleJSON:
+		handlers = append(handlers, slog.NewJSONHandler(w, &slog.HandlerOptions{
+			Level:       level,
+			ReplaceAttr: replaceForOpenBrain,
+		}))
+	default:
+		handlers = append(handlers, newConsoleHandler(w, level, colorEnabled(w, cfg.ForceColor, cfg.DisableColor), cfg.ConsoleOmitKeys))
+	}
+
+	closers := make([]io.Closer, 0, 2)
+	if cfg.HumanFileHandler != nil {
+		handlers = append(handlers, cfg.HumanFileHandler)
+		if c, ok := cfg.HumanFileHandler.(io.Closer); ok {
+			closers = append(closers, c)
 		}
-		h = multiHandler{handlers: []slog.Handler{
-			h,
-			slog.NewJSONHandler(cfg.FileWriter, &slog.HandlerOptions{
-				Level:       fileLevel,
-				ReplaceAttr: replaceForOpenBrain,
-			}),
-		}}
+	} else if cfg.TextDir != "" {
+		if h, err := newHumanFileHandler(cfg.TextDir, cfg.Service); err == nil {
+			handlers = append(handlers, h)
+			if c, ok := h.(io.Closer); ok {
+				closers = append(closers, c)
+			}
+		}
 	}
-	switch {
-	case cfg.HumanFileHandler != nil && cfg.JSONFileHandler != nil:
-		h = multiHandler{handlers: []slog.Handler{h, cfg.HumanFileHandler, cfg.JSONFileHandler}}
-	case cfg.HumanFileHandler != nil:
-		h = multiHandler{handlers: []slog.Handler{h, cfg.HumanFileHandler}}
-	case cfg.JSONFileHandler != nil:
-		h = multiHandler{handlers: []slog.Handler{h, cfg.JSONFileHandler}}
+	if cfg.JSONFileHandler != nil {
+		handlers = append(handlers, cfg.JSONFileHandler)
+		if c, ok := cfg.JSONFileHandler.(io.Closer); ok {
+			closers = append(closers, c)
+		}
+	} else if cfg.JSONLDir != "" {
+		if h, err := newJSONFileHandler(cfg.JSONLDir, cfg.Service); err == nil {
+			handlers = append(handlers, h)
+			if c, ok := h.(io.Closer); ok {
+				closers = append(closers, c)
+			}
+		}
 	}
-	return slog.New(h).With("service", cfg.Service)
+	if len(handlers) == 0 {
+		handlers = append(handlers, slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{
+			Level:       level,
+			ReplaceAttr: replaceForOpenBrain,
+		}))
+	}
+
+	h := handlers[0]
+	if len(handlers) > 1 {
+		h = multiHandler{handlers: handlers}
+	}
+	return &Logger{base: slog.New(h).With("service", cfg.Service), closers: closers}
 }
 
-// NewConsole creates a production logger writing human-readable text to stdout
-// with short HH:MM:SS fixed-width severity prefixes and the same redaction path
-// as New.
-//
-// DHF-REQ: keel/requirement-5, openbrain/requirement-151, openbrain/requirement-152
-func NewConsole(cfg Config) *slog.Logger {
-	level := cfg.Level
-	if level == nil {
-		level = slog.LevelInfo
+func (l *Logger) slog() *slog.Logger {
+	if l == nil || l.base == nil {
+		return slog.Default()
 	}
-	w := cfg.Writer
-	if w == nil {
-		w = os.Stdout
+	return l.base
+}
+
+// Slog returns the wrapped slog logger for APIs that have not migrated yet.
+func (l *Logger) Slog() *slog.Logger { return l.slog() }
+
+// Debug emits a DEBUG record.
+func (l *Logger) Debug(msg string, args ...any) { l.slog().Debug(msg, args...) }
+
+// Info emits an INFO record.
+func (l *Logger) Info(msg string, args ...any) { l.slog().Info(msg, args...) }
+
+// Warn emits a WARN record.
+func (l *Logger) Warn(msg string, args ...any) { l.slog().Warn(msg, args...) }
+
+// Error emits an ERROR record.
+func (l *Logger) Error(msg string, args ...any) { l.slog().Error(msg, args...) }
+
+// DebugContext emits a DEBUG record with ctx.
+func (l *Logger) DebugContext(ctx context.Context, msg string, args ...any) {
+	l.slog().DebugContext(ctx, msg, args...)
+}
+
+// InfoContext emits an INFO record with ctx.
+func (l *Logger) InfoContext(ctx context.Context, msg string, args ...any) {
+	l.slog().InfoContext(ctx, msg, args...)
+}
+
+// WarnContext emits a WARN record with ctx.
+func (l *Logger) WarnContext(ctx context.Context, msg string, args ...any) {
+	l.slog().WarnContext(ctx, msg, args...)
+}
+
+// ErrorContext emits an ERROR record with ctx.
+func (l *Logger) ErrorContext(ctx context.Context, msg string, args ...any) {
+	l.slog().ErrorContext(ctx, msg, args...)
+}
+
+// With returns a logger carrying the supplied attrs.
+func (l *Logger) With(args ...any) *Logger {
+	return &Logger{base: l.slog().With(args...), closers: l.closers}
+}
+
+// WithGroup returns a logger that groups subsequent attrs under name.
+func (l *Logger) WithGroup(name string) *Logger {
+	return &Logger{base: l.slog().WithGroup(name), closers: l.closers}
+}
+
+// Event emits an INFO record with event_type set to verb.
+func (l *Logger) Event(verb, msg string, fields ...any) {
+	args := append([]any{"event_type", verb}, fields...)
+	l.slog().Info(msg, args...)
+}
+
+// Header emits a ruled human-mode banner.
+func (l *Logger) Header(title string, version string) { Header(l.slog(), title, version) }
+
+// Section emits a ruled human-mode section header.
+func (l *Logger) Section(name string) { Section(l.slog(), name) }
+
+// Field emits one aligned label/value row.
+func (l *Logger) Field(label string, value any) { Field(l.slog(), label, value) }
+
+// Close releases file sinks opened by New.
+func (l *Logger) Close() error {
+	if l == nil {
+		return nil
 	}
-	h := newConsoleHandler(w, level, colorEnabled(w, cfg.ForceColor, cfg.DisableColor), cfg.ConsoleOmitKeys)
-	switch {
-	case cfg.HumanFileHandler != nil && cfg.JSONFileHandler != nil:
-		h = multiHandler{handlers: []slog.Handler{h, cfg.HumanFileHandler, cfg.JSONFileHandler}}
-	case cfg.HumanFileHandler != nil:
-		// Caller owns a file handler for the invocation lifetime (no per-call
-		// open). This is the leak-free path for loggers built per log record.
-		h = multiHandler{handlers: []slog.Handler{h, cfg.HumanFileHandler}}
-	case cfg.JSONFileHandler != nil:
-		h = multiHandler{handlers: []slog.Handler{h, cfg.JSONFileHandler}}
-	case cfg.HumanLogDir != "":
-		if fileHandler, err := newHumanFileHandler(cfg.HumanLogDir, cfg.Service); err == nil {
-			h = multiHandler{handlers: []slog.Handler{h, fileHandler}}
-		}
+	var err error
+	for _, c := range l.closers {
+		err = errors.Join(err, c.Close())
 	}
-	return slog.New(h).With("service", cfg.Service)
+	l.closers = nil
+	return err
 }
 
 type multiHandler struct {
@@ -514,7 +618,7 @@ func (h *jsonFileHandler) Close() error {
 // and returns a handler (DEBUG and above) that appends to it. The returned
 // handler also satisfies io.Closer: the caller owns it for the invocation
 // lifetime and must Close it once when done, rather than opening a fresh file
-// per log record. Pass it to NewConsole via Config.HumanFileHandler.
+// per log record. Prefer Config.TextDir with New for production construction.
 //
 // DHF-REQ: openbrain/requirement-152
 func NewHumanFileHandler(dir string, service string) (slog.Handler, error) {
@@ -804,11 +908,11 @@ func (rc *RecordCapture) Reset() {
 	rc.buf.Reset()
 }
 
-// NewForTesting creates a logger that writes to a RecordCapture buffer,
+// newForTesting creates a logger that writes to a RecordCapture buffer,
 // using the same G1 JSON handler chain as production. The log level is
 // set to LevelDebug so all levels are captured. Tests MUST NOT call
 // slog.SetDefault with the returned logger.
-func NewForTesting(service string) (*slog.Logger, *RecordCapture) {
+func newForTesting(service string) (*slog.Logger, *RecordCapture) {
 	rc := &RecordCapture{}
 	h := slog.NewJSONHandler(rc, &slog.HandlerOptions{
 		Level:       slog.LevelDebug,
@@ -817,11 +921,11 @@ func NewForTesting(service string) (*slog.Logger, *RecordCapture) {
 	return slog.New(h).With("service", service), rc
 }
 
-// NewConsoleForTesting creates a console logger that writes to a RecordCapture
+// newConsoleForTesting creates a console logger that writes to a RecordCapture
 // buffer using the same human console handler chain as production.
 //
 // DHF-REQ: keel/requirement-5, openbrain/requirement-151, openbrain/requirement-152
-func NewConsoleForTesting(service string) (*slog.Logger, *RecordCapture) {
+func newConsoleForTesting(service string) (*slog.Logger, *RecordCapture) {
 	rc := &RecordCapture{}
 	h := newConsoleHandler(rc, slog.LevelDebug, false, nil)
 	return slog.New(h).With("service", service), rc

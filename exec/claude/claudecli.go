@@ -14,6 +14,12 @@ import (
 	procexec "github.com/david-aggeler/keel/exec"
 )
 
+type processLogger interface {
+	Debug(msg string, args ...any)
+	Info(msg string, args ...any)
+	InfoContext(ctx context.Context, msg string, args ...any)
+}
+
 // Request describes one headless claude -p invocation.
 type Request struct {
 	// Prompt is the user prompt (may be a slash invocation like "/hello-world").
@@ -38,7 +44,7 @@ type Request struct {
 	Bin string
 	// Logger receives the shared process lifecycle and curated claude progress
 	// records. Nil uses slog.Default through the process facility.
-	Logger *slog.Logger
+	Logger processLogger
 }
 
 // Usage mirrors the usage block of the claude -p result event. See
@@ -185,7 +191,7 @@ func truncateBytes(b []byte, n int) string {
 }
 
 type claudeStreamWriter struct {
-	logger    *slog.Logger
+	logger    processLogger
 	buf       []byte
 	resultRaw []byte
 	err       error
