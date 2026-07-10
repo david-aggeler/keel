@@ -47,9 +47,9 @@ func validateVersion(version string) error {
 // It refuses before creating any tag if the tree is dirty or the gate is red,
 // so a broken tag-on-red state cannot happen.
 //
-// DHF-REQ: keel/requirement-9
+// DHF-REQ: keel/requirement-9, keel/requirement-25
 func runRelease(ctx context.Context, logger *slog.Logger, dir string, version string) error {
-	logging.Section(logger, "keel-dev release "+version)
+	logging.Section(logger, "release "+version)
 
 	if err := validateVersion(version); err != nil {
 		return err

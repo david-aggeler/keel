@@ -35,6 +35,9 @@ type step struct {
 	// advisory marks a step whose output is surfaced through keel/log but whose
 	// failure (non-zero exit) never fails the gate (keel/ac-41: deadcode).
 	advisory bool
+	// quietStderr downgrades child stderr output records from Error to Info for
+	// noisy tools whose progress stream is not itself a failure signal.
+	quietStderr bool
 }
 
 type runLogLocator interface {
@@ -81,11 +84,11 @@ func ciSteps(dir string) []step {
 		{name: "log-core-deps", fn: runLogCoreDependencyQuarantine},
 		// --- static-tool battery (keel/requirement-12) ---
 		// DHF-REQ: keel/requirement-12 (keel/ac-38)
-		{name: "golangci-lint", tool: "golangci-lint", program: "golangci-lint", args: []string{"run", "./..."}},
+		{name: "golangci-lint", tool: "golangci-lint", program: "golangci-lint", args: []string{"run", "./..."}, quietStderr: true},
 		// DHF-REQ: keel/requirement-12 (keel/ac-39)
-		{name: "govulncheck", tool: "govulncheck", program: "govulncheck", args: []string{"./..."}},
+		{name: "govulncheck", tool: "govulncheck", program: "govulncheck", args: []string{"./..."}, quietStderr: true},
 		// DHF-REQ: keel/requirement-12 (keel/ac-40)
-		{name: "cspell", tool: "cspell", program: "cspell", args: []string{"--no-progress", "**/*.md", "**/*.go"}},
+		{name: "cspell", tool: "cspell", program: "cspell", args: []string{"--no-progress", "**/*.md", "**/*.go"}, quietStderr: true},
 		// gitleaks scans the git history + working tree for committed secrets and
 		// exits non-zero on any finding (default --exit-code 1), so a leak fails
 		// the gate. --no-banner keeps the log quiet; --redact prevents any matched
@@ -95,16 +98,17 @@ func ciSteps(dir string) []step {
 		// (presence-only here — see pinnedTools), so this only fails loud if the
 		// tool is missing (keel/ac-45).
 		// DHF-REQ: keel/requirement-13 (keel/ac-45), keel/requirement-8
-		{name: "gitleaks", tool: "gitleaks", program: "gitleaks", args: []string{"detect", "--no-banner", "--redact"}},
+		{name: "gitleaks", tool: "gitleaks", program: "gitleaks", args: []string{"detect", "--no-banner", "--redact"}, quietStderr: true},
 	}
 
 	if len(scripts) > 0 {
 		// DHF-REQ: keel/requirement-12 (keel/ac-43)
-		steps = append(steps, step{name: "shellcheck", tool: "shellcheck", program: "shellcheck", args: scripts})
+		steps = append(steps, step{name: "shellcheck", tool: "shellcheck", program: "shellcheck", args: scripts, quietStderr: true})
 		// DHF-REQ: keel/requirement-12 (keel/ac-44)
 		steps = append(steps, step{
 			name: "shfmt", tool: "shfmt", program: "shfmt",
-			args: append([]string{"-d"}, scripts...),
+			args:        append([]string{"-d"}, scripts...),
+			quietStderr: true,
 			stdoutFails: func(out string) string {
 				diff := strings.TrimSpace(out)
 				if diff == "" {
@@ -121,7 +125,7 @@ func ciSteps(dir string) []step {
 	// that keel-dev's main never calls — but the packages' own tests and external
 	// consumers (vela, openbrain) do — is not genuinely dead. A function is reported
 	// only when unused by main AND untested.
-	steps = append(steps, step{name: "deadcode", tool: "deadcode", program: "deadcode", args: []string{"-test", "./..."}, advisory: true})
+	steps = append(steps, step{name: "deadcode", tool: "deadcode", program: "deadcode", args: []string{"-test", "./..."}, advisory: true, quietStderr: true})
 
 	// The coverage-floored test suite runs last: it is the most expensive step
 	// and the fast static checks should fail before it does.
@@ -142,9 +146,9 @@ func runCI(ctx context.Context, logger *slog.Logger, dir string) error {
 // runCIWithRunLog runs the CI gate and, when a per-run JSONL sink is available,
 // wraps the first failing step in the structured OperationalError carrier.
 //
-// DHF-REQ: keel/requirement-18
+// DHF-REQ: keel/requirement-18, keel/requirement-25
 func runCIWithRunLog(ctx context.Context, logger *slog.Logger, runLog runLogLocator, dir string) error {
-	logging.Section(logger, "keel-dev ci")
+	logging.Section(logger, "ci")
 	for _, s := range ciSteps(dir) {
 		startLine := 0
 		logFile := ""
@@ -226,6 +230,9 @@ func runStep(ctx context.Context, logger *slog.Logger, dir string, s step) error
 		Dir:     dir,
 		Logger:  logger,
 	}
+	if s.quietStderr {
+		req.Logger = quietStderrLogger{Logger: logger}
+	}
 	// Child output travels through keel/log, never as a raw terminal stream
 	// (keel/ac-35, keel/issue-2): line-wise records for live progress, except
 	// where the step inspects stdout itself.
@@ -273,6 +280,36 @@ func runStep(ctx context.Context, logger *slog.Logger, dir string, s step) error
 	}
 	logger.Debug("step complete", "step", s.name, "elapsed_ms", time.Since(started).Milliseconds())
 	return nil
+}
+
+type quietStderrLogger struct {
+	*slog.Logger
+}
+
+// DHF-REQ: keel/requirement-25
+func (l quietStderrLogger) Error(msg string, args ...any) {
+	if isStderrProcessOutput(args) {
+		l.Info(msg, args...)
+		return
+	}
+	l.Logger.Error(msg, args...)
+}
+
+func isStderrProcessOutput(args []any) bool {
+	var processOutput, stderr bool
+	for i := 0; i+1 < len(args); i += 2 {
+		key, ok := args[i].(string)
+		if !ok {
+			continue
+		}
+		switch key {
+		case "event_type":
+			processOutput = args[i+1] == "process_output"
+		case "stream":
+			stderr = args[i+1] == "stderr"
+		}
+	}
+	return processOutput && stderr
 }
 
 // runLogCoreDependencyQuarantine proves that consumers building only keel/log do

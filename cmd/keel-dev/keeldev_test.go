@@ -181,6 +181,27 @@ func TestRunStepLogsThroughKeelLog(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-25
+func TestRunCISectionNamesPhaseOnly(t *testing.T) {
+	logger, cap := testLogger("keel-dev")
+	err := runCI(context.Background(), logger, t.TempDir())
+	if err == nil {
+		t.Fatal("empty directory should fail after emitting the ci section")
+	}
+
+	records := cap.AllJSON()
+	if len(records) == 0 {
+		t.Fatal("no log records captured")
+	}
+	first := records[0]
+	if first["banner"] != "section" {
+		t.Fatalf("first record banner = %#v, want section; record=%#v", first["banner"], first)
+	}
+	if first["msg"] != "ci" {
+		t.Fatalf("ci section = %#v, want phase-only section", first["msg"])
+	}
+}
+
 // TestConsoleSuppressesServiceAttr proves the human console omits the
 // redundant service=keel-dev attr while JSON mode keeps it (keel/issue-3).
 func TestConsoleSuppressesServiceAttr(t *testing.T) {
@@ -202,6 +223,50 @@ func TestConsoleSuppressesServiceAttr(t *testing.T) {
 	logging.New(cfg).Info("hello")
 	if rec := rcJSON.LastJSON(); rec["service"] != "keel-dev" {
 		t.Errorf("JSON mode must keep the service field, got %v", rec)
+	}
+}
+
+// DHF-TEST: keel/requirement-25
+func TestConsoleModeSelectsRendering(t *testing.T) {
+	cases := []struct {
+		mode string
+		want logging.Console
+	}{
+		{"human", logging.ConsolePlain},
+		{"ai", logging.ConsoleSparseAI},
+		{"json", logging.ConsoleJSON},
+	}
+	for _, c := range cases {
+		got, err := consoleForMode(c.mode)
+		if err != nil {
+			t.Fatalf("consoleForMode(%q) error = %v", c.mode, err)
+		}
+		if got != c.want {
+			t.Fatalf("consoleForMode(%q) = %q, want %q", c.mode, got, c.want)
+		}
+	}
+
+	if _, err := consoleForMode("bogus"); err == nil || !strings.Contains(err.Error(), "unknown --mode") {
+		t.Fatalf("unknown mode should fail loud, got %v", err)
+	}
+}
+
+// DHF-TEST: keel/requirement-25
+func TestLoggerConfigUsesConsoleMode(t *testing.T) {
+	rc := &logging.RecordCapture{}
+	logger := newLogger("ai", slog.LevelInfo, rc)
+	logger.Info("gate started", "gate", "probe")
+
+	rec := rc.LastJSON()
+	if rec["event"] != "log" || rec["message"] != "gate started" {
+		t.Fatalf("ai mode should use sparse-AI console records, got %#v", rec)
+	}
+
+	jsonCap := &logging.RecordCapture{}
+	jsonLogger := newLogger("json", slog.LevelInfo, jsonCap)
+	jsonLogger.Info("gate started", "gate", "probe")
+	if rec := jsonCap.LastJSON(); rec["service"] != "keel-dev" || rec["msg"] != "gate started" {
+		t.Fatalf("json mode should use verbose JSON records, got %#v", rec)
 	}
 }
 
