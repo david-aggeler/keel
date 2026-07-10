@@ -19,12 +19,9 @@ import (
 
 type processLogger interface {
 	Debug(msg string, args ...any)
+	Error(msg string, args ...any)
 	Info(msg string, args ...any)
 	InfoContext(ctx context.Context, msg string, args ...any)
-}
-
-type errorProcessLogger interface {
-	Error(msg string, args ...any)
 }
 
 // Request describes a plain external command launch. Only Program is required;
@@ -195,11 +192,7 @@ func (w *captureWriter) Write(p []byte) (int, error) {
 	if w.logger != nil {
 		log := w.logger.Debug
 		if w.streamName == "stderr" {
-			errorLogger, ok := w.logger.(errorProcessLogger)
-			if !ok {
-				errorLogger = slog.Default()
-			}
-			log = errorLogger.Error
+			log = w.logger.Error
 		}
 		for _, line := range cleanProcessOutputLines(string(p)) {
 			log("process output",

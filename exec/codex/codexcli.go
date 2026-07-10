@@ -18,6 +18,7 @@ import (
 
 type processLogger interface {
 	Debug(msg string, args ...any)
+	Error(msg string, args ...any)
 	Info(msg string, args ...any)
 	InfoContext(ctx context.Context, msg string, args ...any)
 }

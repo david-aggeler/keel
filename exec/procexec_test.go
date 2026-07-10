@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -131,6 +132,21 @@ func TestProcessStartLogsStructuredLifecycleAndRedactsSensitiveArgs(t *testing.T
 	}
 	if got, ok := end["elapsed_ms"].(float64); !ok || got < 0 {
 		t.Fatalf("process_end elapsed_ms = %#v, want non-negative duration", end["elapsed_ms"])
+	}
+}
+
+// DHF-TEST: keel/requirement-24
+func TestRequestLoggerContractIncludesErrorForStderrRouting(t *testing.T) {
+	loggerField, ok := reflect.TypeOf(procexec.Request{}).FieldByName("Logger")
+	if !ok {
+		t.Fatal("Request.Logger field missing")
+	}
+	errorMethod, ok := loggerField.Type.MethodByName("Error")
+	if !ok {
+		t.Fatal("Request.Logger contract does not require Error; stderr process_output can bypass the caller logger")
+	}
+	if got := errorMethod.Type.String(); got != "func(string, ...interface {})" {
+		t.Fatalf("Request.Logger Error method type = %s, want func(string, ...interface {})", got)
 	}
 }
 
