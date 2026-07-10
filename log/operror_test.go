@@ -161,9 +161,14 @@ func TestOperationalError_LogValue(t *testing.T) {
 	logger, capture := newJSONCaptureLogger("test-svc")
 
 	opErr := &logging.OperationalError{
-		Op:      "link_blocks",
-		Message: "cross-product link rejected",
-		Err:     errors.New("product mismatch"),
+		Op:        "link_blocks",
+		Message:   "cross-product link rejected",
+		Err:       errors.New("product mismatch"),
+		Task:      "ci:vet",
+		LogFile:   "/tmp/keel-dev/run.jsonl",
+		StartLine: 7,
+		ExitCode:  3,
+		Hint:      "open /tmp/keel-dev/run.jsonl at line 7",
 		Metadata: map[string]any{
 			"reltype":        "depends_on",
 			"src_product_id": int64(42),
@@ -198,6 +203,25 @@ func TestOperationalError_LogValue(t *testing.T) {
 	// root_cause must be present when Err is non-nil.
 	if rc, _ := errGroup["root_cause"].(string); rc != "product mismatch" {
 		t.Errorf("err.root_cause = %q, want %q", rc, "product mismatch")
+	}
+	if task, _ := errGroup["task"].(string); task != "ci:vet" {
+		t.Errorf("err.task = %q, want %q", task, "ci:vet")
+	}
+	if logFile, _ := errGroup["log_file"].(string); logFile != "/tmp/keel-dev/run.jsonl" {
+		t.Errorf("err.log_file = %q, want %q", logFile, "/tmp/keel-dev/run.jsonl")
+	}
+	if startLine, ok := errGroup["start_line"]; !ok {
+		t.Error("err.start_line missing from group")
+	} else if startLine != float64(7) {
+		t.Errorf("err.start_line = %v (%T), want float64(7)", startLine, startLine)
+	}
+	if exitCode, ok := errGroup["exit_code"]; !ok {
+		t.Error("err.exit_code missing from group")
+	} else if exitCode != float64(3) {
+		t.Errorf("err.exit_code = %v (%T), want float64(3)", exitCode, exitCode)
+	}
+	if hint, _ := errGroup["hint"].(string); hint != "open /tmp/keel-dev/run.jsonl at line 7" {
+		t.Errorf("err.hint = %q, want %q", hint, "open /tmp/keel-dev/run.jsonl at line 7")
 	}
 
 	// string metadata field must be present.

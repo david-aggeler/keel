@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -32,6 +34,11 @@ type step struct {
 	// advisory marks a step whose output is surfaced through keel/log but whose
 	// failure (non-zero exit) never fails the gate (keel/ac-41: deadcode).
 	advisory bool
+}
+
+type runLogLocator interface {
+	RunLogPath() string
+	RunLogLine() int
 }
 
 // ciSteps is the canonical gate definition: gofmt, build, vet, lint, test.
@@ -126,15 +133,60 @@ func ciSteps(dir string) []step {
 //
 // DHF-REQ: keel/requirement-11
 func runCI(ctx context.Context, logger *slog.Logger, dir string) error {
+	return runCIWithRunLog(ctx, logger, nil, dir)
+}
+
+// runCIWithRunLog runs the CI gate and, when a per-run JSONL sink is available,
+// wraps the first failing step in the structured OperationalError carrier.
+//
+// DHF-REQ: keel/requirement-18
+func runCIWithRunLog(ctx context.Context, logger *slog.Logger, runLog runLogLocator, dir string) error {
 	logging.Section(logger, "keel-dev ci")
 	for _, s := range ciSteps(dir) {
+		startLine := 0
+		logFile := ""
+		if runLog != nil {
+			logFile = runLog.RunLogPath()
+			if logFile != "" {
+				startLine = runLog.RunLogLine() + 1
+			}
+		}
+		logger.Info("gate started", "gate", s.name)
 		if err := runStep(ctx, logger, dir, s); err != nil {
-			return fmt.Errorf("ci gate %q failed: %w", s.name, err)
+			return gateOperationalError(s.name, logFile, startLine, err)
 		}
 		logger.Info("gate passed", "gate", s.name)
 	}
 	logger.Info("ci gate green")
 	return nil
+}
+
+func gateOperationalError(stepName, logFile string, startLine int, err error) error {
+	return &logging.OperationalError{
+		Op:        "keel-dev ci",
+		Message:   fmt.Sprintf("ci gate %q failed", stepName),
+		Err:       err,
+		Task:      "ci:" + stepName,
+		LogFile:   logFile,
+		StartLine: startLine,
+		ExitCode:  gateExitCode(err),
+		Hint:      gateFailureHint(logFile, startLine),
+	}
+}
+
+func gateExitCode(err error) int {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode()
+	}
+	return 1
+}
+
+func gateFailureHint(logFile string, startLine int) string {
+	if logFile == "" || startLine <= 0 {
+		return "rerun keel-dev ci with file logging enabled and inspect the failing gate records"
+	}
+	return fmt.Sprintf("open %s at line %d", logFile, startLine)
 }
 
 // runStep executes one gate step. Subprocess steps go through keel/exec; child
