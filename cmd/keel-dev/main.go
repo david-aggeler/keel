@@ -79,7 +79,10 @@ func run(argv []string) int {
 	if cfg.Verbose {
 		level = slog.LevelDebug
 	}
-	logger, closeSinks := buildLogger(mode, level, filepath.Join(root, ".logs"))
+	logger, closeSinks, err := buildLogger(mode, level, filepath.Join(root, ".logs"))
+	if err != nil {
+		return exitFor(newLogger(mode, level, os.Stdout), err)
+	}
 	defer closeSinks()
 	slogLogger := logger.Slog()
 
@@ -109,18 +112,18 @@ func printUsage(tree *cli.CommandSpec) {
 //  3. per-run JSON Lines .jsonl under logDir.
 //
 // The returned closer releases both file handlers; call it once at exit.
-// File-sink open failures degrade to console-only (a gate that cannot write
-// its own log file should still gate) — the failure is reported on the logger.
-//
-// DHF-REQ: keel/requirement-11, keel/requirement-19, keel/requirement-25
-func buildLogger(mode string, level slog.Leveler, logDir string) (*logging.Logger, func()) {
+// DHF-REQ: keel/requirement-11, keel/requirement-19, keel/requirement-25, keel/requirement-29
+func buildLogger(mode string, level slog.Leveler, logDir string) (*logging.Logger, func(), error) {
 	cfg := loggerConfig(level)
 	cfg.Console, _ = consoleForMode(mode)
 	cfg.TextDir = logDir
 	cfg.JSONLDir = logDir
 	cfg.PerRun = true
-	logger := logging.New(cfg)
-	return logger, func() { _ = logger.Close() }
+	logger, err := logging.New(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	return logger, func() { _ = logger.Close() }, nil
 }
 
 // newLogger builds a console-only keel/log logger (bootstrap path, before the
@@ -129,7 +132,11 @@ func newLogger(mode string, level slog.Leveler, writer io.Writer) *slog.Logger {
 	cfg := loggerConfig(level)
 	cfg.Console, _ = consoleForMode(mode)
 	cfg.Writer = writer
-	return logging.New(cfg).Slog()
+	logger, err := logging.New(cfg)
+	if err != nil {
+		return slog.New(slog.NewTextHandler(writer, nil))
+	}
+	return logger.Slog()
 }
 
 // DHF-REQ: keel/requirement-25

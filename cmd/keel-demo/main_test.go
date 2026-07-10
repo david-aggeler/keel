@@ -185,7 +185,7 @@ func testLogger(t *testing.T, mode string, out *bytes.Buffer) *logging.Logger {
 	if err != nil {
 		t.Fatalf("ParseMode(%q): %v", mode, err)
 	}
-	logger := logging.New(logging.Config{
+	logger, err := logging.New(logging.Config{
 		Service:  "keel-demo-test",
 		Level:    slog.LevelDebug,
 		Console:  consoleForSharedMode(parsed),
@@ -194,6 +194,9 @@ func testLogger(t *testing.T, mode string, out *bytes.Buffer) *logging.Logger {
 		JSONLDir: t.TempDir(),
 		PerRun:   true,
 	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	t.Cleanup(func() { _ = logger.Close() })
 	return logger
 }

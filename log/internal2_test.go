@@ -61,12 +61,15 @@ func TestNewWithJSONLAndSinkHandlers(t *testing.T) {
 	file := &RecordCapture{}
 
 	// JSONL handler composition branch of New.
-	l := New(Config{
+	l, err := New(Config{
 		Service:         "svc",
 		Console:         ConsoleJSON,
 		Writer:          primary,
 		JSONFileHandler: newTestJSONHandler(file),
 	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	l.Info("both sinks")
 	if primary.LastJSON() == nil || file.LastJSON() == nil {
 		t.Fatal("record missing from a sink")
@@ -81,18 +84,25 @@ func TestNewWithJSONLAndSinkHandlers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, l := range []*Logger{
-		New(Config{Service: "svc", Writer: &RecordCapture{}, HumanFileHandler: hh, JSONFileHandler: jh}),
-		New(Config{Service: "svc", Writer: &RecordCapture{}, HumanFileHandler: hh}),
-		New(Config{Service: "svc", Writer: &RecordCapture{}, JSONFileHandler: jh}),
-		New(Config{Service: "svc", Writer: &RecordCapture{}, TextDir: dir}),
+	for _, cfg := range []Config{
+		{Service: "svc", Writer: &RecordCapture{}, HumanFileHandler: hh, JSONFileHandler: jh},
+		{Service: "svc", Writer: &RecordCapture{}, HumanFileHandler: hh},
+		{Service: "svc", Writer: &RecordCapture{}, JSONFileHandler: jh},
+		{Service: "svc", Writer: &RecordCapture{}, TextDir: dir},
 	} {
+		l, err := New(cfg)
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
 		l.Info("compose")
 	}
 
 	// WithGroup on the composed handlers.
 	rc := &RecordCapture{}
-	lg := New(Config{Service: "svc", Level: slog.LevelDebug, Console: ConsolePlain, Writer: rc})
+	lg, err := New(Config{Service: "svc", Level: slog.LevelDebug, Console: ConsolePlain, Writer: rc})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	lg.WithGroup("grp").Info("grouped", "k", "v")
 	if out := rc.LastRaw(); !strings.Contains(out, "grouped") {
 		t.Errorf("grouped record lost: %q", out)
