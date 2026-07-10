@@ -1,6 +1,8 @@
 openbrain-client.local.yaml
 .logs
 bin/
+# run-queue per-unit worktrees are rooted under <repo>/worktrees/; never track them
+worktrees/
 .claude/legacy/
 # gitignored sandbox for `openbrain-client init --dev` (KD10, CR-0249)
 consumer-claude/

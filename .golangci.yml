@@ -4,20 +4,51 @@
 # enabled set explicit so the gate asserts a known battery rather than whatever
 # the installed golangci-lint defaults to. Bumps to this set are CR-sized.
 #
+# golangci-lint v2 schema (migrated from v1 with `golangci-lint migrate` under
+# the toolchain-modernization CR). gosimple no longer appears: in v2 its checks
+# folded into staticcheck. The exclusion presets reproduce v1's default
+# exclusions (exclude-use-default was on in v1) — this is a faithful tool bump,
+# not a lint-policy change.
+#
 # DHF-REQ: keel/requirement-12 (keel/ac-38)
-run:
-  timeout: 5m
+version: "2"
 
 linters:
-  disable-all: true
+  default: none
   enable:
     - errcheck
     - govet
     - ineffassign
     - staticcheck
     - unused
-    - gosimple
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      # v1.64.8's staticcheck linter ran the SA*/S* checks but not the QF
+      # (quickfix) category; v2 unified them so QF suggestions now fire. Keep
+      # v1's effective check set across this tool bump — turning quickfix
+      # suggestions on is a separate lint-policy decision, not this migration.
+      - linters:
+          - staticcheck
+        text: "QF1001"
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
 
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
+
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

@@ -230,12 +230,14 @@ func TestGitleaksStep_DetectsSecret(t *testing.T) {
 	requireTool(t, "gitleaks")
 
 	dir := t.TempDir()
-	// A canonical AWS example key pair — inert test data, but gitleaks' default
-	// ruleset flags it. Assembled from rune slices so this committed source file
-	// carries no scannable secret-shaped token for the gate's own cspell/gitleaks
-	// passes to trip over.
-	keyID := string([]rune{'A', 'K', 'I', 'A', 'I', 'O', 'S', 'F', 'O', 'D', 'N', 'N', '7', 'E', 'X', 'A', 'M', 'P', 'L', 'E'})
-	keySecret := string([]rune{'w', 'J', 'a', 'l', 'r', 'X', 'U', 't', 'n', 'F', 'E', 'M', 'I', '/', 'K', '7', 'M', 'D', 'E', 'N', 'G', '/', 'b', 'P', 'x', 'R', 'f', 'i', 'C', 'Y', 'E', 'M', 'P', 'L', 'E', 'K', 'E', 'Y', 'x', 'x'})
+	// An inert AWS-shaped key pair that gitleaks' default ruleset flags.
+	// Deliberately NOT the canonical AWS documented example key: recent gitleaks
+	// (>=8.21) allowlists that well-known example, so it no longer trips
+	// detection — a different, non-example key id is what proves the gate works.
+	// Assembled from rune slices so this committed source file carries no
+	// scannable secret-shaped token for the gate's own cspell/gitleaks passes.
+	keyID := string([]rune{'A', 'K', 'I', 'A', '3', 'M', '7', 'Q', 'K', '2', 'P', '9', 'R', 'J', 'T', 'Z', '5', 'W', 'Y', '4'})
+	keySecret := string([]rune{'w', 'J', 'a', 'l', 'r', 'X', 'U', 't', 'n', 'F', 'E', 'M', 'I', '/', 'K', '7', 'M', 'D', 'E', 'N', 'G', '/', 'b', 'P', 'x', 'R', 'f', 'i', 'C', 'Y', 'z', '9', 'Q', '2', 'p', '4', 'R', 'f', 'i', 'C', 'a'})
 	content := "aws_access_key_id = \"" + keyID + "\"\n" +
 		"aws_secret_access_key = \"" + keySecret + "\"\n"
 	if err := os.WriteFile(filepath.Join(dir, "leak.conf"), []byte(content), 0o644); err != nil {

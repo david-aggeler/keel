@@ -47,17 +47,17 @@ exit 0`)
 	// otherwise exit 0. deadcode is presence-only (no --version probe).
 	stub(t, bin, callsFile, "golangci-lint", `
 case "$1" in
-  --version) echo "golangci-lint has version v1.64.8" ;;
+  --version) echo "golangci-lint has version v2.0.2" ;;
 esac
 exit 0`)
 	stub(t, bin, callsFile, "govulncheck", `
 case "$1" in
-  --version) echo "Scanner: govulncheck@v1.1.4" ;;
+  --version) echo "Scanner: govulncheck@v1.3.0" ;;
 esac
 exit 0`)
 	stub(t, bin, callsFile, "cspell", `
 case "$1" in
-  --version) echo "10.0.0" ;;
+  --version) echo "10.0.1" ;;
 esac
 exit 0`)
 	stub(t, bin, callsFile, "deadcode", "exit 0")
