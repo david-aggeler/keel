@@ -127,6 +127,47 @@ func TestParseCoverageTotal(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-22
+func TestLogCoreDependencyQuarantineRejectsOpenTelemetryReachability(t *testing.T) {
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", `
+case "$1 $2 $3" in
+  "list -deps ./log") printf '%s\n' "errors" "log/slog" "`+modulePath+`/log" "go.opentelemetry.io/otel/sdk/log" ;;
+esac
+exit 0`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "log"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runLogCoreDependencyQuarantine(context.Background(), discardLogger(), dir)
+	if err == nil || !strings.Contains(err.Error(), "log core dependency quarantine failed") || !strings.Contains(err.Error(), "go.opentelemetry.io/otel/sdk/log") {
+		t.Fatalf("want OTel dependency quarantine failure, got %v", err)
+	}
+}
+
+// DHF-TEST: keel/requirement-22
+func TestLogCoreDependencyQuarantineAllowsStdlibAndOwnModule(t *testing.T) {
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", `
+case "$1 $2 $3" in
+  "list -deps ./log") printf '%s\n' "errors" "log/slog" "`+modulePath+`/log" ;;
+esac
+exit 0`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "log"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runLogCoreDependencyQuarantine(context.Background(), discardLogger(), dir); err != nil {
+		t.Fatalf("stdlib and own-module deps should pass, got %v", err)
+	}
+}
+
 // TestLintSelf holds keel's own tree to its own lint policies.
 func TestLintSelf(t *testing.T) {
 	root, err := findModuleRoot(".")
