@@ -52,8 +52,8 @@ func TestEmit_ProducesInfoLevelWithKindMetric(t *testing.T) {
 	if got["msg"] != logging.EventToolCall {
 		t.Errorf("msg = %q; want %q", got["msg"], logging.EventToolCall)
 	}
-	if got["level"] != "info" {
-		t.Errorf("level = %q; want %q", got["level"], "info")
+	if got["level"] != "INFO" {
+		t.Errorf("level = %q; want %q", got["level"], "INFO")
 	}
 	if got["kind"] != "metric" {
 		t.Errorf("kind = %q; want %q", got["kind"], "metric")

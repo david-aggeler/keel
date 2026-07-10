@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -52,8 +53,7 @@ type Config struct {
 	// PerRun is reserved for per-run file naming. Daily files remain the current
 	// behavior until requirement-19 changes the file sink internals.
 	PerRun bool
-	// SourceInFiles keeps the source column enabled for text file sinks. Source
-	// capture is currently caller-driven through attrs.
+	// SourceInFiles keeps automatic caller source enabled for text file sinks.
 	SourceInFiles bool
 	// ForceColor forces ANSI color on the console sink even when the writer is
 	// not a terminal. Ignored when NO_COLOR is set or DisableColor is true.
@@ -81,10 +81,11 @@ type Config struct {
 //
 // DHF-REQ: keel/requirement-16
 type Logger struct {
-	base       *slog.Logger
-	closers    []io.Closer
-	runLogPath string
-	runLog     *lineCountingWriteCloser
+	base          *slog.Logger
+	closers       []io.Closer
+	runLogPath    string
+	runLog        *lineCountingWriteCloser
+	sourceInFiles bool
 }
 
 // ctxKey is the context key for storing a *slog.Logger.
@@ -103,10 +104,10 @@ func FromContext(ctx context.Context) *slog.Logger {
 	return slog.Default()
 }
 
-// DHF-REQ: keel/requirement-5
-// replaceForOpenBrain renames "time" -> "ts" (RFC3339Nano), lowercases
-// "level", drops "source", and redacts rendered string values before they
-// reach either the JSON or console sink.
+// DHF-REQ: keel/requirement-5, keel/requirement-20
+// replaceForOpenBrain renames "time" -> "ts" (RFC3339Nano), keeps slog-native
+// uppercase levels, drops "source", and redacts rendered string values before
+// they reach either the JSON or console sink.
 func replaceForOpenBrain(groups []string, a slog.Attr) slog.Attr {
 	if a.Key == slog.TimeKey {
 		a.Key = "ts"
@@ -116,9 +117,6 @@ func replaceForOpenBrain(groups []string, a slog.Attr) slog.Attr {
 		return a
 	}
 	if a.Key == slog.LevelKey {
-		if lvl, ok := a.Value.Any().(slog.Level); ok {
-			a.Value = slog.StringValue(strings.ToLower(lvl.String()))
-		}
 		return a
 	}
 	if a.Key == slog.SourceKey {
@@ -131,6 +129,14 @@ func replaceForOpenBrain(groups []string, a slog.Attr) slog.Attr {
 	}
 	if a.Value.Kind() == slog.KindString {
 		a.Value = slog.StringValue(redactString(a.Value.String()))
+	}
+	return a
+}
+
+func replaceForConsole(groups []string, a slog.Attr) slog.Attr {
+	a = replaceForOpenBrain(groups, a)
+	if a.Key == "module" {
+		return slog.Attr{}
 	}
 	return a
 }
@@ -167,7 +173,7 @@ func New(cfg Config) *Logger {
 	case ConsoleJSON:
 		handlers = append(handlers, slog.NewJSONHandler(w, &slog.HandlerOptions{
 			Level:       level,
-			ReplaceAttr: replaceForOpenBrain,
+			ReplaceAttr: replaceForConsole,
 		}))
 	case ConsoleSparseAI:
 		handlers = append(handlers, newSparseAIHandler(w, level))
@@ -182,7 +188,7 @@ func New(cfg Config) *Logger {
 			closers = append(closers, c)
 		}
 	} else if cfg.TextDir != "" {
-		if h, err := newHumanFileHandler(cfg.TextDir, cfg.Service); err == nil {
+		if h, err := newHumanFileHandler(cfg.TextDir, cfg.Service, cfg.SourceInFiles); err == nil {
 			handlers = append(handlers, h)
 			if c, ok := h.(io.Closer); ok {
 				closers = append(closers, c)
@@ -217,7 +223,7 @@ func New(cfg Config) *Logger {
 	if len(handlers) > 1 {
 		h = multiHandler{handlers: handlers}
 	}
-	return &Logger{base: slog.New(h).With("service", cfg.Service), closers: closers, runLogPath: runLogPath, runLog: runLog}
+	return &Logger{base: slog.New(h).With("service", cfg.Service), closers: closers, runLogPath: runLogPath, runLog: runLog, sourceInFiles: cfg.SourceInFiles}
 }
 
 func (l *Logger) slog() *slog.Logger {
@@ -254,51 +260,66 @@ func (l *Logger) RunLogLine() int {
 }
 
 // Debug emits a DEBUG record.
-func (l *Logger) Debug(msg string, args ...any) { l.slog().Debug(msg, args...) }
+func (l *Logger) Debug(msg string, args ...any) { l.slog().Debug(msg, l.argsWithAutoSource(args)...) }
 
 // Info emits an INFO record.
-func (l *Logger) Info(msg string, args ...any) { l.slog().Info(msg, args...) }
+func (l *Logger) Info(msg string, args ...any) { l.slog().Info(msg, l.argsWithAutoSource(args)...) }
 
 // Warn emits a WARN record.
-func (l *Logger) Warn(msg string, args ...any) { l.slog().Warn(msg, args...) }
+func (l *Logger) Warn(msg string, args ...any) { l.slog().Warn(msg, l.argsWithAutoSource(args)...) }
 
 // Error emits an ERROR record.
-func (l *Logger) Error(msg string, args ...any) { l.slog().Error(msg, args...) }
+func (l *Logger) Error(msg string, args ...any) { l.slog().Error(msg, l.argsWithAutoSource(args)...) }
 
 // DebugContext emits a DEBUG record with ctx.
 func (l *Logger) DebugContext(ctx context.Context, msg string, args ...any) {
-	l.slog().DebugContext(ctx, msg, args...)
+	l.slog().DebugContext(ctx, msg, l.argsWithAutoSource(args)...)
 }
 
 // InfoContext emits an INFO record with ctx.
 func (l *Logger) InfoContext(ctx context.Context, msg string, args ...any) {
-	l.slog().InfoContext(ctx, msg, args...)
+	l.slog().InfoContext(ctx, msg, l.argsWithAutoSource(args)...)
 }
 
 // WarnContext emits a WARN record with ctx.
 func (l *Logger) WarnContext(ctx context.Context, msg string, args ...any) {
-	l.slog().WarnContext(ctx, msg, args...)
+	l.slog().WarnContext(ctx, msg, l.argsWithAutoSource(args)...)
 }
 
 // ErrorContext emits an ERROR record with ctx.
 func (l *Logger) ErrorContext(ctx context.Context, msg string, args ...any) {
-	l.slog().ErrorContext(ctx, msg, args...)
+	l.slog().ErrorContext(ctx, msg, l.argsWithAutoSource(args)...)
 }
 
 // With returns a logger carrying the supplied attrs.
 func (l *Logger) With(args ...any) *Logger {
-	return &Logger{base: l.slog().With(args...), closers: l.closers, runLogPath: l.runLogPath, runLog: l.runLog}
+	return &Logger{base: l.slog().With(args...), closers: l.closers, runLogPath: l.runLogPath, runLog: l.runLog, sourceInFiles: l.sourceInFiles}
 }
 
 // WithGroup returns a logger that groups subsequent attrs under name.
 func (l *Logger) WithGroup(name string) *Logger {
-	return &Logger{base: l.slog().WithGroup(name), closers: l.closers, runLogPath: l.runLogPath, runLog: l.runLog}
+	return &Logger{base: l.slog().WithGroup(name), closers: l.closers, runLogPath: l.runLogPath, runLog: l.runLog, sourceInFiles: l.sourceInFiles}
 }
 
 // Event emits an INFO record with event_type set to verb.
 func (l *Logger) Event(verb, msg string, fields ...any) {
 	args := append([]any{"event_type", verb}, fields...)
-	l.slog().Info(msg, args...)
+	l.slog().Info(msg, l.argsWithAutoSource(args)...)
+}
+
+// DHF-REQ: keel/requirement-20
+func (l *Logger) argsWithAutoSource(args []any) []any {
+	if l == nil || !l.sourceInFiles {
+		return args
+	}
+	_, file, line, ok := runtime.Caller(2)
+	if !ok || file == "" {
+		return args
+	}
+	out := make([]any, 0, len(args)+2)
+	out = append(out, args...)
+	out = append(out, slog.SourceKey, filepath.Base(file)+":"+fmt.Sprintf("%d", line))
+	return out
 }
 
 // Header emits a ruled human-mode banner.
@@ -382,7 +403,7 @@ func (h *sparseAIHandler) Enabled(_ context.Context, level slog.Level) bool {
 	return level >= min
 }
 
-// DHF-REQ: keel/requirement-17
+// DHF-REQ: keel/requirement-17, keel/requirement-20
 func (h *sparseAIHandler) Handle(_ context.Context, r slog.Record) error {
 	attrs := make([]slog.Attr, 0, len(h.attrs)+r.NumAttrs())
 	attrs = append(attrs, h.attrs...)
@@ -395,7 +416,7 @@ func (h *sparseAIHandler) Handle(_ context.Context, r slog.Record) error {
 	fields := make(map[string]any)
 	for _, attr := range attrs {
 		attr = replaceForOpenBrain(h.groups, attr)
-		if attr.Equal(slog.Attr{}) || attr.Key == "" {
+		if attr.Equal(slog.Attr{}) || attr.Key == "" || attr.Key == "module" {
 			continue
 		}
 		if attr.Key == "event_type" {
@@ -519,7 +540,7 @@ func (h *consoleHandler) Enabled(_ context.Context, level slog.Level) bool {
 	return level >= min
 }
 
-// DHF-REQ: openbrain/requirement-151, openbrain/requirement-152
+// DHF-REQ: openbrain/requirement-151, openbrain/requirement-152, keel/requirement-20
 func (h *consoleHandler) Handle(_ context.Context, r slog.Record) error {
 	attrs := make([]slog.Attr, 0, len(h.attrs)+r.NumAttrs())
 	attrs = append(attrs, h.attrs...)
@@ -537,7 +558,7 @@ func (h *consoleHandler) Handle(_ context.Context, r slog.Record) error {
 	b.WriteString(RedactString(message))
 	for _, attr := range attrs {
 		attr = replaceForOpenBrain(h.groups, attr)
-		if attr.Equal(slog.Attr{}) || attr.Key == "" || h.omits(attr.Key) || skipKeys[attr.Key] {
+		if attr.Equal(slog.Attr{}) || attr.Key == "" || attr.Key == "module" || h.omits(attr.Key) || skipKeys[attr.Key] {
 			continue
 		}
 		b.WriteByte(' ')
@@ -558,7 +579,7 @@ func (h *consoleHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	next.attrs = slicesClone(h.attrs)
 	for _, attr := range attrs {
 		attr = replaceForOpenBrain(h.groups, attr)
-		if attr.Equal(slog.Attr{}) || attr.Key == "" || next.omits(attr.Key) {
+		if attr.Equal(slog.Attr{}) || attr.Key == "" || attr.Key == "module" || next.omits(attr.Key) {
 			continue
 		}
 		next.attrs = append(next.attrs, attr)
@@ -644,14 +665,15 @@ func slicesClone[S ~[]E, E any](in S) S {
 	return out
 }
 
+// DHF-REQ: keel/requirement-20
 func consoleLevel(level slog.Level) string {
 	switch {
 	case level >= slog.LevelError:
-		return "ERRO"
+		return "ERROR"
 	case level >= slog.LevelWarn:
 		return "WARN"
 	case level <= slog.LevelDebug:
-		return "DEBU"
+		return "DEBUG"
 	default:
 		return "INFO"
 	}
@@ -738,6 +760,7 @@ type humanFileHandler struct {
 	w      io.Writer
 	attrs  []slog.Attr
 	groups []string
+	source bool
 }
 
 // NewJSONFileHandler opens today's JSON Lines daily log file under dir and
@@ -815,10 +838,10 @@ func (h *jsonFileHandler) Close() error {
 //
 // DHF-REQ: openbrain/requirement-152
 func NewHumanFileHandler(dir string, service string) (slog.Handler, error) {
-	return newHumanFileHandler(dir, service)
+	return newHumanFileHandler(dir, service, false)
 }
 
-func newHumanFileHandler(dir string, service string) (slog.Handler, error) {
+func newHumanFileHandler(dir string, service string, source bool) (slog.Handler, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, err
 	}
@@ -833,14 +856,14 @@ func newHumanFileHandler(dir string, service string) (slog.Handler, error) {
 		_ = f.Close()
 		return nil, err
 	}
-	return &humanFileHandler{mu: &sync.Mutex{}, w: f}, nil
+	return &humanFileHandler{mu: &sync.Mutex{}, w: f, source: source}, nil
 }
 
 func (h *humanFileHandler) Enabled(_ context.Context, level slog.Level) bool {
 	return level >= slog.LevelDebug
 }
 
-// DHF-REQ: openbrain/requirement-152
+// DHF-REQ: openbrain/requirement-152, keel/requirement-20
 func (h *humanFileHandler) Handle(_ context.Context, r slog.Record) error {
 	attrs := make([]slog.Attr, 0, len(h.attrs)+r.NumAttrs())
 	attrs = append(attrs, h.attrs...)
@@ -849,6 +872,12 @@ func (h *humanFileHandler) Handle(_ context.Context, r slog.Record) error {
 		return true
 	})
 	source := sourceFromAttrs(attrs)
+	if source == "" && h.source {
+		source = sourceFromPC(r.PC)
+	}
+	if source == "" {
+		source = serviceFromAttrs(attrs)
+	}
 
 	var b strings.Builder
 	b.WriteString(r.Time.Format("2006-01-02 15:04:05.000"))
@@ -915,10 +944,21 @@ func (h *humanFileHandler) clone() *humanFileHandler {
 		w:      h.w,
 		attrs:  h.attrs,
 		groups: h.groups,
+		source: h.source,
 	}
 }
 
+// DHF-REQ: keel/requirement-20
 func sourceFromAttrs(attrs []slog.Attr) string {
+	for _, attr := range attrs {
+		if (attr.Key == "module" || attr.Key == slog.SourceKey) && attr.Value.Kind() == slog.KindString {
+			return attr.Value.String()
+		}
+	}
+	return ""
+}
+
+func serviceFromAttrs(attrs []slog.Attr) string {
 	for _, attr := range attrs {
 		attr = replaceForOpenBrain(nil, attr)
 		if attr.Key == "service" && attr.Value.Kind() == slog.KindString {
@@ -926,6 +966,18 @@ func sourceFromAttrs(attrs []slog.Attr) string {
 		}
 	}
 	return ""
+}
+
+func sourceFromPC(pc uintptr) string {
+	if pc == 0 {
+		return ""
+	}
+	frames := runtime.CallersFrames([]uintptr{pc})
+	frame, _ := frames.Next()
+	if frame.File == "" {
+		return ""
+	}
+	return filepath.Base(frame.File) + ":" + fmt.Sprintf("%d", frame.Line)
 }
 
 // DHF-REQ: openbrain/requirement-152

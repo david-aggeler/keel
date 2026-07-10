@@ -84,9 +84,10 @@ func TestFormatConsoleValueKinds(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-20
 func TestConsoleLevelsAndColor(t *testing.T) {
-	if consoleLevel(slog.LevelError) != "ERRO" || consoleLevel(slog.LevelWarn) != "WARN" ||
-		consoleLevel(slog.LevelDebug) != "DEBU" || consoleLevel(slog.LevelInfo) != "INFO" {
+	if consoleLevel(slog.LevelError) != "ERROR" || consoleLevel(slog.LevelWarn) != "WARN" ||
+		consoleLevel(slog.LevelDebug) != "DEBUG" || consoleLevel(slog.LevelInfo) != "INFO" {
 		t.Error("consoleLevel mapping broken")
 	}
 	for _, lvl := range []slog.Level{slog.LevelError, slog.LevelWarn, slog.LevelDebug, slog.LevelInfo} {

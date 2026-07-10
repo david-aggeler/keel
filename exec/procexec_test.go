@@ -51,7 +51,7 @@ func TestProcessStartPlainCommandStreamsCapturesAndReturnsExitCode(t *testing.T)
 	}
 }
 
-// DHF-TEST: keel/requirement-1, openbrain/requirement-602
+// DHF-TEST: keel/requirement-1, keel/requirement-20, openbrain/requirement-602
 func TestProcessStartLogsStructuredLifecycleAndRedactsSensitiveArgs(t *testing.T) {
 	var logBuf bytes.Buffer
 	logger := logging.New(logging.Config{
@@ -120,11 +120,11 @@ func TestProcessStartLogsStructuredLifecycleAndRedactsSensitiveArgs(t *testing.T
 	if got, ok := during["data"].(string); !ok || !strings.Contains(got, "during stdout\n") {
 		t.Fatalf("process_output data = %#v, want streamed stdout", during["data"])
 	}
-	if got, ok := during["level"].(string); !ok || got != "debug" {
-		t.Fatalf("stdout process_output level = %#v, want debug", during["level"])
+	if got, ok := during["level"].(string); !ok || got != "DEBUG" {
+		t.Fatalf("stdout process_output level = %#v, want DEBUG", during["level"])
 	}
-	if got, ok := stderr["level"].(string); !ok || got != "info" {
-		t.Fatalf("stderr process_output level = %#v, want info", stderr["level"])
+	if got, ok := stderr["level"].(string); !ok || got != "INFO" {
+		t.Fatalf("stderr process_output level = %#v, want INFO", stderr["level"])
 	}
 	if got, ok := end["exit_code"].(float64); !ok || got != 0 {
 		t.Fatalf("process_end exit_code = %#v, want 0", end["exit_code"])
