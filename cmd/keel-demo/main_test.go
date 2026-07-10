@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -180,8 +181,15 @@ func TestModuleRootHelpers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("findModuleRoot returned error: %v", err)
 	}
-	if !strings.HasSuffix(root, "cr-24") {
-		t.Fatalf("findModuleRoot returned unexpected root %q", root)
+	if !filepath.IsAbs(root) {
+		t.Fatalf("findModuleRoot returned non-absolute root %q", root)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		t.Fatalf("findModuleRoot returned root without readable go.mod %q: %v", root, err)
+	}
+	if !declaresKeel(string(data)) {
+		t.Fatalf("findModuleRoot returned non-keel module root %q", root)
 	}
 	if !declaresKeel("module github.com/david-aggeler/keel\n") {
 		t.Fatal("declaresKeel rejected the keel module")
