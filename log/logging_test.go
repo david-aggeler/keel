@@ -799,8 +799,8 @@ func TestConsoleOutput_UsesStructuredHumanRunStyle(t *testing.T) {
 	logger.Info("Done.")
 
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
-	if len(lines) != 9 {
-		t.Fatalf("captured %d lines, want 9:\n%s", len(lines), buf.String())
+	if len(lines) != 10 {
+		t.Fatalf("captured %d lines, want 10:\n%s", len(lines), buf.String())
 	}
 	for _, line := range lines {
 		if !regexp.MustCompile(`^\d{2}:\d{2}:\d{2} (INFO|WARN)  `).MatchString(line) {
@@ -822,11 +822,86 @@ func TestConsoleOutput_UsesStructuredHumanRunStyle(t *testing.T) {
 	if !strings.Contains(lines[5], "WARN  Id hash collision detected within 01:00:00 window.") {
 		t.Fatalf("warning was not inline in the same stream: %q", lines[5])
 	}
-	if !strings.Contains(lines[6], strings.Repeat("-", 70)) || !strings.Contains(lines[6], "Summary") {
-		t.Fatalf("section header is not rendered through logger: %q", lines[6])
+	if !strings.Contains(lines[6], strings.Repeat("-", 70)) || !strings.Contains(lines[7], "Summary") {
+		t.Fatalf("section header is not rendered through logger:\n%s", buf.String())
 	}
-	if !strings.Contains(lines[8], "Done.") {
-		t.Fatalf("completion marker missing: %q", lines[8])
+	if !strings.Contains(lines[9], "Done.") {
+		t.Fatalf("completion marker missing: %q", lines[9])
+	}
+}
+
+// DHF-TEST: keel/requirement-24
+func TestConsoleOutput_RendersBannersByConsoleMode(t *testing.T) {
+	var plain bytes.Buffer
+	plainLogger := logging.New(logging.Config{
+		Console: logging.ConsolePlain,
+		Service: "keel-dev",
+		Level:   slog.LevelDebug,
+		Writer:  &plain,
+	})
+	plainLogger.Header("keel-dev ci", "v1.2.3")
+	plainLogger.Section("Gate")
+
+	plainLines := strings.Split(strings.TrimSpace(plain.String()), "\n")
+	if len(plainLines) != 5 {
+		t.Fatalf("plain banner line count = %d, want 5:\n%s", len(plainLines), plain.String())
+	}
+	if !strings.Contains(plainLines[0], strings.Repeat("=", 70)) ||
+		!strings.Contains(plainLines[1], "keel-dev ci v1.2.3") ||
+		!strings.Contains(plainLines[2], strings.Repeat("=", 70)) {
+		t.Fatalf("plain header did not render as human rule/title/rule:\n%s", plain.String())
+	}
+	if !strings.Contains(plainLines[3], strings.Repeat("-", 70)) ||
+		strings.Contains(plainLines[3], "Gate") ||
+		!strings.Contains(plainLines[4], "Gate") {
+		t.Fatalf("plain section did not render as rule then name:\n%s", plain.String())
+	}
+	if strings.Contains(plain.String(), "banner=") {
+		t.Fatalf("plain console leaked banner attr: %q", plain.String())
+	}
+
+	var sparse bytes.Buffer
+	sparseLogger := logging.New(logging.Config{
+		Console: logging.ConsoleSparseAI,
+		Service: "keel-dev",
+		Writer:  &sparse,
+	})
+	sparseLogger.Header("keel-dev ci", "v1.2.3")
+	sparseLogger.Section("Gate")
+	sparseRecords := parseSparseAILogRecords(t, sparse.String())
+	if len(sparseRecords) != 2 {
+		t.Fatalf("sparse banner records = %d, want 2:\n%s", len(sparseRecords), sparse.String())
+	}
+	if got := sparseRecords[0]["event"]; got != "header" {
+		t.Fatalf("sparse header event = %#v, want header; record=%#v", got, sparseRecords[0])
+	}
+	if got := sparseRecords[1]["event"]; got != "section" {
+		t.Fatalf("sparse section event = %#v, want section; record=%#v", got, sparseRecords[1])
+	}
+	if strings.Contains(sparse.String(), strings.Repeat("=", 10)) || strings.Contains(sparse.String(), strings.Repeat("-", 10)) {
+		t.Fatalf("sparse console emitted human rules: %q", sparse.String())
+	}
+
+	var jsonBuf bytes.Buffer
+	jsonLogger := logging.New(logging.Config{
+		Console: logging.ConsoleJSON,
+		Service: "keel-dev",
+		Writer:  &jsonBuf,
+	})
+	jsonLogger.Header("keel-dev ci", "v1.2.3")
+	jsonLogger.Section("Gate")
+	jsonRecords := parseJSONLines(t, jsonBuf.String())
+	if len(jsonRecords) != 2 {
+		t.Fatalf("json banner records = %d, want 2:\n%s", len(jsonRecords), jsonBuf.String())
+	}
+	if got, ok := jsonRecords[0]["banner"].(string); !ok || got != "header" {
+		t.Fatalf("json header banner = %#v, want header; record=%#v", jsonRecords[0]["banner"], jsonRecords[0])
+	}
+	if got, ok := jsonRecords[1]["banner"].(string); !ok || got != "section" {
+		t.Fatalf("json section banner = %#v, want section; record=%#v", jsonRecords[1]["banner"], jsonRecords[1])
+	}
+	if strings.Contains(jsonBuf.String(), strings.Repeat("=", 10)) || strings.Contains(jsonBuf.String(), strings.Repeat("-", 10)) {
+		t.Fatalf("json console emitted human rules: %q", jsonBuf.String())
 	}
 }
 
@@ -1205,4 +1280,27 @@ func TestRecordCapture_AllJSON_LastJSONAgreement(t *testing.T) {
 		t.Errorf("AllJSON[last][msg] = %v, LastJSON[msg] = %v — disagreement",
 			finalAllJSON["msg"], last["msg"])
 	}
+}
+
+func parseJSONLines(t *testing.T, raw string) []map[string]any {
+	t.Helper()
+	lines := strings.Split(strings.TrimSpace(raw), "\n")
+	records := make([]map[string]any, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("unmarshal log line %q: %v", line, err)
+		}
+		records = append(records, record)
+	}
+	return records
+}
+
+func parseSparseAILogRecords(t *testing.T, raw string) []map[string]any {
+	t.Helper()
+	return parseJSONLines(t, raw)
 }

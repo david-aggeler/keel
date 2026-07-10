@@ -23,6 +23,10 @@ type processLogger interface {
 	InfoContext(ctx context.Context, msg string, args ...any)
 }
 
+type errorProcessLogger interface {
+	Error(msg string, args ...any)
+}
+
 // Request describes a plain external command launch. Only Program is required;
 // the zero value of every other field is a usable default.
 type Request struct {
@@ -42,7 +46,7 @@ type Request struct {
 	// addition to the captured [Result.Stdout] and the line-wise debug log.
 	Stdout io.Writer
 	// Stderr, when non-nil, receives a verbatim copy of the child's stderr in
-	// addition to the captured [Result.Stderr] and the line-wise info log.
+	// addition to the captured [Result.Stderr] and the line-wise error log.
 	Stderr io.Writer
 	// Logger receives the START/END lifecycle and per-line output records. Nil
 	// uses slog.Default.
@@ -182,7 +186,7 @@ type captureWriter struct {
 	streamName string
 }
 
-// DHF-REQ: openbrain/requirement-602
+// DHF-REQ: openbrain/requirement-602, keel/requirement-24
 func (w *captureWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -191,13 +195,19 @@ func (w *captureWriter) Write(p []byte) (int, error) {
 	if w.logger != nil {
 		log := w.logger.Debug
 		if w.streamName == "stderr" {
-			log = w.logger.Info
+			errorLogger, ok := w.logger.(errorProcessLogger)
+			if !ok {
+				errorLogger = slog.Default()
+			}
+			log = errorLogger.Error
 		}
-		log("process output",
-			"event_type", "process_output",
-			"stream", w.streamName,
-			"data", logging.RedactString(string(p)),
-		)
+		for _, line := range cleanProcessOutputLines(string(p)) {
+			log("process output",
+				"event_type", "process_output",
+				"stream", w.streamName,
+				"data", logging.RedactString(line),
+			)
+		}
 	}
 	if w.stream != nil {
 		if _, err := w.stream.Write(p); err != nil {
@@ -205,6 +215,20 @@ func (w *captureWriter) Write(p []byte) (int, error) {
 		}
 	}
 	return len(p), nil
+}
+
+func cleanProcessOutputLines(s string) []string {
+	s = strings.TrimRight(s, "\r\n")
+	parts := strings.Split(s, "\n")
+	lines := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimRight(part, "\r")
+		if strings.TrimSpace(part) == "" {
+			continue
+		}
+		lines = append(lines, part)
+	}
+	return lines
 }
 
 func (w *captureWriter) String() string {
