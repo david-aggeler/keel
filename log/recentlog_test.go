@@ -60,7 +60,7 @@ func TestRecentBuffer_EmptyAndClamp(t *testing.T) {
 }
 
 func TestTeeRecent_CapturesWarnErrorOnly(t *testing.T) {
-	base, _ := NewForTesting("mcp-server")
+	base, _ := newForTesting("mcp-server")
 	buf := NewRecentBuffer(100)
 	logger := TeeRecent(base, buf, "mcp-server")
 
@@ -85,7 +85,7 @@ func TestTeeRecent_CapturesWarnErrorOnly(t *testing.T) {
 }
 
 func TestTeeRecent_RedactsAtIngest(t *testing.T) {
-	base, _ := NewForTesting("web-ui")
+	base, _ := newForTesting("web-ui")
 	buf := NewRecentBuffer(10)
 	logger := TeeRecent(base, buf, "web-ui")
 
@@ -116,7 +116,7 @@ func TestTeeRecent_RedactsAtIngest(t *testing.T) {
 // TestTeeRecent_ForwardsToInner asserts the tee does not swallow records: the
 // wrapped handler still sees every level.
 func TestTeeRecent_ForwardsToInner(t *testing.T) {
-	base, capture := NewForTesting("svc")
+	base, capture := newForTesting("svc")
 	buf := NewRecentBuffer(10)
 	logger := TeeRecent(base, buf, "svc")
 	logger.Info("forwarded")

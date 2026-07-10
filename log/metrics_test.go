@@ -37,7 +37,7 @@ func TestMetric_ReturnsKindAttr(t *testing.T) {
 }
 
 func TestEmit_ProducesInfoLevelWithKindMetric(t *testing.T) {
-	logger, rc := logging.NewForTesting("test-svc")
+	logger, rc := newJSONCaptureLogger("test-svc")
 
 	logging.Emit(logger, logging.EventToolCall,
 		slog.String("tool", "store_memory"),
@@ -61,7 +61,7 @@ func TestEmit_ProducesInfoLevelWithKindMetric(t *testing.T) {
 }
 
 func TestEmit_MsDurationsAreNumeric(t *testing.T) {
-	logger, rc := logging.NewForTesting("test-svc")
+	logger, rc := newJSONCaptureLogger("test-svc")
 
 	logging.Emit(logger, logging.EventVaultWriteTiming,
 		slog.String("op", "create"),
@@ -92,7 +92,7 @@ func TestEmit_MsDurationsAreNumeric(t *testing.T) {
 }
 
 func TestEmit_CountFieldsAreNumeric(t *testing.T) {
-	logger, rc := logging.NewForTesting("test-svc")
+	logger, rc := newJSONCaptureLogger("test-svc")
 
 	logging.Emit(logger, "ingest_summary",
 		slog.Int("ok_count", 5),
@@ -119,7 +119,7 @@ func TestEmit_CountFieldsAreNumeric(t *testing.T) {
 }
 
 func TestEmit_MultipleCallsProduceMultipleLines(t *testing.T) {
-	logger, rc := logging.NewForTesting("test-svc")
+	logger, rc := newJSONCaptureLogger("test-svc")
 
 	logging.Emit(logger, logging.EventToolCall, slog.String("tool", "tool_a"))
 	logging.Emit(logger, logging.EventToolCall, slog.String("tool", "tool_b"))
@@ -156,7 +156,7 @@ func TestEmit_MultipleCallsProduceMultipleLines(t *testing.T) {
 // Emit call when multiple events are emitted. This is the key use-case for
 // drift tests that need to inspect both a per-record line and a summary line.
 func TestEmit_AllJSONSeesAllLines(t *testing.T) {
-	logger, rc := logging.NewForTesting("test-svc")
+	logger, rc := newJSONCaptureLogger("test-svc")
 
 	logging.Emit(logger, logging.EventToolCall, slog.String("tool", "a"))
 	logging.Emit(logger, logging.EventToolCall, slog.String("tool", "b"))

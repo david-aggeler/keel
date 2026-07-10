@@ -17,6 +17,16 @@ func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+func testLogger(service string) (*slog.Logger, *logging.RecordCapture) {
+	cap := &logging.RecordCapture{}
+	return logging.New(logging.Config{
+		Service: service,
+		Level:   slog.LevelDebug,
+		Console: logging.ConsoleJSON,
+		Writer:  cap,
+	}).Slog(), cap
+}
+
 // requireTool skips the test when a required external binary is absent, keeping
 // the suite hermetic-but-honest on minimal environments.
 func requireTool(t *testing.T, name string) {
@@ -102,7 +112,7 @@ func TestRunCIGofmtGate(t *testing.T) {
 func TestRunStepLogsThroughKeelLog(t *testing.T) {
 	requireTool(t, "go")
 
-	logger, cap := logging.NewForTesting("keel-dev")
+	logger, cap := testLogger("keel-dev")
 	err := runStep(context.Background(), logger, ".", step{
 		name: "probe", program: "go", args: []string{"env", "GOOS"},
 	})
@@ -127,11 +137,12 @@ func TestRunStepLogsThroughKeelLog(t *testing.T) {
 // TestConsoleSuppressesServiceAttr proves the human console omits the
 // redundant service=keel-dev attr while JSON mode keeps it (keel/issue-3).
 func TestConsoleSuppressesServiceAttr(t *testing.T) {
-	cfg := consoleConfig(nil)
+	cfg := loggerConfig(nil)
 
 	rc := &logging.RecordCapture{}
 	cfg.Writer = rc
-	logging.NewConsole(cfg).Info("hello", "k", "v")
+	cfg.Console = logging.ConsolePlain
+	logging.New(cfg).Info("hello", "k", "v")
 	if out := rc.LastRaw(); strings.Contains(out, "service=") {
 		t.Errorf("console line should omit service attr: %q", out)
 	} else if !strings.Contains(out, "k=v") {
@@ -140,6 +151,7 @@ func TestConsoleSuppressesServiceAttr(t *testing.T) {
 
 	rcJSON := &logging.RecordCapture{}
 	cfg.Writer = rcJSON
+	cfg.Console = logging.ConsoleJSON
 	logging.New(cfg).Info("hello")
 	if rec := rcJSON.LastJSON(); rec["service"] != "keel-dev" {
 		t.Errorf("JSON mode must keep the service field, got %v", rec)

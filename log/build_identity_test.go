@@ -7,7 +7,7 @@ import (
 
 // DHF-TEST: openbrain/requirement-108
 func TestLogBuildIdentityEmitsVersionAndGitCommit(t *testing.T) {
-	logger, capture := NewForTesting("build-test")
+	logger, capture := newForTesting("build-test")
 
 	LogBuildIdentity(logger, "1.2.3", "abc1234")
 

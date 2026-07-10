@@ -4,20 +4,18 @@
 // "github.com/david-aggeler/keel/log") to avoid colliding with the stdlib "log"
 // package.
 //
-// # Three sinks
+// # Four sinks
 //
-// A production logger fans one log record out to as many as three sinks at once:
+// A production logger fans one log record out to the sinks selected by [Config]:
 //
-//   - the console — either machine JSON ([New]) or human-readable text
-//     ([NewConsole]) on stdout;
-//   - a daily human-readable rolling file ([NewHumanFileHandler]); and
-//   - a daily JSON Lines rolling file ([NewJSONFileHandler]).
+//   - the console — sparse-AI, human-readable text, machine JSON, or none;
+//   - a daily human-readable rolling file under Config.TextDir; and
+//   - a daily JSON Lines rolling file under Config.JSONLDir.
 //
-// The file handlers are opened once and owned by the caller for the invocation
-// lifetime (they satisfy [io.Closer] and must be Closed once); pass them to
-// [New] or [NewConsole] via [Config]. All three sinks share one field schema —
-// ts (RFC3339Nano), level (lowercase), msg, service — so the JSON and human
-// renderings of a record always agree.
+// [New] is the single public logger constructor. File sinks opened by [New] are
+// owned by the returned [Logger] and released by [Logger.Close]. All sinks share
+// one field schema — ts (RFC3339Nano), level (lowercase), msg, service — so the
+// JSON and human renderings of a record always agree.
 //
 // # Redaction at the boundary
 //
@@ -35,6 +33,6 @@
 // [RecentBuffer]/[TeeRecent] (an in-process ring buffer of recent warn/error
 // records for a /diag surface), the [Metric]/[Emit] metrics convention, the
 // [Header]/[Section]/[Field] human banner helpers, and [LogBuildIdentity] for
-// startup build-identity logging. [NewForTesting] and [RecordCapture] let tests
-// assert on emitted records without touching the global default logger.
+// startup build-identity logging. [RecordCapture] lets tests assert on emitted
+// records without touching the global default logger.
 package log

@@ -16,7 +16,7 @@ import (
 // DHF-TEST: keel/user_need-1 (keel/ac-48)
 func ExampleNew() {
 	var buf bytes.Buffer
-	logger := logging.New(logging.Config{Service: "demo", Writer: &buf})
+	logger := logging.New(logging.Config{Service: "demo", Console: logging.ConsoleJSON, Writer: &buf})
 
 	logger.Info("service starting", "port", 8080)
 

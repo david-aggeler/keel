@@ -16,7 +16,7 @@ func TestFromContextAndWithLogger(t *testing.T) {
 	if got := FromContext(context.Background()); got != base {
 		t.Error("empty context should fall back to slog.Default")
 	}
-	l, _ := NewForTesting("svc")
+	l, _ := newForTesting("svc")
 	ctx := WithLogger(context.Background(), l)
 	if got := FromContext(ctx); got != l {
 		t.Error("stored logger not returned")
@@ -35,7 +35,7 @@ func TestDiscard(t *testing.T) {
 }
 
 func TestConsoleMessageCodexProgress(t *testing.T) {
-	l, rc := NewConsoleForTesting("svc")
+	l, rc := newConsoleForTesting("svc")
 
 	l.Info("codex progress", "detail", "reading files", "event_type", "agent_message")
 	if out := rc.LastRaw(); !strings.Contains(out, "codex detail: reading files") {
@@ -59,7 +59,7 @@ func TestConsoleMessageCodexProgress(t *testing.T) {
 }
 
 func TestFormatConsoleValueKinds(t *testing.T) {
-	l, rc := NewConsoleForTesting("svc")
+	l, rc := newConsoleForTesting("svc")
 	when := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
 	l.Info("kinds",
 		"t", when,
