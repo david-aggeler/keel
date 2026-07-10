@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -76,6 +77,8 @@ func ciSteps(dir string) []step {
 		{name: "lint", fn: func(_ context.Context, _ *slog.Logger, dir string) error {
 			return runLint(dir)
 		}},
+		// DHF-REQ: keel/requirement-22
+		{name: "log-core-deps", fn: runLogCoreDependencyQuarantine},
 		// --- static-tool battery (keel/requirement-12) ---
 		// DHF-REQ: keel/requirement-12 (keel/ac-38)
 		{name: "golangci-lint", tool: "golangci-lint", program: "golangci-lint", args: []string{"run", "./..."}},
@@ -269,5 +272,39 @@ func runStep(ctx context.Context, logger *slog.Logger, dir string, s step) error
 		}
 	}
 	logger.Debug("step complete", "step", s.name, "elapsed_ms", time.Since(started).Milliseconds())
+	return nil
+}
+
+// runLogCoreDependencyQuarantine proves that consumers building only keel/log do
+// not reach optional exporter dependencies such as the OpenTelemetry SDK.
+//
+// DHF-REQ: keel/requirement-22
+func runLogCoreDependencyQuarantine(ctx context.Context, logger *slog.Logger, dir string) error {
+	if _, err := os.Stat(filepath.Join(dir, "log")); os.IsNotExist(err) {
+		return nil
+	}
+	proc, err := procexec.ProcessStart(ctx, procexec.Request{
+		Program: "go",
+		Args:    []string{"list", "-deps", "./log"},
+		Dir:     dir,
+		Logger:  logger,
+	})
+	if err != nil {
+		return err
+	}
+	res, waitErr := proc.Wait()
+	if waitErr != nil {
+		return waitErr
+	}
+	for _, dep := range strings.Split(res.Stdout, "\n") {
+		dep = strings.TrimSpace(dep)
+		if dep == "" || dep == modulePath || strings.HasPrefix(dep, modulePath+"/") {
+			continue
+		}
+		first, _, _ := strings.Cut(dep, "/")
+		if strings.Contains(first, ".") {
+			return fmt.Errorf("keel-dev: log core dependency quarantine failed: ./log depends on external package %q", dep)
+		}
+	}
 	return nil
 }

@@ -74,6 +74,11 @@ type Config struct {
 	// for internal tests and advanced composition; prefer JSONLDir for normal
 	// construction.
 	JSONFileHandler slog.Handler
+
+	// Handlers are additional slog handlers fanned out after the built-in sinks.
+	// Optional packages such as log/otel use this hook so the core log package
+	// keeps its dependency surface unchanged.
+	Handlers []slog.Handler
 }
 
 // Logger is keel/log's public logger. It wraps slog while owning any file sinks
@@ -173,7 +178,7 @@ func isSensitiveAttrKey(key string) bool {
 
 // New creates a production logger from the four-sink Config model.
 //
-// DHF-REQ: keel/requirement-16, openbrain/requirement-602
+// DHF-REQ: keel/requirement-16, keel/requirement-22, openbrain/requirement-602
 func New(cfg Config) *Logger {
 	level := cfg.Level
 	if level == nil {
@@ -184,7 +189,7 @@ func New(cfg Config) *Logger {
 		w = os.Stdout
 	}
 
-	handlers := make([]slog.Handler, 0, 3)
+	handlers := make([]slog.Handler, 0, 3+len(cfg.Handlers))
 	console := cfg.Console
 	if console == "" {
 		console = ConsoleSparseAI
@@ -231,6 +236,15 @@ func New(cfg Config) *Logger {
 			}
 			runLogPath = path
 			runLog = counter
+		}
+	}
+	for _, h := range cfg.Handlers {
+		if h == nil {
+			continue
+		}
+		handlers = append(handlers, h)
+		if c, ok := h.(io.Closer); ok {
+			closers = append(closers, c)
 		}
 	}
 	if len(handlers) == 0 {

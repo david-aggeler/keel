@@ -36,6 +36,7 @@ exit 0`)
 	stub(t, bin, callsFile, "gofmt", "exit 0")
 	stub(t, bin, callsFile, "go", `
 case "$1 $2" in
+  "list -deps") echo "errors"; echo "log/slog"; echo "`+modulePath+`/log" ;;
   "tool cover") echo "total:	(statements)	92.0%" ;;
 esac
 exit 0`)
