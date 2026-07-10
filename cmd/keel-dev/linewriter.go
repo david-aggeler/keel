@@ -14,7 +14,7 @@ import (
 // This is the only sanctioned way for keel-dev to surface child output; handing
 // os.Stdout/os.Stderr to a subprocess is a lint violation (no-raw-stdout-stream).
 //
-// DHF-REQ: keel/requirement-11 (keel/ac-35)
+// DHF-REQ: keel/requirement-11 (keel/ac-35), keel/requirement-17
 type lineLogWriter struct {
 	mu     sync.Mutex
 	logger *slog.Logger
@@ -58,5 +58,9 @@ func (w *lineLogWriter) emit(line string) {
 	if strings.TrimSpace(line) == "" {
 		return
 	}
-	w.logger.Info(line, "stream", w.stream, "step", w.step)
+	if w.stream == "stdout" {
+		w.logger.Debug(line, "stream", w.stream, "step", w.step, "event_type", "process_output")
+		return
+	}
+	w.logger.Info(line, "stream", w.stream, "step", w.step, "event_type", "process_output")
 }

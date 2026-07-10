@@ -89,6 +89,116 @@ func TestNewConfigExposesFourSinkLoggerSurface(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-17
+func TestSparseAIConsoleEmitsCuratedEventsAndKeepsDebugChildOutputInFiles(t *testing.T) {
+	var console bytes.Buffer
+	textDir := t.TempDir()
+	jsonlDir := t.TempDir()
+
+	logger := logging.New(logging.Config{
+		Service:  "svc",
+		Level:    slog.LevelInfo,
+		Console:  logging.ConsoleSparseAI,
+		Writer:   &console,
+		TextDir:  textDir,
+		JSONLDir: jsonlDir,
+	})
+	t.Cleanup(func() {
+		if err := logger.Close(); err != nil {
+			t.Fatalf("Close returned error: %v", err)
+		}
+	})
+
+	logger.Event("step", "running gate", "step", "test", "attempt", 1)
+	logger.Debug("child stdout", "event_type", "process_output", "stream", "stdout", "data", "noise")
+
+	lines := strings.Split(strings.TrimSpace(console.String()), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("sparse console lines = %#v, want one curated info event and no debug child output", lines)
+	}
+	var sparse map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &sparse); err != nil {
+		t.Fatalf("sparse console line is not JSON: %q: %v", lines[0], err)
+	}
+	if got, _ := sparse["level"].(string); got != "info" {
+		t.Fatalf("sparse level = %q, want info", got)
+	}
+	if got, _ := sparse["event"].(string); got != "step" {
+		t.Fatalf("sparse event = %q, want step", got)
+	}
+	if got, _ := sparse["message"].(string); got != "running gate" {
+		t.Fatalf("sparse message = %q, want running gate", got)
+	}
+	fields, ok := sparse["fields"].(map[string]any)
+	if !ok {
+		t.Fatalf("sparse fields = %#v, want object", sparse["fields"])
+	}
+	if got, _ := fields["step"].(string); got != "test" {
+		t.Fatalf("sparse fields.step = %#v, want test", fields["step"])
+	}
+	if _, ok := sparse["ts"]; ok {
+		t.Fatalf("sparse console exposed verbose ts field: %#v", sparse)
+	}
+	if _, ok := sparse["msg"]; ok {
+		t.Fatalf("sparse console exposed verbose msg field: %#v", sparse)
+	}
+	if strings.Contains(console.String(), "child stdout") || strings.Contains(console.String(), "noise") {
+		t.Fatalf("sparse console included debug child output: %q", console.String())
+	}
+
+	textLogs, err := filepath.Glob(filepath.Join(textDir, "*.log"))
+	if err != nil || len(textLogs) != 1 {
+		t.Fatalf("text sink matches = %v, err = %v; want one .log file", textLogs, err)
+	}
+	textBytes, err := os.ReadFile(textLogs[0])
+	if err != nil {
+		t.Fatalf("read text sink: %v", err)
+	}
+	if !strings.Contains(string(textBytes), "child stdout") || !strings.Contains(string(textBytes), "noise") {
+		t.Fatalf("text sink = %q, want debug child output", string(textBytes))
+	}
+	jsonLogs, err := filepath.Glob(filepath.Join(jsonlDir, "*.jsonl"))
+	if err != nil || len(jsonLogs) != 1 {
+		t.Fatalf("jsonl sink matches = %v, err = %v; want one .jsonl file", jsonLogs, err)
+	}
+	jsonBytes, err := os.ReadFile(jsonLogs[0])
+	if err != nil {
+		t.Fatalf("read jsonl sink: %v", err)
+	}
+	if !strings.Contains(string(jsonBytes), `"level":"debug"`) || !strings.Contains(string(jsonBytes), `"data":"noise"`) {
+		t.Fatalf("jsonl sink = %q, want debug child output record", string(jsonBytes))
+	}
+}
+
+// DHF-TEST: keel/requirement-17
+func TestConsoleJSONRemainsVerboseRecordRendering(t *testing.T) {
+	var console bytes.Buffer
+	logger := logging.New(logging.Config{
+		Service: "svc",
+		Level:   slog.LevelInfo,
+		Console: logging.ConsoleJSON,
+		Writer:  &console,
+	})
+
+	logger.Event("step", "running gate", "step", "test")
+
+	var record map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(console.Bytes()), &record); err != nil {
+		t.Fatalf("verbose JSON console line is not JSON: %q: %v", console.String(), err)
+	}
+	for _, key := range []string{"ts", "level", "msg", "service", "event_type"} {
+		if _, ok := record[key]; !ok {
+			t.Fatalf("verbose JSON console missing %q in %#v", key, record)
+		}
+	}
+	if _, ok := record["event"]; ok {
+		t.Fatalf("verbose JSON console used sparse event field: %#v", record)
+	}
+	if _, ok := record["fields"]; ok {
+		t.Fatalf("verbose JSON console used sparse fields object: %#v", record)
+	}
+}
+
 func TestJSONOutput_HasG1Fields(t *testing.T) {
 	logger, capture := newJSONCaptureLogger("mcp")
 
