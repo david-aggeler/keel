@@ -53,6 +53,45 @@ func TestVSCodeRunBlockedLaneUsesEngineProtocol(t *testing.T) {
 	}
 }
 
+func TestVSCodeHandlersDispatchDiscoveryPlanAndLintRun(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+
+	var discover bytes.Buffer
+	if err := handleVSCodeTestsDiscover(contextWithVSCodeTestState(root, &discover), []string{"--format", "json"}); err != nil {
+		t.Fatalf("discover handler: %v", err)
+	}
+	var doc vscode.DiscoveryDocument
+	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
+		t.Fatalf("discover JSON: %v", err)
+	}
+	if !discoveryHasLane(doc, vscodeLaneLint) {
+		t.Fatalf("discover missing lint lane: %+v", doc.Items)
+	}
+
+	var plan bytes.Buffer
+	if err := handleVSCodeTestsPlan(contextWithVSCodeTestState(root, &plan), []string{"--format", "json", "--id", vscodeLaneLint}); err != nil {
+		t.Fatalf("plan handler: %v", err)
+	}
+	var setup vscode.SetupPlan
+	if err := json.Unmarshal(plan.Bytes(), &setup); err != nil {
+		t.Fatalf("plan JSON: %v", err)
+	}
+	if len(setup.Items) != 1 || setup.Items[0].ID != vscodeLaneLint {
+		t.Fatalf("plan items = %+v, want lint lane", setup.Items)
+	}
+
+	var protocol bytes.Buffer
+	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", vscodeLaneLint}); err != nil {
+		t.Fatalf("lint run handler: %v\n%s", err, protocol.String())
+	}
+	events := decodeRunEvents(t, protocol.String())
+	if events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode != 0 {
+		t.Fatalf("lint run terminal = %+v, want exit 0", events[len(events)-1])
+	}
+}
+
 func contextWithVSCodeTestState(root string, protocol io.Writer) context.Context {
 	return withRunStateProtocol(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, root, protocol)
 }
@@ -105,7 +144,7 @@ func TestVSCodeDiscoveryAndPlanExposeKeelLaneSet(t *testing.T) {
 		t.Fatalf("plan JSON: %v\n%s", err, plan.String())
 	}
 	if len(setup.Checks) == 0 {
-		t.Fatalf("plan checks empty; want keel prereqs")
+		t.Fatalf("plan checks empty; want keel prerequisites")
 	}
 }
 
@@ -179,6 +218,41 @@ func TestVSCodeProtocolWriterIsOnlyStdoutAllowlistGrowth(t *testing.T) {
 	err = runLint(dir)
 	if err == nil || !strings.Contains(err.Error(), "newProtocolStream") || !strings.Contains(err.Error(), "stream.go") {
 		t.Fatalf("stdout allowlist must include file and function, got %v", err)
+	}
+}
+
+func TestVSCodeArgumentAndProfileEdges(t *testing.T) {
+	if _, err := parseVSCodeIDs([]string{"--format", "yaml"}, true); err == nil {
+		t.Fatal("non-json format should fail")
+	}
+	if _, err := parseVSCodeIDs([]string{"--id"}, false); err == nil {
+		t.Fatal("missing --id value should fail")
+	}
+	if _, err := parseVSCodeIDs([]string{"--unknown"}, true); err == nil {
+		t.Fatal("unknown vscode argument should fail")
+	}
+	if err := rejectUnsupportedFormat([]string{"--format", "xml"}); err == nil {
+		t.Fatal("rejectUnsupportedFormat should reject xml")
+	}
+	if got := laneForIDs([]string{"go::root", vscodeLaneTestFast}); got != vscodeLaneTestFast {
+		t.Fatalf("laneForIDs = %q, want %q", got, vscodeLaneTestFast)
+	}
+	if got := laneForIDs([]string{"go::root"}); got != "go::root" {
+		t.Fatalf("laneForIDs fallback = %q", got)
+	}
+
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	profile := newKeelWorkspaceProfile(root)
+	if profile.Repo() == "" || profile.ModulePath() != modulePath || profile.LogDir() == "" || profile.MaxOutputBytes() == 0 {
+		t.Fatalf("profile scalar methods returned empty values: %+v", profile)
+	}
+	t.Setenv("KEEL_VSCODE_DEMO_BLOCK", "")
+	if readiness := profile.PrepareLane(context.Background(), vscodeLaneLint); !readiness.Ready() {
+		t.Fatalf("profile should be ready with go and module root: %+v", readiness)
+	}
+	if statusWord(false) != "blocked" || workspaceNode("") != "unknown" {
+		t.Fatal("status/workspace fallback helpers returned unexpected values")
 	}
 }
 
