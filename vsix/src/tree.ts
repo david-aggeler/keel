@@ -10,6 +10,7 @@ export interface PublishedTree {
   readonly discoveryItemsById: Map<string, DiscoveryItem>;
   readonly parentByItemId: Map<string, vscode.TestItem>;
   readonly capabilities: DiscoveryCapabilities;
+  readonly modulePath?: string;
 }
 
 export function publishDiscovery(
@@ -60,7 +61,8 @@ export function publishDiscovery(
     aliasesByCanonicalId,
     discoveryItemsById,
     parentByItemId,
-    capabilities: discovery.capabilities ?? {}
+    capabilities: discovery.capabilities ?? {},
+    modulePath: discovery.module_path
   };
 }
 

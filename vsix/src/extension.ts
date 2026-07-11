@@ -1,9 +1,11 @@
 import * as cp from 'node:child_process';
+import * as nodefs from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as vscode from 'vscode';
 import { adapterConfig, configRelativePath, currentConfigVersion, defaultAdapterConfig, defaultConfigTemplate, discoverTests, planTests, readAdapterConfig, runTests } from './bridgeAdapter';
-import { ExternalRunMirror, ExternalRunStateSnapshot } from './externalRunMirror';
+import { ExternalRunMirror, ExternalRunStateSnapshot, setExternalRunStaleMsForTest } from './externalRunMirror';
 import { publishDiscovery, PublishedTree } from './tree';
 import { DesiredState, RunEvent, SetupPlan } from './protocol';
 
@@ -18,6 +20,7 @@ let externalRunMirror: ExternalRunMirror | undefined;
 // Re-export for any caller that still imports ExternalRunMirror /
 // ExternalRunStateSnapshot from './extension' (the pre-Story-27.24 path).
 export { ExternalRunMirror };
+export { setExternalRunStaleMsForTest };
 export type { ExternalRunStateSnapshot };
 
 // DHF-REQ: keel/requirement-40
@@ -42,6 +45,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void runSelected(controller, request, token);
   });
   context.subscriptions.push(runProfile);
+  const coverageProfile = controller.createRunProfile('Coverage', vscode.TestRunProfileKind.Coverage, (request, token) => {
+    void runSelected(controller, request, token, true);
+  });
+  coverageProfile.loadDetailedCoverage = async () => [];
+  context.subscriptions.push(coverageProfile);
 
   context.subscriptions.push(
     vscode.commands.registerCommand('keel.tests.refresh', async () => {
@@ -344,7 +352,8 @@ async function runAdapterMaintenance(controller: vscode.TestController, ids: rea
 async function runSelected(
   controller: vscode.TestController,
   request: vscode.TestRunRequest,
-  token: vscode.CancellationToken
+  token: vscode.CancellationToken,
+  coverage = false
 ): Promise<void> {
   const selected = request.include ?? Array.from(tree?.itemsById.values() ?? []);
   if (activeRun) {
@@ -391,6 +400,7 @@ async function runSelected(
   let resetResultsAfterRun = false;
   const selectedItemIds = new Set(selected.map((item) => item.id));
   const resultItemIds = new Set<string>();
+  const applyOptions = { coverage, workspaceRoot, modulePath: tree?.modulePath };
   const cancellation = token.onCancellationRequested(() => {
     cancelActiveRun(run, selected, child);
     forceKill = setTimeout(() => signalProcessGroup(child, 'SIGKILL'), 2000);
@@ -403,7 +413,7 @@ async function runSelected(
     stdout = lines.pop() ?? '';
     for (const line of lines) {
       if (line.trim()) {
-        const applied = applyRunEvent(run, line, selectedItemIds, resultItemIds);
+        const applied = applyRunEvent(run, line, selectedItemIds, resultItemIds, applyOptions);
         resetResultsAfterRun = applied.resetResults || resetResultsAfterRun;
         if (applied.finished) {
           finishRun();
@@ -426,7 +436,7 @@ async function runSelected(
     });
     child.on('close', () => {
       if (stdout.trim()) {
-        const applied = applyRunEvent(run, stdout, selectedItemIds, resultItemIds);
+        const applied = applyRunEvent(run, stdout, selectedItemIds, resultItemIds, applyOptions);
         resetResultsAfterRun = applied.resetResults || resetResultsAfterRun;
         if (applied.finished) {
           finishRun();
@@ -635,6 +645,10 @@ export function currentTree(): PublishedTree | undefined {
   return tree;
 }
 
+export function setCurrentTreeForTest(next: PublishedTree | undefined): void {
+  tree = next;
+}
+
 async function openDevWorkspaceWhenLaunchedEmpty(): Promise<void> {
   if (vscode.workspace.workspaceFolders?.length) {
     return;
@@ -652,7 +666,19 @@ interface AppliedRunEvent {
   finished: boolean;
 }
 
-export function applyRunEvent(run: vscode.TestRun, line: string, selectedItemIds: ReadonlySet<string>, resultItemIds: Set<string>): AppliedRunEvent {
+export interface ApplyRunEventOptions {
+  coverage?: boolean;
+  workspaceRoot?: string;
+  modulePath?: string;
+}
+
+export function applyRunEvent(
+  run: vscode.TestRun,
+  line: string,
+  selectedItemIds: ReadonlySet<string>,
+  resultItemIds: Set<string>,
+  options: ApplyRunEventOptions = {}
+): AppliedRunEvent {
   let event: RunEvent;
   try {
     event = JSON.parse(line) as RunEvent;
@@ -733,7 +759,7 @@ export function applyRunEvent(run: vscode.TestRun, line: string, selectedItemIds
       }
       break;
     case 'artifact':
-      appendArtifact(run, event);
+      appendArtifact(run, event, options);
       break;
     case 'run_finished':
       appendRunOutput(run, `finished${event.exit_code !== undefined ? ` exit_code=${event.exit_code}` : ''}`);
@@ -895,12 +921,44 @@ export function testMessageFromEvent(event: RunEvent, fallback: string): vscode.
   return message;
 }
 
-function appendArtifact(run: vscode.TestRun, event: RunEvent): void {
+function appendArtifact(run: vscode.TestRun, event: RunEvent, options: ApplyRunEventOptions): void {
   if (!event.artifact) {
     if (event.message) {
       appendRunOutput(run, event.message);
     }
     return;
+  }
+  if (event.artifact.kind === 'coverage') {
+    appendCoverageArtifact(run, event, options);
+    return;
+  }
+  appendRunOutput(run, artifactOutputLine(event));
+}
+
+// DHF-REQ: keel/requirement-39
+function appendCoverageArtifact(run: vscode.TestRun, event: RunEvent, options: ApplyRunEventOptions): void {
+  if (!options.coverage) {
+    appendRunOutput(run, `coverage artifact ignored outside Coverage profile: ${event.artifact?.uri ?? 'unknown'}`);
+    return;
+  }
+  if (!event.artifact || !options.workspaceRoot || !options.modulePath) {
+    appendRunOutput(run, 'coverage artifact cannot be applied because discovery did not provide module_path', 'ERROR');
+    return;
+  }
+  let profilePath: string;
+  try {
+    profilePath = fileURLToPath(event.artifact.uri);
+  } catch {
+    appendRunOutput(run, `coverage artifact URI is not a file URI: ${event.artifact.uri}`, 'ERROR');
+    return;
+  }
+  if (!nodefs.existsSync(profilePath)) {
+    appendRunOutput(run, `coverage artifact is no longer available: ${profilePath}`, 'ERROR');
+    return;
+  }
+  const profile = nodefs.readFileSync(profilePath, 'utf8');
+  for (const fileCoverage of parseGoCoverageProfile(profile, options.workspaceRoot, options.modulePath)) {
+    run.addCoverage(fileCoverage);
   }
   appendRunOutput(run, artifactOutputLine(event));
 }
@@ -914,4 +972,43 @@ export function artifactOutputLine(event: RunEvent): string {
 
 export function artifactCommandUri(uri: string): string {
   return `command:keel.tests.openArtifact?${encodeURIComponent(JSON.stringify([uri]))}`;
+}
+
+// DHF-REQ: keel/requirement-39
+export function parseGoCoverageProfile(profile: string, workspaceRoot: string, modulePath: string): vscode.FileCoverage[] {
+  const byFile = new Map<string, { covered: number; total: number }>();
+  const prefix = `${modulePath}/`;
+  for (const line of profile.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('mode:')) {
+      continue;
+    }
+    const match = /^([^:]+):\d+\.\d+,\d+\.\d+\s+(\d+)\s+(\d+)$/.exec(trimmed);
+    if (!match || !match[1].startsWith(prefix)) {
+      continue;
+    }
+    const relative = match[1].slice(prefix.length);
+    const statements = Number.parseInt(match[2], 10);
+    const count = Number.parseInt(match[3], 10);
+    const current = byFile.get(relative) ?? { covered: 0, total: 0 };
+    current.total += statements;
+    if (count > 0) {
+      current.covered += statements;
+    }
+    byFile.set(relative, current);
+  }
+  return Array.from(byFile.entries())
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([relative, counts]) => new vscode.FileCoverage(
+      vscode.Uri.file(path.join(workspaceRoot, relative)),
+      new vscode.TestCoverageCount(counts.covered, counts.total)
+    ));
+}
+
+export function coverageFileSnapshotsForTest(coverages: readonly vscode.FileCoverage[]): Array<{ uri: string; covered: number; total: number }> {
+  return coverages.map((coverage) => ({
+    uri: coverage.uri.fsPath,
+    covered: coverage.statementCoverage.covered,
+    total: coverage.statementCoverage.total
+  }));
 }
