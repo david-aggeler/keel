@@ -83,6 +83,33 @@ func TestImportExternalRunContinuesPastOverCapLine(t *testing.T) {
 }
 
 // DHF-TEST: keel/requirement-23
+func TestImportExternalRunContinuesPastExactCapLine(t *testing.T) {
+	input := strings.NewReader(strings.Join([]string{
+		`{"event":"run_started"}`,
+		strings.Repeat("x", ImportMaxLineBytes),
+		`{"event":"run_finished","exit_code":0}`,
+	}, "\n"))
+
+	var events []RunEvent
+	report := ImportExternalRun(t.TempDir(), input, nil, func(event RunEvent) {
+		events = append(events, event)
+	}, nil)
+	if report.TruncatedLines != 1 {
+		t.Fatalf("TruncatedLines = %d, want 1 for the exactly-at-cap line", report.TruncatedLines)
+	}
+	if report.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0 from the producer terminal after the at-cap line", report.ExitCode)
+	}
+	if len(events) == 0 || events[len(events)-1].Event != "run_finished" {
+		t.Fatalf("stream did not end with the producer run_finished: %+v", events)
+	}
+	last := events[len(events)-1]
+	if last.ExitCode == nil || *last.ExitCode != 0 {
+		t.Fatalf("terminal run_finished lost the producer exit code: %+v", last)
+	}
+}
+
+// DHF-TEST: keel/requirement-23
 func TestImportExternalRunAccountsForOverCapLine(t *testing.T) {
 	tooLong := strings.NewReader(strings.Repeat("x", ImportMaxLineBytes+1))
 	var events []RunEvent

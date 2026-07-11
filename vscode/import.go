@@ -71,10 +71,12 @@ func ImportExternalRun(workspace string, r io.Reader, producerErr error, emit Ru
 	return report
 }
 
-// readCappedLine reads one newline-terminated line from reader, accumulating
-// at most maxBytes bytes. A longer line is discarded through its newline and
-// reported as tooLong, leaving the reader positioned at the next line. err is
-// io.EOF once the stream is exhausted; a final unterminated line is returned
+// readCappedLine reads one newline-terminated line from reader, keeping lines
+// strictly under maxBytes. A line of maxBytes or more is discarded through its
+// newline and reported as tooLong, leaving the reader positioned at the next
+// line. The strict bound keeps every admitted line plus its newline scannable
+// by the downstream 4 MiB bufio.Scanner in NormalizeRunEvents. err is io.EOF
+// once the stream is exhausted; a final unterminated line is returned
 // alongside it.
 func readCappedLine(reader *bufio.Reader, maxBytes int) (line []byte, tooLong bool, err error) {
 	for {
@@ -84,7 +86,7 @@ func readCappedLine(reader *bufio.Reader, maxBytes int) (line []byte, tooLong bo
 			chunk = chunk[:len(chunk)-1]
 		}
 		if !tooLong {
-			if len(line)+len(chunk) > maxBytes {
+			if len(line)+len(chunk) >= maxBytes {
 				tooLong = true
 				line = nil
 			} else {
