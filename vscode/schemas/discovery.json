@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/david-aggeler/keel/vscode/schemas/discovery.json",
+  "title": "consumer VS Code test discovery",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "workspace", "generated_at", "capabilities", "items"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "workspace": {
+      "type": "string",
+      "minLength": 1
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "capabilities": {
+      "$ref": "#/$defs/capabilities"
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/test_item"
+      }
+    }
+  },
+  "$defs": {
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["clear_results", "refresh_invalidates_results", "neutral_parent_rollups"],
+      "properties": {
+        "clear_results": {
+          "type": "boolean"
+        },
+        "refresh_invalidates_results": {
+          "type": "boolean"
+        },
+        "neutral_parent_rollups": {
+          "type": "boolean"
+        },
+        "clear_results_test_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "clear_state_test_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "test_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "kind", "runnable", "profiles"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_-]*(::[A-Za-z0-9_.@/$:-]+)+$"
+        },
+        "parent_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sort_text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["root", "lane", "package", "file", "suite", "test", "project", "group", "maintenance"]
+        },
+        "framework": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runner_label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "uri": {
+          "type": "string",
+          "minLength": 1
+        },
+        "range": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["start_line", "start_column", "end_line", "end_column"],
+          "properties": {
+            "start_line": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "start_column": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "end_line": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "end_column": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "runnable": {
+          "type": "boolean"
+        },
+        "profiles": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["run", "debug", "coverage"]
+          },
+          "uniqueItems": true
+        },
+        "lane_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "playwright_project": {
+          "type": "string",
+          "minLength": 1
+        },
+        "canonical_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "required_resources": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}
