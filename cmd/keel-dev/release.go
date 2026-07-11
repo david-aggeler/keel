@@ -11,7 +11,6 @@ import (
 	"time"
 
 	procexec "github.com/david-aggeler/keel/exec"
-	logging "github.com/david-aggeler/keel/log"
 )
 
 // fetchAttempts / fetchDelay bound the post-release verification retry: a freshly
@@ -49,7 +48,7 @@ func validateVersion(version string) error {
 //
 // DHF-REQ: keel/requirement-9, keel/requirement-25
 func runRelease(ctx context.Context, logger *slog.Logger, dir string, version string) error {
-	logging.Section(logger, "release "+version)
+	logger.Info("release "+version, "banner", "section", "name", "release "+version)
 
 	if err := validateVersion(version); err != nil {
 		return err

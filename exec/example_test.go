@@ -3,9 +3,10 @@ package exec_test
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 
 	procexec "github.com/david-aggeler/keel/exec"
-	logging "github.com/david-aggeler/keel/log"
 )
 
 // ExampleProcessStart runs a subprocess through keel/exec and reads its captured
@@ -18,7 +19,7 @@ func ExampleProcessStart() {
 	proc, err := procexec.ProcessStart(context.Background(), procexec.Request{
 		Program: "echo",
 		Args:    []string{"hello from keel/exec"},
-		Logger:  logging.Discard(),
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
 		panic(err)

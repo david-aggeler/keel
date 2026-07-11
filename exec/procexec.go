@@ -250,7 +250,7 @@ func (w *captureWriter) logLine(line string) {
 	log("process output",
 		"event_type", "process_output",
 		"stream", w.streamName,
-		"data", logging.RedactString(line),
+		"data", redactedString(line),
 	)
 }
 
@@ -269,7 +269,11 @@ func renderCommandLine(program string, args []string, sensitiveArgs map[int]bool
 		}
 		parts = append(parts, shellQuote(arg))
 	}
-	return logging.RedactString(strings.Join(parts, " "))
+	return redactedString(strings.Join(parts, " "))
+}
+
+func redactedString(s string) string {
+	return logging.RedactErr(errors.New(s)).Error()
 }
 
 func shellQuote(s string) string {

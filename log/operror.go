@@ -93,13 +93,13 @@ func (e *OperationalError) LogValue() slog.Value {
 		attrs = append(attrs, slog.String("message", e.Message))
 	}
 	if e.Err != nil {
-		attrs = append(attrs, slog.String("root_cause", RedactString(e.Err.Error())))
+		attrs = append(attrs, slog.String("root_cause", redactString(e.Err.Error())))
 	}
 	if e.Task != "" {
 		attrs = append(attrs, slog.String("task", e.Task))
 	}
 	if e.LogFile != "" {
-		attrs = append(attrs, slog.String("log_file", RedactString(e.LogFile)))
+		attrs = append(attrs, slog.String("log_file", redactString(e.LogFile)))
 	}
 	if e.StartLine > 0 {
 		attrs = append(attrs, slog.Int("start_line", e.StartLine))
@@ -108,14 +108,14 @@ func (e *OperationalError) LogValue() slog.Value {
 		attrs = append(attrs, slog.Int("exit_code", e.ExitCode))
 	}
 	if e.Hint != "" {
-		attrs = append(attrs, slog.String("hint", RedactString(e.Hint)))
+		attrs = append(attrs, slog.String("hint", redactString(e.Hint)))
 	}
 	for k, v := range e.Metadata {
 		if _, reserved := reservedLogKeys[k]; reserved {
 			continue // silently drop; carrier's own field wins
 		}
 		if s, ok := v.(string); ok {
-			attrs = append(attrs, slog.String(k, RedactString(s)))
+			attrs = append(attrs, slog.String(k, redactString(s)))
 		} else {
 			attrs = append(attrs, slog.Any(k, v)) // KD8: non-strings unredacted by contract
 		}

@@ -148,7 +148,11 @@ func runCI(ctx context.Context, logger *slog.Logger, dir string) error {
 //
 // DHF-REQ: keel/requirement-18, keel/requirement-25
 func runCIWithRunLog(ctx context.Context, logger *slog.Logger, runLog runLogLocator, dir string) error {
-	logging.Section(logger, "ci")
+	if runLogLogger, ok := runLog.(*logging.Logger); ok {
+		runLogLogger.Section("ci")
+	} else {
+		logger.Info("ci", "banner", "section", "name", "ci")
+	}
 	for _, s := range ciSteps(dir) {
 		startLine := 0
 		logFile := ""
