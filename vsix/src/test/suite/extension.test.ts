@@ -5,8 +5,10 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 import {
   applyRunEvent,
+  coverageFileSnapshotsForTest,
   currentAdapterConfig,
   ExternalRunMirror,
+  parseGoCoverageProfile,
   setExternalRunStaleMsForTest,
   setCurrentTreeForTest,
   shouldInvalidateResultsForEvent
@@ -179,6 +181,61 @@ suite('Keel Test Bridge config contract', () => {
     assert.match(outputs.join(''), /demoted artifact\.uri must use file scheme/);
     assert.doesNotMatch(outputs.join(''), /command:keel\.tests\.openArtifact/);
     controller.dispose();
+  });
+
+  // DHF-TEST: keel/requirement-39
+  test('Go coverage profile maps module paths to workspace FileCoverage URIs', () => {
+    const root = process.cwd();
+    const coverages = parseGoCoverageProfile([
+      'mode: atomic',
+      'github.com/david-aggeler/keel/log/logger.go:10.1,12.2 2 2',
+      'github.com/david-aggeler/keel/log/logger.go:14.1,15.2 1 0',
+      'github.com/david-aggeler/keel/exec/run.go:20.1,23.2 3 1'
+    ].join('\n'), root, 'github.com/david-aggeler/keel');
+
+    const snapshots = coverageFileSnapshotsForTest(coverages);
+    assert.deepEqual(snapshots, [
+      { uri: path.join(root, 'exec/run.go'), covered: 3, total: 3 },
+      { uri: path.join(root, 'log/logger.go'), covered: 2, total: 3 }
+    ]);
+  });
+
+  // DHF-TEST: keel/requirement-39
+  test('coverage artifacts add FileCoverage only for coverage runs and missing artifacts are visible errors', () => {
+    const root = process.cwd();
+    const profile = path.join(os.tmpdir(), `keel-cover-${process.pid}-${Date.now()}.out`);
+    fs.writeFileSync(profile, [
+      'mode: atomic',
+      'github.com/david-aggeler/keel/log/logger.go:10.1,12.2 2 2'
+    ].join('\n'));
+    const added: vscode.FileCoverage[] = [];
+    const outputs: string[] = [];
+    const run = {
+      appendOutput(data: string) {
+        outputs.push(data);
+      },
+      addCoverage(fileCoverage: vscode.FileCoverage) {
+        added.push(fileCoverage);
+      }
+    };
+    const event = runEvent({
+      event: 'artifact',
+      test_id: 'keel::lane::test-coverage',
+      artifact: { name: 'coverage profile', uri: vscode.Uri.file(profile).toString(), kind: 'coverage' }
+    });
+
+    try {
+      applyRunEvent(run as vscode.TestRun, JSON.stringify(event), new Set(), new Set(), { coverage: true, workspaceRoot: root, modulePath: 'github.com/david-aggeler/keel' });
+      assert.equal(added.length, 1);
+      applyRunEvent(run as vscode.TestRun, JSON.stringify(event), new Set(), new Set(), { coverage: false, workspaceRoot: root, modulePath: 'github.com/david-aggeler/keel' });
+      assert.equal(added.length, 1, 'plain Run profile must not add coverage');
+
+      fs.rmSync(profile, { force: true });
+      applyRunEvent(run as vscode.TestRun, JSON.stringify(event), new Set(), new Set(), { coverage: true, workspaceRoot: root, modulePath: 'github.com/david-aggeler/keel' });
+      assert.match(outputs.join(''), /coverage artifact is no longer available/);
+    } finally {
+      fs.rmSync(profile, { force: true });
+    }
   });
 });
 
