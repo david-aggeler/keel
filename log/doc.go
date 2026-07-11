@@ -20,19 +20,15 @@
 // # Redaction at the boundary
 //
 // Every rendered string — messages, attr values, and error text — passes through
-// the same secret-scrubbing path ([RedactString], [RedactErr]) before it reaches
-// any sink: DSN passwords, bearer tokens, and PATs in URLs or query params are
-// masked, and attrs whose key looks sensitive (token/password/secret/pat) are
-// dropped wholesale. Redaction is applied once, at the log boundary, so callers
-// never have to pre-scrub values they log.
+// the same secret-scrubbing path before it reaches any sink: DSN passwords,
+// bearer tokens, and PATs in URLs or query params are masked, and attrs whose
+// key looks sensitive (token/password/secret/pat) are dropped wholesale.
+// [RedactErr] exposes the same treatment for errors. Redaction is applied once,
+// at the log boundary, so callers never have to pre-scrub values they log.
 //
 // # Beyond the sinks
 //
-// The package also carries the diagnostic surfaces built on top of the sinks:
-// [OperationalError] (a multi-field error carrier that redacts itself for slog),
-// [RecentBuffer]/[TeeRecent] (an in-process ring buffer of recent warn/error
-// records for a /diag surface), the [Metric]/[Emit] metrics convention, the
-// [Header]/[Section]/[Field] human banner helpers, and [LogBuildIdentity] for
-// startup build-identity logging. [RecordCapture] lets tests assert on emitted
-// records without touching the global default logger.
+// The package also carries [OperationalError], a multi-field error carrier that
+// redacts itself for slog. Human banner helpers, metrics emission, and startup
+// build-identity logging are methods on [Logger].
 package log

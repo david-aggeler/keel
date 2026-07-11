@@ -13,21 +13,21 @@ import (
 
 func TestFromContextAndWithLogger(t *testing.T) {
 	base := slog.Default()
-	if got := FromContext(context.Background()); got != base {
+	if got := fromContext(context.Background()); got != base {
 		t.Error("empty context should fall back to slog.Default")
 	}
 	l, _ := newForTesting("svc")
-	ctx := WithLogger(context.Background(), l)
-	if got := FromContext(ctx); got != l {
+	ctx := withLogger(context.Background(), l)
+	if got := fromContext(ctx); got != l {
 		t.Error("stored logger not returned")
 	}
-	if got := FromContext(WithLogger(context.Background(), nil)); got != base {
+	if got := fromContext(withLogger(context.Background(), nil)); got != base {
 		t.Error("nil stored logger should fall back to slog.Default")
 	}
 }
 
 func TestDiscard(t *testing.T) {
-	l := Discard()
+	l := discard()
 	if l == nil {
 		t.Fatal("Discard returned nil")
 	}
@@ -98,7 +98,7 @@ func TestConsoleLevelsAndColor(t *testing.T) {
 	}
 
 	// Non-file writer: never colored. Disable and NO_COLOR win over force.
-	rc := &RecordCapture{}
+	rc := &recordCapture{}
 	if colorEnabled(rc, false, false) {
 		t.Error("non-file writer should not enable color")
 	}
@@ -117,16 +117,19 @@ func TestConsoleLevelsAndColor(t *testing.T) {
 
 func TestHeaderSectionFieldsNilLogger(t *testing.T) {
 	// Nil loggers fall back to slog.Default and must not panic.
-	Header(nil, "title", "v1")
-	Section(nil, "sec")
-	Field(nil, "label", 1)
-	Fields(nil, []FieldRow{{Label: "a", Value: 1}, {Label: "longer", Value: 2}})
+	var logger *Logger
+	logger.Header("title", "v1")
+	logger.Section("sec")
+	logger.Field("label", 1)
+	logger.Fields([]FieldRow{{Label: "a", Value: 1}, {Label: "longer", Value: 2}})
+	logger.Emit("event")
+	logger.LogBuildIdentity("v1", "c")
 }
 
 func TestHumanAndJSONFileHandlerLifecycle(t *testing.T) {
 	dir := t.TempDir()
 
-	hh, err := NewHumanFileHandler(dir, "svc")
+	hh, err := newHumanFileHandler(dir, "svc", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +150,7 @@ func TestHumanAndJSONFileHandlerLifecycle(t *testing.T) {
 		t.Error("human file handler should be closable")
 	}
 
-	jh, err := NewJSONFileHandler(dir, "svc")
+	jh, _, _, err := newJSONFileHandler(dir, "svc", false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,8 +178,8 @@ func TestParseLevelBranches(t *testing.T) {
 		"error": slog.LevelError, "bogus": slog.LevelInfo,
 	}
 	for in, want := range cases {
-		if got := ParseLevel(in); got != want {
-			t.Errorf("ParseLevel(%q) = %v, want %v", in, got, want)
+		if got := parseLevel(in); got != want {
+			t.Errorf("parseLevel(%q) = %v, want %v", in, got, want)
 		}
 	}
 }

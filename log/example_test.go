@@ -29,13 +29,3 @@ func ExampleNew() {
 	fmt.Println(rec["service"], rec["level"], rec["msg"], rec["port"])
 	// Output: demo INFO service starting 8080
 }
-
-// ExampleRedactString shows the redaction contract every keel/log sink applies
-// at the log boundary: a password embedded in a DSN is masked before it is
-// logged, so callers never have to pre-scrub the values they log.
-//
-// DHF-TEST: keel/user_need-1 (keel/ac-48)
-func ExampleRedactString() {
-	fmt.Println(logging.RedactString("dialing postgres://user:sesame@db:5432/app"))
-	// Output: dialing postgres://***:***@db:5432/app
-}

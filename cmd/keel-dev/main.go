@@ -25,7 +25,7 @@ import (
 )
 
 // version is stamped via -ldflags "-X main.version=vX.Y.Z"; "dev" otherwise.
-// The git commit is resolved from build info by keel/log's ResolveGitCommit.
+// The git commit is resolved from build info by keel/log.
 var version = ""
 
 func main() {
@@ -84,18 +84,18 @@ func run(argv []string) int {
 		return exitFor(newLogger(mode, level, os.Stdout), err)
 	}
 	defer closeSinks()
-	slogLogger := logger.Slog()
 
 	// DHF-REQ: keel/requirement-11 — human-mode banner + build identity through
 	// keel/log's own presentation surface (Header, LogBuildIdentity).
 	if !cfg.NoHeader {
-		logging.Header(slogLogger, "keel-dev "+words[0], version)
-		logging.LogBuildIdentity(slogLogger, version, "")
+		logger.Header("keel-dev "+words[0], version)
+		logger.LogBuildIdentity(version, "")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	slogLogger := logger.Slog()
 	return exitFor(slogLogger, tree.Dispatch(withRunState(ctx, slogLogger, logger, root), words))
 }
 

@@ -142,11 +142,10 @@ func consoleForSharedMode(mode cli.Mode) logging.Console {
 
 // DHF-REQ: keel/requirement-26
 func runShowcase(ctx context.Context, logger *logging.Logger, mode string) error {
-	slogLogger := logger.Slog()
-	logging.Header(slogLogger, "keel-demo showcase", version)
-	logging.Section(slogLogger, "presentation surfaces")
-	logging.Field(slogLogger, "mode", mode)
-	logging.Fields(slogLogger, []logging.FieldRow{
+	logger.Header("keel-demo showcase", version)
+	logger.Section("presentation surfaces")
+	logger.Field("mode", mode)
+	logger.Fields([]logging.FieldRow{
 		{Label: "surface_count", Value: 9},
 		{Label: "secret", Value: "Bearer demo-secret-token"},
 	})
@@ -169,7 +168,7 @@ func runShowcase(ctx context.Context, logger *logging.Logger, mode string) error
 		"stdout_bytes", len(result.Stdout),
 		"stderr_bytes", len(result.Stderr),
 	)
-	logging.Emit(slogLogger, "demo_metric",
+	logger.Emit("demo_metric",
 		slog.String("mode", mode),
 		slog.Int("surface_count", 9),
 	)
