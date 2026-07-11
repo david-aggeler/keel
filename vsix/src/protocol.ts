@@ -1,6 +1,7 @@
 export interface DiscoveryDocument {
   version: 1;
   workspace: string;
+  module_path?: string;
   generated_at: string;
   capabilities?: DiscoveryCapabilities;
   items: DiscoveryItem[];
