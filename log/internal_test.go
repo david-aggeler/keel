@@ -129,7 +129,7 @@ func TestHeaderSectionFieldsNilLogger(t *testing.T) {
 func TestHumanAndJSONFileHandlerLifecycle(t *testing.T) {
 	dir := t.TempDir()
 
-	hh, err := newHumanFileHandler(dir, "svc", false)
+	hh, err := newTextFileHandler(dir, "svc", false)
 	if err != nil {
 		t.Fatal(err)
 	}
