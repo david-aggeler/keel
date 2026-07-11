@@ -2,6 +2,7 @@ package log_test
 
 import (
 	"log/slog"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -15,11 +16,37 @@ func TestMetricKind_Value(t *testing.T) {
 }
 
 func TestEventConstants(t *testing.T) {
-	if logging.EventVaultWriteTiming != "vault_write_timing" {
-		t.Errorf("EventVaultWriteTiming = %q; want %q", logging.EventVaultWriteTiming, "vault_write_timing")
-	}
 	if logging.EventToolCall != "tool_call" {
 		t.Errorf("EventToolCall = %q; want %q", logging.EventToolCall, "tool_call")
+	}
+}
+
+// DHF-TEST: keel/requirement-31
+func TestFoundationExportsAreConsumerAgnostic(t *testing.T) {
+	for _, importPath := range []string{
+		"github.com/david-aggeler/keel/cli",
+		"github.com/david-aggeler/keel/exec",
+		"github.com/david-aggeler/keel/exec/claude",
+		"github.com/david-aggeler/keel/exec/codex",
+		"github.com/david-aggeler/keel/log",
+		"github.com/david-aggeler/keel/log/otel",
+	} {
+		out, err := exec.Command("go", "doc", importPath).CombinedOutput()
+		if err != nil {
+			t.Fatalf("go doc %s: %v\n%s", importPath, err, out)
+		}
+		for _, line := range strings.Split(string(out), "\n") {
+			if !strings.HasPrefix(line, "const ") &&
+				!strings.HasPrefix(line, "func ") &&
+				!strings.HasPrefix(line, "type ") {
+				continue
+			}
+			for _, forbidden := range []string{"Vault", "vault"} {
+				if strings.Contains(line, forbidden) {
+					t.Errorf("go doc %s contains consumer-domain term %q in exported declaration %q", importPath, forbidden, line)
+				}
+			}
+		}
 	}
 }
 
@@ -63,7 +90,7 @@ func TestEmit_ProducesInfoLevelWithKindMetric(t *testing.T) {
 func TestEmit_MsDurationsAreNumeric(t *testing.T) {
 	logger, rc := newJSONCaptureLogger(t, "test-svc")
 
-	logging.Emit(logger, logging.EventVaultWriteTiming,
+	logging.Emit(logger, "sync_timing",
 		slog.String("op", "create"),
 		slog.Int64("pull_ms", 10),
 		slog.Int64("commit_ms", 20),

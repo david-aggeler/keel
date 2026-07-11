@@ -12,8 +12,7 @@ const MetricKind = "metric"
 // Event name constants. The slog msg field carries these values.
 // Field naming convention: _ms for durations, _count for counts.
 const (
-	EventVaultWriteTiming = "vault_write_timing"
-	EventToolCall         = "tool_call"
+	EventToolCall = "tool_call"
 )
 
 // Metric returns the slog.Attr that tags a log line as a metrics event.
@@ -29,10 +28,12 @@ func Metric() slog.Attr {
 //
 // Example:
 //
-//	logging.Emit(logger, logging.EventVaultWriteTiming,
+//	logging.Emit(logger, "sync_timing",
 //	    slog.String("op", "create"),
 //	    slog.Int64("pull_ms", pullDur.Milliseconds()),
 //	)
+//
+// DHF-REQ: keel/requirement-31
 func Emit(logger *slog.Logger, event string, attrs ...slog.Attr) {
 	all := make([]slog.Attr, 0, 1+len(attrs))
 	all = append(all, Metric())
