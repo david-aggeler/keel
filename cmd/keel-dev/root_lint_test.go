@@ -74,6 +74,25 @@ func TestLintNoRawFmtOutput(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-15
+func TestLintNoRawFmtOutputScansLibrarySurface(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	for _, sub := range []string{"log", "exec"} {
+		pkgDir := filepath.Join(dir, sub)
+		if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, pkgDir, "out.go",
+			"package "+strings.ReplaceAll(sub, "-", "")+"\n\nimport \"fmt\"\n\nfunc x() { fmt.Println(\"diagnostic bypass\") }\n")
+		err := runLint(dir)
+		if err == nil || !strings.Contains(err.Error(), "no-raw-fmt-output") || !strings.Contains(err.Error(), sub+"/out.go") {
+			t.Fatalf("raw fmt output in %s should fail lint with package path, got %v", sub, err)
+		}
+		writeFile(t, pkgDir, "out.go", "package "+strings.ReplaceAll(sub, "-", "")+"\n\nfunc x() {}\n")
+	}
+}
+
 // TestLintNoRawStdoutStream proves the ac-36 policy flags os.Stdout/os.Stderr
 // references outside the main.go allowlist and names the offending function.
 func TestLintNoRawStdoutStream(t *testing.T) {
