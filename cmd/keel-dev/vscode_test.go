@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/david-aggeler/keel/vscode"
 )
@@ -148,6 +149,140 @@ func TestVSCodeDiscoveryAndPlanExposeKeelLaneSet(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-39
+func TestVSCodeCoverageLaneEmitsPersistedCoverageArtifact(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	writeFile(t, root, "main_test.go", "package p\n\nimport \"testing\"\n\nfunc TestOne(t *testing.T) {}\n")
+
+	var discover bytes.Buffer
+	if err := writeVSCodeDiscovery(root, &discover); err != nil {
+		t.Fatalf("writeVSCodeDiscovery: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
+		t.Fatalf("discovery JSON: %v\n%s", err, discover.String())
+	}
+	if got := doc["module_path"]; got != modulePath {
+		t.Fatalf("discovery module_path = %v, want %q", got, modulePath)
+	}
+	items, ok := doc["items"].([]any)
+	if !ok {
+		t.Fatalf("discovery items missing: %+v", doc)
+	}
+	for _, raw := range items {
+		item, ok := raw.(map[string]any)
+		if !ok || item["id"] != vscodeLaneTestCoverage {
+			continue
+		}
+		profiles, ok := item["profiles"].([]any)
+		if !ok || len(profiles) != 1 || profiles[0] != "coverage" {
+			t.Fatalf("coverage lane profiles = %v, want [coverage]", item["profiles"])
+		}
+		goto foundCoverageLane
+	}
+	t.Fatalf("discovery missing coverage lane: %+v", items)
+
+foundCoverageLane:
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", `
+case "$1 $2" in
+  "test ./...")
+    for arg in "$@"; do
+      case "$arg" in
+        -coverprofile=*)
+          profile=${arg#-coverprofile=}
+          mkdir -p "$(dirname "$profile")"
+          printf 'mode: atomic\npkg/file.go:1.1,1.10 1 1\n' > "$profile"
+          ;;
+      esac
+    done
+    printf '?   \tgithub.com/david-aggeler/keel/log\t[no test files]\n'
+    printf 'ok  \tgithub.com/david-aggeler/keel/vscode\t0.012s\tcoverage: 91.2%% of statements\n'
+    ;;
+  "tool cover")
+    printf 'github.com/david-aggeler/keel/vscode/file.go:1:\tFunc\t91.2%%\n'
+    printf 'total:\t(statements)\t91.2%%\n'
+    ;;
+esac
+exit 0`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	oldCoverageDir := filepath.Join(root, ".logs", "vscode-cover", "old-run")
+	if err := os.MkdirAll(oldCoverageDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldTime := time.Now().Add(-8 * 24 * time.Hour)
+	if err := os.Chtimes(oldCoverageDir, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+
+	var protocol bytes.Buffer
+	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", vscodeLaneTestCoverage}); err != nil {
+		t.Fatalf("coverage run handler: %v\n%s\ncalls:\n%s", err, protocol.String(), calls(t, callsFile))
+	}
+	events := decodeRunEvents(t, protocol.String())
+	finishedIndex := eventIndex(events, "run_finished")
+	if finishedIndex < 0 {
+		t.Fatalf("coverage run missing run_finished: %+v", events)
+	}
+	var artifact *vscode.RunArtifact
+	var packagePasses int
+	var summaryFound bool
+	for i, event := range events {
+		if event.Event == "artifact" && event.Artifact != nil && event.Artifact.Kind == "coverage" {
+			if i > finishedIndex {
+				t.Fatalf("coverage artifact emitted after run_finished: %+v", events)
+			}
+			if artifact != nil {
+				t.Fatalf("multiple coverage artifacts: %+v", events)
+			}
+			artifact = event.Artifact
+		}
+		if event.Event == "passed" && strings.HasPrefix(event.TestID, "go::package::") && event.DurationMS > 0 {
+			packagePasses++
+		}
+		if event.Event == "output" && strings.Contains(event.Message, "total statement coverage 91.2%") {
+			summaryFound = true
+		}
+	}
+	if artifact == nil {
+		t.Fatalf("coverage run emitted no artifact{kind:coverage}: %+v", events)
+	}
+	if packagePasses == 0 {
+		t.Fatalf("coverage run emitted no per-package passed events: %+v", events)
+	}
+	if !summaryFound {
+		t.Fatalf("coverage run emitted no total percentage output line: %+v", events)
+	}
+	artifactPath := strings.TrimPrefix(artifact.URI, "file://")
+	if !strings.Contains(artifactPath, filepath.Join(".logs", "vscode-cover", events[0].RunID, "cover.out")) {
+		t.Fatalf("coverage artifact path = %q, want .logs/vscode-cover/<run-id>/cover.out", artifactPath)
+	}
+	info, err := os.Stat(artifactPath)
+	if err != nil {
+		t.Fatalf("coverage profile not persisted at %s: %v", artifactPath, err)
+	}
+	if info.Size() == 0 {
+		t.Fatalf("coverage profile at %s is empty", artifactPath)
+	}
+	if _, err := os.Stat(oldCoverageDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old coverage run dir should be swept, stat err=%v", err)
+	}
+
+	protocol.Reset()
+	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", vscodeLaneTestFast}); err != nil {
+		t.Fatalf("test-fast run handler: %v\n%s", err, protocol.String())
+	}
+	for _, event := range decodeRunEvents(t, protocol.String()) {
+		if event.Event == "artifact" {
+			t.Fatalf("non-coverage lane emitted artifact: %+v", event)
+		}
+	}
+}
+
 // DHF-TEST: keel/requirement-36
 func TestVSCodeRunWritesStampedExternalRunStream(t *testing.T) {
 	root := t.TempDir()
@@ -189,6 +324,15 @@ func discoveryHasLane(doc vscode.DiscoveryDocument, id string) bool {
 		}
 	}
 	return false
+}
+
+func eventIndex(events []vscode.RunEvent, eventName string) int {
+	for i, event := range events {
+		if event.Event == eventName {
+			return i
+		}
+	}
+	return -1
 }
 
 func TestVSCodeProtocolWriterIsOnlyStdoutAllowlistGrowth(t *testing.T) {
