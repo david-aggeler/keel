@@ -126,7 +126,7 @@ func handleVSCodeTestsRun(ctx context.Context, args []string) error {
 		return vscodeRunError{exitCode: 1, msg: "vscode lane blocked"}
 	}
 
-	exitCode, err = runVSCodeLane(ctx, state.logger, state.root, laneID)
+	exitCode, err = runVSCodeLane(ctx, state.logger, state.root, laneID, runID, writer)
 	if err != nil {
 		writer(vscode.RunEvent{Event: "errored", Message: err.Error()})
 		writer(vscode.RunEvent{Event: "run_finished", Message: err.Error(), ExitCode: &exitCode})
@@ -139,10 +139,12 @@ func handleVSCodeTestsRun(ctx context.Context, args []string) error {
 	return nil
 }
 
+// DHF-REQ: keel/requirement-39
 func writeVSCodeDiscovery(root string, out io.Writer) error {
 	doc := vscode.DiscoveryDocument{
 		Version:     1,
 		Workspace:   workspaceNode(root),
+		ModulePath:  modulePath,
 		GeneratedAt: time.Now().UTC(),
 		Capabilities: vscode.DiscoveryCapabilities{
 			ClearResults:              true,
@@ -193,6 +195,10 @@ func writeVSCodePlan(root string, ids []string, out io.Writer) error {
 }
 
 func laneItem(id, label string) vscode.TestItem {
+	profiles := []string{"run"}
+	if id == vscodeLaneTestCoverage {
+		profiles = []string{"coverage"}
+	}
 	return vscode.TestItem{
 		ID:                id,
 		ParentID:          "keel::root",
@@ -202,7 +208,7 @@ func laneItem(id, label string) vscode.TestItem {
 		Runner:            "keel-dev",
 		RunnerLabel:       "keel-dev",
 		Runnable:          true,
-		Profiles:          []string{"run"},
+		Profiles:          profiles,
 		LaneID:            id,
 		RequiredResources: []string{"go-toolchain", "keel-module-root", "stub-binaries"},
 	}
@@ -219,7 +225,7 @@ func selectedPlanItems(ids []string) []vscode.SetupPlanItem {
 	return items
 }
 
-func runVSCodeLane(ctx context.Context, logger *slog.Logger, root, laneID string) (int, error) {
+func runVSCodeLane(ctx context.Context, logger *slog.Logger, root, laneID, runID string, writer vscode.RunEventWriter) (int, error) {
 	switch laneID {
 	case vscodeLaneLint:
 		if err := runLint(root); err != nil {
@@ -236,7 +242,7 @@ func runVSCodeLane(ctx context.Context, logger *slog.Logger, root, laneID string
 		if logger == nil {
 			logger = vscodeDiscardLogger()
 		}
-		if err := runTestWithCoverage(ctx, logger, root); err != nil {
+		if err := runVSCodeTestCoverage(ctx, logger, root, runID, writer); err != nil {
 			return 1, err
 		}
 	default:

@@ -4,13 +4,17 @@
   "title": "consumer VS Code test discovery",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "workspace", "generated_at", "capabilities", "items"],
+  "required": ["version", "workspace", "module_path", "generated_at", "capabilities", "items"],
   "properties": {
     "version": {
       "type": "integer",
       "const": 1
     },
     "workspace": {
+      "type": "string",
+      "minLength": 1
+    },
+    "module_path": {
       "type": "string",
       "minLength": 1
     },
