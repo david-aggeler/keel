@@ -27,9 +27,10 @@ func stubTools(t *testing.T, dirtyTree bool, tagExists bool) (callsFile string) 
 	}
 
 	stub(t, bin, callsFile, "git", `
-case "$1 $2" in
+case "$*" in
   "status --porcelain") printf '%s' '`+gitStatus+`' ;;
-  "tag --list") printf '%s' '`+gitTagList+`' ;;
+  "status --porcelain -- vsix/package.json") printf '%s' ' M vsix/package.json' ;;
+  "tag --list"*) printf '%s' '`+gitTagList+`' ;;
 esac
 exit 0`)
 	stub(t, bin, callsFile, "gh", "exit 0")
@@ -62,6 +63,22 @@ exit 0`)
 	stub(t, bin, callsFile, "deadcode", "exit 0")
 	// gitleaks is presence-only (no --version probe); a clean scan exits 0.
 	stub(t, bin, callsFile, "gitleaks", "exit 0")
+	stub(t, bin, callsFile, "node", `
+case "$1" in
+  --version) echo "v22.0.0" ;;
+esac
+exit 0`)
+	stub(t, bin, callsFile, "pnpm", `
+case "$*" in
+  "--dir "*" run package:vsix")
+    package_dir=$2
+    version=$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' "$package_dir/package.json" | head -1)
+    mkdir -p "$package_dir/dist"
+    touch "$package_dir/dist/keel-test-bridge-$version.vsix"
+    ;;
+esac
+exit 0`)
+	stub(t, bin, callsFile, "xvfb-run", "exit 0")
 
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return callsFile
@@ -93,6 +110,11 @@ func moduleFixture(t *testing.T) string {
 	dir := t.TempDir()
 	writeFile(t, dir, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, dir, "p.go", "package p\n\nfunc One() int {\n\treturn 1\n}\n")
+	if err := os.MkdirAll(filepath.Join(dir, "vsix"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, filepath.Join("vsix", "package.json"),
+		"{\n  \"name\": \"keel-test-bridge\",\n  \"version\": \"0.0.0\",\n  \"scripts\": {\n    \"package:vsix\": \"true\",\n    \"ci\": \"true\"\n  }\n}\n")
 	return dir
 }
 
@@ -111,9 +133,12 @@ func TestRunReleaseHappyPath(t *testing.T) {
 	for _, want := range []string{
 		"git status --porcelain",
 		"git tag --list v9.9.9",
+		"pnpm --dir " + filepath.Join(dir, "vsix") + " run ci",
+		"pnpm --dir " + filepath.Join(dir, "vsix") + " run package:vsix",
 		"git tag -a v9.9.9 -m keel v9.9.9",
 		"git push origin v9.9.9",
-		"gh release create v9.9.9 --title keel v9.9.9 --generate-notes",
+		"git push origin HEAD",
+		"gh release create v9.9.9 --title keel v9.9.9 --generate-notes " + filepath.Join(dir, "vsix", "dist", "keel-test-bridge-9.9.9.vsix"),
 		"go get github.com/david-aggeler/keel@v9.9.9",
 	} {
 		if !strings.Contains(got, want) {
@@ -122,6 +147,96 @@ func TestRunReleaseHappyPath(t *testing.T) {
 	}
 	if strings.Index(got, "git tag -a") < strings.Index(got, "git status --porcelain") {
 		t.Error("tag created before preflight")
+	}
+	if strings.Index(got, "git tag -a") < strings.Index(got, "pnpm --dir") {
+		t.Error("tag created before VSIX preflight/package")
+	}
+	pkg, err := os.ReadFile(filepath.Join(dir, "vsix", "package.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(pkg), `"version": "9.9.9"`) {
+		t.Fatalf("release did not stamp vsix package version:\n%s", pkg)
+	}
+}
+
+// TestRunReleaseCommitsVSIXStampBeforeTag pins the one-version invariant: the
+// stamped vsix/package.json is committed before the annotated tag is created,
+// so the tag's tree carries the same version as the built release asset. A
+// stamp left dirty in the worktree would let the tag point at the previous
+// committed version while the GitHub asset says X.Y.Z.
+//
+// DHF-TEST: keel/requirement-40
+func TestRunReleaseCommitsVSIXStampBeforeTag(t *testing.T) {
+	callsFile := stubTools(t, false, false)
+	dir := moduleFixture(t)
+
+	if err := runRelease(context.Background(), discardLogger(), dir, "v9.9.9"); err != nil {
+		t.Fatalf("happy-path release failed: %v", err)
+	}
+
+	got := calls(t, callsFile)
+	add := strings.Index(got, "git add -- "+filepath.Join("vsix", "package.json"))
+	commit := strings.Index(got, "git commit -m keel v9.9.9: stamp VSIX version")
+	tag := strings.Index(got, "git tag -a v9.9.9")
+	if add == -1 {
+		t.Fatalf("stamped vsix/package.json was never staged; calls:\n%s", got)
+	}
+	if commit == -1 {
+		t.Fatalf("stamped vsix/package.json was never committed; calls:\n%s", got)
+	}
+	if tag == -1 {
+		t.Fatalf("no annotated tag created; calls:\n%s", got)
+	}
+	if !(add < commit && commit < tag) {
+		t.Fatalf("one-version invariant broken: want add < commit < tag, got add=%d commit=%d tag=%d; calls:\n%s",
+			add, commit, tag, got)
+	}
+}
+
+// TestCommitVSIXStampSkipsWhenAlreadyCommitted pins the no-op branch: when the
+// committed manifest already carries the target version (re-run after a
+// mid-release failure), commitVSIXStamp neither stages nor commits.
+//
+// DHF-TEST: keel/requirement-40
+func TestCommitVSIXStampSkipsWhenAlreadyCommitted(t *testing.T) {
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "git", "exit 0") // path-scoped status prints nothing: clean
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := commitVSIXStamp(context.Background(), discardLogger(), t.TempDir(), "v9.9.9"); err != nil {
+		t.Fatalf("commitVSIXStamp no-op path failed: %v", err)
+	}
+	got := calls(t, callsFile)
+	if strings.Contains(got, "git add") || strings.Contains(got, "git commit") {
+		t.Fatalf("already-committed stamp still staged/committed:\n%s", got)
+	}
+}
+
+// TestStampVSIXPackageVersionPreservesManifestShape pins that the stamp is a
+// one-line version bump: key order, unrelated lines, and && in script values
+// survive byte-for-byte.
+//
+// DHF-TEST: keel/requirement-40
+func TestStampVSIXPackageVersionPreservesManifestShape(t *testing.T) {
+	dir := t.TempDir()
+	manifest := "{\n  \"name\": \"keel-test-bridge\",\n  \"version\": \"0.0.0\",\n  \"scripts\": {\n    \"ci\": \"a && b\"\n  },\n  \"engines\": {\n    \"vscode\": \"^1.100.0\"\n  }\n}\n"
+	path := filepath.Join(dir, "package.json")
+	if err := os.WriteFile(path, []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := stampVSIXPackageVersion(path, "9.9.9"); err != nil {
+		t.Fatalf("stamp: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Replace(manifest, `"version": "0.0.0"`, `"version": "9.9.9"`, 1)
+	if string(got) != want {
+		t.Fatalf("stamp was not a one-line bump:\n--- want ---\n%s\n--- got ---\n%s", want, got)
 	}
 }
 

@@ -11,7 +11,7 @@ import (
 
 type jsonSchema struct {
 	ID                   string                `json:"$id"`
-	AdditionalProperties *bool                 `json:"additionalProperties"`
+	AdditionalProperties json.RawMessage       `json:"additionalProperties"`
 	Required             []string              `json:"required"`
 	Properties           map[string]jsonSchema `json:"properties"`
 	Defs                 map[string]jsonSchema `json:"$defs"`
@@ -42,10 +42,11 @@ func TestSchemasDriftAgainstGoTypes(t *testing.T) {
 		{"run-event location", reflect.TypeOf(RunLocation{}), "#/properties/location"},
 		{"run-event artifact", reflect.TypeOf(RunArtifact{}), "#/properties/artifact"},
 		{"run-lock", reflect.TypeOf(RunLockFile{}), ""},
+		{"test-bridge-config", reflect.TypeOf(TestBridgeConfig{}), ""},
 	}
 
 	loaded := map[string]jsonSchema{}
-	for _, name := range []SchemaName{SchemaDiscovery, SchemaSetupPlan, SchemaRunEvent, SchemaRunLock} {
+	for _, name := range []SchemaName{SchemaDiscovery, SchemaSetupPlan, SchemaRunEvent, SchemaRunLock, SchemaTestBridgeConfig} {
 		body, err := SchemaBytes(name)
 		if err != nil {
 			t.Fatalf("read schema %s: %v", name, err)
@@ -57,7 +58,7 @@ func TestSchemasDriftAgainstGoTypes(t *testing.T) {
 		if !strings.Contains(schema.ID, "github.com/david-aggeler/keel/vscode/schemas/") {
 			t.Fatalf("%s $id is not keel-anchored: %q", name, schema.ID)
 		}
-		if schema.AdditionalProperties == nil || *schema.AdditionalProperties {
+		if !additionalPropertiesClosed(schema.AdditionalProperties) {
 			t.Fatalf("%s does not set additionalProperties:false", name)
 		}
 		loaded[string(name)] = schema
@@ -66,7 +67,7 @@ func TestSchemasDriftAgainstGoTypes(t *testing.T) {
 	for _, check := range checks {
 		root := loaded[schemaNameForCheck(check.name)]
 		schema := schemaAtRef(root, check.ref)
-		if schema.AdditionalProperties == nil || *schema.AdditionalProperties {
+		if !additionalPropertiesClosed(schema.AdditionalProperties) {
 			t.Fatalf("%s does not set additionalProperties:false", check.name)
 		}
 		wantProps, wantRequired := jsonFields(check.typ)
@@ -84,6 +85,11 @@ func TestSchemasDriftAgainstGoTypes(t *testing.T) {
 	assertEnumMatches(t, loaded["run-event"].Properties["event"].Enum, sortedKeys(knownRunEvents))
 	assertEnumMatches(t, loaded["run-event"].Properties["source"].Enum, sortedKeys(runEventSources))
 	assertEnumMatches(t, loaded["run-event"].Properties["artifact"].Properties["kind"].Enum, sortedKeys(artifactKinds))
+}
+
+func additionalPropertiesClosed(raw json.RawMessage) bool {
+	var b bool
+	return json.Unmarshal(raw, &b) == nil && !b
 }
 
 // DHF-TEST: keel/requirement-34

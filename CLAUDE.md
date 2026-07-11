@@ -4,10 +4,11 @@ Rules for coding agents in this repo. Short and blunt on purpose.
 
 ## What keel is
 
-- ONE public Go module: `github.com/david-aggeler/keel`. Apache-2.0.
+- ONE public Go module: `github.com/david-aggeler/keel` plus the Keel Test
+  Bridge VSIX under `vsix/`. Apache-2.0.
 - Subpackages: `log`, `exec`, `exec/claude`, `exec/codex`, `cmd/keel-dev`,
   plus approved dev/example binaries such as `cmd/keel-demo`.
-- One tag. One version. Zero external deps in the keel/log + keel/exec
+- One tag. One version across the Go module and VSIX. Zero external deps in the keel/log + keel/exec
   core compile graph; log/otel is a quarantined sibling and may split to a
   separate module later. No internal replaces.
 - Anonymous `go get` must always work. NEVER add GOPRIVATE, tokens,
@@ -62,8 +63,12 @@ Manual/operator work only. The run-queue tail creates and owns its own
   in-process lint policies, tests with a total-coverage floor (85%).
 - The local gate and the release preflight run the same command. Do not
   re-list checks anywhere else. keel runs no GitHub Actions CI.
+- VSIX: `keel-dev vsix ci` is the Node-backed sibling gate for `vsix/`
+  (pnpm build/lint/headless suite). Core `keel-dev ci` stays node-free.
 - Release: `keel-dev release vX.Y.Z`. It refuses on dirty tree, existing
-  tag, or red gate. Then tag → gh release → anonymous-fetch check.
+  tag, red core gate, or red VSIX gate. Then it stamps/builds the VSIX release
+  asset, tags, creates the GitHub release with the VSIX attached, and runs the
+  anonymous-fetch check.
 - Doc: `docs/release.md`.
 
 ## keel-dev output rules
@@ -112,3 +117,5 @@ Manual/operator work only. The run-queue tail creates and owns its own
 - keel-dev is the development/release CLI. Approved dev/example binaries may
   exist outside keel-dev when backed by SoR requirements. No SoR client code in
   keel — record ops use `openbrain-client` from PATH.
+- The Keel Test Bridge VSIX activates only on `.vscode/test-bridge.json`.
+  `testBridge.*` VS Code settings are intentionally not supported.

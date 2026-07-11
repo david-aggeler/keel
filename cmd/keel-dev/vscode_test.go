@@ -93,6 +93,35 @@ func TestVSCodeHandlersDispatchDiscoveryPlanAndLintRun(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-40
+func TestVSCodeConfigHandlersInitAndUpgrade(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+
+	if err := handleVSCodeConfigInit(contextWithVSCodeTestState(root, io.Discard), nil); err != nil {
+		t.Fatalf("config init: %v", err)
+	}
+	body, err := os.ReadFile(filepath.Join(root, ".vscode", "test-bridge.json"))
+	if err != nil {
+		t.Fatalf("read initialized config: %v", err)
+	}
+	if !strings.Contains(string(body), `"command": "bin/keel-dev"`) {
+		t.Fatalf("initialized config does not contain keel devtool command:\n%s", body)
+	}
+
+	writeFile(t, root, filepath.Join(".vscode", "test-bridge.json"), `{"version":1,"command":"bin/custom","args":["vscode","tests"],"displayName":"Custom"}`+"\n")
+	if err := handleVSCodeConfigUpgrade(contextWithVSCodeTestState(root, io.Discard), nil); err != nil {
+		t.Fatalf("config upgrade: %v", err)
+	}
+	body, err = os.ReadFile(filepath.Join(root, ".vscode", "test-bridge.json"))
+	if err != nil {
+		t.Fatalf("read upgraded config: %v", err)
+	}
+	if !strings.Contains(string(body), `"command": "bin/custom"`) || !strings.Contains(string(body), `"version": 2`) {
+		t.Fatalf("upgraded config did not preserve command and stamp current version:\n%s", body)
+	}
+}
+
 func contextWithVSCodeTestState(root string, protocol io.Writer) context.Context {
 	return withRunStateProtocol(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, root, protocol)
 }

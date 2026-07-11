@@ -1,0 +1,19 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Vela Test Bridge",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "/tmp/vela-vscode-extension-host",
+        "--extensionDevelopmentPath=${workspaceFolder}"
+      ],
+      "outFiles": ["${workspaceFolder}/out/**/*.js"],
+      "preLaunchTask": "pnpm: compile",
+      "env": {
+        "VELA_VSCODE_BRIDGE_DEV_WORKSPACE": "${workspaceFolder}/../.."
+      }
+    }
+  ]
+}

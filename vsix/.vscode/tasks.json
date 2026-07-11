@@ -1,0 +1,27 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "pnpm: compile",
+      "type": "shell",
+      "command": "pnpm run compile",
+      "group": "build",
+      "problemMatcher": "$tsc"
+    },
+    {
+      "label": "pnpm: watch",
+      "type": "shell",
+      "command": "pnpm run watch",
+      "isBackground": true,
+      "group": "build",
+      "problemMatcher": "$tsc-watch"
+    },
+    {
+      "label": "pnpm: test:headless",
+      "type": "shell",
+      "command": "pnpm run test:headless",
+      "group": "test",
+      "problemMatcher": "$tsc"
+    }
+  ]
+}
