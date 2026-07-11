@@ -117,6 +117,26 @@ exit 0`)
 	}
 }
 
+// DHF-TEST: keel/requirement-12
+func TestCoverageUsesAllPackageDenominator(t *testing.T) {
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", `
+case "$1 $2" in
+  "tool cover") echo "total:	(statements)	92.0%" ;;
+esac
+exit 0`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := runTestWithCoverage(context.Background(), discardLogger(), t.TempDir()); err != nil {
+		t.Fatalf("coverage run failed: %v", err)
+	}
+	got := calls(t, callsFile)
+	if !strings.Contains(got, "-coverpkg=./...") {
+		t.Fatalf("coverage gate must use all-package denominator; calls:\n%s", got)
+	}
+}
+
 func TestParseCoverageTotal(t *testing.T) {
 	if _, err := parseCoverageTotal("garbage\n"); err == nil {
 		t.Error("missing total line should error")
