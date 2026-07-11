@@ -34,11 +34,12 @@ func TestDiscard(t *testing.T) {
 	l.Info("goes nowhere", "k", "v") // must not panic
 }
 
-func TestConsoleMessageCodexProgress(t *testing.T) {
+// DHF-TEST: keel/requirement-2
+func TestConsoleMessageProgressDetailHook(t *testing.T) {
 	l, rc := newConsoleForTesting("svc")
 
-	l.Info("codex progress", "detail", "reading files", "event_type", "agent_message")
-	if out := rc.LastRaw(); !strings.Contains(out, "codex detail: reading files") {
+	l.Info("builder progress", "detail", "reading files", "event_type", "agent_message")
+	if out := rc.LastRaw(); !strings.Contains(out, "builder detail: reading files") {
 		t.Errorf("curated detail missing: %q", out)
 	}
 	if out := rc.LastRaw(); strings.Contains(out, "event_type=") {
@@ -46,14 +47,14 @@ func TestConsoleMessageCodexProgress(t *testing.T) {
 	}
 
 	rc.Reset()
-	l.Info("codex progress", "detail", "   ", "event_type", "noop")
-	if out := rc.LastRaw(); !strings.Contains(out, "codex progress") {
+	l.Info("builder progress", "detail", "   ", "event_type", "noop")
+	if out := rc.LastRaw(); !strings.Contains(out, "builder progress") {
 		t.Errorf("blank detail should keep the generic message: %q", out)
 	}
 
 	rc.Reset()
-	l.Info("codex progress", "detail", 42)
-	if out := rc.LastRaw(); !strings.Contains(out, "codex detail: 42") {
+	l.Info("builder progress", "detail", 42)
+	if out := rc.LastRaw(); !strings.Contains(out, "builder detail: 42") {
 		t.Errorf("non-string detail should be formatted: %q", out)
 	}
 }

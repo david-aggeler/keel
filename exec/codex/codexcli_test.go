@@ -296,6 +296,42 @@ func TestRun_UsesSharedProcessLifecycleLogging(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-2
+func TestRun_EmitsCuratedCodexProgressRecords(t *testing.T) {
+	dir := t.TempDir()
+	argvFile := filepath.Join(dir, "argv.txt")
+	stdinLenFile := filepath.Join(dir, "stdinlen.txt")
+	stub := writeStreamStub(t, argvFile, stdinLenFile, realExecJSONLines, 0)
+
+	var logBuf bytes.Buffer
+	logger, err := logging.New(logging.Config{
+		Service: "codexcli-test",
+		Level:   slog.LevelDebug,
+		Console: logging.ConsoleJSON,
+		Writer:  &logBuf,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := Run(context.Background(), Request{
+		Prompt: "inspect repository",
+		Dir:    dir,
+		Bin:    stub,
+		Logger: logger,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	records := parseJSONLogRecords(t, logBuf.String())
+	progress := findLogRecord(t, records, "msg", "codex progress")
+	if got, ok := progress["detail"].(string); !ok || got != "Repo contains docs, sdk, and examples directories." {
+		t.Fatalf("codex progress detail = %#v, want curated agent text", progress["detail"])
+	}
+	if got, ok := progress["event_type"].(string); !ok || got != "agent_message" {
+		t.Fatalf("codex progress event_type = %#v, want semantic codex event type", progress["event_type"])
+	}
+}
+
 func parseJSONLogRecords(t *testing.T, logs string) []map[string]any {
 	t.Helper()
 	lines := strings.Split(strings.TrimSpace(logs), "\n")
