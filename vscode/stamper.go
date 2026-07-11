@@ -85,12 +85,22 @@ func (s EventStamper) invalid(event RunEvent, message string) RunEvent {
 		out.Time = time.Now().UTC()
 	}
 	out.RunID = s.RunID
-	out.Source = s.Source
+	out.Source = recoverySource(s.Source)
 	out.Workspace = s.Workspace
 	if event.TestID != "" {
 		out.TestID = event.TestID
 	}
 	return out
+}
+
+func recoverySource(source string) string {
+	if source == "" {
+		return ""
+	}
+	if _, ok := runEventSources[source]; ok {
+		return source
+	}
+	return "vscode"
 }
 
 func sanitizeArtifactURI(workspace string, artifact *RunArtifact) (RunArtifact, bool, string) {
