@@ -308,8 +308,8 @@ func TestLineLogWriterFlushAndCR(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-17, keel/requirement-20
-func TestLineLogWriterKeepsStderrAtInfo(t *testing.T) {
+// DHF-TEST: keel/requirement-17, keel/requirement-24
+func TestLineLogWriterKeepsStderrAtError(t *testing.T) {
 	logger, cap := testLogger("keel-dev")
 	w := newLineLogWriter(logger, "step", "stderr")
 	if _, err := w.Write([]byte("failure detail\n")); err != nil {
@@ -320,8 +320,8 @@ func TestLineLogWriterKeepsStderrAtInfo(t *testing.T) {
 	if msg, _ := rec["msg"].(string); msg != "failure detail" {
 		t.Fatalf("stderr child output msg = %#v, want failure detail", rec["msg"])
 	}
-	if level, _ := rec["level"].(string); level != "INFO" {
-		t.Fatalf("stderr child output level = %#v, want INFO", rec["level"])
+	if level, _ := rec["level"].(string); level != "ERROR" {
+		t.Fatalf("stderr child output level = %#v, want ERROR", rec["level"])
 	}
 	if event, _ := rec["event_type"].(string); event != "process_output" {
 		t.Fatalf("stderr child output event_type = %#v, want process_output", rec["event_type"])

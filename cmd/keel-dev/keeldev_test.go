@@ -188,6 +188,50 @@ func TestRunStepLogsThroughKeelLog(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-17, keel/requirement-24
+func TestQuietStderrLoggerPromotesRealStderrAndFiltersKnownBenignLines(t *testing.T) {
+	logger, cap := testLogger("keel-dev")
+	wrapped := quietStderrLogger{Logger: logger}
+
+	wrapped.Error("process output",
+		"event_type", "process_output",
+		"stream", "stderr",
+		"step", "gitleaks",
+		"data", "real leak detected",
+	)
+	wrapped.Error("process output",
+		"event_type", "process_output",
+		"stream", "stderr",
+		"step", "gitleaks",
+		"data", "\x1b[90m3:33AM\x1b[0m \x1b[32mINF\x1b[0m scan completed in 42ms",
+	)
+
+	records := cap.AllJSON()
+	if len(records) != 2 {
+		t.Fatalf("records = %#v, want real stderr plus reclassified benign stderr", records)
+	}
+	if records[0]["level"] != "ERROR" || records[0]["data"] != "real leak detected" {
+		t.Fatalf("real stderr record = %#v, want ERROR", records[0])
+	}
+	if records[1]["level"] != "DEBUG" || records[1]["data"] != "\x1b[90m3:33AM\x1b[0m \x1b[32mINF\x1b[0m scan completed in 42ms" {
+		t.Fatalf("known-benign stderr record = %#v, want DEBUG", records[1])
+	}
+}
+
+// DHF-TEST: keel/requirement-17, keel/requirement-24
+func TestLineLogWriterRoutesStderrAtError(t *testing.T) {
+	logger, cap := testLogger("keel-dev")
+	lines := newLineLogWriter(logger, "probe", "stderr")
+	if _, err := lines.Write([]byte("failure\n")); err != nil {
+		t.Fatalf("Write returned error: %v", err)
+	}
+
+	rec := cap.LastJSON()
+	if rec["level"] != "ERROR" || rec["stream"] != "stderr" || rec["msg"] != "failure" {
+		t.Fatalf("stderr line record = %#v, want ERROR process output", rec)
+	}
+}
+
 // DHF-TEST: keel/requirement-25
 func TestRunCISectionNamesPhaseOnly(t *testing.T) {
 	logger, cap := testLogger("keel-dev")

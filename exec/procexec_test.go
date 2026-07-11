@@ -144,6 +144,49 @@ func TestProcessStartLogsStructuredLifecycleAndRedactsSensitiveArgs(t *testing.T
 	}
 }
 
+// DHF-TEST: keel/requirement-1
+func TestProcessWaitIsIdempotentAndEmitsProcessEndOnce(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := mustLogger(t, logging.Config{
+		Service: "procexec-test",
+		Level:   slog.LevelDebug,
+		Console: logging.ConsoleJSON,
+		Writer:  &logBuf,
+	})
+
+	proc, err := procexec.ProcessStart(context.Background(), procexec.Request{
+		Logger:  logger,
+		Program: "sh",
+		Args:    []string{"-c", "printf once"},
+	})
+	if err != nil {
+		t.Fatalf("ProcessStart returned error: %v", err)
+	}
+
+	first, err := proc.Wait()
+	if err != nil {
+		t.Fatalf("first Wait returned error: %v", err)
+	}
+	second, err := proc.Wait()
+	if err != nil {
+		t.Fatalf("second Wait returned error: %v", err)
+	}
+	if first.ExitCode != second.ExitCode || first.Stdout != second.Stdout || first.Stderr != second.Stderr || first.Duration != second.Duration {
+		t.Fatalf("second Wait result = %#v, want same observable result as first %#v", second, first)
+	}
+
+	records := parseJSONLogRecords(t, logBuf.String())
+	processEnds := 0
+	for _, record := range records {
+		if record["event_type"] == "process_end" {
+			processEnds++
+		}
+	}
+	if processEnds != 1 {
+		t.Fatalf("process_end records = %d, want 1; records=%#v", processEnds, records)
+	}
+}
+
 // DHF-TEST: keel/requirement-24
 func TestRequestLoggerContractIncludesErrorForStderrRouting(t *testing.T) {
 	loggerField, ok := reflect.TypeOf(procexec.Request{}).FieldByName("Logger")
