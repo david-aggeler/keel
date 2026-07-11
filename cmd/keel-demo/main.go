@@ -40,7 +40,11 @@ func run(argv []string) int {
 	if cfg.Help {
 		return renderHelp(tree, mode, words)
 	}
-	logger, closeLogger := buildLogger(mode)
+	logger, closeLogger, err := buildLogger(mode)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "keel-demo: "+err.Error())
+		return 1
+	}
 	defer closeLogger()
 	if len(words) == 0 {
 		return exitCodeFor(logger, runShowcase(context.Background(), logger, string(mode)))
@@ -91,7 +95,11 @@ func renderHelp(tree *cli.CommandSpec, mode cli.Mode, path []string) int {
 		fmt.Fprint(os.Stdout, help.String())
 		return 0
 	}
-	logger, closeLogger := buildLogger(mode)
+	logger, closeLogger, err := buildLogger(mode)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "keel-demo: "+err.Error())
+		return 1
+	}
 	defer closeLogger()
 	command := "keel-demo"
 	if len(path) > 0 {
@@ -101,8 +109,9 @@ func renderHelp(tree *cli.CommandSpec, mode cli.Mode, path []string) int {
 	return 0
 }
 
-func buildLogger(mode cli.Mode) (*logging.Logger, func()) {
-	logger := logging.New(logging.Config{
+// DHF-REQ: keel/requirement-29
+func buildLogger(mode cli.Mode) (*logging.Logger, func(), error) {
+	logger, err := logging.New(logging.Config{
 		Service:         "keel-demo",
 		Level:           slog.LevelDebug,
 		Console:         consoleForSharedMode(mode),
@@ -112,7 +121,10 @@ func buildLogger(mode cli.Mode) (*logging.Logger, func()) {
 		PerRun:          true,
 		ConsoleOmitKeys: []string{"service"},
 	})
-	return logger, func() { _ = logger.Close() }
+	if err != nil {
+		return nil, nil, err
+	}
+	return logger, func() { _ = logger.Close() }, nil
 }
 
 func consoleForSharedMode(mode cli.Mode) logging.Console {
@@ -186,7 +198,11 @@ func exitCodeFor(logger *logging.Logger, err error) int {
 		return 0
 	}
 	if logger == nil {
-		logger, closeLogger := buildLogger(cli.ModeHuman)
+		logger, closeLogger, buildErr := buildLogger(cli.ModeHuman)
+		if buildErr != nil {
+			fmt.Fprintln(os.Stderr, "keel-demo: "+buildErr.Error())
+			return 1
+		}
 		defer closeLogger()
 		return exitCodeFor(logger, err)
 	}
