@@ -36,7 +36,9 @@ Only then does it:
    the same version as the release asset (one version, no dirty-stamp drift).
 7. **VSIX asset build** — `pnpm --dir vsix run package:vsix` builds the
    release asset from that committed state.
-8. Create the annotated tag `vX.Y.Z` and push it to `origin`.
+8. Create the annotated tag `vX.Y.Z` and push it — plus the release (stamp)
+   commit via `git push origin HEAD` — to `origin`, so `origin/main` carries
+   the stamped manifest the tag points at.
 9. Create the GitHub release with `gh release create ... --generate-notes`,
    attaching `vsix/dist/keel-test-bridge-X.Y.Z.vsix`.
 10. **Verify anonymous resolution** — in a throwaway module with a fresh
@@ -46,7 +48,7 @@ Only then does it:
    resolve. Retries a few times to absorb proxy.golang.org propagation lag.
 
 keel runs no GitHub Actions CI — the `release` verb's own clean-cache fetch check
-(step 7) is the proof that the tag is publicly fetchable. To re-check a tag later,
+(step 10) is the proof that the tag is publicly fetchable. To re-check a tag later,
 run `keel-dev verify vX.Y.Z` (see below).
 
 ### Prerequisites

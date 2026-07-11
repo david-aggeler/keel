@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -95,7 +96,13 @@ func runRelease(ctx context.Context, logger *slog.Logger, dir string, version st
 	if err := runCmd(ctx, logger, dir, "git", "push", "origin", version); err != nil {
 		return fmt.Errorf("push tag: %w", err)
 	}
-	logger.Info("tag created and pushed", "version", version)
+	// Push the branch too: the tag push uploads the stamp commit's objects, but
+	// without this origin/main never advances to it and every later checkout
+	// forks from a pre-stamp base.
+	if err := runCmd(ctx, logger, dir, "git", "push", "origin", "HEAD"); err != nil {
+		return fmt.Errorf("push release commit: %w", err)
+	}
+	logger.Info("tag and release commit pushed", "version", version)
 
 	// --- GitHub release. ---
 	if err := runCmd(ctx, logger, dir, "gh", "release", "create", version, "--title", "keel "+version, "--generate-notes", asset); err != nil {
@@ -156,21 +163,32 @@ func buildVSIXReleaseAsset(ctx context.Context, logger *slog.Logger, dir, versio
 	return asset, nil
 }
 
+// vsixVersionLine matches the manifest's top-level version line. Dependency
+// maps key by package name and engines by tool name, so a line-anchored
+// "version" key exists only at the top level of package.json.
+var vsixVersionLine = regexp.MustCompile(`(?m)^(\s*)"version"\s*:\s*"[^"]*"`)
+
+// stampVSIXPackageVersion rewrites only the version line, preserving the
+// hand-maintained manifest's key order and formatting — the stamp is committed
+// to history, so it must read as a one-line version bump, not a rewrite.
 func stampVSIXPackageVersion(path, version string) error {
 	body, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	var pkg map[string]any
-	if err := json.Unmarshal(body, &pkg); err != nil {
-		return fmt.Errorf("parse %s: %w", path, err)
+	m := vsixVersionLine.FindSubmatchIndex(body)
+	if m == nil {
+		return fmt.Errorf("no version field in %s", path)
 	}
-	pkg["version"] = version
-	out, err := json.MarshalIndent(pkg, "", "  ")
-	if err != nil {
-		return err
+	var buf bytes.Buffer
+	buf.Write(body[:m[0]])
+	buf.Write(body[m[2]:m[3]]) // original indentation
+	buf.WriteString(`"version": "` + version + `"`)
+	buf.Write(body[m[1]:])
+	if !json.Valid(buf.Bytes()) {
+		return fmt.Errorf("version stamp broke %s", path)
 	}
-	return os.WriteFile(path, append(out, '\n'), 0o644)
+	return os.WriteFile(path, buf.Bytes(), 0o644)
 }
 
 // runVerify validates the version and confirms the tag resolves anonymously,
