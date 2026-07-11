@@ -1,7 +1,26 @@
 // Package cli provides keel's shared command tree, generated help, and
-// UsageError contract for first-party developer CLIs.
+// usage-error contract for first-party developer CLIs.
 //
-// DHF-REQ: keel/requirement-21
+// Consumers describe their CLI as a tree of CommandSpec values. Dispatch walks
+// that tree from the root to the deepest matching command, validates
+// command-declared flags, and invokes only the matched command's Handler with
+// the remaining positional arguments. Commands without handlers, unknown
+// commands, and unknown flag-shaped arguments return UsageError so callers can
+// render diagnostics consistently and exit with exit code 2.
+//
+// The same tree is also the source for generated help. Config defines the root
+// usage shell, global flag rows, output-mode prose, and trailing guidance;
+// command nodes provide their own usage suffixes, summaries, long descriptions,
+// flags, and nested subcommands. RenderRootHelp and RenderTopicHelp format that
+// model for human help output without requiring each CLI to maintain a second
+// hand-written usage text.
+//
+// ParseGlobalConfig handles keel's shared position-independent global flags
+// before command dispatch. It returns RuntimeConfig, whose Mode selects the
+// console protocol and whose Help, Version, Verbose, and NoHeader fields let
+// binaries route shared behavior before invoking the command tree.
+//
+// DHF-REQ: keel/requirement-21, keel/requirement-30
 package cli
 
 import (
@@ -12,7 +31,9 @@ import (
 	"strings"
 )
 
-// Mode names the shared console output mode selected by a CLI invocation.
+// Mode names the shared console protocol selected by a CLI invocation.
+// Human mode is the default terminal-facing stream; AI and JSON modes are
+// machine-facing protocols consumed by automation.
 type Mode string
 
 const (
@@ -24,7 +45,10 @@ const (
 	ModeJSON Mode = "json"
 )
 
-// RuntimeConfig is the shared global CLI configuration parsed before dispatch.
+// RuntimeConfig is the shared global CLI configuration parsed before command
+// dispatch. Binaries use it to handle cross-cutting concerns such as output
+// protocol, verbosity, generated help, version output, and banner suppression
+// before handing the remaining words to a CommandSpec tree.
 type RuntimeConfig struct {
 	// Mode is the selected console output mode.
 	Mode Mode
@@ -38,7 +62,10 @@ type RuntimeConfig struct {
 	Version bool
 }
 
-// Config describes the generated root-help shell around a consumer command tree.
+// Config describes the generated root-help shell around a consumer command
+// tree. It keeps program-level usage, global flags, mode descriptions, and final
+// guidance in one data structure so root help and command-topic help stay in
+// sync with dispatch.
 type Config struct {
 	// Program is the executable name shown in generated usage.
 	Program string
@@ -58,10 +85,15 @@ type Config struct {
 	Trailing string
 }
 
-// Handler executes a command with its remaining arguments.
+// Handler executes a matched command with the arguments left after command-tree
+// navigation. It receives only the command-specific remainder; global flags are
+// parsed by ParseGlobalConfig before Dispatch.
 type Handler func(context.Context, []string) error
 
-// CommandSpec is a node in the shared command tree.
+// CommandSpec is a node in the shared command tree. A root node holds Config
+// plus first-level Subcommands, while leaf nodes usually provide a Handler and
+// optional Flags. Dispatch, generated usage, and generated help all read this
+// same model so CLIs do not maintain separate command registries.
 type CommandSpec struct {
 	// Name is the command token used for tree navigation.
 	Name string
@@ -83,7 +115,10 @@ type CommandSpec struct {
 	Config Config
 }
 
-// FlagSpec describes one flag row in generated help.
+// FlagSpec describes one command or global flag row in generated help. Name is
+// stored without leading dashes, Value is an optional placeholder, Default is
+// appended to the description when present, and Short is the operator-facing
+// explanation.
 type FlagSpec struct {
 	// Name is the flag name without leading dashes.
 	Name string
@@ -95,18 +130,22 @@ type FlagSpec struct {
 	Short string
 }
 
-// UsageError reports invalid CLI usage. Consumers map it to exit code 2.
+// UsageError reports invalid CLI usage. Consumers should present its diagnostic
+// to the operator and map it to exit code 2, keeping usage failures distinct
+// from runtime command failures.
 type UsageError struct {
 	// Err is the underlying diagnostic presented to the user.
 	Err error
 }
 
-// NewUsageError returns a UsageError with a formatted message.
+// NewUsageError returns a UsageError with a formatted message suitable for
+// direct display in CLI diagnostics.
 func NewUsageError(format string, args ...any) UsageError {
 	return UsageError{Err: fmt.Errorf(format, args...)}
 }
 
-// Error returns the usage diagnostic text.
+// Error returns the usage diagnostic text, or an empty string for a zero-value
+// UsageError.
 func (e UsageError) Error() string {
 	if e.Err == nil {
 		return ""
@@ -114,14 +153,17 @@ func (e UsageError) Error() string {
 	return e.Err.Error()
 }
 
-// Unwrap returns the underlying usage diagnostic.
+// Unwrap returns the underlying usage diagnostic so callers can use errors.Is
+// and errors.As with wrapped usage failures.
 func (e UsageError) Unwrap() error { return e.Err }
 
 // ExitCode returns the process exit code for usage errors.
 func (e UsageError) ExitCode() int { return 2 }
 
 // ParseGlobalConfig parses shared position-independent global flags and returns
-// the non-global command words.
+// the non-global command words. It accepts --mode, -v/--verbose, --no-header,
+// -h/--help, and --version wherever they appear in argv, leaving command and
+// positional words in their original relative order.
 func ParseGlobalConfig(argv []string) (RuntimeConfig, []string, error) {
 	cfg := RuntimeConfig{Mode: ModeHuman}
 	var words []string
@@ -153,7 +195,8 @@ func ParseGlobalConfig(argv []string) (RuntimeConfig, []string, error) {
 	return cfg, words, nil
 }
 
-// ParseMode parses a shared console mode string.
+// ParseMode parses a shared console mode string case-insensitively and rejects
+// unknown values with UsageError.
 func ParseMode(mode string) (Mode, error) {
 	switch Mode(strings.ToLower(mode)) {
 	case ModeHuman:
@@ -167,7 +210,9 @@ func ParseMode(mode string) (Mode, error) {
 	}
 }
 
-// Usage returns the generated usage line for this command at path.
+// Usage returns the generated usage line for this command at path. Explicit Use
+// text wins; otherwise the root Config or the command's Args/Subcommands fill in
+// the command-specific suffix.
 func (c *CommandSpec) Usage(path []string) string {
 	program := c.program()
 	if c.Use != "" {
@@ -189,7 +234,8 @@ func (c *CommandSpec) Usage(path []string) string {
 }
 
 // Find returns the deepest node matching path, any unmatched remainder, and
-// whether the whole path matched.
+// whether the whole path matched. It is useful for help-topic routing where a
+// caller needs both the resolved command and the unresolved suffix.
 func (c *CommandSpec) Find(path []string) (*CommandSpec, []string, bool) {
 	if len(path) == 0 {
 		return c, nil, true
@@ -202,7 +248,8 @@ func (c *CommandSpec) Find(path []string) (*CommandSpec, []string, bool) {
 	return c, path, false
 }
 
-// Child returns the named direct subcommand.
+// Child returns the named direct subcommand without walking deeper into the
+// tree.
 func (c *CommandSpec) Child(name string) (*CommandSpec, bool) {
 	for _, child := range c.Subcommands {
 		if child.Name == name {
@@ -212,7 +259,10 @@ func (c *CommandSpec) Child(name string) (*CommandSpec, bool) {
 	return nil, false
 }
 
-// Dispatch invokes the deepest matching command handler.
+// Dispatch invokes the deepest matching command handler. It inherits root
+// Config into child nodes, rejects empty or unknown command paths with
+// UsageError, rejects undeclared flag-shaped arguments, and passes the remaining
+// arguments to the resolved Handler unchanged.
 func (c *CommandSpec) Dispatch(ctx context.Context, args []string) error {
 	c.InheritConfig()
 	if len(args) == 0 {
@@ -279,7 +329,8 @@ func (c *CommandSpec) match(path []string) (*CommandSpec, []string, []string) {
 	return node, matched, path
 }
 
-// RenderRootHelp writes generated root help.
+// RenderRootHelp writes generated root help from Config, global flags,
+// first-level command summaries, output-mode prose, and trailing guidance.
 func (c *CommandSpec) RenderRootHelp(w io.Writer) {
 	c.InheritConfig()
 	if c.Config.RootSummary != "" {
@@ -315,7 +366,8 @@ func (c *CommandSpec) RenderRootHelp(w io.Writer) {
 	}
 }
 
-// RenderTopicHelp writes help for the command path or root help when path is empty.
+// RenderTopicHelp writes help for the command path or root help when path is
+// empty. Unknown topics render a diagnostic followed by root help.
 func (c *CommandSpec) RenderTopicHelp(w io.Writer, path []string) {
 	c.InheritConfig()
 	node, remaining, ok := c.Find(path)
@@ -331,7 +383,8 @@ func (c *CommandSpec) RenderTopicHelp(w io.Writer, path []string) {
 	node.RenderCommandHelp(w, path)
 }
 
-// RenderCommandHelp writes command help for one command node.
+// RenderCommandHelp writes command help for one command node, including its
+// summary, usage, declared flags, and nested subcommands.
 func (c *CommandSpec) RenderCommandHelp(w io.Writer, path []string) {
 	title := strings.Join(path, " ")
 	fmt.Fprintf(w, "%s commands:\n", title)
@@ -356,7 +409,8 @@ func (c *CommandSpec) RenderCommandHelp(w io.Writer, path []string) {
 	RenderSubcommandHelp(w, path, c.Subcommands, 0)
 }
 
-// RenderSubcommandHelp writes a nested subcommand listing.
+// RenderSubcommandHelp writes a nested subcommand listing below parent. Rows
+// are sorted by command name at each level for stable generated help.
 func RenderSubcommandHelp(w io.Writer, parent []string, commands []*CommandSpec, depth int) {
 	ordered := append([]*CommandSpec{}, commands...)
 	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Name < ordered[j].Name })
@@ -374,7 +428,8 @@ func RenderSubcommandHelp(w io.Writer, parent []string, commands []*CommandSpec,
 	}
 }
 
-// PrintCommandRows writes aligned command summary rows.
+// PrintCommandRows writes aligned command summary rows in the order supplied by
+// the caller.
 func PrintCommandRows(w io.Writer, commands []*CommandSpec) {
 	width := 0
 	for _, cmd := range commands {
@@ -387,7 +442,8 @@ func PrintCommandRows(w io.Writer, commands []*CommandSpec) {
 	}
 }
 
-// PrintFlagRows writes flag help rows.
+// PrintFlagRows writes flag help rows using the package's shared two-line flag
+// layout.
 func PrintFlagRows(w io.Writer, flags []FlagSpec) {
 	for _, f := range flags {
 		value := ""
@@ -402,7 +458,8 @@ func PrintFlagRows(w io.Writer, flags []FlagSpec) {
 	}
 }
 
-// SubcommandAlternates returns a pipe-separated command-name list.
+// SubcommandAlternates returns a pipe-separated command-name list in command
+// tree order for generated usage strings.
 func SubcommandAlternates(commands []*CommandSpec) string {
 	names := make([]string, 0, len(commands))
 	for _, child := range commands {
@@ -411,7 +468,9 @@ func SubcommandAlternates(commands []*CommandSpec) string {
 	return strings.Join(names, "|")
 }
 
-// SimpleSpecs builds sorted leaf command specs from descriptions.
+// SimpleSpecs builds sorted leaf command specs from descriptions, using prefix
+// plus each map key as the Use text. It is a convenience for static topic lists
+// whose commands only need generated help.
 func SimpleSpecs(prefix string, descriptions map[string]string) []*CommandSpec {
 	keys := make([]string, 0, len(descriptions))
 	for name := range descriptions {
@@ -425,7 +484,8 @@ func SimpleSpecs(prefix string, descriptions map[string]string) []*CommandSpec {
 	return specs
 }
 
-// InheritConfig fills missing child Config values from the root configuration.
+// InheritConfig fills missing child Config values from the root configuration so
+// child usage and help render with the same program name and root shell.
 func (c *CommandSpec) InheritConfig() {
 	c.inheritConfig(c.Config)
 }
