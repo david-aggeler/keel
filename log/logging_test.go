@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"log/slog"
 	"os"
@@ -100,6 +103,50 @@ func TestNewConfigJSONCaptureHelper_ReturnsLoggerAndCapture(t *testing.T) {
 	}
 	if capture == nil {
 		t.Fatal("newJSONCaptureLogger returned nil capture")
+	}
+}
+
+// DHF-TEST: keel/requirement-30
+func TestConfigPerRunDocDescribesImplementedBehavior(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "logging.go", nil, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("parse logging.go: %v", err)
+	}
+
+	var comment string
+	ast.Inspect(file, func(node ast.Node) bool {
+		typeSpec, ok := node.(*ast.TypeSpec)
+		if !ok || typeSpec.Name.Name != "Config" {
+			return true
+		}
+		structType, ok := typeSpec.Type.(*ast.StructType)
+		if !ok {
+			return false
+		}
+		for _, field := range structType.Fields.List {
+			for _, name := range field.Names {
+				if name.Name == "PerRun" && field.Doc != nil {
+					comment = field.Doc.Text()
+					return false
+				}
+			}
+		}
+		return false
+	})
+
+	if comment == "" {
+		t.Fatal("Config.PerRun has no doc comment")
+	}
+	lower := strings.ToLower(comment)
+	for _, forbidden := range []string{"reserved", "until requirement-19"} {
+		if strings.Contains(lower, forbidden) {
+			t.Fatalf("Config.PerRun doc = %q; must describe implemented per-run JSONL behavior, not future-only behavior", comment)
+		}
+	}
+	for _, want := range []string{"per-invocation", "JSONLDir", "RunLogPath", "RunLogLine", "daily"} {
+		if !strings.Contains(comment, want) {
+			t.Fatalf("Config.PerRun doc = %q; want mention of %q", comment, want)
+		}
 	}
 }
 
