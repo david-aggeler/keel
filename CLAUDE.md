@@ -41,6 +41,21 @@ The loop, always:
 
 Small change? Still a CR. Docs-only? Still a CR (merge_gate: docs).
 
+## Worktrees
+
+Manage per-CR worktrees with the change-request skill's scripts in
+`.claude/skills/change-request/scripts/` — NOT raw `git worktree` or
+`git checkout -b` on the primary checkout (that is blocked). `openbrain-client`
+has no worktree verb.
+
+- `worktree-up.sh <kind> <seq> <slug>`     — new worktree on a fresh branch off main
+- `worktree-down.sh <kind> <seq> <slug>`   — pre-merge teardown; refuses dirty, keeps the branch
+- `worktree-resume.sh <kind> <seq> <slug>` — re-attach a worktree to an existing branch
+- `worktree-status.sh <kind> <seq> <slug>` — read-only existence check
+
+Manual/operator work only. The run-queue tail creates and owns its own
+`cr-<seq>` worktrees — never hand-create those.
+
 ## The gate
 
 - Run `go run ./cmd/keel-dev ci`. That is THE gate: gofmt, build, vet,
