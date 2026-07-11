@@ -9,6 +9,10 @@ Read `CLAUDE.md`. It is the rulebook. This file is the short version.
   path. CR approved BEFORE code; closed with the merge SHA only after
   checking the diff against every AC with written evidence. Defects get
   an issue first; the fix still runs under a CR. Never fix silently.
+- Manual worktrees via `.claude/skills/change-request/scripts/worktree-up.sh`
+  / `worktree-down.sh` (not raw `git worktree`/`git checkout -b`;
+  openbrain-client has no worktree verb). The run-queue tail owns its own
+  `cr-<seq>` worktrees.
 - The gate is `go run ./cmd/keel-dev ci`. Same command in CI and release
   preflight. Don't invent other gates.
 - All keel-dev output through keel/log, three sinks (console + `.logs/`
