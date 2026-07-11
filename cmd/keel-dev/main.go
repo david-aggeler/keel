@@ -79,6 +79,8 @@ func run(argv []string) int {
 	if cfg.Verbose {
 		level = slog.LevelDebug
 	}
+	// DHF-REQ: keel/requirement-38 — vscode verbs keep stdout pure protocol:
+	// the console sink routes to stderr while both file sinks stay on.
 	consoleWriter := io.Writer(os.Stdout)
 	if len(words) > 0 && words[0] == "vscode" {
 		consoleWriter = os.Stderr
@@ -109,6 +111,10 @@ func printUsage(tree *cli.CommandSpec) {
 	tree.RenderRootHelp(os.Stderr)
 }
 
+// newProtocolStream is the single allowlisted VS Code protocol JSONL writer —
+// the only non-logger os.Stdout reference the no-raw-stdout-stream lint admits.
+//
+// DHF-REQ: keel/requirement-38
 func newProtocolStream() io.Writer {
 	return os.Stdout
 }
