@@ -1288,6 +1288,21 @@ func TestConsoleAndJSON_RedactAttributeValuesIdentically(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-2
+func TestSyntheticAdapterUsesGenericProgressDetailConsoleHook(t *testing.T) {
+	logger, capture := newConsoleCaptureLogger(t, "builder-adapter")
+
+	logger.Info("builder progress", "detail", "indexed files", "event_type", "scan")
+
+	raw := capture.LastRaw()
+	if !strings.Contains(raw, "builder detail: indexed files") {
+		t.Fatalf("synthetic adapter progress was not rendered as detail: %q", raw)
+	}
+	if strings.Contains(raw, "event_type=") || strings.Contains(raw, "detail=") {
+		t.Fatalf("generic progress attrs leaked into console output: %q", raw)
+	}
+}
+
 // DHF-TEST: openbrain/requirement-104
 func TestAllHandlers_RedactSensitiveTokenAttributes(t *testing.T) {
 	tests := []struct {

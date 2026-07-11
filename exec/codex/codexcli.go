@@ -230,6 +230,16 @@ func (w *eventStreamWriter) consumeLine(line []byte) {
 	if ev.Type == "thread.started" && w.res.ThreadID == "" {
 		w.res.ThreadID = decodeThreadID(line)
 	}
+	if ev.Type != "result" {
+		w.logProgress(ev, line)
+	}
+	if w.onEvent != nil {
+		w.onEvent(ev)
+	}
+	w.res.Events = append(w.res.Events, ev)
+}
+
+func (w *eventStreamWriter) logProgress(ev Event, line []byte) {
 	if detail := codexProgressDetail(line); detail != "" {
 		log := w.logger
 		if log == nil {
@@ -240,10 +250,6 @@ func (w *eventStreamWriter) consumeLine(line []byte) {
 			"detail", detail,
 		)
 	}
-	if w.onEvent != nil {
-		w.onEvent(ev)
-	}
-	w.res.Events = append(w.res.Events, ev)
 }
 
 // DHF-REQ: keel/requirement-2
@@ -257,8 +263,8 @@ func codexProgressDetail(line []byte) string {
 			continue
 		}
 		for _, key := range []string{"text", "summary", "result"} {
-			if s := stringValue(src[key]); s != "" {
-				return trimProgressDetail(s)
+			if s := trimProgressDetail(stringValue(src[key])); s != "" {
+				return s
 			}
 		}
 	}
