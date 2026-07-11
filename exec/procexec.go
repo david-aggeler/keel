@@ -78,6 +78,7 @@ type Process struct {
 	stderr  *captureWriter
 	logger  processLogger
 	waitErr error
+	result  Result
 	waitCh  chan error
 	once    sync.Once
 }
@@ -151,7 +152,9 @@ func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 	return p, nil
 }
 
-// Wait blocks until the process exits and returns its captured result.
+// Wait blocks until the process exits and returns its captured result. It may
+// be called more than once; the process is reaped, captured result assembled,
+// and "process end" lifecycle record emitted only on the first call.
 func (p *Process) Wait() (Result, error) {
 	if p == nil {
 		return Result{ExitCode: -1}, errors.New("keel/exec: nil process")
@@ -163,20 +166,21 @@ func (p *Process) Wait() (Result, error) {
 		// writers; emit any trailing unterminated line before building Result.
 		p.stdout.flush()
 		p.stderr.flush()
+
+		p.result = Result{
+			ExitCode: p.cmd.ProcessState.ExitCode(),
+			Duration: time.Since(p.started),
+			Stdout:   p.stdout.String(),
+			Stderr:   p.stderr.String(),
+		}
+		p.logger.Info("process end",
+			"event_type", "process_end",
+			"exit_code", p.result.ExitCode,
+			"elapsed_ms", p.result.Duration.Milliseconds(),
+		)
 	})
 
-	result := Result{
-		ExitCode: p.cmd.ProcessState.ExitCode(),
-		Duration: time.Since(p.started),
-		Stdout:   p.stdout.String(),
-		Stderr:   p.stderr.String(),
-	}
-	p.logger.Info("process end",
-		"event_type", "process_end",
-		"exit_code", result.ExitCode,
-		"elapsed_ms", result.Duration.Milliseconds(),
-	)
-	return result, p.waitErr
+	return p.result, p.waitErr
 }
 
 type captureWriter struct {

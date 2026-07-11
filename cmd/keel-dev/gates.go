@@ -35,8 +35,8 @@ type step struct {
 	// advisory marks a step whose output is surfaced through keel/log but whose
 	// failure (non-zero exit) never fails the gate (keel/ac-41: deadcode).
 	advisory bool
-	// quietStderr downgrades child stderr output records from Error to Info for
-	// noisy tools whose progress stream is not itself a failure signal.
+	// quietStderr reclassifies only known-benign child stderr progress records
+	// for noisy tools whose progress stream is not itself a failure signal.
 	quietStderr bool
 }
 
@@ -231,7 +231,7 @@ func runStep(ctx context.Context, logger *slog.Logger, dir string, s step) error
 		Logger:  logger,
 	}
 	if s.quietStderr {
-		req.Logger = quietStderrLogger{Logger: logger}
+		req.Logger = quietStderrLogger{Logger: logger, step: s.name}
 	}
 	// Child output travels through keel/log, never as a raw terminal stream
 	// (keel/ac-35, keel/issue-2): line-wise records for live progress, except
@@ -284,19 +284,31 @@ func runStep(ctx context.Context, logger *slog.Logger, dir string, s step) error
 
 type quietStderrLogger struct {
 	*slog.Logger
+	step string
 }
 
-// DHF-REQ: keel/requirement-25
+// DHF-REQ: keel/requirement-17, keel/requirement-24, keel/requirement-25
 func (l quietStderrLogger) Error(msg string, args ...any) {
-	if isStderrProcessOutput(args) {
-		l.Info(msg, args...)
+	fields := stderrProcessOutputFields(args)
+	if fields.step == "" {
+		fields.step = l.step
+	}
+	if fields.processOutput && fields.stderr && isKnownBenignStderr(fields.step, fields.data) {
+		l.Debug(msg, args...)
 		return
 	}
 	l.Logger.Error(msg, args...)
 }
 
-func isStderrProcessOutput(args []any) bool {
-	var processOutput, stderr bool
+type processOutputFields struct {
+	processOutput bool
+	stderr        bool
+	step          string
+	data          string
+}
+
+func stderrProcessOutputFields(args []any) processOutputFields {
+	var fields processOutputFields
 	for i := 0; i+1 < len(args); i += 2 {
 		key, ok := args[i].(string)
 		if !ok {
@@ -304,12 +316,55 @@ func isStderrProcessOutput(args []any) bool {
 		}
 		switch key {
 		case "event_type":
-			processOutput = args[i+1] == "process_output"
+			fields.processOutput = args[i+1] == "process_output"
 		case "stream":
-			stderr = args[i+1] == "stderr"
+			fields.stderr = args[i+1] == "stderr"
+		case "step":
+			fields.step, _ = args[i+1].(string)
+		case "data":
+			fields.data, _ = args[i+1].(string)
 		}
 	}
-	return processOutput && stderr
+	return fields
+}
+
+// isKnownBenignStderr is deliberately caller-level and narrow: keel/exec keeps
+// stderr at Error, while keel-dev can reinterpret tool progress it understands.
+func isKnownBenignStderr(step, line string) bool {
+	line = strings.TrimSpace(stripANSI(line))
+	switch step {
+	case "cspell":
+		return strings.HasPrefix(line, "CSpell: Files checked:") &&
+			strings.Contains(line, "Issues found: 0 in 0 files.")
+	case "gitleaks":
+		return strings.HasPrefix(line, "INF ") ||
+			strings.Contains(line, " INF ")
+	case "govulncheck":
+		return strings.HasPrefix(line, "Scanning ") ||
+			strings.HasPrefix(line, "Fetching ") ||
+			strings.HasPrefix(line, "No vulnerabilities found")
+	default:
+		return false
+	}
+}
+
+func stripANSI(line string) string {
+	var b strings.Builder
+	for i := 0; i < len(line); i++ {
+		if line[i] != 0x1b || i+1 >= len(line) || line[i+1] != '[' {
+			b.WriteByte(line[i])
+			continue
+		}
+		i += 2
+		for i < len(line) {
+			c := line[i]
+			if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') {
+				break
+			}
+			i++
+		}
+	}
+	return b.String()
 }
 
 // runLogCoreDependencyQuarantine proves that consumers building only keel/log do
