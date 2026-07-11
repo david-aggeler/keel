@@ -257,6 +257,49 @@ func TestNewConfigFansOutToAdditionalHandlers(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-16, keel/requirement-22
+func TestNewConfigRedactsBeforeAdditionalHandlerFanout(t *testing.T) {
+	var console bytes.Buffer
+	extra := newCaptureHandler()
+
+	logger := mustNewLogger(t, logging.Config{
+		Service:  "svc",
+		Console:  logging.ConsoleJSON,
+		Writer:   &console,
+		Handlers: []slog.Handler{extra},
+	})
+
+	secret := "Bearer injected-handler-token"
+	logger.Info("login failed "+secret, "token", secret, "detail", "dsn postgres://user:password@db/app")
+
+	if len(extra.state.records) != 1 {
+		t.Fatalf("extra handler records = %d, want 1", len(extra.state.records))
+	}
+	record := extra.state.records[0]
+	renderedAttrs := make(map[string]string)
+	record.Attrs(func(a slog.Attr) bool {
+		renderedAttrs[a.Key] = a.Value.Resolve().String()
+		return true
+	})
+	for name, got := range map[string]string{
+		"message": record.Message,
+		"token":   renderedAttrs["token"],
+		"detail":  renderedAttrs["detail"],
+	} {
+		if strings.Contains(got, "injected-handler-token") || strings.Contains(got, "password") {
+			t.Fatalf("extra handler %s leaked secret: %q", name, got)
+		}
+	}
+	for name, got := range map[string]string{
+		"message": record.Message,
+		"token":   renderedAttrs["token"],
+	} {
+		if !strings.Contains(got, "[REDACTED]") {
+			t.Fatalf("extra handler %s = %q, want bearer redaction marker", name, got)
+		}
+	}
+}
+
 // DHF-TEST: keel/requirement-19
 func TestNewConfigPerRunJSONLSinkUsesInvocationFileAndTracksLines(t *testing.T) {
 	jsonlDir := t.TempDir()
