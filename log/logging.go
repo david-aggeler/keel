@@ -36,6 +36,8 @@ const (
 // value is usable: Service is blank, the level defaults to Info, and output
 // goes to os.Stdout with the sparse-AI console and no file sinks. All fields are
 // optional.
+//
+// DHF-REQ: keel/requirement-30
 type Config struct {
 	// Service is the value stamped into the "service" field of every record.
 	Service string
@@ -50,8 +52,9 @@ type Config struct {
 	TextDir string
 	// JSONLDir, when non-empty, opens a daily JSON Lines .jsonl file sink.
 	JSONLDir string
-	// PerRun is reserved for per-run file naming. Daily files remain the current
-	// behavior until requirement-19 changes the file sink internals.
+	// PerRun, when true, makes JSONLDir use a per-invocation JSON Lines file
+	// whose path and line counter back RunLogPath and RunLogLine. When false,
+	// JSONLDir uses the daily rolling JSONL file.
 	PerRun bool
 	// SourceInFiles keeps automatic caller source enabled for text file sinks.
 	SourceInFiles bool
