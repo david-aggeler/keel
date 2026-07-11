@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -121,7 +122,7 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 	defer devNull.Close()
 
 	res := &Result{}
-	stdout := &eventStreamWriter{res: res, onEvent: req.OnEvent}
+	stdout := &eventStreamWriter{res: res, onEvent: req.OnEvent, logger: req.Logger}
 
 	proc, err := procexec.ProcessStart(ctx, procexec.Request{
 		Program: bin,
@@ -181,6 +182,7 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 type eventStreamWriter struct {
 	res     *Result
 	onEvent func(Event)
+	logger  processLogger
 	buf     []byte
 	err     error
 }
@@ -228,10 +230,59 @@ func (w *eventStreamWriter) consumeLine(line []byte) {
 	if ev.Type == "thread.started" && w.res.ThreadID == "" {
 		w.res.ThreadID = decodeThreadID(line)
 	}
+	if ev.Type != "result" {
+		w.logProgress(ev, line)
+	}
 	if w.onEvent != nil {
 		w.onEvent(ev)
 	}
 	w.res.Events = append(w.res.Events, ev)
+}
+
+func (w *eventStreamWriter) logProgress(ev Event, line []byte) {
+	if detail := codexProgressDetail(line); detail != "" {
+		log := w.logger
+		if log == nil {
+			log = slog.Default()
+		}
+		log.Info("codex progress",
+			"event_type", ev.Type,
+			"detail", detail,
+		)
+	}
+}
+
+// DHF-REQ: keel/requirement-2
+func codexProgressDetail(line []byte) string {
+	var ev map[string]any
+	if err := json.Unmarshal(line, &ev); err != nil {
+		return ""
+	}
+	for _, src := range []map[string]any{progressObj(ev["item"]), progressObj(ev["payload"]), progressObj(ev["msg"]), ev} {
+		if src == nil {
+			continue
+		}
+		for _, key := range []string{"text", "summary", "result"} {
+			if s := trimProgressDetail(stringValue(src[key])); s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+func progressObj(v any) map[string]any {
+	m, _ := v.(map[string]any)
+	return m
+}
+
+func stringValue(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
+func trimProgressDetail(s string) string {
+	return strings.TrimSpace(strings.Join(strings.Fields(s), " "))
 }
 
 // itemEnvelopeTypes are the codex `exec --json` thread/item wrappers whose

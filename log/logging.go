@@ -798,7 +798,8 @@ func (h *consoleHandler) omits(key string) bool {
 
 func (h *consoleHandler) consoleMessage(msg string, boundAttrs []slog.Attr, recordAttrs []slog.Attr) (string, map[string]bool) {
 	skip := map[string]bool{}
-	if msg != "codex progress" {
+	progressName, ok := strings.CutSuffix(msg, " progress")
+	if !ok || strings.TrimSpace(progressName) == "" {
 		return msg, skip
 	}
 	detail := ""
@@ -833,9 +834,9 @@ func (h *consoleHandler) consoleMessage(msg string, boundAttrs []slog.Attr, reco
 		}
 	}
 	if strings.TrimSpace(detail) == "" {
-		return "codex progress", skip
+		return msg, skip
 	}
-	return "codex detail: " + detail, skip
+	return progressName + " detail: " + detail, skip
 }
 
 func omitKeySet(keys []string) map[string]struct{} {
