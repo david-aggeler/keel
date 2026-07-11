@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// DHF-TEST: keel/requirement-23
+// DHF-TEST: keel/requirement-23, keel/requirement-34
 func TestEventStamperValidEventAndInvalidValues(t *testing.T) {
 	now := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
 	stamper := EventStamper{
@@ -30,8 +30,8 @@ func TestEventStamperValidEventAndInvalidValues(t *testing.T) {
 			t.Fatalf("invalid event was not demoted to output: in=%+v out=%+v", tc, stamped)
 		}
 	}
-	if stamped := (EventStamper{Now: func() time.Time { return now }, Source: "bad-source"}).Stamp(RunEvent{Event: "passed"}); stamped.Event != "output" {
-		t.Fatalf("invalid configured source was not demoted to output: %+v", stamped)
+	if stamped := (EventStamper{Now: func() time.Time { return now }, Source: "bad-source"}).Stamp(RunEvent{Event: "passed"}); stamped.Event != "output" || stamped.Source != "vscode" {
+		t.Fatalf("invalid configured source was not demoted to schema-valid output: %+v", stamped)
 	}
 }
 
