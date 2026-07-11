@@ -146,11 +146,11 @@ func ensureTagAbsent(ctx context.Context, logger *slog.Logger, dir, version stri
 
 // verifyAnonymousFetch confirms `go get <module>@<version>` resolves through the
 // default toolchain from a clean module cache with no private-access config: it
-// builds a throwaway module in a temp dir, points GOMODCACHE at a fresh empty
-// directory, and scrubs GOPRIVATE/GOINSECURE/GONOSUMCHECK/GONOSUMDB and any
-// netrc so only anonymous public resolution can succeed.
+// builds a throwaway module in a temp dir, points GOMODCACHE and HOME at fresh
+// empty directories, disables GOAUTH/netrc, and scrubs private module settings
+// so only anonymous public resolution can succeed.
 //
-// DHF-REQ: keel/requirement-9
+// DHF-REQ: keel/requirement-8, keel/requirement-9
 func verifyAnonymousFetch(ctx context.Context, logger *slog.Logger, version string) error {
 	tmp, err := os.MkdirTemp("", "keel-verify-")
 	if err != nil {
@@ -160,7 +160,11 @@ func verifyAnonymousFetch(ctx context.Context, logger *slog.Logger, version stri
 
 	work := filepath.Join(tmp, "mod")
 	cache := filepath.Join(tmp, "cache")
+	home := filepath.Join(tmp, "home")
 	if err := os.MkdirAll(work, 0o755); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(home, 0o755); err != nil {
 		return err
 	}
 	gomod := "module keelverify\n\ngo 1.25\n"
@@ -172,6 +176,9 @@ func verifyAnonymousFetch(ctx context.Context, logger *slog.Logger, version stri
 	// but forbid every private-access escape hatch and isolate the module cache.
 	env := append(os.Environ(),
 		"GOMODCACHE="+cache,
+		"HOME="+home,
+		"NETRC=/dev/null",
+		"GOAUTH=off",
 		"GOFLAGS=",
 		"GOPRIVATE=",
 		"GONOSUMCHECK=",

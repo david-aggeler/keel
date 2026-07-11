@@ -180,6 +180,47 @@ func TestRunVerifySucceeds(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-8, keel/requirement-9
+func TestRunVerifyScrubsAmbientCredentialSources(t *testing.T) {
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", `
+printf 'NETRC=%s\n' "$NETRC" >> `+callsFile+`
+printf 'HOME=%s\n' "$HOME" >> `+callsFile+`
+printf 'GOAUTH=%s\n' "$GOAUTH" >> `+callsFile+`
+printf 'GOPRIVATE=%s\n' "$GOPRIVATE" >> `+callsFile+`
+exit 0`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("NETRC", filepath.Join(t.TempDir(), ".netrc"))
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("GOAUTH", "netrc")
+	t.Setenv("GOPRIVATE", "github.com/david-aggeler/*")
+
+	if err := runVerify(context.Background(), discardLogger(), "v9.9.9"); err != nil {
+		t.Fatalf("verify failed: %v", err)
+	}
+
+	got := calls(t, callsFile)
+	for _, want := range []string{
+		"NETRC=/dev/null",
+		"GOAUTH=off",
+		"GOPRIVATE=",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("anonymous fetch did not scrub %q; calls:\n%s", want, got)
+		}
+	}
+	for _, forbidden := range []string{
+		"HOME=" + os.Getenv("HOME"),
+		"GOAUTH=netrc",
+		"GOPRIVATE=github.com/david-aggeler/*",
+	} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("anonymous fetch leaked ambient credential source %q; calls:\n%s", forbidden, got)
+		}
+	}
+}
+
 // TestRunVerifyRetriesThenFails exercises the retry loop with a failing go stub
 // and short delays.
 func TestRunVerifyRetriesThenFails(t *testing.T) {
