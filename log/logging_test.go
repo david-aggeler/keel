@@ -258,7 +258,7 @@ func TestNewConfigFansOutToAdditionalHandlers(t *testing.T) {
 }
 
 // DHF-TEST: keel/requirement-16, keel/requirement-22
-func TestNewConfigRedactsBeforeAdditionalHandlerFanout(t *testing.T) {
+func TestNewConfigRedactsBeforeAdditionalHandlerFanOut(t *testing.T) {
 	var console bytes.Buffer
 	extra := newCaptureHandler()
 
