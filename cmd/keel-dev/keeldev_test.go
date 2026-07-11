@@ -20,12 +20,16 @@ func discardLogger() *slog.Logger {
 
 func testLogger(service string) (*slog.Logger, *logging.RecordCapture) {
 	cap := &logging.RecordCapture{}
-	return logging.New(logging.Config{
+	logger, err := logging.New(logging.Config{
 		Service: service,
 		Level:   slog.LevelDebug,
 		Console: logging.ConsoleJSON,
 		Writer:  cap,
-	}).Slog(), cap
+	})
+	if err != nil {
+		panic(err)
+	}
+	return logger.Slog(), cap
 }
 
 // requireTool skips the test when a required external binary is absent, keeping
@@ -117,19 +121,22 @@ func TestRunCIFailureCarriesStructuredOperationalError(t *testing.T) {
 	writeFile(t, dir, "bad.go", "package p\n\nvar    Y = 2\n")
 
 	logDir := t.TempDir()
-	logger := logging.New(logging.Config{
+	logger, err := logging.New(logging.Config{
 		Service:  "keel-dev",
 		Console:  logging.ConsoleNone,
 		JSONLDir: logDir,
 		PerRun:   true,
 	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	t.Cleanup(func() {
 		if err := logger.Close(); err != nil {
 			t.Fatalf("Close returned error: %v", err)
 		}
 	})
 
-	err := runCIWithRunLog(context.Background(), logger.Slog(), logger, dir)
+	err = runCIWithRunLog(context.Background(), logger.Slog(), logger, dir)
 	if err == nil {
 		t.Fatal("unformatted module should fail ci, got nil")
 	}
@@ -210,7 +217,11 @@ func TestConsoleSuppressesServiceAttr(t *testing.T) {
 	rc := &logging.RecordCapture{}
 	cfg.Writer = rc
 	cfg.Console = logging.ConsolePlain
-	logging.New(cfg).Info("hello", "k", "v")
+	logger, err := logging.New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	logger.Info("hello", "k", "v")
 	if out := rc.LastRaw(); strings.Contains(out, "service=") {
 		t.Errorf("console line should omit service attr: %q", out)
 	} else if !strings.Contains(out, "k=v") {
@@ -220,7 +231,11 @@ func TestConsoleSuppressesServiceAttr(t *testing.T) {
 	rcJSON := &logging.RecordCapture{}
 	cfg.Writer = rcJSON
 	cfg.Console = logging.ConsoleJSON
-	logging.New(cfg).Info("hello")
+	logger, err = logging.New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	logger.Info("hello")
 	if rec := rcJSON.LastJSON(); rec["service"] != "keel-dev" {
 		t.Errorf("JSON mode must keep the service field, got %v", rec)
 	}

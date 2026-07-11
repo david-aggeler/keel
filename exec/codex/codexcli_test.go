@@ -238,12 +238,15 @@ func TestRun_UsesSharedProcessLifecycleLogging(t *testing.T) {
 	stub := writeStreamStub(t, argvFile, stdinLenFile, realExecJSONLines, 0)
 
 	var logBuf bytes.Buffer
-	logger := logging.New(logging.Config{
+	logger, err := logging.New(logging.Config{
 		Service: "codexcli-test",
 		Level:   slog.LevelDebug,
 		Console: logging.ConsoleJSON,
 		Writer:  &logBuf,
 	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	var gotTypes []string
 	res, err := Run(context.Background(), Request{
 		Prompt: "inspect repository",

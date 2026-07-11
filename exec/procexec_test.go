@@ -13,6 +13,15 @@ import (
 	logging "github.com/david-aggeler/keel/log"
 )
 
+func mustLogger(t *testing.T, cfg logging.Config) *logging.Logger {
+	t.Helper()
+	logger, err := logging.New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return logger
+}
+
 // DHF-TEST: openbrain/requirement-565
 func TestProcessStartPlainCommandStreamsCapturesAndReturnsExitCode(t *testing.T) {
 	var streamedOut bytes.Buffer
@@ -55,7 +64,7 @@ func TestProcessStartPlainCommandStreamsCapturesAndReturnsExitCode(t *testing.T)
 // DHF-TEST: keel/requirement-1, keel/requirement-20, openbrain/requirement-602
 func TestProcessStartLogsStructuredLifecycleAndRedactsSensitiveArgs(t *testing.T) {
 	var logBuf bytes.Buffer
-	logger := logging.New(logging.Config{
+	logger := mustLogger(t, logging.Config{
 		Service: "procexec-test",
 		Level:   slog.LevelDebug,
 		Console: logging.ConsoleJSON,
@@ -153,7 +162,7 @@ func TestRequestLoggerContractIncludesErrorForStderrRouting(t *testing.T) {
 // DHF-TEST: keel/requirement-1
 func TestProcessStartHumanLifecycleShowsFullCommandWithoutEllipsis(t *testing.T) {
 	var logBuf bytes.Buffer
-	logger := logging.New(logging.Config{Console: logging.ConsolePlain, Service: "procexec-test", Writer: &logBuf, DisableColor: true})
+	logger := mustLogger(t, logging.Config{Console: logging.ConsolePlain, Service: "procexec-test", Writer: &logBuf, DisableColor: true})
 	longArg := strings.Repeat("visible-human-argument-", 12)
 
 	proc, err := procexec.ProcessStart(context.Background(), procexec.Request{
@@ -183,7 +192,7 @@ func TestProcessStartHumanLifecycleShowsFullCommandWithoutEllipsis(t *testing.T)
 // DHF-TEST: keel/requirement-24
 func TestProcessStartLogsChildOutputAsCleanPerLineRecords(t *testing.T) {
 	var logBuf bytes.Buffer
-	logger := logging.New(logging.Config{
+	logger := mustLogger(t, logging.Config{
 		Service: "procexec-test",
 		Level:   slog.LevelDebug,
 		Console: logging.ConsoleJSON,

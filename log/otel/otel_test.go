@@ -56,11 +56,14 @@ func TestHandlerExportsResourceAndActiveSpanCorrelation(t *testing.T) {
 	spanCtx, span := tracerProvider.Tracer("keel/log/otel-test").Start(ctx, "operation")
 	defer span.End()
 
-	logger := logging.New(logging.Config{
+	logger, err := logging.New(logging.Config{
 		Service:  "svc",
 		Console:  logging.ConsoleNone,
 		Handlers: []slog.Handler{handler},
 	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	logger.InfoContext(spanCtx, "sent", "answer", 42)
 
 	if err := shutdown(context.Background()); err != nil {
