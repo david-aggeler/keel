@@ -62,5 +62,5 @@ func (w *lineLogWriter) emit(line string) {
 		w.logger.Debug(line, "stream", w.stream, "step", w.step, "event_type", "process_output")
 		return
 	}
-	w.logger.Info(line, "stream", w.stream, "step", w.step, "event_type", "process_output")
+	w.logger.Error(line, "stream", w.stream, "step", w.step, "event_type", "process_output")
 }

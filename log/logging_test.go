@@ -819,6 +819,30 @@ func TestSourceInFilesDefaultsOffAndCanBeEnabled(t *testing.T) {
 	if got := string(sourceData); !strings.Contains(got, "logging_test.go") {
 		t.Fatalf("SourceInFiles=true missing caller source: %q", got)
 	}
+
+	jsonlDir := t.TempDir()
+	jsonlLogger := mustNewLogger(t, logging.Config{
+		Service:       "svc",
+		Console:       logging.ConsoleNone,
+		JSONLDir:      jsonlDir,
+		SourceInFiles: true,
+	})
+	jsonlLogger.Info("json source enabled")
+	if err := jsonlLogger.Close(); err != nil {
+		t.Fatalf("close jsonl logger: %v", err)
+	}
+	jsonlData, err := os.ReadFile(logging.JSONLogPath(jsonlDir, "svc"))
+	if err != nil {
+		t.Fatalf("read source JSONL file sink: %v", err)
+	}
+	var record map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(jsonlData), &record); err != nil {
+		t.Fatalf("parse source JSONL file sink: %v; body=%q", err, string(jsonlData))
+	}
+	source, ok := record["source"].(string)
+	if !ok || !strings.Contains(source, "logging_test.go") {
+		t.Fatalf("SourceInFiles=true JSONL source = %#v, want caller file; record=%#v", record["source"], record)
+	}
 }
 
 // DHF-TEST: openbrain/requirement-602

@@ -175,10 +175,10 @@ func TestRunStepNonAdvisory_FailsOnNonZero(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-25
-func TestRunStepQuietStderrDowngradesBenignToolProgress(t *testing.T) {
+// DHF-TEST: keel/requirement-17, keel/requirement-24, keel/requirement-25
+func TestRunStepQuietStderrReclassifiesKnownBenignToolProgress(t *testing.T) {
 	dir := t.TempDir()
-	script := "#!/bin/sh\nprintf '%s\\n' 'benign progress' >&2\n"
+	script := "#!/bin/sh\nprintf '%s\\n' 'CSpell: Files checked: 55, Issues found: 0 in 0 files.' >&2\n"
 	tool := filepath.Join(dir, "quiet-tool")
 	if err := os.WriteFile(tool, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -186,24 +186,24 @@ func TestRunStepQuietStderrDowngradesBenignToolProgress(t *testing.T) {
 
 	logger, cap := testLogger("keel-dev")
 	if err := runStep(context.Background(), logger, ".", step{
-		name: "quiet-tool", program: tool, quietStderr: true,
+		name: "cspell", program: tool, quietStderr: true,
 	}); err != nil {
 		t.Fatalf("quiet stderr step should pass, got %v", err)
 	}
 
-	var sawDowngraded bool
+	var sawReclassified bool
 	for _, rec := range cap.AllJSON() {
-		if rec["event_type"] == "process_output" && rec["stream"] == "stderr" && rec["data"] == "benign progress" {
+		if rec["event_type"] == "process_output" && rec["stream"] == "stderr" && rec["data"] == "CSpell: Files checked: 55, Issues found: 0 in 0 files." {
 			if rec["level"] == "ERROR" {
 				t.Fatalf("quiet stderr progress surfaced at ERROR: %#v", rec)
 			}
-			if rec["level"] == "INFO" {
-				sawDowngraded = true
+			if rec["level"] == "DEBUG" {
+				sawReclassified = true
 			}
 		}
 	}
-	if !sawDowngraded {
-		t.Fatalf("did not find downgraded stderr progress record; records=%#v", cap.AllJSON())
+	if !sawReclassified {
+		t.Fatalf("did not find reclassified stderr progress record; records=%#v", cap.AllJSON())
 	}
 }
 
