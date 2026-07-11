@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -204,6 +207,60 @@ func TestRunStepQuietStderrDowngradesBenignToolProgress(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-12, keel/requirement-8
+func TestStaticDetectionSelfTestsDoNotSkip(t *testing.T) {
+	src, err := parser.ParseFile(token.NewFileSet(), "tools_test.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"TestCspellStep_FailsOnMisspelling", "TestGitleaksStep_DetectsSecret"} {
+		fn := testFunc(src, name)
+		if fn == nil {
+			t.Fatalf("%s not found", name)
+		}
+		if callsHelper(fn, "require"+"Tool") {
+			t.Fatalf("%s must be non-skippable; do not call requireTool", name)
+		}
+		if callsMethod(fn, "Skip") || callsMethod(fn, "Skipf") || callsMethod(fn, "SkipNow") {
+			t.Fatalf("%s must be non-skippable; do not call t.Skip", name)
+		}
+	}
+}
+
+func testFunc(file *ast.File, name string) *ast.FuncDecl {
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if ok && fn.Name.Name == name {
+			return fn
+		}
+	}
+	return nil
+}
+
+func callsHelper(fn *ast.FuncDecl, name string) bool {
+	var found bool
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if ident, ok := n.(*ast.Ident); ok && ident.Name == name {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+func callsMethod(fn *ast.FuncDecl, name string) bool {
+	var found bool
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == name {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
 // TestCspellStep_FailsOnMisspelling is the anti-vacuous-pass guard: with the
 // repo's committed cspell.json, a file containing a word that is in no
 // dictionary MUST fail the cspell step. This proves the spell-check step
@@ -211,8 +268,6 @@ func TestRunStepQuietStderrDowngradesBenignToolProgress(t *testing.T) {
 // fail. The misspelled token is assembled at runtime so the committed test
 // source carries no unknown word for the real gate's cspell run to flag.
 func TestCspellStep_FailsOnMisspelling(t *testing.T) {
-	requireTool(t, "cspell")
-
 	root, err := findModuleRoot(".")
 	if err != nil {
 		t.Fatalf("findModuleRoot: %v", err)
@@ -259,8 +314,6 @@ func TestCspellStep_FailsOnMisspelling(t *testing.T) {
 // with --no-git so gitleaks scans the temp dir as plain files (no repo needed);
 // exit code 1 on a finding is what fails the gate.
 func TestGitleaksStep_DetectsSecret(t *testing.T) {
-	requireTool(t, "gitleaks")
-
 	dir := t.TempDir()
 	// An inert AWS-shaped key pair that gitleaks' default ruleset flags.
 	// Deliberately NOT the canonical AWS documented example key: recent gitleaks
