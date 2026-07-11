@@ -22,9 +22,10 @@ import (
 //   - no-stdlib-log: the stdlib "log" package must not be imported anywhere in
 //     the module (log/slog is fine) — diagnostics flow through keel/log.
 //
-//   - no-raw-fmt-output: cmd/keel-dev must not print run output via
-//     fmt.Print*/Fprint* (ac-29: no raw fmt fallback); the static usage text in
-//     main.go is the single allowlisted exception.
+//   - no-raw-fmt-output: cmd/keel-dev plus the library surface (log, exec)
+//     must not print run output via fmt.Print*/Fprint* (ac-29, ac-54: no raw
+//     fmt fallback); the static usage text in main.go is the single
+//     allowlisted exception.
 //
 //   - no-raw-stdout-stream: cmd/keel-dev must not reference os.Stdout/os.Stderr
 //     outside logger construction and the usage-text printer (keel/ac-36) —
@@ -46,7 +47,7 @@ func runLint(dir string) error {
 	}
 	violations = append(violations, v...)
 
-	v, err = scanNoRawFmtOutput(filepath.Join(dir, "cmd", "keel-dev"))
+	v, err = scanNoRawFmtOutput(dir)
 	if err != nil {
 		return err
 	}
@@ -95,41 +96,49 @@ var rawFmtFuncs = map[string]bool{
 	"Fprint": true, "Fprintln": true, "Fprintf": true,
 }
 
-// scanNoRawFmtOutput reports fmt print calls in keel-dev outside the usage-text
-// allowlist (printUsage in main.go, which emits static help, not run output).
-// A tree without cmd/keel-dev (e.g. lint fixtures in tests) has nothing to scan.
-func scanNoRawFmtOutput(dir string) ([]string, error) {
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return nil, nil
-	}
+var rawFmtDirs = []string{filepath.Join("cmd", "keel-dev"), "log", "exec"}
+
+// scanNoRawFmtOutput reports fmt print calls in keel-dev and library packages
+// outside the usage-text allowlist (printUsage in main.go, which emits static
+// help, not run output). Missing roots are ignored for small lint fixtures.
+func scanNoRawFmtOutput(root string) ([]string, error) {
 	var violations []string
-	err := walkGoFiles(dir, func(path string, file *ast.File, fset *token.FileSet) {
-		ast.Inspect(file, func(n ast.Node) bool {
-			// Allowlist: the printUsage function and the unknown-flag refusal in
-			// run() are static help/diagnostic text, not run output.
-			if fn, ok := n.(*ast.FuncDecl); ok && filepath.Base(path) == "main.go" &&
-				(fn.Name.Name == "printUsage" || fn.Name.Name == "run") {
-				return false
-			}
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
+	for _, sub := range rawFmtDirs {
+		dir := filepath.Join(root, sub)
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			continue
+		}
+		err := walkGoFiles(dir, func(path string, file *ast.File, fset *token.FileSet) {
+			ast.Inspect(file, func(n ast.Node) bool {
+				// Allowlist: the printUsage function and the unknown-flag refusal
+				// in run() are static help/diagnostic text, not run output.
+				if fn, ok := n.(*ast.FuncDecl); ok && relPath(root, path) == filepath.Join("cmd", "keel-dev", "main.go") &&
+					(fn.Name.Name == "printUsage" || fn.Name.Name == "run") {
+					return false
+				}
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				pkg, ok := sel.X.(*ast.Ident)
+				if !ok || pkg.Name != "fmt" || !rawFmtFuncs[sel.Sel.Name] {
+					return true
+				}
+				pos := fset.Position(call.Pos())
+				violations = append(violations,
+					fmt.Sprintf("  no-raw-fmt-output: %s:%d calls fmt.%s — route run output through keel/log", relPath(root, path), pos.Line, sel.Sel.Name))
 				return true
-			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			pkg, ok := sel.X.(*ast.Ident)
-			if !ok || pkg.Name != "fmt" || !rawFmtFuncs[sel.Sel.Name] {
-				return true
-			}
-			pos := fset.Position(call.Pos())
-			violations = append(violations,
-				fmt.Sprintf("  no-raw-fmt-output: %s:%d calls fmt.%s — route run output through keel/log", filepath.Base(path), pos.Line, sel.Sel.Name))
-			return true
+			})
 		})
-	})
-	return violations, err
+		if err != nil {
+			return nil, err
+		}
+	}
+	return violations, nil
 }
 
 // stdoutAllowlist names the only functions in cmd/keel-dev permitted to touch

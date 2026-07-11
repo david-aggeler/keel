@@ -28,7 +28,7 @@ func runTestWithCoverage(ctx context.Context, logger *slog.Logger, dir string) e
 	defer os.RemoveAll(tmp)
 	profile := filepath.Join(tmp, "cover.out")
 
-	if err := runCmd(ctx, logger, dir, "go", "test", "./...", "-coverprofile="+profile, "-covermode=atomic"); err != nil {
+	if err := runCmd(ctx, logger, dir, "go", "test", "./...", "-coverprofile="+profile, "-covermode=atomic", "-coverpkg=./..."); err != nil {
 		return err
 	}
 
