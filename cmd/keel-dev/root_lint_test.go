@@ -74,6 +74,25 @@ func TestLintNoRawFmtOutput(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-15
+func TestLintNoRawFmtOutputScansLibrarySurface(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	for _, sub := range []string{"log", "exec"} {
+		pkgDir := filepath.Join(dir, sub)
+		if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, pkgDir, "out.go",
+			"package "+strings.ReplaceAll(sub, "-", "")+"\n\nimport \"fmt\"\n\nfunc x() { fmt.Println(\"diagnostic bypass\") }\n")
+		err := runLint(dir)
+		if err == nil || !strings.Contains(err.Error(), "no-raw-fmt-output") || !strings.Contains(err.Error(), sub+"/out.go") {
+			t.Fatalf("raw fmt output in %s should fail lint with package path, got %v", sub, err)
+		}
+		writeFile(t, pkgDir, "out.go", "package "+strings.ReplaceAll(sub, "-", "")+"\n\nfunc x() {}\n")
+	}
+}
+
 // TestLintNoRawStdoutStream proves the ac-36 policy flags os.Stdout/os.Stderr
 // references outside the main.go allowlist and names the offending function.
 func TestLintNoRawStdoutStream(t *testing.T) {
@@ -114,6 +133,26 @@ exit 0`)
 	err := runTestWithCoverage(context.Background(), discardLogger(), t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "below the 85.0% floor") {
 		t.Fatalf("want coverage-floor failure, got %v", err)
+	}
+}
+
+// DHF-TEST: keel/requirement-12
+func TestCoverageUsesAllPackageDenominator(t *testing.T) {
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", `
+case "$1 $2" in
+  "tool cover") echo "total:	(statements)	92.0%" ;;
+esac
+exit 0`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := runTestWithCoverage(context.Background(), discardLogger(), t.TempDir()); err != nil {
+		t.Fatalf("coverage run failed: %v", err)
+	}
+	got := calls(t, callsFile)
+	if !strings.Contains(got, "-coverpkg=./...") {
+		t.Fatalf("coverage gate must use all-package denominator; calls:\n%s", got)
 	}
 }
 
