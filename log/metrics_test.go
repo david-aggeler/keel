@@ -11,7 +11,7 @@ import (
 
 // DHF-TEST: keel/requirement-31
 func TestFoundationExportsAreConsumerAgnostic(t *testing.T) {
-	out, err := exec.Command("go", "list", "github.com/david-aggeler/keel/...").CombinedOutput()
+	out, err := exec.Command("go", "list", "github.com/david-aggeler/keel/...").Output()
 	if err != nil {
 		t.Fatalf("go list packages: %v\n%s", err, out)
 	}

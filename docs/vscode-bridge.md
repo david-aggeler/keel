@@ -1,7 +1,9 @@
 # keel VS Code Test Bridge
 
 `keel-dev vscode tests` is keel's producer for the neutral VS Code test-runner
-protocol in `github.com/david-aggeler/keel/vscode`.
+protocol in `github.com/david-aggeler/keel/vscode`. The Keel Test Bridge VSIX
+lives in this repo under `vsix/` and rides the same release tag as the Go
+module.
 
 ## Commands
 
@@ -9,6 +11,9 @@ protocol in `github.com/david-aggeler/keel/vscode`.
 go run ./cmd/keel-dev vscode tests discover --format json
 go run ./cmd/keel-dev vscode tests plan --format json --id keel::lane::test-fast
 go run ./cmd/keel-dev vscode tests run --id keel::lane::test-fast
+go run ./cmd/keel-dev vscode config init
+go run ./cmd/keel-dev vscode config upgrade
+go run ./cmd/keel-dev vsix ci
 ```
 
 The lane ids are:
@@ -32,6 +37,36 @@ removed opportunistically when a new run starts.
 The VS Code extension and keel engine use the in-repo fixtures from this
 checkout. There is no peer fixture-sync step: a single commit carries the engine,
 extension, and fixture state atomically.
+
+## Workspace Config
+
+The extension activates only when `.vscode/test-bridge.json` exists. It does not
+read or fall back to `testBridge.*` VS Code settings.
+
+```json
+{
+  "version": 2,
+  "command": "bin/keel-dev",
+  "args": ["vscode", "tests"],
+  "displayName": "Keel",
+  "env": {
+    "OPTIONAL_KEY": "optional value"
+  }
+}
+```
+
+`version`, `command`, `args`, and `displayName` are required. `env` is optional.
+The JSON Schema is embedded in `keel/vscode` as `test-bridge-config` and is
+drift-checked against the Go type. `CurrentConfigVersion` is the schema version
+constant.
+
+`keel-dev vscode config init` writes the default template. `keel-dev vscode
+config upgrade` migrates supported older configs forward, preserves user values,
+and is byte-idempotent. If the config version is newer than the binary, upgrade
+refuses without writing. The extension follows the same rule on activation:
+older configs are upgraded by invoking the configured devtool's `vscode config
+upgrade` verb and notifying the user to inspect the git diff; newer configs are
+read tolerantly and never rewritten.
 
 ## Demo Block
 

@@ -32,6 +32,14 @@ func vscodeCommandSpec() *cli.CommandSpec {
 		Short: "Emit VS Code test-runner protocol documents.",
 		Subcommands: []*cli.CommandSpec{
 			{
+				Name:  "config",
+				Short: "Initialize or upgrade VS Code test bridge config.",
+				Subcommands: []*cli.CommandSpec{
+					{Name: "init", Use: "vscode config init", Short: "Write .vscode/test-bridge.json if absent.", Handler: handleVSCodeConfigInit},
+					{Name: "upgrade", Use: "vscode config upgrade", Short: "Upgrade .vscode/test-bridge.json to the current schema.", Handler: handleVSCodeConfigUpgrade},
+				},
+			},
+			{
 				Name:  "tests",
 				Short: "VS Code test discovery, setup planning, and lane runs.",
 				Subcommands: []*cli.CommandSpec{
@@ -42,6 +50,38 @@ func vscodeCommandSpec() *cli.CommandSpec {
 			},
 		},
 	}
+}
+
+// DHF-REQ: keel/requirement-40
+func handleVSCodeConfigInit(ctx context.Context, args []string) error {
+	if len(args) != 0 {
+		return cli.NewUsageError("vscode config init takes no arguments: got %q", args)
+	}
+	state := stateFrom(ctx)
+	res, err := vscode.InitTestBridgeConfig(state.root)
+	if err != nil {
+		return err
+	}
+	if state.logger != nil {
+		state.logger.Info("vscode config init", "path", res.Path, "changed", res.Changed, "version", res.ToVersion)
+	}
+	return nil
+}
+
+// DHF-REQ: keel/requirement-40
+func handleVSCodeConfigUpgrade(ctx context.Context, args []string) error {
+	if len(args) != 0 {
+		return cli.NewUsageError("vscode config upgrade takes no arguments: got %q", args)
+	}
+	state := stateFrom(ctx)
+	res, err := vscode.UpgradeTestBridgeConfig(state.root)
+	if err != nil {
+		return err
+	}
+	if state.logger != nil {
+		state.logger.Info("vscode config upgrade", "path", res.Path, "changed", res.Changed, "from_version", res.FromVersion, "to_version", res.ToVersion)
+	}
+	return nil
 }
 
 func handleVSCodeTestsDiscover(ctx context.Context, args []string) error {

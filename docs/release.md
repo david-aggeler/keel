@@ -1,9 +1,9 @@
 # Cutting a keel release and bumping consumers
 
 keel ships as **one** public Apache-2.0 Go module,
-`github.com/david-aggeler/keel`, with one tag per release. Anonymous `go get`
-must always work — never add GOPRIVATE, tokens, netrc, or Docker build secrets
-on any path.
+`github.com/david-aggeler/keel`, plus the Keel Test Bridge VSIX from `vsix/`,
+with one tag/version per release. Anonymous `go get` must always work — never
+add GOPRIVATE, tokens, netrc, or Docker build secrets on any path.
 
 The whole loop is driven by keel's own CLI, `keel-dev` — keel dogfooding
 keel/log and keel/exec. Record operations (issues, CRs, requirements) are **not**
@@ -24,14 +24,20 @@ preflight step fails:
    `v1.2.3-rc.1`).
 2. **Clean tree** — `git status --porcelain` must be empty.
 3. **Tag absent** — `vX.Y.Z` must not already exist locally.
-4. **Green gate** — the full `keel-dev ci` sequence (gofmt, `go build ./...`,
+4. **Green core gate** — the full `keel-dev ci` sequence (gofmt, `go build ./...`,
    `go vet ./...`, the compiled-in lint policies, `go test ./...`) must pass.
+5. **Green VSIX gate** — `keel-dev vsix ci` runs pnpm compile/lint and the
+   headless VS Code extension suite. It fails loudly if Node, pnpm, or xvfb is
+   absent.
+6. **VSIX asset build** — `vsix/package.json` is stamped from the release tag
+   and `pnpm --dir vsix run package:vsix` builds the release asset.
 
 Only then does it:
 
-5. Create the annotated tag `vX.Y.Z` and push it to `origin`.
-6. Create the GitHub release with `gh release create ... --generate-notes`.
-7. **Verify anonymous resolution** — in a throwaway module with a fresh
+7. Create the annotated tag `vX.Y.Z` and push it to `origin`.
+8. Create the GitHub release with `gh release create ... --generate-notes`,
+   attaching `vsix/dist/keel-test-bridge-X.Y.Z.vsix`.
+9. **Verify anonymous resolution** — in a throwaway module with a fresh
    `GOMODCACHE` and every private-access escape hatch scrubbed
    (`GOPRIVATE`/`GOINSECURE`/`GONOSUMDB` empty, global git config ignored), run
    `go get github.com/david-aggeler/keel@vX.Y.Z` and fail loudly if it does not
@@ -43,7 +49,8 @@ run `keel-dev verify vX.Y.Z` (see below).
 
 ### Prerequisites
 
-- `git`, `go`, and `gh` (authenticated: `gh auth status`) on PATH.
+- `git`, `go`, `gh` (authenticated: `gh auth status`), Node, pnpm, and xvfb on
+  PATH.
 - Push access to `origin` and permission to create GitHub releases.
 
 ## 2. Verify an existing tag

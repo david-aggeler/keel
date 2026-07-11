@@ -62,6 +62,22 @@ exit 0`)
 	stub(t, bin, callsFile, "deadcode", "exit 0")
 	// gitleaks is presence-only (no --version probe); a clean scan exits 0.
 	stub(t, bin, callsFile, "gitleaks", "exit 0")
+	stub(t, bin, callsFile, "node", `
+case "$1" in
+  --version) echo "v22.0.0" ;;
+esac
+exit 0`)
+	stub(t, bin, callsFile, "pnpm", `
+case "$*" in
+  "--dir "*" run package:vsix")
+    package_dir=$2
+    version=$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' "$package_dir/package.json" | head -1)
+    mkdir -p "$package_dir/dist"
+    touch "$package_dir/dist/keel-test-bridge-$version.vsix"
+    ;;
+esac
+exit 0`)
+	stub(t, bin, callsFile, "xvfb-run", "exit 0")
 
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return callsFile
@@ -93,6 +109,10 @@ func moduleFixture(t *testing.T) string {
 	dir := t.TempDir()
 	writeFile(t, dir, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, dir, "p.go", "package p\n\nfunc One() int {\n\treturn 1\n}\n")
+	if err := os.MkdirAll(filepath.Join(dir, "vsix"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, filepath.Join("vsix", "package.json"), `{"name":"keel-test-bridge","version":"0.0.0","scripts":{"package:vsix":"true","ci":"true"}}`+"\n")
 	return dir
 }
 
@@ -111,9 +131,11 @@ func TestRunReleaseHappyPath(t *testing.T) {
 	for _, want := range []string{
 		"git status --porcelain",
 		"git tag --list v9.9.9",
+		"pnpm --dir " + filepath.Join(dir, "vsix") + " run ci",
+		"pnpm --dir " + filepath.Join(dir, "vsix") + " run package:vsix",
 		"git tag -a v9.9.9 -m keel v9.9.9",
 		"git push origin v9.9.9",
-		"gh release create v9.9.9 --title keel v9.9.9 --generate-notes",
+		"gh release create v9.9.9 --title keel v9.9.9 --generate-notes " + filepath.Join(dir, "vsix", "dist", "keel-test-bridge-9.9.9.vsix"),
 		"go get github.com/david-aggeler/keel@v9.9.9",
 	} {
 		if !strings.Contains(got, want) {
@@ -122,6 +144,16 @@ func TestRunReleaseHappyPath(t *testing.T) {
 	}
 	if strings.Index(got, "git tag -a") < strings.Index(got, "git status --porcelain") {
 		t.Error("tag created before preflight")
+	}
+	if strings.Index(got, "git tag -a") < strings.Index(got, "pnpm --dir") {
+		t.Error("tag created before VSIX preflight/package")
+	}
+	pkg, err := os.ReadFile(filepath.Join(dir, "vsix", "package.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(pkg), `"version": "9.9.9"`) {
+		t.Fatalf("release did not stamp vsix package version:\n%s", pkg)
 	}
 }
 

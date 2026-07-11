@@ -1,0 +1,9 @@
+{
+  "version": 2,
+  "command": "bin/keel-dev",
+  "args": [
+    "vscode",
+    "tests"
+  ],
+  "displayName": "Keel"
+}
