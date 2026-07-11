@@ -8,7 +8,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -74,9 +73,9 @@ func mustNewLogger(t testing.TB, cfg logging.Config) *logging.Logger {
 	return logger
 }
 
-func newJSONCaptureLogger(t testing.TB, service string) (*slog.Logger, *logging.RecordCapture) {
+func newJSONCaptureLogger(t testing.TB, service string) (*slog.Logger, *recordCapture) {
 	t.Helper()
-	rc := &logging.RecordCapture{}
+	rc := &recordCapture{}
 	return mustNewLogger(t, logging.Config{
 		Service: service,
 		Level:   slog.LevelDebug,
@@ -85,9 +84,9 @@ func newJSONCaptureLogger(t testing.TB, service string) (*slog.Logger, *logging.
 	}).Slog(), rc
 }
 
-func newConsoleCaptureLogger(t testing.TB, service string) (*slog.Logger, *logging.RecordCapture) {
+func newConsoleCaptureLogger(t testing.TB, service string) (*slog.Logger, *recordCapture) {
 	t.Helper()
-	rc := &logging.RecordCapture{}
+	rc := &recordCapture{}
 	return mustNewLogger(t, logging.Config{
 		Service: service,
 		Level:   slog.LevelDebug,
@@ -714,7 +713,7 @@ func TestModuleContextAppearsOnlyInFileSinks(t *testing.T) {
 		t.Fatalf("console included module context reserved for file sinks: %q", got)
 	}
 
-	textData, err := os.ReadFile(logging.HumanLogPath(textDir, "svc"))
+	textData, err := os.ReadFile(textLogPath(textDir, "svc"))
 	if err != nil {
 		t.Fatalf("read human file sink: %v", err)
 	}
@@ -722,7 +721,7 @@ func TestModuleContextAppearsOnlyInFileSinks(t *testing.T) {
 		t.Fatalf("human file sink missing module context: %q", got)
 	}
 
-	jsonData, err := os.ReadFile(logging.JSONLogPath(jsonlDir, "svc"))
+	jsonData, err := os.ReadFile(jsonLogPath(jsonlDir, "svc"))
 	if err != nil {
 		t.Fatalf("read JSONL file sink: %v", err)
 	}
@@ -756,7 +755,7 @@ func TestGroupedModuleContextAppearsOnlyInFileSinks(t *testing.T) {
 		t.Fatalf("console included grouped module context reserved for file sinks: %q", got)
 	}
 
-	textData, err := os.ReadFile(logging.HumanLogPath(textDir, "svc"))
+	textData, err := os.ReadFile(textLogPath(textDir, "svc"))
 	if err != nil {
 		t.Fatalf("read human file sink: %v", err)
 	}
@@ -764,7 +763,7 @@ func TestGroupedModuleContextAppearsOnlyInFileSinks(t *testing.T) {
 		t.Fatalf("human file sink missing grouped module context: %q", got)
 	}
 
-	jsonData, err := os.ReadFile(logging.JSONLogPath(jsonlDir, "svc"))
+	jsonData, err := os.ReadFile(jsonLogPath(jsonlDir, "svc"))
 	if err != nil {
 		t.Fatalf("read JSONL file sink: %v", err)
 	}
@@ -793,7 +792,7 @@ func TestSourceInFilesDefaultsOffAndCanBeEnabled(t *testing.T) {
 	if err := defaultLogger.Close(); err != nil {
 		t.Fatalf("close default logger: %v", err)
 	}
-	defaultData, err := os.ReadFile(logging.HumanLogPath(defaultDir, "svc"))
+	defaultData, err := os.ReadFile(textLogPath(defaultDir, "svc"))
 	if err != nil {
 		t.Fatalf("read default human file sink: %v", err)
 	}
@@ -812,7 +811,7 @@ func TestSourceInFilesDefaultsOffAndCanBeEnabled(t *testing.T) {
 	if err := sourceLogger.Close(); err != nil {
 		t.Fatalf("close source logger: %v", err)
 	}
-	sourceData, err := os.ReadFile(logging.HumanLogPath(sourceDir, "svc"))
+	sourceData, err := os.ReadFile(textLogPath(sourceDir, "svc"))
 	if err != nil {
 		t.Fatalf("read source human file sink: %v", err)
 	}
@@ -831,7 +830,7 @@ func TestSourceInFilesDefaultsOffAndCanBeEnabled(t *testing.T) {
 	if err := jsonlLogger.Close(); err != nil {
 		t.Fatalf("close jsonl logger: %v", err)
 	}
-	jsonlData, err := os.ReadFile(logging.JSONLogPath(jsonlDir, "svc"))
+	jsonlData, err := os.ReadFile(jsonLogPath(jsonlDir, "svc"))
 	if err != nil {
 		t.Fatalf("read source JSONL file sink: %v", err)
 	}
@@ -848,19 +847,20 @@ func TestSourceInFilesDefaultsOffAndCanBeEnabled(t *testing.T) {
 // DHF-TEST: openbrain/requirement-602
 func TestJSONOutput_FileSinkRetainsDebugWhenConsoleUsesInfo(t *testing.T) {
 	var console bytes.Buffer
-	var file bytes.Buffer
+	dir := t.TempDir()
 	logger := mustNewLogger(t, logging.Config{
-		Service: "openbrain-client",
-		Level:   slog.LevelInfo,
-		Console: logging.ConsoleJSON,
-		Writer:  &console,
-		JSONFileHandler: slog.NewJSONHandler(&file, &slog.HandlerOptions{
-			Level: slog.LevelDebug,
-		}),
+		Service:  "openbrain-client",
+		Level:    slog.LevelInfo,
+		Console:  logging.ConsoleJSON,
+		Writer:   &console,
+		JSONLDir: dir,
 	})
 
 	logger.Debug("debug detail", "chunk", "stdout payload")
 	logger.Info("visible info")
+	if err := logger.Close(); err != nil {
+		t.Fatalf("close logger: %v", err)
+	}
 
 	consoleRaw := console.String()
 	if strings.Contains(consoleRaw, "debug detail") || strings.Contains(consoleRaw, "stdout payload") {
@@ -870,7 +870,11 @@ func TestJSONOutput_FileSinkRetainsDebugWhenConsoleUsesInfo(t *testing.T) {
 		t.Fatalf("console did not emit INFO record: %q", consoleRaw)
 	}
 
-	fileRaw := file.String()
+	fileData, err := os.ReadFile(jsonLogPath(dir, "openbrain-client"))
+	if err != nil {
+		t.Fatalf("read JSONL file sink: %v", err)
+	}
+	fileRaw := string(fileData)
 	if !strings.Contains(fileRaw, "debug detail") || !strings.Contains(fileRaw, "stdout payload") {
 		t.Fatalf("file sink did not retain DEBUG detail: %q", fileRaw)
 	}
@@ -881,7 +885,7 @@ func TestJSONOutput_FileSinkRetainsDebugWhenConsoleUsesInfo(t *testing.T) {
 
 // DHF-TEST: keel/requirement-5, openbrain/requirement-151
 func TestConsoleOutput_HumanReadableAndRedacted(t *testing.T) {
-	capture := &logging.RecordCapture{}
+	capture := &recordCapture{}
 	logger := mustNewLogger(t, logging.Config{Console: logging.ConsolePlain,
 		Service:         "cli",
 		Level:           slog.LevelDebug,
@@ -953,7 +957,7 @@ func TestConsoleOutput_UsesStructuredHumanRunStyle(t *testing.T) {
 	})
 
 	logger.Header("openbrain-dev", "v0.0.0-dev")
-	logging.Fields(logger.Slog(), []logging.FieldRow{
+	logger.Fields([]logging.FieldRow{
 		{Label: "Directory", Value: "./Product/"},
 		{Label: "Files to process", Value: 4},
 	})
@@ -1153,7 +1157,7 @@ func TestConsoleOutput_WritesRollingHumanFileAtDebugAndRetainsTen(t *testing.T) 
 		t.Fatalf("oldest daily log was not pruned; stat err=%v", err)
 	}
 
-	today := logging.HumanLogPath(dir, "openbrain-dev")
+	today := textLogPath(dir, "openbrain-dev")
 	body, err := os.ReadFile(today)
 	if err != nil {
 		t.Fatalf("read current human log %s: %v", today, err)
@@ -1170,82 +1174,19 @@ func TestConsoleOutput_WritesRollingHumanFileAtDebugAndRetainsTen(t *testing.T) 
 	}
 }
 
-// TestHumanFileHandler_SharedAcrossLoggersAndCloseable pins the fix for the
-// per-record file-open leak: a single NewHumanFileHandler is opened once and
-// reused across many New(Config) loggers (as the devtool does per console line),
-// all writes land in the one daily file, and the handler closes cleanly.
-//
-// DHF-REQ: openbrain/requirement-152
-func TestHumanFileHandler_SharedAcrossLoggersAndCloseable(t *testing.T) {
-	dir := t.TempDir()
-	fh, err := logging.NewHumanFileHandler(dir, "openbrain-dev")
-	if err != nil {
-		t.Fatalf("NewHumanFileHandler: %v", err)
-	}
-
-	// Build a fresh console logger per emission with the SAME shared file
-	// handler — the leak-free path. None of these opens a new file.
-	for i := 0; i < 5; i++ {
-		var console bytes.Buffer
-		logger := mustNewLogger(t, logging.Config{Console: logging.ConsolePlain,
-			Service:          "openbrain-dev",
-			Level:            slog.LevelInfo,
-			Writer:           &console,
-			HumanFileHandler: fh,
-		})
-		logger.Info("line", "n", i)
-	}
-
-	// Exactly one daily file exists — no per-logger file proliferation.
-	matches, err := filepath.Glob(filepath.Join(dir, "openbrain-dev-*.log"))
-	if err != nil {
-		t.Fatalf("glob: %v", err)
-	}
-	if len(matches) != 1 {
-		t.Fatalf("expected exactly 1 daily log, got %d: %v", len(matches), matches)
-	}
-
-	closer, ok := fh.(io.Closer)
-	if !ok {
-		t.Fatalf("NewHumanFileHandler result %T does not implement io.Closer", fh)
-	}
-	if err := closer.Close(); err != nil {
-		t.Fatalf("close: %v", err)
-	}
-
-	body, err := os.ReadFile(logging.HumanLogPath(dir, "openbrain-dev"))
-	if err != nil {
-		t.Fatalf("read daily log: %v", err)
-	}
-	for i := 0; i < 5; i++ {
-		if !strings.Contains(string(body), "n="+strconv.Itoa(i)) {
-			t.Fatalf("shared file missing line n=%d: %q", i, string(body))
-		}
-	}
-}
-
 // DHF-TEST: openbrain/change_request-441
 func TestLoggerFansOutToConsoleHumanFileAndJSONFile(t *testing.T) {
 	dir := t.TempDir()
-	humanHandler, err := logging.NewHumanFileHandler(dir, "openbrain-client")
-	if err != nil {
-		t.Fatalf("NewHumanFileHandler: %v", err)
-	}
-	t.Cleanup(func() { _ = humanHandler.(io.Closer).Close() })
-	jsonHandler, err := logging.NewJSONFileHandler(dir, "openbrain-client")
-	if err != nil {
-		t.Fatalf("NewJSONFileHandler: %v", err)
-	}
-	t.Cleanup(func() { _ = jsonHandler.(io.Closer).Close() })
 
 	var console bytes.Buffer
 	logger := mustNewLogger(t, logging.Config{Console: logging.ConsolePlain,
-		Service:          "openbrain-client",
-		Level:            slog.LevelInfo,
-		Writer:           &console,
-		HumanFileHandler: humanHandler,
-		JSONFileHandler:  jsonHandler,
+		Service:  "openbrain-client",
+		Level:    slog.LevelInfo,
+		Writer:   &console,
+		TextDir:  dir,
+		JSONLDir: dir,
 	})
+	t.Cleanup(func() { _ = logger.Close() })
 	logger.Debug("debug detail", "token", "secret-value")
 	logger.Info("human visible", "unit", "cr-441")
 
@@ -1256,7 +1197,7 @@ func TestLoggerFansOutToConsoleHumanFileAndJSONFile(t *testing.T) {
 		t.Fatalf("console output is not human text: %q", console.String())
 	}
 
-	humanData, err := os.ReadFile(logging.HumanLogPath(dir, "openbrain-client"))
+	humanData, err := os.ReadFile(textLogPath(dir, "openbrain-client"))
 	if err != nil {
 		t.Fatalf("read human log: %v", err)
 	}
@@ -1264,7 +1205,7 @@ func TestLoggerFansOutToConsoleHumanFileAndJSONFile(t *testing.T) {
 		t.Fatalf("human file did not capture DEBUG text detail: %q", got)
 	}
 
-	jsonData, err := os.ReadFile(logging.JSONLogPath(dir, "openbrain-client"))
+	jsonData, err := os.ReadFile(jsonLogPath(dir, "openbrain-client"))
 	if err != nil {
 		t.Fatalf("read JSON log: %v", err)
 	}
@@ -1331,10 +1272,10 @@ func TestSyntheticAdapterUsesGenericProgressDetailConsoleHook(t *testing.T) {
 func TestAllHandlers_RedactSensitiveTokenAttributes(t *testing.T) {
 	tests := []struct {
 		name      string
-		newLogger func() (*slog.Logger, *logging.RecordCapture)
+		newLogger func() (*slog.Logger, *recordCapture)
 	}{
-		{"json", func() (*slog.Logger, *logging.RecordCapture) { return newJSONCaptureLogger(t, "cli") }},
-		{"console", func() (*slog.Logger, *logging.RecordCapture) { return newConsoleCaptureLogger(t, "cli") }},
+		{"json", func() (*slog.Logger, *recordCapture) { return newJSONCaptureLogger(t, "cli") }},
+		{"console", func() (*slog.Logger, *recordCapture) { return newConsoleCaptureLogger(t, "cli") }},
 	}
 
 	for _, tc := range tests {

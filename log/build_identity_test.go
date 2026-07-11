@@ -9,7 +9,7 @@ import (
 func TestLogBuildIdentityEmitsVersionAndGitCommit(t *testing.T) {
 	logger, capture := newForTesting("build-test")
 
-	LogBuildIdentity(logger, "1.2.3", "abc1234")
+	logBuildIdentity(logger, "1.2.3", "abc1234")
 
 	got := capture.LastJSON()
 	if got["msg"] != "build identity" {

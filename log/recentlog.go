@@ -5,7 +5,7 @@ package log
 // shared data source behind every service's /diag recent_logs surface and the
 // mcp-server admin recent-logs tool (openbrain/requirement-186, change_request-381).
 //
-// INVARIANT: no RecentEntry field carries a secret. Message and every attr
+// INVARIANT: no recentEntry field carries a secret. Message and every attr
 // value pass through the same redaction path as the JSON/console sinks
 // (RedactString + sensitive-key suppression), applied at ingest — so a record
 // is scrubbed once, when captured, never on read.
@@ -22,12 +22,8 @@ import (
 	"time"
 )
 
-// DefaultRecentCapacity is the per-service recent-log buffer size used by all
-// four services. Sized for a useful warn/error tail without unbounded growth.
-const DefaultRecentCapacity = 256
-
-// RecentEntry is one retained warn/error log record in /diag-ready form.
-type RecentEntry struct {
+// recentEntry is one retained warn/error log record in /diag-ready form.
+type recentEntry struct {
 	Time    string            `json:"time"`            // RFC3339Nano emit time
 	Level   string            `json:"level"`           // uppercase: "WARN" | "ERROR"
 	Service string            `json:"service"`         // emitting service
@@ -35,11 +31,11 @@ type RecentEntry struct {
 	Attrs   map[string]string `json:"attrs,omitempty"` // redacted key→value (service omitted)
 }
 
-// RecentBuffer is a thread-safe fixed-capacity ring buffer of RecentEntry.
+// recentBuffer is a thread-safe fixed-capacity ring buffer of recentEntry.
 // Entries are inserted oldest→newest; Entries() reads them back newest-first.
-type RecentBuffer struct {
+type recentBuffer struct {
 	mu       sync.Mutex
-	buf      []RecentEntry
+	buf      []recentEntry
 	capacity int
 	head     int // index of the next write position
 	count    int // number of valid entries (≤ capacity)
@@ -47,12 +43,12 @@ type RecentBuffer struct {
 
 // NewRecentBuffer creates a buffer with the given capacity. Capacities ≤ 0 are
 // clamped to 1 to keep the modular arithmetic in Add well-defined.
-func NewRecentBuffer(capacity int) *RecentBuffer {
+func newRecentBuffer(capacity int) *recentBuffer {
 	if capacity <= 0 {
 		capacity = 1
 	}
-	return &RecentBuffer{
-		buf:      make([]RecentEntry, capacity),
+	return &recentBuffer{
+		buf:      make([]recentEntry, capacity),
 		capacity: capacity,
 	}
 }
@@ -60,7 +56,7 @@ func NewRecentBuffer(capacity int) *RecentBuffer {
 // DHF-REQ: keel/requirement-20
 // Add inserts an entry, evicting the oldest when full. The entry is expected to
 // be already redacted (the recentHandler does this at capture time).
-func (b *RecentBuffer) Add(e RecentEntry) {
+func (b *recentBuffer) Add(e recentEntry) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	e.Level = strings.ToUpper(strings.TrimSpace(e.Level))
@@ -74,11 +70,11 @@ func (b *RecentBuffer) Add(e RecentEntry) {
 // Entries returns retained entries newest-first. level filters to a single
 // level ("WARN" or "ERROR"; case-insensitive); empty returns all levels. limit
 // caps the result count; limit ≤ 0 returns every retained (matching) entry.
-func (b *RecentBuffer) Entries(limit int, level string) []RecentEntry {
+func (b *recentBuffer) Entries(limit int, level string) []recentEntry {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	level = strings.ToUpper(strings.TrimSpace(level))
-	out := make([]RecentEntry, 0, b.count)
+	out := make([]recentEntry, 0, b.count)
 	for i := 0; i < b.count; i++ {
 		// Walk backwards from the most-recent write. +2*capacity keeps the
 		// index non-negative before the modulo for any valid head/i.
@@ -96,18 +92,18 @@ func (b *RecentBuffer) Entries(limit int, level string) []RecentEntry {
 }
 
 // Len returns the number of entries currently retained.
-func (b *RecentBuffer) Len() int {
+func (b *recentBuffer) Len() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.count
 }
 
 // recentHandler is an slog.Handler that captures warn/error records into a
-// RecentBuffer (redacted) before forwarding to the wrapped handler. Records
+// recentBuffer (redacted) before forwarding to the wrapped handler. Records
 // below warn are forwarded untouched and never retained.
 type recentHandler struct {
 	inner   slog.Handler
-	buf     *RecentBuffer
+	buf     *recentBuffer
 	service string
 	attrs   []slog.Attr // accumulated via WithAttrs (the "service" attr lives here)
 }
@@ -115,7 +111,7 @@ type recentHandler struct {
 // TeeRecent wraps logger so that warn/error records are also captured into buf,
 // stamped with service. The returned logger writes to the original destination
 // and the buffer both.
-func TeeRecent(logger *slog.Logger, buf *RecentBuffer, service string) *slog.Logger {
+func teeRecent(logger *slog.Logger, buf *recentBuffer, service string) *slog.Logger {
 	return slog.New(&recentHandler{inner: logger.Handler(), buf: buf, service: service})
 }
 
@@ -131,17 +127,17 @@ func (h *recentHandler) Handle(ctx context.Context, r slog.Record) error {
 }
 
 // DHF-REQ: keel/requirement-20
-// toEntry renders a warn/error record into a redacted RecentEntry.
-func (h *recentHandler) toEntry(r slog.Record) RecentEntry {
+// toEntry renders a warn/error record into a redacted recentEntry.
+func (h *recentHandler) toEntry(r slog.Record) recentEntry {
 	level := "WARN"
 	if r.Level >= slog.LevelError {
 		level = "ERROR"
 	}
-	e := RecentEntry{
+	e := recentEntry{
 		Time:    r.Time.Format(time.RFC3339Nano),
 		Level:   level,
 		Service: h.service,
-		Message: RedactString(r.Message),
+		Message: redactString(r.Message),
 	}
 	var attrs map[string]string
 	add := func(a slog.Attr) {
@@ -170,7 +166,7 @@ func redactAttrValue(a slog.Attr) string {
 	if isSensitiveAttrKey(a.Key) {
 		return "[REDACTED]"
 	}
-	return RedactString(a.Value.Resolve().String())
+	return redactString(a.Value.Resolve().String())
 }
 
 func (h *recentHandler) WithAttrs(attrs []slog.Attr) slog.Handler {

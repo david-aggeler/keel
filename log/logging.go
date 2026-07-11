@@ -37,7 +37,7 @@ const (
 // goes to os.Stdout with the sparse-AI console and no file sinks. All fields are
 // optional.
 //
-// DHF-REQ: keel/requirement-30
+// DHF-REQ: keel/requirement-30, keel/requirement-33
 type Config struct {
 	// Service is the value stamped into the "service" field of every record.
 	Service string
@@ -68,16 +68,6 @@ type Config struct {
 	// Machine JSON logging is intentionally unaffected.
 	ConsoleOmitKeys []string
 
-	// HumanFileHandler is a pre-opened human rolling-file handler. It is kept
-	// for internal tests and advanced composition; prefer TextDir for normal
-	// construction.
-	HumanFileHandler slog.Handler
-
-	// JSONFileHandler is a pre-opened JSON Lines rolling-file handler. It is kept
-	// for internal tests and advanced composition; prefer JSONLDir for normal
-	// construction.
-	JSONFileHandler slog.Handler
-
 	// Handlers are additional slog handlers fanned out after the built-in sinks.
 	// Optional packages such as log/otel use this hook so the core log package
 	// keeps its dependency surface unchanged.
@@ -87,7 +77,7 @@ type Config struct {
 // Logger is keel/log's public logger. It wraps slog while owning any file sinks
 // opened by [New].
 //
-// DHF-REQ: keel/requirement-16
+// DHF-REQ: keel/requirement-16, keel/requirement-33
 type Logger struct {
 	base          *slog.Logger
 	closers       []io.Closer
@@ -99,13 +89,11 @@ type Logger struct {
 // ctxKey is the context key for storing a *slog.Logger.
 type ctxKey struct{}
 
-// WithLogger stores a logger in the context.
-func WithLogger(ctx context.Context, l *slog.Logger) context.Context {
+func withLogger(ctx context.Context, l *slog.Logger) context.Context {
 	return context.WithValue(ctx, ctxKey{}, l)
 }
 
-// FromContext returns the logger stored in ctx, falling back to slog.Default().
-func FromContext(ctx context.Context) *slog.Logger {
+func fromContext(ctx context.Context) *slog.Logger {
 	if l, ok := ctx.Value(ctxKey{}).(*slog.Logger); ok && l != nil {
 		return l
 	}
@@ -189,7 +177,7 @@ func isSensitiveAttrKey(key string) bool {
 
 // New creates a production logger from the four-sink Config model.
 //
-// DHF-REQ: keel/requirement-16, keel/requirement-22, keel/requirement-29, openbrain/requirement-602
+// DHF-REQ: keel/requirement-16, keel/requirement-22, keel/requirement-29, keel/requirement-33, openbrain/requirement-602
 func New(cfg Config) (*Logger, error) {
 	level := cfg.Level
 	if level == nil {
@@ -219,12 +207,7 @@ func New(cfg Config) (*Logger, error) {
 	}
 
 	closers := make([]io.Closer, 0, 2)
-	if cfg.HumanFileHandler != nil {
-		handlers = append(handlers, cfg.HumanFileHandler)
-		if c, ok := cfg.HumanFileHandler.(io.Closer); ok {
-			closers = append(closers, c)
-		}
-	} else if cfg.TextDir != "" {
+	if cfg.TextDir != "" {
 		h, err := newHumanFileHandler(cfg.TextDir, cfg.Service, cfg.SourceInFiles)
 		if err != nil {
 			return nil, fmt.Errorf("keel/log: open text sink: %w", err)
@@ -236,12 +219,7 @@ func New(cfg Config) (*Logger, error) {
 	}
 	var runLogPath string
 	var runLog *lineCountingWriteCloser
-	if cfg.JSONFileHandler != nil {
-		handlers = append(handlers, cfg.JSONFileHandler)
-		if c, ok := cfg.JSONFileHandler.(io.Closer); ok {
-			closers = append(closers, c)
-		}
-	} else if cfg.JSONLDir != "" {
+	if cfg.JSONLDir != "" {
 		h, path, counter, err := newJSONFileHandler(cfg.JSONLDir, cfg.Service, cfg.PerRun, cfg.SourceInFiles)
 		if err != nil {
 			closeAll(closers)
@@ -380,13 +358,24 @@ func (l *Logger) argsWithAutoSource(args []any) []any {
 }
 
 // Header emits a ruled human-mode banner.
-func (l *Logger) Header(title string, version string) { Header(l.slog(), title, version) }
+func (l *Logger) Header(title string, version string) { header(l.slog(), title, version) }
 
 // Section emits a ruled human-mode section header.
-func (l *Logger) Section(name string) { Section(l.slog(), name) }
+func (l *Logger) Section(name string) { section(l.slog(), name) }
 
 // Field emits one aligned label/value row.
-func (l *Logger) Field(label string, value any) { Field(l.slog(), label, value) }
+func (l *Logger) Field(label string, value any) { l.Fields([]FieldRow{{Label: label, Value: value}}) }
+
+// Fields emits aligned label/value rows.
+func (l *Logger) Fields(rows []FieldRow) { fields(l.slog(), rows) }
+
+// Emit logs a metrics event at Info level.
+func (l *Logger) Emit(event string, attrs ...slog.Attr) { emit(l.slog(), event, attrs...) }
+
+// LogBuildIdentity logs a single build identity record.
+func (l *Logger) LogBuildIdentity(version, gitCommit string) {
+	logBuildIdentity(l.slog(), version, gitCommit)
+}
 
 // Close releases file sinks opened by New.
 func (l *Logger) Close() error {
@@ -445,7 +434,7 @@ func (h multiHandler) WithGroup(name string) slog.Handler {
 // DHF-REQ: keel/requirement-16, keel/requirement-22
 func redactRecord(r slog.Record) slog.Record {
 	r = r.Clone()
-	r.Message = RedactString(r.Message)
+	r.Message = redactString(r.Message)
 	attrs := make([]slog.Attr, 0, r.NumAttrs())
 	r.Attrs(func(a slog.Attr) bool {
 		attrs = append(attrs, redactAttr(a))
@@ -477,7 +466,7 @@ func redactValue(key string, v slog.Value) slog.Value {
 		return slog.StringValue("[REDACTED]")
 	}
 	if v.Kind() == slog.KindString {
-		return slog.StringValue(RedactString(v.String()))
+		return slog.StringValue(redactString(v.String()))
 	}
 	if v.Kind() == slog.KindGroup {
 		attrs := v.Group()
@@ -548,7 +537,7 @@ func (h *sparseAIHandler) Handle(_ context.Context, r slog.Record) error {
 	}{
 		Level:   r.Level.String(),
 		Event:   event,
-		Message: RedactString(r.Message),
+		Message: redactString(r.Message),
 		Fields:  fields,
 	}
 
@@ -601,7 +590,7 @@ func sparseFieldValue(v slog.Value) any {
 	v = v.Resolve()
 	switch v.Kind() {
 	case slog.KindString:
-		return RedactString(v.String())
+		return redactString(v.String())
 	case slog.KindBool:
 		return v.Bool()
 	case slog.KindDuration:
@@ -626,7 +615,7 @@ func sparseFieldValue(v slog.Value) any {
 		}
 		return out
 	default:
-		return RedactString(fmt.Sprint(v.Any()))
+		return redactString(fmt.Sprint(v.Any()))
 	}
 }
 
@@ -673,7 +662,7 @@ func (h *consoleHandler) Handle(_ context.Context, r slog.Record) error {
 	writeConsoleLevel(&b, r.Level, h.color)
 	b.WriteString("  ")
 	message, skipKeys := h.consoleMessage(r.Message, boundAttrs, recordAttrs)
-	b.WriteString(RedactString(message))
+	b.WriteString(redactString(message))
 	for _, attr := range boundAttrs {
 		attr = replaceForOpenBrain(h.groups, attr)
 		key := attr.Key
@@ -732,7 +721,7 @@ func writeConsoleBannerLine(b *strings.Builder, t time.Time, level slog.Level, c
 	b.WriteByte(' ')
 	writeConsoleLevel(b, level, color)
 	b.WriteString("  ")
-	b.WriteString(RedactString(msg))
+	b.WriteString(redactString(msg))
 	b.WriteByte('\n')
 }
 
@@ -940,7 +929,7 @@ func formatConsoleValue(v slog.Value) string {
 	v = v.Resolve()
 	switch v.Kind() {
 	case slog.KindString:
-		return RedactString(v.String())
+		return redactString(v.String())
 	case slog.KindTime:
 		return v.Time().Format(time.RFC3339Nano)
 	case slog.KindDuration:
@@ -956,7 +945,7 @@ func formatConsoleValue(v slog.Value) string {
 		}
 		return "{" + strings.Join(parts, " ") + "}"
 	default:
-		return RedactString(fmt.Sprint(v.Any()))
+		return redactString(fmt.Sprint(v.Any()))
 	}
 }
 
@@ -968,24 +957,14 @@ type humanFileHandler struct {
 	source bool
 }
 
-// NewJSONFileHandler opens today's JSON Lines daily log file under dir and
-// returns a handler (DEBUG and above) that appends to it. The returned handler
-// also satisfies io.Closer; callers own it for the invocation lifetime.
-//
-// DHF-REQ: openbrain/change_request-441, keel/requirement-20
-func NewJSONFileHandler(dir string, service string) (slog.Handler, error) {
-	h, _, _, err := newJSONFileHandler(dir, service, false, false)
-	return h, err
-}
-
 func newJSONFileHandler(dir string, service string, perRun bool, source bool) (slog.Handler, string, *lineCountingWriteCloser, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, "", nil, err
 	}
-	path := JSONLogPath(dir, service)
+	path := jsonLogPath(dir, service)
 	flag := os.O_CREATE | os.O_WRONLY | os.O_APPEND
 	if perRun {
-		path = PerRunJSONLogPath(dir)
+		path = perRunJSONLogPath(dir)
 		flag = os.O_CREATE | os.O_WRONLY | os.O_EXCL
 	}
 	f, err := os.OpenFile(path, flag, 0o600)
@@ -1036,17 +1015,6 @@ func (h *jsonFileHandler) Close() error {
 	return h.close()
 }
 
-// NewHumanFileHandler opens today's Serilog-style daily human log file under dir
-// and returns a handler (DEBUG and above) that appends to it. The returned
-// handler also satisfies io.Closer: the caller owns it for the invocation
-// lifetime and must Close it once when done, rather than opening a fresh file
-// per log record. Prefer Config.TextDir with New for production construction.
-//
-// DHF-REQ: openbrain/requirement-152, keel/requirement-20
-func NewHumanFileHandler(dir string, service string) (slog.Handler, error) {
-	return newHumanFileHandler(dir, service, false)
-}
-
 func newHumanFileHandler(dir string, service string, source bool) (slog.Handler, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, err
@@ -1054,7 +1022,7 @@ func newHumanFileHandler(dir string, service string, source bool) (slog.Handler,
 	if err := pruneHumanLogs(dir, service, 10); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(HumanLogPath(dir, service), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := os.OpenFile(textLogPath(dir, service), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, err
 	}
@@ -1098,7 +1066,7 @@ func (h *humanFileHandler) Handle(_ context.Context, r slog.Record) error {
 	b.WriteByte('\t')
 	b.WriteString(fmt.Sprintf("%-26s", source))
 	b.WriteByte('\t')
-	b.WriteString(RedactString(r.Message))
+	b.WriteString(redactString(r.Message))
 	for _, attr := range boundAttrs {
 		attr = replaceForOpenBrain(nil, attr)
 		key := attr.Key
@@ -1213,21 +1181,17 @@ func sourceFromPC(pc uintptr) string {
 }
 
 // DHF-REQ: openbrain/requirement-152, keel/requirement-20
-// HumanLogPath returns today's Serilog-style daily human log path for service.
-func HumanLogPath(dir string, service string) string {
+func textLogPath(dir string, service string) string {
 	return filepath.Join(dir, safeLogService(service)+"-"+time.Now().Format("2006-01-02")+".log")
 }
 
 // DHF-REQ: openbrain/change_request-441, keel/requirement-20
-// JSONLogPath returns today's JSON Lines daily log path for service.
-func JSONLogPath(dir string, service string) string {
+func jsonLogPath(dir string, service string) string {
 	return filepath.Join(dir, safeLogService(service)+"-"+time.Now().Format("2006-01-02")+".jsonl")
 }
 
-// PerRunJSONLogPath returns a new per-invocation JSON Lines log path under dir.
-//
 // DHF-REQ: keel/requirement-19, keel/requirement-20
-func PerRunJSONLogPath(dir string) string {
+func perRunJSONLogPath(dir string) string {
 	stamp := time.Now().UTC().Format("20060102T150405.000000000Z")
 	return filepath.Join(dir, stamp+"-"+fmt.Sprintf("%d", os.Getpid())+".jsonl")
 }
@@ -1276,8 +1240,7 @@ type FieldRow struct {
 }
 
 // DHF-REQ: openbrain/requirement-151, keel/requirement-24
-// Header logs a structured banner through the provided logger.
-func Header(logger *slog.Logger, title string, version string) {
+func header(logger *slog.Logger, title string, version string) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -1285,8 +1248,7 @@ func Header(logger *slog.Logger, title string, version string) {
 }
 
 // DHF-REQ: openbrain/requirement-151, keel/requirement-24
-// Section logs a structured section banner through the provided logger.
-func Section(logger *slog.Logger, name string) {
+func section(logger *slog.Logger, name string) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -1294,14 +1256,7 @@ func Section(logger *slog.Logger, name string) {
 }
 
 // DHF-REQ: openbrain/requirement-151
-// Field logs one label/value row. Use Fields when multiple rows should align.
-func Field(logger *slog.Logger, label string, value any) {
-	Fields(logger, []FieldRow{{Label: label, Value: value}})
-}
-
-// DHF-REQ: openbrain/requirement-151
-// Fields logs aligned label/value rows through the provided logger.
-func Fields(logger *slog.Logger, rows []FieldRow) {
+func fields(logger *slog.Logger, rows []FieldRow) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -1316,22 +1271,22 @@ func Fields(logger *slog.Logger, rows []FieldRow) {
 	}
 }
 
-// RecordCapture captures JSON log output for testing.
-type RecordCapture struct {
+// recordCapture captures JSON log output for testing.
+type recordCapture struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
 }
 
 // Write appends raw handler output to the capture buffer. It is the
 // [io.Writer] the JSON handler emits into; it is safe for concurrent use.
-func (rc *RecordCapture) Write(p []byte) (int, error) {
+func (rc *recordCapture) Write(p []byte) (int, error) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	return rc.buf.Write(p)
 }
 
 // LastJSON returns the last complete JSON line as a map, or nil.
-func (rc *RecordCapture) LastJSON() map[string]any {
+func (rc *recordCapture) LastJSON() map[string]any {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	lines := strings.Split(strings.TrimSpace(rc.buf.String()), "\n")
@@ -1348,7 +1303,7 @@ func (rc *RecordCapture) LastJSON() map[string]any {
 // AllJSON returns every captured log line as a slice of parsed maps, in
 // emission order. Lines that fail JSON parsing are skipped. Returns a non-nil
 // empty slice when the buffer is empty.
-func (rc *RecordCapture) AllJSON() []map[string]any {
+func (rc *recordCapture) AllJSON() []map[string]any {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	raw := strings.TrimSpace(rc.buf.String())
@@ -1371,7 +1326,7 @@ func (rc *RecordCapture) AllJSON() []map[string]any {
 }
 
 // LastRaw returns the last complete JSON line as a raw string.
-func (rc *RecordCapture) LastRaw() string {
+func (rc *recordCapture) LastRaw() string {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	lines := strings.Split(strings.TrimSpace(rc.buf.String()), "\n")
@@ -1382,18 +1337,18 @@ func (rc *RecordCapture) LastRaw() string {
 }
 
 // Reset clears the capture buffer.
-func (rc *RecordCapture) Reset() {
+func (rc *recordCapture) Reset() {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	rc.buf.Reset()
 }
 
-// newForTesting creates a logger that writes to a RecordCapture buffer,
+// newForTesting creates a logger that writes to a recordCapture buffer,
 // using the same G1 JSON handler chain as production. The log level is
 // set to LevelDebug so all levels are captured. Tests MUST NOT call
 // slog.SetDefault with the returned logger.
-func newForTesting(service string) (*slog.Logger, *RecordCapture) {
-	rc := &RecordCapture{}
+func newForTesting(service string) (*slog.Logger, *recordCapture) {
+	rc := &recordCapture{}
 	h := slog.NewJSONHandler(rc, &slog.HandlerOptions{
 		Level:       slog.LevelDebug,
 		ReplaceAttr: replaceForOpenBrain,
@@ -1401,12 +1356,12 @@ func newForTesting(service string) (*slog.Logger, *RecordCapture) {
 	return slog.New(h).With("service", service), rc
 }
 
-// newConsoleForTesting creates a console logger that writes to a RecordCapture
+// newConsoleForTesting creates a console logger that writes to a recordCapture
 // buffer using the same human console handler chain as production.
 //
 // DHF-REQ: keel/requirement-5, openbrain/requirement-151, openbrain/requirement-152
-func newConsoleForTesting(service string) (*slog.Logger, *RecordCapture) {
-	rc := &RecordCapture{}
+func newConsoleForTesting(service string) (*slog.Logger, *recordCapture) {
+	rc := &recordCapture{}
 	h := newConsoleHandler(rc, slog.LevelDebug, false, nil)
 	return slog.New(h).With("service", service), rc
 }
@@ -1451,10 +1406,6 @@ func redactString(s string) string {
 	return s
 }
 
-// RedactString redacts secrets from an already-rendered string (metadata
-// values, root_cause). String→string sibling of RedactErr. (KD7.)
-func RedactString(s string) string { return redactString(s) }
-
 // RedactErr walks the error string and strips DSN passwords and bearer tokens.
 // Returns nil for nil input. Delegates regex work to redactString; flatten-no-wrap
 // contract is unchanged — errors.Is/As do NOT see through a redacted error.
@@ -1465,9 +1416,7 @@ func RedactErr(err error) error {
 	return fmt.Errorf("%s", redactString(err.Error()))
 }
 
-// ParseLevel parses a log level string ("debug", "info", "warn", "error").
-// Returns slog.LevelInfo on empty or unrecognized input.
-func ParseLevel(s string) slog.Level {
+func parseLevel(s string) slog.Level {
 	switch strings.ToLower(s) {
 	case "debug":
 		return slog.LevelDebug

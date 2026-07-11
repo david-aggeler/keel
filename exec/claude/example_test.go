@@ -3,10 +3,11 @@ package claude_test
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 
 	"github.com/david-aggeler/keel/exec/claude"
-	logging "github.com/david-aggeler/keel/log"
 )
 
 // ExampleRun drives the adapter against a hermetic stub standing in for the real
@@ -22,7 +23,7 @@ func ExampleRun() {
 	res, err := claude.Run(context.Background(), claude.Request{
 		Prompt: "reply with PONG",
 		Bin:    stub,
-		Logger: logging.Discard(),
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
 		panic(err)
