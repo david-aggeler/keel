@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/david-aggeler/keel/vscode/schemas/run-lock.json",
+  "title": "consumer VS Code test run lock",
+  "description": "On-disk format of the cross-run lock at .devtools/locks/vscode-tests.lock. Promoted from an inline struct/path constant to a defined contract file so every consumer of the discover/plan/run protocol agrees on the lock shape instead of reimplementing it. A held lock names the owning process (pid), when it was taken (created_at), the selected test ids of the run holding it, and an ownership token proving the releaser is the acquirer. A stale lock — pid no longer alive, or not a vscode process — may be reclaimed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["pid", "created_at", "ids"],
+  "properties": {
+    "pid": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "token": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}
