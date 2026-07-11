@@ -23,14 +23,11 @@ func TestEventConstants(t *testing.T) {
 
 // DHF-TEST: keel/requirement-31
 func TestFoundationExportsAreConsumerAgnostic(t *testing.T) {
-	for _, importPath := range []string{
-		"github.com/david-aggeler/keel/cli",
-		"github.com/david-aggeler/keel/exec",
-		"github.com/david-aggeler/keel/exec/claude",
-		"github.com/david-aggeler/keel/exec/codex",
-		"github.com/david-aggeler/keel/log",
-		"github.com/david-aggeler/keel/log/otel",
-	} {
+	out, err := exec.Command("go", "list", "github.com/david-aggeler/keel/...").CombinedOutput()
+	if err != nil {
+		t.Fatalf("go list packages: %v\n%s", err, out)
+	}
+	for _, importPath := range strings.Fields(string(out)) {
 		out, err := exec.Command("go", "doc", importPath).CombinedOutput()
 		if err != nil {
 			t.Fatalf("go doc %s: %v\n%s", importPath, err, out)
