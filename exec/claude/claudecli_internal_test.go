@@ -4,18 +4,50 @@ package claude
 // keel/change_request-4 (keel/ac-37).
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	logging "github.com/david-aggeler/keel/log"
 )
 
-func testLogger(service string) (*logging.Logger, *logging.RecordCapture) {
-	cap := &logging.RecordCapture{}
+type testCapture struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (c *testCapture) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.Write(p)
+}
+
+func (c *testCapture) AllJSON() []map[string]any {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	raw := strings.TrimSpace(c.buf.String())
+	out := make([]map[string]any, 0)
+	if raw == "" {
+		return out
+	}
+	for _, line := range strings.Split(raw, "\n") {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err == nil {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func testLogger(service string) (*logging.Logger, *testCapture) {
+	cap := &testCapture{}
 	logger, err := logging.New(logging.Config{
 		Service: service,
 		Level:   slog.LevelDebug,
@@ -114,7 +146,7 @@ type stickyErr struct{}
 func (*stickyErr) Error() string { return "sticky" }
 
 func TestClaudeStreamWriterLineTooLong(t *testing.T) {
-	w := &claudeStreamWriter{logger: logging.Discard()}
+	w := &claudeStreamWriter{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	huge := make([]byte, 5*1024*1024) // > maxLine, no newline
 	for i := range huge {
 		huge[i] = 'a'

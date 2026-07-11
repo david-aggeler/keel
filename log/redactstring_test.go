@@ -1,4 +1,4 @@
-package log_test
+package log
 
 // redactstring_test.go — Tests for RedactString (new exported symbol, KD7)
 // and a regression pin for RedactErr's flatten-no-wrap contract.
@@ -14,8 +14,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-
-	logging "github.com/david-aggeler/keel/log"
 )
 
 // ---------------------------------------------------------------------------
@@ -31,7 +29,7 @@ import (
 
 func TestRedactErr_FlattenNoWrap(t *testing.T) {
 	sentinel := errors.New("original sensitive error")
-	redacted := logging.RedactErr(sentinel)
+	redacted := RedactErr(sentinel)
 
 	if redacted == nil {
 		t.Fatal("RedactErr(non-nil) returned nil")
@@ -124,7 +122,7 @@ func TestRedactString(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := logging.RedactString(tc.input)
+			got := redactString(tc.input)
 			tc.check(t, got)
 		})
 	}
@@ -136,7 +134,7 @@ func TestRedactString(t *testing.T) {
 func TestRedactString_TokenOnlyUserinfo(t *testing.T) {
 	pat := "ghp_abc123XYZ"
 	input := "https://" + pat + "@github.com/org/repo.git"
-	got := logging.RedactString(input)
+	got := redactString(input)
 	if strings.Contains(got, pat) {
 		t.Errorf("RedactString must strip token-only userinfo PAT %q; got: %s", pat, got)
 	}
@@ -150,7 +148,7 @@ func TestRedactString_TokenOnlyUserinfo(t *testing.T) {
 func TestRedactString_TokenQueryParam(t *testing.T) {
 	pat := "myPAT_secret99"
 	input := "https://gitea.internal/vault/repo.git?token=" + pat
-	got := logging.RedactString(input)
+	got := redactString(input)
 	if strings.Contains(got, pat) {
 		t.Errorf("RedactString must strip ?token= PAT %q; got: %s", pat, got)
 	}
@@ -161,7 +159,7 @@ func TestRedactString_TokenQueryParam(t *testing.T) {
 func TestRedactString_AccessTokenQueryParam(t *testing.T) {
 	pat := "gho_accessToken42"
 	input := "https://api.github.com/repos/x?access_token=" + pat
-	got := logging.RedactString(input)
+	got := redactString(input)
 	if strings.Contains(got, pat) {
 		t.Errorf("RedactString must strip ?access_token= PAT %q; got: %s", pat, got)
 	}

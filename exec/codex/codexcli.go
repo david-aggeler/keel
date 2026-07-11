@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -14,7 +15,6 @@ import (
 	"time"
 
 	procexec "github.com/david-aggeler/keel/exec"
-	logging "github.com/david-aggeler/keel/log"
 )
 
 type processLogger interface {
@@ -379,7 +379,7 @@ func Version(ctx context.Context, bin string) (string, error) {
 		Program: bin,
 		Args:    []string{"--version"},
 		Stdout:  &out,
-		Logger:  logging.Discard(),
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
 		return "", fmt.Errorf("keel/exec/codex: %s --version: %w", bin, err)

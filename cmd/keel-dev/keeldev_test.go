@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -9,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	logging "github.com/david-aggeler/keel/log"
@@ -18,8 +21,60 @@ func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-func testLogger(service string) (*slog.Logger, *logging.RecordCapture) {
-	cap := &logging.RecordCapture{}
+type recordCapture struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (rc *recordCapture) Write(p []byte) (int, error) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	return rc.buf.Write(p)
+}
+
+func (rc *recordCapture) LastJSON() map[string]any {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	lines := strings.Split(strings.TrimSpace(rc.buf.String()), "\n")
+	if len(lines) == 0 || lines[len(lines)-1] == "" {
+		return nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &m); err != nil {
+		return nil
+	}
+	return m
+}
+
+func (rc *recordCapture) AllJSON() []map[string]any {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	raw := strings.TrimSpace(rc.buf.String())
+	out := make([]map[string]any, 0)
+	if raw == "" {
+		return out
+	}
+	for _, line := range strings.Split(raw, "\n") {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimSpace(line)), &m); err == nil {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func (rc *recordCapture) LastRaw() string {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	lines := strings.Split(strings.TrimSpace(rc.buf.String()), "\n")
+	if len(lines) == 0 {
+		return ""
+	}
+	return lines[len(lines)-1]
+}
+
+func testLogger(service string) (*slog.Logger, *recordCapture) {
+	cap := &recordCapture{}
 	logger, err := logging.New(logging.Config{
 		Service: service,
 		Level:   slog.LevelDebug,
@@ -258,7 +313,7 @@ func TestRunCISectionNamesPhaseOnly(t *testing.T) {
 func TestConsoleSuppressesServiceAttr(t *testing.T) {
 	cfg := loggerConfig(nil)
 
-	rc := &logging.RecordCapture{}
+	rc := &recordCapture{}
 	cfg.Writer = rc
 	cfg.Console = logging.ConsolePlain
 	logger, err := logging.New(cfg)
@@ -272,7 +327,7 @@ func TestConsoleSuppressesServiceAttr(t *testing.T) {
 		t.Errorf("non-suppressed attrs must survive: %q", out)
 	}
 
-	rcJSON := &logging.RecordCapture{}
+	rcJSON := &recordCapture{}
 	cfg.Writer = rcJSON
 	cfg.Console = logging.ConsoleJSON
 	logger, err = logging.New(cfg)
@@ -312,7 +367,7 @@ func TestConsoleModeSelectsRendering(t *testing.T) {
 
 // DHF-TEST: keel/requirement-25
 func TestLoggerConfigUsesConsoleMode(t *testing.T) {
-	rc := &logging.RecordCapture{}
+	rc := &recordCapture{}
 	logger := newLogger("ai", slog.LevelInfo, rc)
 	logger.Info("gate started", "gate", "probe")
 
@@ -321,7 +376,7 @@ func TestLoggerConfigUsesConsoleMode(t *testing.T) {
 		t.Fatalf("ai mode should use sparse-AI console records, got %#v", rec)
 	}
 
-	jsonCap := &logging.RecordCapture{}
+	jsonCap := &recordCapture{}
 	jsonLogger := newLogger("json", slog.LevelInfo, jsonCap)
 	jsonLogger.Info("gate started", "gate", "probe")
 	if rec := jsonCap.LastJSON(); rec["service"] != "keel-dev" || rec["msg"] != "gate started" {

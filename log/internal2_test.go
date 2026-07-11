@@ -5,7 +5,6 @@ package log
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"strings"
 	"testing"
@@ -14,7 +13,7 @@ import (
 
 func TestBuildIdentity(t *testing.T) {
 	l, rc := newForTesting("svc")
-	LogBuildIdentity(l, "", "")
+	logBuildIdentity(l, "", "")
 	rec := rc.LastJSON()
 	if rec["version"] != "dev" {
 		t.Errorf("empty version should log as dev, got %v", rec["version"])
@@ -23,20 +22,20 @@ func TestBuildIdentity(t *testing.T) {
 		t.Error("git_commit should always be populated")
 	}
 
-	LogBuildIdentity(l, "v1.2.3", "abc123")
+	logBuildIdentity(l, "v1.2.3", "abc123")
 	rec = rc.LastJSON()
 	if rec["version"] != "v1.2.3" || rec["git_commit"] != "abc123" {
 		t.Errorf("explicit identity not honored: %v", rec)
 	}
 
-	LogBuildIdentity(nil, "v1", "c") // nil logger falls back, must not panic
+	logBuildIdentity(nil, "v1", "c") // nil logger falls back, must not panic
 
-	if got := ResolveGitCommit("explicit"); got != "explicit" {
+	if got := resolveGitCommit("explicit"); got != "explicit" {
 		t.Errorf("explicit commit should pass through, got %q", got)
 	}
 	// "dev" and "" resolve from build info; tests run without vcs stamping, so
 	// any non-empty result is acceptable.
-	if got := ResolveGitCommit("dev"); got == "" {
+	if got := resolveGitCommit("dev"); got == "" {
 		t.Error("dev commit resolution returned empty")
 	}
 	if versionOrDev("") != "dev" || versionOrDev("v2") != "v2" {
@@ -46,7 +45,7 @@ func TestBuildIdentity(t *testing.T) {
 
 func TestStartDailyBuildIdentityStops(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	StartDailyBuildIdentity(ctx, Discard(), "v1", "c")
+	startDailyBuildIdentity(ctx, discard(), "v1", "c")
 	cancel() // goroutine must exit on ctx.Done without firing
 	time.Sleep(10 * time.Millisecond)
 
@@ -57,15 +56,15 @@ func TestStartDailyBuildIdentityStops(t *testing.T) {
 
 func TestNewWithJSONLAndSinkHandlers(t *testing.T) {
 	dir := t.TempDir()
-	primary := &RecordCapture{}
-	file := &RecordCapture{}
+	primary := &recordCapture{}
+	file := &recordCapture{}
 
-	// JSONL handler composition branch of New.
+	// Additional handler composition branch of New.
 	l, err := New(Config{
-		Service:         "svc",
-		Console:         ConsoleJSON,
-		Writer:          primary,
-		JSONFileHandler: newTestJSONHandler(file),
+		Service:  "svc",
+		Console:  ConsoleJSON,
+		Writer:   primary,
+		Handlers: []slog.Handler{newTestJSONHandler(file)},
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -75,20 +74,11 @@ func TestNewWithJSONLAndSinkHandlers(t *testing.T) {
 		t.Fatal("record missing from a sink")
 	}
 
-	// Human+JSON handler composition branches of New.
-	hh, err := NewHumanFileHandler(dir, "svc")
-	if err != nil {
-		t.Fatal(err)
-	}
-	jh, err := NewJSONFileHandler(dir, "svc")
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Text/JSONL file composition branches of New.
 	for _, cfg := range []Config{
-		{Service: "svc", Writer: &RecordCapture{}, HumanFileHandler: hh, JSONFileHandler: jh},
-		{Service: "svc", Writer: &RecordCapture{}, HumanFileHandler: hh},
-		{Service: "svc", Writer: &RecordCapture{}, JSONFileHandler: jh},
-		{Service: "svc", Writer: &RecordCapture{}, TextDir: dir},
+		{Service: "svc", Writer: &recordCapture{}, TextDir: dir, JSONLDir: dir},
+		{Service: "svc", Writer: &recordCapture{}, TextDir: dir},
+		{Service: "svc", Writer: &recordCapture{}, JSONLDir: dir},
 	} {
 		l, err := New(cfg)
 		if err != nil {
@@ -98,7 +88,7 @@ func TestNewWithJSONLAndSinkHandlers(t *testing.T) {
 	}
 
 	// WithGroup on the composed handlers.
-	rc := &RecordCapture{}
+	rc := &recordCapture{}
 	lg, err := New(Config{Service: "svc", Level: slog.LevelDebug, Console: ConsolePlain, Writer: rc})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -114,7 +104,7 @@ func TestNewWithJSONLAndSinkHandlers(t *testing.T) {
 	}
 }
 
-func newTestJSONHandler(w io.Writer) slog.Handler {
+func newTestJSONHandler(w *recordCapture) slog.Handler {
 	return slog.NewJSONHandler(w, &slog.HandlerOptions{
 		Level:       slog.LevelDebug,
 		ReplaceAttr: replaceForOpenBrain,
@@ -122,12 +112,12 @@ func newTestJSONHandler(w io.Writer) slog.Handler {
 }
 
 func TestRecentBufferEdges(t *testing.T) {
-	buf := NewRecentBuffer(3)
+	buf := newRecentBuffer(3)
 	if buf.Len() != 0 {
 		t.Fatal("fresh buffer not empty")
 	}
 	base, _ := newForTesting("svc")
-	l := TeeRecent(base, buf, "svc")
+	l := teeRecent(base, buf, "svc")
 	l = l.With("k", "v") // exercise WithAttrs on the tee handler
 	l = l.WithGroup("grp")
 	for i := 0; i < 5; i++ {

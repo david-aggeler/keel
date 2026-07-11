@@ -9,18 +9,6 @@ import (
 	logging "github.com/david-aggeler/keel/log"
 )
 
-func TestMetricKind_Value(t *testing.T) {
-	if logging.MetricKind != "metric" {
-		t.Errorf("MetricKind = %q; want %q", logging.MetricKind, "metric")
-	}
-}
-
-func TestEventConstants(t *testing.T) {
-	if logging.EventToolCall != "tool_call" {
-		t.Errorf("EventToolCall = %q; want %q", logging.EventToolCall, "tool_call")
-	}
-}
-
 // DHF-TEST: keel/requirement-31
 func TestFoundationExportsAreConsumerAgnostic(t *testing.T) {
 	out, err := exec.Command("go", "list", "github.com/david-aggeler/keel/...").CombinedOutput()
@@ -47,23 +35,10 @@ func TestFoundationExportsAreConsumerAgnostic(t *testing.T) {
 	}
 }
 
-func TestMetric_ReturnsKindAttr(t *testing.T) {
-	a := logging.Metric()
-	if a.Key != "kind" {
-		t.Errorf("Metric().Key = %q; want %q", a.Key, "kind")
-	}
-	if a.Value.Kind() != slog.KindString {
-		t.Errorf("Metric().Value.Kind() = %v; want KindString", a.Value.Kind())
-	}
-	if a.Value.String() != "metric" {
-		t.Errorf("Metric().Value.String() = %q; want %q", a.Value.String(), "metric")
-	}
-}
-
 func TestEmit_ProducesInfoLevelWithKindMetric(t *testing.T) {
-	logger, rc := newJSONCaptureLogger(t, "test-svc")
+	logger, rc := newJSONMetricLogger(t, "test-svc")
 
-	logging.Emit(logger, logging.EventToolCall,
+	logger.Emit("tool_call",
 		slog.String("tool", "store_memory"),
 		slog.Int64("duration_ms", 42),
 		slog.Bool("error", false),
@@ -73,8 +48,8 @@ func TestEmit_ProducesInfoLevelWithKindMetric(t *testing.T) {
 	if got == nil {
 		t.Fatal("expected a captured log line, got nil")
 	}
-	if got["msg"] != logging.EventToolCall {
-		t.Errorf("msg = %q; want %q", got["msg"], logging.EventToolCall)
+	if got["msg"] != "tool_call" {
+		t.Errorf("msg = %q; want %q", got["msg"], "tool_call")
 	}
 	if got["level"] != "INFO" {
 		t.Errorf("level = %q; want %q", got["level"], "INFO")
@@ -85,9 +60,9 @@ func TestEmit_ProducesInfoLevelWithKindMetric(t *testing.T) {
 }
 
 func TestEmit_MsDurationsAreNumeric(t *testing.T) {
-	logger, rc := newJSONCaptureLogger(t, "test-svc")
+	logger, rc := newJSONMetricLogger(t, "test-svc")
 
-	logging.Emit(logger, "sync_timing",
+	logger.Emit("sync_timing",
 		slog.String("op", "create"),
 		slog.Int64("pull_ms", 10),
 		slog.Int64("commit_ms", 20),
@@ -116,9 +91,9 @@ func TestEmit_MsDurationsAreNumeric(t *testing.T) {
 }
 
 func TestEmit_CountFieldsAreNumeric(t *testing.T) {
-	logger, rc := newJSONCaptureLogger(t, "test-svc")
+	logger, rc := newJSONMetricLogger(t, "test-svc")
 
-	logging.Emit(logger, "ingest_summary",
+	logger.Emit("ingest_summary",
 		slog.Int("ok_count", 5),
 		slog.Int("err_count", 2),
 	)
@@ -143,11 +118,11 @@ func TestEmit_CountFieldsAreNumeric(t *testing.T) {
 }
 
 func TestEmit_MultipleCallsProduceMultipleLines(t *testing.T) {
-	logger, rc := newJSONCaptureLogger(t, "test-svc")
+	logger, rc := newJSONMetricLogger(t, "test-svc")
 
-	logging.Emit(logger, logging.EventToolCall, slog.String("tool", "tool_a"))
-	logging.Emit(logger, logging.EventToolCall, slog.String("tool", "tool_b"))
-	logging.Emit(logger, logging.EventToolCall, slog.String("tool", "tool_c"))
+	logger.Emit("tool_call", slog.String("tool", "tool_a"))
+	logger.Emit("tool_call", slog.String("tool", "tool_b"))
+	logger.Emit("tool_call", slog.String("tool", "tool_c"))
 
 	// Count lines in the capture buffer.
 	raw := rc.LastRaw()
@@ -161,7 +136,7 @@ func TestEmit_MultipleCallsProduceMultipleLines(t *testing.T) {
 
 	// Reset and verify buffer tracks all three.
 	rc.Reset()
-	logging.Emit(logger, logging.EventToolCall, slog.String("tool", "tool_d"))
+	logger.Emit("tool_call", slog.String("tool", "tool_d"))
 	got := rc.LastJSON()
 	if got == nil {
 		t.Fatal("expected a line after reset")
@@ -180,10 +155,10 @@ func TestEmit_MultipleCallsProduceMultipleLines(t *testing.T) {
 // Emit call when multiple events are emitted. This is the key use-case for
 // drift tests that need to inspect both a per-record line and a summary line.
 func TestEmit_AllJSONSeesAllLines(t *testing.T) {
-	logger, rc := newJSONCaptureLogger(t, "test-svc")
+	logger, rc := newJSONMetricLogger(t, "test-svc")
 
-	logging.Emit(logger, logging.EventToolCall, slog.String("tool", "a"))
-	logging.Emit(logger, logging.EventToolCall, slog.String("tool", "b"))
+	logger.Emit("tool_call", slog.String("tool", "a"))
+	logger.Emit("tool_call", slog.String("tool", "b"))
 
 	all := rc.AllJSON()
 	if len(all) != 2 {
@@ -201,4 +176,15 @@ func TestEmit_AllJSONSeesAllLines(t *testing.T) {
 			t.Errorf("AllJSON[%d][kind] = %v, want %q", i, line["kind"], "metric")
 		}
 	}
+}
+
+func newJSONMetricLogger(t testing.TB, service string) (*logging.Logger, *recordCapture) {
+	t.Helper()
+	rc := &recordCapture{}
+	return mustNewLogger(t, logging.Config{
+		Service: service,
+		Level:   slog.LevelDebug,
+		Console: logging.ConsoleJSON,
+		Writer:  rc,
+	}), rc
 }
