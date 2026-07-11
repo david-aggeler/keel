@@ -208,7 +208,7 @@ func New(cfg Config) (*Logger, error) {
 
 	closers := make([]io.Closer, 0, 2)
 	if cfg.TextDir != "" {
-		h, err := newHumanFileHandler(cfg.TextDir, cfg.Service, cfg.SourceInFiles)
+		h, err := newTextFileHandler(cfg.TextDir, cfg.Service, cfg.SourceInFiles)
 		if err != nil {
 			return nil, fmt.Errorf("keel/log: open text sink: %w", err)
 		}
@@ -357,10 +357,10 @@ func (l *Logger) argsWithAutoSource(args []any) []any {
 	return out
 }
 
-// Header emits a ruled human-mode banner.
+// Header emits a ruled banner, rendered per console mode.
 func (l *Logger) Header(title string, version string) { header(l.slog(), title, version) }
 
-// Section emits a ruled human-mode section header.
+// Section emits a ruled section banner, rendered per console mode.
 func (l *Logger) Section(name string) { section(l.slog(), name) }
 
 // Field emits one aligned label/value row.
@@ -1015,18 +1015,18 @@ func (h *jsonFileHandler) Close() error {
 	return h.close()
 }
 
-func newHumanFileHandler(dir string, service string, source bool) (slog.Handler, error) {
+func newTextFileHandler(dir string, service string, source bool) (slog.Handler, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, err
 	}
-	if err := pruneHumanLogs(dir, service, 10); err != nil {
+	if err := pruneTextLogs(dir, service, 10); err != nil {
 		return nil, err
 	}
 	f, err := os.OpenFile(textLogPath(dir, service), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, err
 	}
-	if err := pruneHumanLogs(dir, service, 10); err != nil {
+	if err := pruneTextLogs(dir, service, 10); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
@@ -1196,7 +1196,7 @@ func perRunJSONLogPath(dir string) string {
 	return filepath.Join(dir, stamp+"-"+fmt.Sprintf("%d", os.Getpid())+".jsonl")
 }
 
-func pruneHumanLogs(dir string, service string, keep int) error {
+func pruneTextLogs(dir string, service string, keep int) error {
 	matches, err := filepath.Glob(filepath.Join(dir, safeLogService(service)+"-*.log"))
 	if err != nil {
 		return err
