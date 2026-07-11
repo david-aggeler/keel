@@ -5,9 +5,43 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
+
+// DHF-TEST: keel/requirement-30
+func TestCLIPackageDocsMeetNarrativeBar(t *testing.T) {
+	source, err := os.ReadFile("cli.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	for _, want := range []string{
+		"command tree",
+		"Dispatch",
+		"generated help",
+		"Mode",
+		"RuntimeConfig",
+		"UsageError",
+		"exit code 2",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("package docs missing %q", want)
+		}
+	}
+	if !regexp.MustCompile(`DHF-REQ:.*keel/requirement-30`).MatchString(text) {
+		t.Fatal("package docs missing DHF-REQ trace for keel/requirement-30")
+	}
+	exampleSource, err := os.ReadFile("example_test.go")
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`(?m)^func Example`).MatchString(text) && !regexp.MustCompile(`(?m)^func Example`).MatchString(string(exampleSource)) {
+		t.Fatal("cli package must include a runnable go doc Example")
+	}
+}
 
 // DHF-TEST: keel/requirement-21
 func TestCommandModelDispatchHelpAndUsageErrors(t *testing.T) {
