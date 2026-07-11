@@ -41,7 +41,9 @@ func validateVersion(version string) error {
 
 // runRelease cuts a release in one invocation:
 //
-//	preflight (clean tree + green `keel-dev ci`) -> annotated tag ->
+//	preflight (clean tree + green `keel-dev ci` + green `keel-dev vsix ci`) ->
+//	stamp vsix/package.json from the tag and COMMIT the stamp -> build the VSIX
+//	asset -> annotated tag (whose tree now carries the stamped version) ->
 //	`gh release create` -> anonymous go-get verification from a clean cache.
 //
 // It refuses before creating any tag if the tree is dirty or the gate is red,
@@ -68,11 +70,23 @@ func runRelease(ctx context.Context, logger *slog.Logger, dir string, version st
 	if err := runVSIXGate(ctx, logger, dir); err != nil {
 		return fmt.Errorf("release preflight: %w", err)
 	}
+	logger.Info("preflight green", "version", version)
+
+	// --- Stamp + commit the VSIX version, then build the asset. ---
+	// The stamp is committed BEFORE the tag so the tag's tree carries the same
+	// vsix/package.json version as the release asset (one-version invariant);
+	// tagging a dirty stamp would publish an asset the tagged source disagrees
+	// with.
+	if err := stampVSIXPackageVersion(filepath.Join(dir, "vsix", "package.json"), strings.TrimPrefix(version, "v")); err != nil {
+		return fmt.Errorf("stamp vsix version: %w", err)
+	}
+	if err := commitVSIXStamp(ctx, logger, dir, version); err != nil {
+		return err
+	}
 	asset, err := buildVSIXReleaseAsset(ctx, logger, dir, version)
 	if err != nil {
-		return fmt.Errorf("release preflight: %w", err)
+		return err
 	}
-	logger.Info("preflight green", "version", version)
 
 	// --- Tag. ---
 	if err := runCmd(ctx, logger, dir, "git", "tag", "-a", version, "-m", "keel "+version); err != nil {
@@ -97,12 +111,37 @@ func runRelease(ctx context.Context, logger *slog.Logger, dir string, version st
 	return nil
 }
 
+// commitVSIXStamp commits the stamped vsix/package.json so the annotated tag
+// records the same version the release asset carries. A no-op when the
+// committed file already carries the target version.
+//
+// DHF-REQ: keel/requirement-40
+func commitVSIXStamp(ctx context.Context, logger *slog.Logger, dir, version string) error {
+	rel := filepath.Join("vsix", "package.json")
+	out, _, err := capture(ctx, logger, dir, "git", "status", "--porcelain", "--", rel)
+	if err != nil {
+		return fmt.Errorf("git status %s: %w", rel, err)
+	}
+	if strings.TrimSpace(out) == "" {
+		logger.Info("vsix version already committed", "version", version)
+		return nil
+	}
+	if err := runCmd(ctx, logger, dir, "git", "add", "--", rel); err != nil {
+		return fmt.Errorf("stage vsix version stamp: %w", err)
+	}
+	if err := runCmd(ctx, logger, dir, "git", "commit", "-m", "keel "+version+": stamp VSIX version"); err != nil {
+		return fmt.Errorf("commit vsix version stamp: %w", err)
+	}
+	logger.Info("vsix version stamp committed", "version", version)
+	return nil
+}
+
+// buildVSIXReleaseAsset packages the (already stamped and committed) extension
+// and returns the asset path.
+//
 // DHF-REQ: keel/requirement-40
 func buildVSIXReleaseAsset(ctx context.Context, logger *slog.Logger, dir, version string) (string, error) {
 	vsixDir := filepath.Join(dir, "vsix")
-	if err := stampVSIXPackageVersion(filepath.Join(vsixDir, "package.json"), strings.TrimPrefix(version, "v")); err != nil {
-		return "", err
-	}
 	if err := runStep(ctx, logger, dir, step{
 		name:    "vsix:package",
 		program: "pnpm",

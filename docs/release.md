@@ -29,15 +29,17 @@ preflight step fails:
 5. **Green VSIX gate** — `keel-dev vsix ci` runs pnpm compile/lint and the
    headless VS Code extension suite. It fails loudly if Node, pnpm, or xvfb is
    absent.
-6. **VSIX asset build** — `vsix/package.json` is stamped from the release tag
-   and `pnpm --dir vsix run package:vsix` builds the release asset.
-
 Only then does it:
 
-7. Create the annotated tag `vX.Y.Z` and push it to `origin`.
-8. Create the GitHub release with `gh release create ... --generate-notes`,
+6. **Stamp + commit the VSIX version** — `vsix/package.json` is stamped from
+   the release tag and the stamp is **committed**, so the tag's tree carries
+   the same version as the release asset (one version, no dirty-stamp drift).
+7. **VSIX asset build** — `pnpm --dir vsix run package:vsix` builds the
+   release asset from that committed state.
+8. Create the annotated tag `vX.Y.Z` and push it to `origin`.
+9. Create the GitHub release with `gh release create ... --generate-notes`,
    attaching `vsix/dist/keel-test-bridge-X.Y.Z.vsix`.
-9. **Verify anonymous resolution** — in a throwaway module with a fresh
+10. **Verify anonymous resolution** — in a throwaway module with a fresh
    `GOMODCACHE` and every private-access escape hatch scrubbed
    (`GOPRIVATE`/`GOINSECURE`/`GONOSUMDB` empty, global git config ignored), run
    `go get github.com/david-aggeler/keel@vX.Y.Z` and fail loudly if it does not
