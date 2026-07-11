@@ -407,6 +407,7 @@ func (h multiHandler) Enabled(ctx context.Context, level slog.Level) bool {
 }
 
 func (h multiHandler) Handle(ctx context.Context, r slog.Record) error {
+	r = redactRecord(r)
 	var err error
 	for _, handler := range h.handlers {
 		if handler.Enabled(ctx, r.Level) {
@@ -417,6 +418,7 @@ func (h multiHandler) Handle(ctx context.Context, r slog.Record) error {
 }
 
 func (h multiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	attrs = redactAttrs(attrs)
 	next := multiHandler{handlers: make([]slog.Handler, 0, len(h.handlers))}
 	for _, handler := range h.handlers {
 		next.handlers = append(next.handlers, handler.WithAttrs(attrs))
@@ -430,6 +432,53 @@ func (h multiHandler) WithGroup(name string) slog.Handler {
 		next.handlers = append(next.handlers, handler.WithGroup(name))
 	}
 	return next
+}
+
+// DHF-REQ: keel/requirement-16, keel/requirement-22
+func redactRecord(r slog.Record) slog.Record {
+	r = r.Clone()
+	r.Message = RedactString(r.Message)
+	attrs := make([]slog.Attr, 0, r.NumAttrs())
+	r.Attrs(func(a slog.Attr) bool {
+		attrs = append(attrs, redactAttr(a))
+		return true
+	})
+	r = slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
+	r.AddAttrs(attrs...)
+	return r
+}
+
+func redactAttrs(attrs []slog.Attr) []slog.Attr {
+	if len(attrs) == 0 {
+		return attrs
+	}
+	redacted := make([]slog.Attr, 0, len(attrs))
+	for _, attr := range attrs {
+		redacted = append(redacted, redactAttr(attr))
+	}
+	return redacted
+}
+
+func redactAttr(a slog.Attr) slog.Attr {
+	a.Value = redactValue(a.Key, a.Value.Resolve())
+	return a
+}
+
+func redactValue(key string, v slog.Value) slog.Value {
+	if v.Kind() == slog.KindString && isSensitiveAttrKey(key) {
+		return slog.StringValue("[REDACTED]")
+	}
+	if v.Kind() == slog.KindString {
+		return slog.StringValue(RedactString(v.String()))
+	}
+	if v.Kind() == slog.KindGroup {
+		attrs := v.Group()
+		for i := range attrs {
+			attrs[i] = redactAttr(attrs[i])
+		}
+		return slog.GroupValue(attrs...)
+	}
+	return v
 }
 
 type sparseAIHandler struct {
