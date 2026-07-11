@@ -171,6 +171,15 @@ func TestVSCodeProtocolWriterIsOnlyStdoutAllowlistGrowth(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "extraProtocolStream") {
 		t.Fatalf("unexpected stdout allowlist growth should fail, got %v", err)
 	}
+
+	writeFile(t, keeldev, "main.go",
+		"package main\n\nimport (\n\t\"io\"\n\t\"os\"\n)\n\nfunc newLogger() io.Writer { return os.Stdout }\n")
+	writeFile(t, keeldev, "stream.go",
+		"package main\n\nimport (\n\t\"io\"\n\t\"os\"\n)\n\nfunc newProtocolStream() io.Writer { return os.Stdout }\n")
+	err = runLint(dir)
+	if err == nil || !strings.Contains(err.Error(), "newProtocolStream") || !strings.Contains(err.Error(), "stream.go") {
+		t.Fatalf("stdout allowlist must include file and function, got %v", err)
+	}
 }
 
 // DHF-TEST: keel/requirement-38
