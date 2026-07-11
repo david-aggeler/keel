@@ -3,7 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { adapterConfig, configRelativePath, currentConfigVersion, defaultAdapterConfig, defaultConfigTemplate, discoverTests, planTests, readAdapterConfig, runTests } from './bridgeAdapter';
-import { ExternalRunMirror, ExternalRunStateSnapshot } from './externalRunMirror';
+import { ExternalRunMirror, ExternalRunStateSnapshot, setExternalRunStaleMsForTest } from './externalRunMirror';
 import { publishDiscovery, PublishedTree } from './tree';
 import { DesiredState, RunEvent, SetupPlan } from './protocol';
 
@@ -18,6 +18,7 @@ let externalRunMirror: ExternalRunMirror | undefined;
 // Re-export for any caller that still imports ExternalRunMirror /
 // ExternalRunStateSnapshot from './extension' (the pre-Story-27.24 path).
 export { ExternalRunMirror };
+export { setExternalRunStaleMsForTest };
 export type { ExternalRunStateSnapshot };
 
 // DHF-REQ: keel/requirement-40
@@ -633,6 +634,10 @@ export function extensionOutput(): vscode.OutputChannel {
 
 export function currentTree(): PublishedTree | undefined {
   return tree;
+}
+
+export function setCurrentTreeForTest(next: PublishedTree | undefined): void {
+  tree = next;
 }
 
 async function openDevWorkspaceWhenLaunchedEmpty(): Promise<void> {
