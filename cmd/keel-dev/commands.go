@@ -59,6 +59,7 @@ func commandTree() *cli.CommandSpec {
 			{Name: "release", Use: "release vX.Y.Z", Short: "Cut a release after a clean preflight.", Handler: handleRelease},
 			{Name: "verify", Use: "verify vX.Y.Z", Short: "Re-verify anonymous module fetch for an existing tag.", Handler: handleVerify},
 			vscodeCommandSpec(),
+			vsixCommandSpec(),
 		},
 	}
 	tree.InheritConfig()

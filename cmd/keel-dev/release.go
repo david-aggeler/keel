@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -64,6 +65,13 @@ func runRelease(ctx context.Context, logger *slog.Logger, dir string, version st
 	if err := runCI(ctx, logger, dir); err != nil {
 		return fmt.Errorf("release preflight: %w", err)
 	}
+	if err := runVSIXGate(ctx, logger, dir); err != nil {
+		return fmt.Errorf("release preflight: %w", err)
+	}
+	asset, err := buildVSIXReleaseAsset(ctx, logger, dir, version)
+	if err != nil {
+		return fmt.Errorf("release preflight: %w", err)
+	}
 	logger.Info("preflight green", "version", version)
 
 	// --- Tag. ---
@@ -76,7 +84,7 @@ func runRelease(ctx context.Context, logger *slog.Logger, dir string, version st
 	logger.Info("tag created and pushed", "version", version)
 
 	// --- GitHub release. ---
-	if err := runCmd(ctx, logger, dir, "gh", "release", "create", version, "--title", "keel "+version, "--generate-notes"); err != nil {
+	if err := runCmd(ctx, logger, dir, "gh", "release", "create", version, "--title", "keel "+version, "--generate-notes", asset); err != nil {
 		return fmt.Errorf("gh release create: %w", err)
 	}
 	logger.Info("github release created", "version", version)
@@ -87,6 +95,43 @@ func runRelease(ctx context.Context, logger *slog.Logger, dir string, version st
 	}
 	logger.Info("release complete", "module", modulePath, "version", version)
 	return nil
+}
+
+// DHF-REQ: keel/requirement-40
+func buildVSIXReleaseAsset(ctx context.Context, logger *slog.Logger, dir, version string) (string, error) {
+	vsixDir := filepath.Join(dir, "vsix")
+	if err := stampVSIXPackageVersion(filepath.Join(vsixDir, "package.json"), strings.TrimPrefix(version, "v")); err != nil {
+		return "", err
+	}
+	if err := runStep(ctx, logger, dir, step{
+		name:    "vsix:package",
+		program: "pnpm",
+		args:    []string{"--dir", vsixDir, "run", "package:vsix"},
+	}); err != nil {
+		return "", err
+	}
+	asset := filepath.Join(vsixDir, "dist", "keel-test-bridge-"+strings.TrimPrefix(version, "v")+".vsix")
+	if _, err := os.Stat(asset); err != nil {
+		return "", fmt.Errorf("vsix package asset %s: %w", asset, err)
+	}
+	return asset, nil
+}
+
+func stampVSIXPackageVersion(path, version string) error {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var pkg map[string]any
+	if err := json.Unmarshal(body, &pkg); err != nil {
+		return fmt.Errorf("parse %s: %w", path, err)
+	}
+	pkg["version"] = version
+	out, err := json.MarshalIndent(pkg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(out, '\n'), 0o644)
 }
 
 // runVerify validates the version and confirms the tag resolves anonymously,
