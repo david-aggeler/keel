@@ -152,6 +152,32 @@ func TestExitCodeMapping(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-18
+func TestExitCodeForRedactsUsageErrorBeforeInjectedHandlers(t *testing.T) {
+	var out bytes.Buffer
+	logger, err := logging.New(logging.Config{
+		Service:  "keel-demo-test",
+		Console:  logging.ConsoleNone,
+		Handlers: []slog.Handler{slog.NewJSONHandler(&out, nil)},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = logger.Close() })
+
+	code := exitCodeFor(logger, cli.NewUsageError("bad token Bearer usage-error-token"))
+	if code != 2 {
+		t.Fatalf("exitCodeFor(usage) = %d, want 2", code)
+	}
+	rendered := out.String()
+	if strings.Contains(rendered, "usage-error-token") {
+		t.Fatalf("usage error leaked raw secret:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "Bearer [REDACTED]") {
+		t.Fatalf("usage error output missing redaction marker:\n%s", rendered)
+	}
+}
+
 func runDemo(t *testing.T, args ...string) (string, int) {
 	t.Helper()
 
