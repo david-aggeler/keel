@@ -23,10 +23,7 @@ suite('Keel Test Bridge config contract', () => {
     assert.equal(manifest.name, 'keel-test-bridge');
     assert.equal(manifest.displayName, 'Keel Test Bridge');
     assert.equal(manifest.license, 'Apache-2.0');
-    assert.deepEqual(
-      manifest.activationEvents.filter((event) => event.startsWith('workspaceContains:')),
-      ['workspaceContains:.vscode/test-bridge.json']
-    );
+    assert.deepEqual(manifest.activationEvents, ['workspaceContains:.vscode/test-bridge.json']);
     assert.equal(manifest.contributes?.configuration, undefined);
     const commands = new Set(manifest.contributes?.commands?.map((command) => command.command));
     assert.ok(commands.has('keel.tests.refresh'));

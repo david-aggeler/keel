@@ -16,11 +16,7 @@
     "Testing"
   ],
   "activationEvents": [
-    "workspaceContains:.vscode/test-bridge.json",
-    "onCommand:keel.tests.refresh",
-    "onCommand:keel.tests.initConfig",
-    "onCommand:keel.tests.clearTestResults",
-    "onCommand:keel.tests.clearLocalState"
+    "workspaceContains:.vscode/test-bridge.json"
   ],
   "main": "./out/extension.js",
   "contributes": {
