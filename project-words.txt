@@ -72,6 +72,7 @@ unparseable
 unredacted
 webdav
 worktree
+worktrees
 keel
 codex
 coverpkg
