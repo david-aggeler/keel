@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"log/slog"
 
 	"github.com/david-aggeler/keel/cli"
@@ -9,15 +10,20 @@ import (
 )
 
 type runState struct {
-	logger *slog.Logger
-	runLog *logging.Logger
-	root   string
+	logger   *slog.Logger
+	runLog   *logging.Logger
+	root     string
+	protocol io.Writer
 }
 
 type runStateKey struct{}
 
 func withRunState(ctx context.Context, logger *slog.Logger, runLog *logging.Logger, root string) context.Context {
-	return context.WithValue(ctx, runStateKey{}, runState{logger: logger, runLog: runLog, root: root})
+	return withRunStateProtocol(ctx, logger, runLog, root, newProtocolStream())
+}
+
+func withRunStateProtocol(ctx context.Context, logger *slog.Logger, runLog *logging.Logger, root string, protocol io.Writer) context.Context {
+	return context.WithValue(ctx, runStateKey{}, runState{logger: logger, runLog: runLog, root: root, protocol: protocol})
 }
 
 func stateFrom(ctx context.Context) runState {
@@ -52,6 +58,7 @@ func commandTree() *cli.CommandSpec {
 			{Name: "ci", Use: "ci", Short: "Run the verification gate: gofmt, build, vet, lint, test.", Handler: handleCI},
 			{Name: "release", Use: "release vX.Y.Z", Short: "Cut a release after a clean preflight.", Handler: handleRelease},
 			{Name: "verify", Use: "verify vX.Y.Z", Short: "Re-verify anonymous module fetch for an existing tag.", Handler: handleVerify},
+			vscodeCommandSpec(),
 		},
 	}
 	tree.InheritConfig()

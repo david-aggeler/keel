@@ -141,15 +141,17 @@ func scanNoRawFmtOutput(root string) ([]string, error) {
 	return violations, nil
 }
 
-// stdoutAllowlist names the only functions in cmd/keel-dev permitted to touch
-// os.Stdout/os.Stderr: logger construction (the writers keel/log wraps) and the
-// static usage-text printer. Everything else must go through the logger.
+// stdoutAllowlist names the only (file, function) pairs in cmd/keel-dev
+// permitted to touch os.Stdout/os.Stderr: logger construction (the writers
+// keel/log wraps), the static usage-text printer, and the sole VS Code protocol
+// JSONL stream. Everything else must go through the logger.
 var stdoutAllowlist = map[string]bool{
-	"buildLogger":  true,
-	"loggerConfig": true, // base logger config (console writer)
-	"newLogger":    true,
-	"printUsage":   true,
-	"run":          true, // unknown-flag refusal precedes logger construction
+	fileFunc("main.go", "buildLogger"):       true,
+	fileFunc("main.go", "loggerConfig"):      true, // base logger config (console writer)
+	fileFunc("main.go", "newLogger"):         true,
+	fileFunc("main.go", "newProtocolStream"): true,
+	fileFunc("main.go", "printUsage"):        true,
+	fileFunc("main.go", "run"):               true, // unknown-flag refusal precedes logger construction
 }
 
 // scanNoRawStdoutStream reports os.Stdout/os.Stderr references in cmd/keel-dev
@@ -166,7 +168,7 @@ func scanNoRawStdoutStream(dir string) ([]string, error) {
 			if !ok {
 				continue
 			}
-			if filepath.Base(path) == "main.go" && stdoutAllowlist[fn.Name.Name] {
+			if stdoutAllowlist[fileFunc(filepath.Base(path), fn.Name.Name)] {
 				continue
 			}
 			ast.Inspect(fn, func(n ast.Node) bool {
@@ -186,6 +188,10 @@ func scanNoRawStdoutStream(dir string) ([]string, error) {
 		}
 	})
 	return violations, err
+}
+
+func fileFunc(file, fn string) string {
+	return file + ":" + fn
 }
 
 // libraryDocDirs are the module-root-relative library package roots whose
