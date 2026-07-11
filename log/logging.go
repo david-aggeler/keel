@@ -141,6 +141,14 @@ func replaceForOpenBrain(groups []string, a slog.Attr) slog.Attr {
 	return a
 }
 
+// DHF-REQ: keel/requirement-20
+func replaceForOpenBrainFile(groups []string, a slog.Attr) slog.Attr {
+	if a.Key == slog.SourceKey {
+		return a
+	}
+	return replaceForOpenBrain(groups, a)
+}
+
 func replaceForConsole(groups []string, a slog.Attr) slog.Attr {
 	a = replaceForOpenBrain(groups, a)
 	if isContextKey(a.Key) {
@@ -234,7 +242,7 @@ func New(cfg Config) (*Logger, error) {
 			closers = append(closers, c)
 		}
 	} else if cfg.JSONLDir != "" {
-		h, path, counter, err := newJSONFileHandler(cfg.JSONLDir, cfg.Service, cfg.PerRun)
+		h, path, counter, err := newJSONFileHandler(cfg.JSONLDir, cfg.Service, cfg.PerRun, cfg.SourceInFiles)
 		if err != nil {
 			closeAll(closers)
 			return nil, fmt.Errorf("keel/log: open jsonl sink: %w", err)
@@ -966,11 +974,11 @@ type humanFileHandler struct {
 //
 // DHF-REQ: openbrain/change_request-441
 func NewJSONFileHandler(dir string, service string) (slog.Handler, error) {
-	h, _, _, err := newJSONFileHandler(dir, service, false)
+	h, _, _, err := newJSONFileHandler(dir, service, false, false)
 	return h, err
 }
 
-func newJSONFileHandler(dir string, service string, perRun bool) (slog.Handler, string, *lineCountingWriteCloser, error) {
+func newJSONFileHandler(dir string, service string, perRun bool, source bool) (slog.Handler, string, *lineCountingWriteCloser, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, "", nil, err
 	}
@@ -987,8 +995,9 @@ func newJSONFileHandler(dir string, service string, perRun bool) (slog.Handler, 
 	w := &lineCountingWriteCloser{WriteCloser: f}
 	return &jsonFileHandler{
 		Handler: slog.NewJSONHandler(w, &slog.HandlerOptions{
+			AddSource:   source,
 			Level:       slog.LevelDebug,
-			ReplaceAttr: replaceForOpenBrain,
+			ReplaceAttr: replaceForOpenBrainFile,
 		}),
 		close: w.Close,
 	}, path, w, nil
