@@ -74,12 +74,14 @@ webdav
 worktree
 keel
 codex
+coverpkg
 cspell
 shfmt
 shellcheck
 deadcode
 gitleaks
 gomodcache
+GOAUTH
 nodejs
 npx
 pnpm
