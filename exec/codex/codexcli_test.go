@@ -332,6 +332,58 @@ func TestRun_EmitsCuratedCodexProgressRecords(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-2
+func TestRun_DoesNotEmitTerminalResultAsCodexProgress(t *testing.T) {
+	dir := t.TempDir()
+	argvFile := filepath.Join(dir, "argv.txt")
+	stdinLenFile := filepath.Join(dir, "stdinlen.txt")
+	stub := writeStreamStub(t, argvFile, stdinLenFile, []string{
+		`{"type":"agent_message","text":"working"}`,
+		`{"type":"result","text":"final answer"}`,
+	}, 0)
+
+	var logBuf bytes.Buffer
+	logger, err := logging.New(logging.Config{
+		Service: "codexcli-test",
+		Level:   slog.LevelDebug,
+		Console: logging.ConsoleJSON,
+		Writer:  &logBuf,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := Run(context.Background(), Request{
+		Prompt: "inspect repository",
+		Dir:    dir,
+		Bin:    stub,
+		Logger: logger,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	records := parseJSONLogRecords(t, logBuf.String())
+	for _, record := range records {
+		if got, _ := record["msg"].(string); got != "codex progress" {
+			continue
+		}
+		if got, _ := record["event_type"].(string); got == "result" {
+			t.Fatalf("terminal result event was emitted as codex progress: %#v", record)
+		}
+	}
+	progress := findLogRecord(t, records, "msg", "codex progress")
+	if got, ok := progress["detail"].(string); !ok || got != "working" {
+		t.Fatalf("codex progress detail = %#v, want non-result progress only", progress["detail"])
+	}
+}
+
+// DHF-TEST: keel/requirement-2
+func TestCodexProgressDetailSkipsWhitespaceOnlyFallbackCandidates(t *testing.T) {
+	line := []byte(`{"type":"item.completed","item":{"type":"agent_message","text":" \t\n ","summary":"usable summary"}}`)
+	if got := codexProgressDetail(line); got != "usable summary" {
+		t.Fatalf("codexProgressDetail = %q, want fallback summary after blank text", got)
+	}
+}
+
 func parseJSONLogRecords(t *testing.T, logs string) []map[string]any {
 	t.Helper()
 	lines := strings.Split(strings.TrimSpace(logs), "\n")
