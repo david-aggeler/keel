@@ -972,7 +972,7 @@ type humanFileHandler struct {
 // returns a handler (DEBUG and above) that appends to it. The returned handler
 // also satisfies io.Closer; callers own it for the invocation lifetime.
 //
-// DHF-REQ: openbrain/change_request-441
+// DHF-REQ: openbrain/change_request-441, keel/requirement-20
 func NewJSONFileHandler(dir string, service string) (slog.Handler, error) {
 	h, _, _, err := newJSONFileHandler(dir, service, false, false)
 	return h, err
@@ -1042,7 +1042,7 @@ func (h *jsonFileHandler) Close() error {
 // lifetime and must Close it once when done, rather than opening a fresh file
 // per log record. Prefer Config.TextDir with New for production construction.
 //
-// DHF-REQ: openbrain/requirement-152
+// DHF-REQ: openbrain/requirement-152, keel/requirement-20
 func NewHumanFileHandler(dir string, service string) (slog.Handler, error) {
 	return newHumanFileHandler(dir, service, false)
 }
@@ -1154,7 +1154,7 @@ func (h *humanFileHandler) WithGroup(name string) slog.Handler {
 // for all. Safe to call once at the end of an invocation; handlers must not be
 // used afterward.
 //
-// DHF-REQ: openbrain/requirement-152
+// DHF-REQ: openbrain/requirement-152, keel/requirement-20
 func (h *humanFileHandler) Close() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -1212,13 +1212,13 @@ func sourceFromPC(pc uintptr) string {
 	return filepath.Base(frame.File) + ":" + fmt.Sprintf("%d", frame.Line)
 }
 
-// DHF-REQ: openbrain/requirement-152
+// DHF-REQ: openbrain/requirement-152, keel/requirement-20
 // HumanLogPath returns today's Serilog-style daily human log path for service.
 func HumanLogPath(dir string, service string) string {
 	return filepath.Join(dir, safeLogService(service)+"-"+time.Now().Format("2006-01-02")+".log")
 }
 
-// DHF-REQ: openbrain/change_request-441
+// DHF-REQ: openbrain/change_request-441, keel/requirement-20
 // JSONLogPath returns today's JSON Lines daily log path for service.
 func JSONLogPath(dir string, service string) string {
 	return filepath.Join(dir, safeLogService(service)+"-"+time.Now().Format("2006-01-02")+".jsonl")
@@ -1226,7 +1226,7 @@ func JSONLogPath(dir string, service string) string {
 
 // PerRunJSONLogPath returns a new per-invocation JSON Lines log path under dir.
 //
-// DHF-REQ: keel/requirement-19
+// DHF-REQ: keel/requirement-19, keel/requirement-20
 func PerRunJSONLogPath(dir string) string {
 	stamp := time.Now().UTC().Format("20060102T150405.000000000Z")
 	return filepath.Join(dir, stamp+"-"+fmt.Sprintf("%d", os.Getpid())+".jsonl")
