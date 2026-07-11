@@ -145,11 +145,12 @@ func scanNoRawFmtOutput(root string) ([]string, error) {
 // os.Stdout/os.Stderr: logger construction (the writers keel/log wraps) and the
 // static usage-text printer. Everything else must go through the logger.
 var stdoutAllowlist = map[string]bool{
-	"buildLogger":  true,
-	"loggerConfig": true, // base logger config (console writer)
-	"newLogger":    true,
-	"printUsage":   true,
-	"run":          true, // unknown-flag refusal precedes logger construction
+	"buildLogger":       true,
+	"loggerConfig":      true, // base logger config (console writer)
+	"newLogger":         true,
+	"newProtocolStream": true, // sole vscode protocol JSONL writer
+	"printUsage":        true,
+	"run":               true, // unknown-flag refusal precedes logger construction
 }
 
 // scanNoRawStdoutStream reports os.Stdout/os.Stderr references in cmd/keel-dev

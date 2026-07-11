@@ -79,7 +79,11 @@ func run(argv []string) int {
 	if cfg.Verbose {
 		level = slog.LevelDebug
 	}
-	logger, closeSinks, err := buildLogger(mode, level, filepath.Join(root, ".logs"))
+	consoleWriter := io.Writer(os.Stdout)
+	if len(words) > 0 && words[0] == "vscode" {
+		consoleWriter = os.Stderr
+	}
+	logger, closeSinks, err := buildLogger(mode, level, filepath.Join(root, ".logs"), consoleWriter)
 	if err != nil {
 		return exitFor(newLogger(mode, level, os.Stdout), err)
 	}
@@ -105,6 +109,10 @@ func printUsage(tree *cli.CommandSpec) {
 	tree.RenderRootHelp(os.Stderr)
 }
 
+func newProtocolStream() io.Writer {
+	return os.Stdout
+}
+
 // buildLogger builds keel-dev's three-sink logger from keel/log:
 //
 //  1. console on stdout — human by default; sparse-AI or JSON via --mode;
@@ -113,9 +121,10 @@ func printUsage(tree *cli.CommandSpec) {
 //
 // The returned closer releases both file handlers; call it once at exit.
 // DHF-REQ: keel/requirement-11, keel/requirement-19, keel/requirement-25, keel/requirement-29
-func buildLogger(mode string, level slog.Leveler, logDir string) (*logging.Logger, func(), error) {
+func buildLogger(mode string, level slog.Leveler, logDir string, writer io.Writer) (*logging.Logger, func(), error) {
 	cfg := loggerConfig(level)
 	cfg.Console, _ = consoleForMode(mode)
+	cfg.Writer = writer
 	cfg.TextDir = logDir
 	cfg.JSONLDir = logDir
 	cfg.PerRun = true
