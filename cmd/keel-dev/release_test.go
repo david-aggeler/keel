@@ -27,9 +27,10 @@ func stubTools(t *testing.T, dirtyTree bool, tagExists bool) (callsFile string) 
 	}
 
 	stub(t, bin, callsFile, "git", `
-case "$1 $2" in
+case "$*" in
   "status --porcelain") printf '%s' '`+gitStatus+`' ;;
-  "tag --list") printf '%s' '`+gitTagList+`' ;;
+  "status --porcelain -- vsix/package.json") printf '%s' ' M vsix/package.json' ;;
+  "tag --list"*) printf '%s' '`+gitTagList+`' ;;
 esac
 exit 0`)
 	stub(t, bin, callsFile, "gh", "exit 0")
@@ -154,6 +155,40 @@ func TestRunReleaseHappyPath(t *testing.T) {
 	}
 	if !strings.Contains(string(pkg), `"version": "9.9.9"`) {
 		t.Fatalf("release did not stamp vsix package version:\n%s", pkg)
+	}
+}
+
+// TestRunReleaseCommitsVSIXStampBeforeTag pins the one-version invariant: the
+// stamped vsix/package.json is committed before the annotated tag is created,
+// so the tag's tree carries the same version as the built release asset. A
+// stamp left dirty in the worktree would let the tag point at the previous
+// committed version while the GitHub asset says X.Y.Z.
+//
+// DHF-TEST: keel/requirement-40
+func TestRunReleaseCommitsVSIXStampBeforeTag(t *testing.T) {
+	callsFile := stubTools(t, false, false)
+	dir := moduleFixture(t)
+
+	if err := runRelease(context.Background(), discardLogger(), dir, "v9.9.9"); err != nil {
+		t.Fatalf("happy-path release failed: %v", err)
+	}
+
+	got := calls(t, callsFile)
+	add := strings.Index(got, "git add -- "+filepath.Join("vsix", "package.json"))
+	commit := strings.Index(got, "git commit -m keel v9.9.9: stamp VSIX version")
+	tag := strings.Index(got, "git tag -a v9.9.9")
+	if add == -1 {
+		t.Fatalf("stamped vsix/package.json was never staged; calls:\n%s", got)
+	}
+	if commit == -1 {
+		t.Fatalf("stamped vsix/package.json was never committed; calls:\n%s", got)
+	}
+	if tag == -1 {
+		t.Fatalf("no annotated tag created; calls:\n%s", got)
+	}
+	if !(add < commit && commit < tag) {
+		t.Fatalf("one-version invariant broken: want add < commit < tag, got add=%d commit=%d tag=%d; calls:\n%s",
+			add, commit, tag, got)
 	}
 }
 
