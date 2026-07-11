@@ -319,7 +319,7 @@ var payloadEnvelopeTypes = map[string]bool{
 // scripted-stub shape, or thread.*/turn.*/error) is returned as-is. Other
 // wrappers (event_msg/payload, msg) are unwrapped as a robustness fallback.
 //
-// DHF-REQ: openbrain/requirement-32
+// DHF-REQ: openbrain/requirement-32, keel/requirement-7
 func decodeEventType(line []byte) string {
 	var hdr struct {
 		Type string `json:"type"`
@@ -355,7 +355,7 @@ func decodeEventType(line []byte) string {
 
 // decodeThreadID extracts the stdout stream's thread_id from thread.started.
 //
-// DHF-REQ: openbrain/requirement-591
+// DHF-REQ: openbrain/requirement-591, keel/requirement-7
 func decodeThreadID(line []byte) string {
 	var hdr struct {
 		ThreadID string `json:"thread_id"`
