@@ -7,7 +7,9 @@ Rules for coding agents in this repo. Short and blunt on purpose.
 - ONE public Go module: `github.com/david-aggeler/keel`. Apache-2.0.
 - Subpackages: `log`, `exec`, `exec/claude`, `exec/codex`, `cmd/keel-dev`,
   plus approved dev/example binaries such as `cmd/keel-demo`.
-- One tag. One version. Zero external deps. No internal replaces.
+- One tag. One version. Zero external deps in the keel/log + keel/exec
+  core compile graph; log/otel is a quarantined sibling and may split to a
+  separate module later. No internal replaces.
 - Anonymous `go get` must always work. NEVER add GOPRIVATE, tokens,
   netrc, or Docker secrets to any build path. No exceptions.
 - keel is a shared foundation for downstream consumers.
