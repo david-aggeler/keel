@@ -33,9 +33,6 @@ func ParseGoItemID(id string) (GoSelection, bool) {
 			return GoSelection{}, false
 		}
 		pkg := filepath.ToSlash(filepath.Dir(rel))
-		if pkg == "." {
-			pkg = "."
-		}
 		return GoSelection{Kind: "file", Pkg: pkg, File: rel}, true
 	case strings.HasPrefix(id, "go::test::"):
 		rest := strings.TrimPrefix(id, "go::test::")
