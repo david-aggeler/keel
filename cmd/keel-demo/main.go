@@ -206,9 +206,10 @@ func exitCodeFor(logger *logging.Logger, err error) int {
 		defer closeLogger()
 		return exitCodeFor(logger, err)
 	}
+	// DHF-REQ: keel/requirement-18
 	var usage cli.UsageError
 	if errors.As(err, &usage) {
-		logger.Error("keel-demo failed", "error", err.Error())
+		logger.Error("keel-demo failed", "error", logging.RedactErr(err).Error())
 		return usage.ExitCode()
 	}
 	var opErr *logging.OperationalError
