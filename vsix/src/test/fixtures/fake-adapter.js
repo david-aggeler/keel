@@ -18,18 +18,19 @@ if (command === 'vscode tests discover --format') {
       clear_results: true,
       refresh_invalidates_results: true,
       neutral_parent_rollups: true,
-      clear_results_test_ids: ['openbrain::maintenance::clear-results'],
-      clear_state_test_ids: ['openbrain::maintenance::clear-state']
+      clear_results_test_ids: ['keel::maintenance::clear-results'],
+      clear_state_test_ids: ['keel::maintenance::clear-state']
     },
     items: [
-      { id: 'openbrain::agents', label: 'Agents', kind: 'root', framework: 'openbrain', runner: 'python-test', runner_label: 'Python test', runnable: true, profiles: ['run'] },
-      { id: 'openbrain::file::agents/test_memory.py', parent_id: 'openbrain::agents', label: 'test_memory.py', kind: 'file', framework: 'openbrain', runner: 'python-test', runner_label: 'Python test', uri: 'agents/test_memory.py', runnable: true, profiles: ['run'], required_resources: ['python'] },
-      { id: 'openbrain::test::agents/test_memory.py::test_recall', parent_id: 'openbrain::file::agents/test_memory.py', label: 'test_recall', kind: 'test', framework: 'openbrain', runner: 'python-test', runner_label: 'Python test', uri: 'agents/test_memory.py', runnable: true, profiles: ['run'], required_resources: ['python'] },
-      { id: 'openbrain::test::agents/test_memory.py::test_store', parent_id: 'openbrain::file::agents/test_memory.py', label: 'test_store', kind: 'test', framework: 'openbrain', runner: 'python-test', runner_label: 'Python test', uri: 'agents/test_memory.py', runnable: true, profiles: ['run'], required_resources: ['python'] },
-      { id: 'openbrain::lane::smoke', label: 'Smoke', kind: 'lane', framework: 'openbrain', runner: 'openbrain-dev', runner_label: 'OpenBrain devtool', runnable: true, profiles: ['run'] },
-      { id: 'alias::openbrain::lane::smoke::openbrain::test::agents/test_memory.py::test_recall', parent_id: 'openbrain::lane::smoke', label: 'test_recall', kind: 'test', framework: 'openbrain', runner: 'python-test', runner_label: 'Python test', canonical_id: 'openbrain::test::agents/test_memory.py::test_recall', runnable: true, profiles: ['run'] },
-      { id: 'openbrain::maintenance::clear-results', label: 'clear OpenBrain test results', kind: 'maintenance', framework: 'openbrain', runner: 'openbrain-dev', runner_label: 'OpenBrain devtool', runnable: true, profiles: ['run'] },
-      { id: 'openbrain::maintenance::clear-state', label: 'clear OpenBrain local state', kind: 'maintenance', framework: 'openbrain', runner: 'openbrain-dev', runner_label: 'OpenBrain devtool', runnable: true, profiles: ['run'] }
+      { id: 'keel::agents', label: 'Agents', kind: 'root', framework: 'keel', runner: 'go-test', runner_label: 'Go test', runnable: true, profiles: ['run'] },
+      { id: 'keel::file::agents/test_memory.go', parent_id: 'keel::agents', label: 'test_memory.go', kind: 'file', framework: 'keel', runner: 'go-test', runner_label: 'Go test', uri: 'agents/test_memory.go', runnable: true, profiles: ['run'] },
+      { id: 'keel::test::agents/test_memory.go::TestRecall', parent_id: 'keel::file::agents/test_memory.go', label: 'TestRecall', kind: 'test', framework: 'keel', runner: 'go-test', runner_label: 'Go test', uri: 'agents/test_memory.go', runnable: true, profiles: ['run'], required_resources: ['go'] },
+      { id: 'keel::test::agents/test_memory.go::TestStore', parent_id: 'keel::file::agents/test_memory.go', label: 'TestStore', kind: 'test', framework: 'keel', runner: 'go-test', runner_label: 'Go test', uri: 'agents/test_memory.go', runnable: true, profiles: ['run'], required_resources: ['go'] },
+      { id: 'keel::lane::smoke', label: 'Smoke', kind: 'lane', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'] },
+      { id: 'alias::keel::lane::smoke::keel::test::agents/test_memory.go::TestRecall', parent_id: 'keel::lane::smoke', label: 'TestRecall', kind: 'test', framework: 'keel', runner: 'go-test', runner_label: 'Go test', canonical_id: 'keel::test::agents/test_memory.go::TestRecall', runnable: true, profiles: ['run'] },
+      { id: 'keel::lane::test-coverage', label: 'test-coverage', kind: 'lane', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['coverage'] },
+      { id: 'keel::maintenance::clear-results', label: 'clear Keel test results', kind: 'maintenance', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'] },
+      { id: 'keel::maintenance::clear-state', label: 'clear Keel local state', kind: 'maintenance', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'] }
     ]
   }, null, 2));
   process.stdout.write('\n');
@@ -69,16 +70,16 @@ if (args.slice(0, 4).join(' ') === 'vscode tests run --format') {
   }
   const emit = (event) => process.stdout.write(`${JSON.stringify({ version: 1, time: now(), run_id: 'fake-run', ...event })}\n`);
   emit({ event: 'run_started', message: 'OpenBrain fake test run started' });
-  const selected = ids[0] ?? 'openbrain::test::agents/test_memory.py::test_recall';
+  const selected = ids[0] ?? 'keel::test::agents/test_memory.go::TestRecall';
   emit({ event: 'test_started', test_id: selected });
-  if (selected === 'openbrain::maintenance::clear-state' || selected === 'openbrain::maintenance::clear-results') {
+  if (selected === 'keel::maintenance::clear-state' || selected === 'keel::maintenance::clear-results') {
     emit({ event: 'output', test_id: selected, message: `completed ${selected}` });
     emit({ event: 'passed', test_id: selected, duration_ms: 1 });
     emit({ event: 'run_finished', exit_code: 0 });
     process.exit(0);
   }
   emit({ event: 'artifact', test_id: selected, artifact: { name: 'fake log', uri: '/tmp/openbrain-fake.log', kind: 'log' } });
-  emit({ event: 'passed', test_id: 'openbrain::test::agents/test_memory.py::test_recall', duration_ms: 12 });
+  emit({ event: 'passed', test_id: 'keel::test::agents/test_memory.go::TestRecall', duration_ms: 12 });
   emit({ event: 'run_finished', exit_code: 0 });
   process.exit(0);
 }
