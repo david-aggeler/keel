@@ -1,0 +1,75 @@
+{
+  "name": "keel-test-bridge",
+  "displayName": "Keel Test Bridge",
+  "description": "VS Code Testing API bridge for Keel's canonical devtool test protocol.",
+  "version": "0.1.2",
+  "publisher": "aggeler",
+  "private": true,
+  "license": "Apache-2.0",
+  "engines": {
+    "vscode": "^1.102.0"
+  },
+  "extensionKind": [
+    "workspace"
+  ],
+  "categories": [
+    "Testing"
+  ],
+  "activationEvents": [
+    "workspaceContains:.vscode/test-bridge.json"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "keel.tests.initConfig",
+        "title": "Keel: Initialize Test Bridge Config"
+      },
+      {
+        "command": "keel.tests.refresh",
+        "title": "Keel: Refresh Tests"
+      },
+      {
+        "command": "keel.tests.runSelected",
+        "title": "Keel: Run Selected Tests"
+      },
+      {
+        "command": "keel.tests.clearTestResults",
+        "title": "Keel: Clear Test Results"
+      },
+      {
+        "command": "keel.tests.openArtifact",
+        "title": "Keel: Open Test Artifact"
+      },
+      {
+        "command": "keel.tests.clearLocalState",
+        "title": "Keel: Clear Local Test State"
+      }
+    ]
+  },
+  "scripts": {
+    "build:devtool": "cd .. && mkdir -p bin && go build -o bin/keel-dev ./cmd/keel-dev",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "tsc -p ./ --noEmit",
+    "ci": "pnpm run compile && pnpm run lint && pnpm run test:headless",
+    "vscode:prepublish": "pnpm run compile",
+    "package:vsix": "pnpm run compile && mkdir -p dist && vsce package --no-dependencies --allow-missing-repository --out dist/keel-test-bridge-${npm_package_version}.vsix",
+    "install:local": "pnpm run package:vsix && code --install-extension dist/keel-test-bridge-${npm_package_version}.vsix --force",
+    "uninstall:local": "code --uninstall-extension aggeler.keel-test-bridge",
+    "test": "pnpm run compile && pnpm run build:devtool && vscode-test --fail-zero",
+    "test:headless": "pnpm run compile && pnpm run build:devtool && xvfb-run -a vscode-test --fail-zero",
+    "test:headless:json": "pnpm run compile && pnpm run build:devtool && mkdir -p .vscode-test && KEEL_VSCODE_MOCHA_JSONL=.vscode-test/results.jsonl xvfb-run -a vscode-test --fail-zero --reporter ./test-jsonl-reporter.cjs",
+    "test:conformance": "pnpm run test:headless"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^22.15.21",
+    "@types/vscode": "1.102.0",
+    "@vscode/test-cli": "^0.0.11",
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.9.1",
+    "mocha": "^11.4.0",
+    "typescript": "^5.8.3"
+  }
+}

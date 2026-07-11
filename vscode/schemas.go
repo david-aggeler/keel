@@ -14,10 +14,11 @@ var SchemasFS embed.FS
 type SchemaName string
 
 const (
-	SchemaDiscovery SchemaName = "discovery"
-	SchemaSetupPlan SchemaName = "setup-plan"
-	SchemaRunEvent  SchemaName = "run-event"
-	SchemaRunLock   SchemaName = "run-lock"
+	SchemaDiscovery        SchemaName = "discovery"
+	SchemaSetupPlan        SchemaName = "setup-plan"
+	SchemaRunEvent         SchemaName = "run-event"
+	SchemaRunLock          SchemaName = "run-lock"
+	SchemaTestBridgeConfig SchemaName = "test-bridge-config"
 )
 
 // SchemaBytes returns one embedded JSON Schema by logical name.
@@ -25,7 +26,7 @@ const (
 // DHF-REQ: keel/requirement-34
 func SchemaBytes(name SchemaName) ([]byte, error) {
 	switch name {
-	case SchemaDiscovery, SchemaSetupPlan, SchemaRunEvent, SchemaRunLock:
+	case SchemaDiscovery, SchemaSetupPlan, SchemaRunEvent, SchemaRunLock, SchemaTestBridgeConfig:
 		return SchemasFS.ReadFile("schemas/" + string(name) + ".json")
 	default:
 		return nil, fmt.Errorf("keel/vscode: unknown schema %q", name)
