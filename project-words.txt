@@ -77,12 +77,15 @@ keel
 codex
 coverpkg
 cspell
+fanout
 shfmt
 shellcheck
 deadcode
 gitleaks
 gomodcache
 GOAUTH
+gosec
+nolint
 nodejs
 npx
 pnpm
@@ -90,3 +93,11 @@ corepack
 faketool
 presencetool
 selftest
+Prereq
+prereq
+Rollups
+rollup
+vapp
+vapps
+Vitest
+vitest

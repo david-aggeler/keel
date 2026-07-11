@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/david-aggeler/keel/vscode/schemas/run-event.json",
+  "title": "consumer VS Code test run JSONL event",
+  "description": "One JSONL event on the discover/plan/run protocol's run stream. Terminal run_finished guarantee: every run MUST end with a single terminal run_finished event carrying an exit_code. A producer crash or a mid-stream schema violation MUST still yield that terminal run_finished (with a non-zero exit_code), preceded by an errored or output event describing the fault — a stream that simply stops without a run_finished is a contract violation, not a UI quirk.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "event", "time"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "event": {
+      "type": "string",
+      "$comment": "Unknown-event tolerance: this producer emits only the enum values below and validates its own output against them. Consumers, however, MUST tolerate an unknown (unrecognized) event value by rendering it as output and logging it — never a silent drop. The closed enum here is a producer conformance bar; the render-as-output-plus-log fallback is the consumer's obligation.",
+      "enum": ["run_started", "test_started", "output", "passed", "failed", "errored", "cancelled", "skipped", "artifact", "run_finished"]
+    },
+    "time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source": {
+      "type": "string",
+      "enum": ["vscode", "external"]
+    },
+    "workspace": {
+      "type": "string",
+      "minLength": 1
+    },
+    "live": {
+      "type": "boolean"
+    },
+    "test_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "message": {
+      "type": "string"
+    },
+    "duration_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uri", "line", "column"],
+      "properties": {
+        "uri": {
+          "type": "string",
+          "minLength": 1
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "column": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "uri", "kind"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "uri": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["log", "trace", "screenshot", "video", "coverage", "report", "other"]
+        }
+      }
+    },
+    "exit_code": {
+      "type": "integer"
+    }
+  }
+}
