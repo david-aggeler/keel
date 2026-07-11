@@ -64,6 +64,7 @@ type RunLockFile struct {
 type DiscoveryDocument struct {
 	Version      int                   `json:"version"`
 	Workspace    string                `json:"workspace"`
+	ModulePath   string                `json:"module_path"`
 	GeneratedAt  time.Time             `json:"generated_at"`
 	Capabilities DiscoveryCapabilities `json:"capabilities"`
 	Items        []TestItem            `json:"items"`
