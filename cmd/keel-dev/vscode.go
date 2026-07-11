@@ -227,14 +227,14 @@ func runVSCodeLane(ctx context.Context, logger *slog.Logger, root, laneID string
 		}
 	case vscodeLaneTestFast:
 		if logger == nil {
-			logger = discardLogger()
+			logger = vscodeDiscardLogger()
 		}
 		if err := runStep(ctx, logger, root, step{name: "vscode:test-fast", program: "go", args: []string{"test", "./..."}}); err != nil {
 			return gateExitCode(err), err
 		}
 	case vscodeLaneTestCoverage:
 		if logger == nil {
-			logger = discardLogger()
+			logger = vscodeDiscardLogger()
 		}
 		if err := runTestWithCoverage(ctx, logger, root); err != nil {
 			return 1, err
@@ -243,6 +243,10 @@ func runVSCodeLane(ctx context.Context, logger *slog.Logger, root, laneID string
 		return 2, cli.NewUsageError("unknown vscode lane id %q", laneID)
 	}
 	return 0, nil
+}
+
+func vscodeDiscardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
 func parseVSCodeIDs(args []string, allowEmpty bool) ([]string, error) {
@@ -452,15 +456,4 @@ func buildCommit() string {
 		}
 	}
 	return ""
-}
-
-func exitCodeForVSCode(err error) int {
-	if err == nil {
-		return 0
-	}
-	var runErr vscodeRunError
-	if errors.As(err, &runErr) {
-		return runErr.exitCode
-	}
-	return 1
 }
