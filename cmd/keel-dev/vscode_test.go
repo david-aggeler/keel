@@ -573,6 +573,70 @@ func TestVSCodeDetectLanesMaintenanceItemRunsDetect(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-53
+func TestVSCodeRunStartedCarriesRequestedSelection(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	t.Setenv("KEEL_VSCODE_DEMO_BLOCK", vscodeLaneTestFast)
+
+	var protocol bytes.Buffer
+	err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", vscodeLaneTestFast})
+	if err == nil {
+		t.Fatal("blocked run returned nil; want non-zero")
+	}
+	events := decodeRunEvents(t, protocol.String())
+	if len(events) == 0 || events[0].Event != "run_started" {
+		t.Fatalf("events = %+v, want run_started first", events)
+	}
+	if got := events[0].Requested; len(got) != 1 || got[0].ID != vscodeLaneTestFast || got[0].Label != "test-fast" {
+		t.Fatalf("run_started requested = %+v, want exact selected lane", got)
+	}
+}
+
+// DHF-TEST: keel/requirement-53
+func TestVSCodeDiscoveryAppendsExactLaneDurationHint(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	if err := os.MkdirAll(filepath.Join(root, ".vscode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{"version":1,"lanes":[{"id":"go-log","label":"log","order":"b.40","members":[{"go":"./log/..."}]}]}`+"\n")
+	runDir := filepath.Join(root, ".devtools", "vscode-runs")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join(".devtools", "vscode-runs", "old.jsonl"), strings.Join([]string{
+		`{"version":1,"event":"run_started","time":"2026-07-12T10:00:00Z","run_id":"old","requested":[{"id":"keel::lane::go-log","label":"log"}]}`,
+		`{"version":1,"event":"run_finished","time":"2026-07-12T10:00:08Z","run_id":"old","exit_code":0}`,
+	}, "\n")+"\n")
+	writeFile(t, root, filepath.Join(".devtools", "vscode-runs", "multi.jsonl"), strings.Join([]string{
+		`{"version":1,"event":"run_started","time":"2026-07-12T10:10:00Z","run_id":"multi","requested":[{"id":"keel::lane::go-log","label":"log"},{"id":"keel::lane::lint","label":"lint"}]}`,
+		`{"version":1,"event":"run_finished","time":"2026-07-12T10:10:01Z","run_id":"multi","exit_code":0}`,
+	}, "\n")+"\n")
+	writeFile(t, root, filepath.Join(".devtools", "vscode-runs", "new.jsonl"), strings.Join([]string{
+		`{"version":1,"event":"run_started","time":"2026-07-12T10:20:00Z","run_id":"new","requested":[{"id":"keel::lane::go-log","label":"log"}]}`,
+		`{"version":1,"event":"run_finished","time":"2026-07-12T10:20:09.800Z","run_id":"new","exit_code":1}`,
+	}, "\n")+"\n")
+
+	var discover bytes.Buffer
+	if err := writeVSCodeDiscovery(root, &discover); err != nil {
+		t.Fatalf("writeVSCodeDiscovery: %v", err)
+	}
+	var doc vscode.DiscoveryDocument
+	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
+		t.Fatalf("discovery JSON: %v\n%s", err, discover.String())
+	}
+	lane, ok := discoveryItemByID(doc, "keel::lane::go-log")
+	if !ok {
+		t.Fatalf("discovery missing go-log lane: %+v", doc.Items)
+	}
+	if got := strings.Join(lane.Limitations, " "); !strings.Contains(got, "last 9.8s") {
+		t.Fatalf("lane limitations = %q, want newest exact single-lane duration hint", got)
+	}
+}
+
 // DHF-TEST: keel/requirement-47
 func TestVSCodeMaintenanceItemsAdvertiseCapabilitiesAndRunActions(t *testing.T) {
 	root := t.TempDir()
