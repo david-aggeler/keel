@@ -300,6 +300,134 @@ func TestVSCodeDiscoveryEmitsStructuredOrderedTree(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-51
+func TestVSCodeDiscoveryRendersFileLanesAndDiagnostics(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	if err := os.MkdirAll(filepath.Join(root, "log"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "exec"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".vscode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join("log", "logging_test.go"), "package log\n\nimport \"testing\"\n\nfunc TestLog(t *testing.T) {}\n")
+	writeFile(t, root, filepath.Join("exec", "exec_test.go"), "package exec\n\nimport \"testing\"\n\nfunc TestExec(t *testing.T) {}\n")
+	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{
+  "version": 1,
+  "lanes": [
+    {
+      "id": "go-log",
+      "label": "log subsystem",
+      "order": "b.40",
+      "description": "fast log checks",
+      "members": [{"go":"./log/..."}],
+      "prerequisites": ["go-toolchain"]
+    },
+    {
+      "id": "core",
+      "label": "core rollup",
+      "order": "b.50",
+      "members": [{"lane":"go-log"},{"lane":"lint"},{"go":"./exec/..."}],
+      "prerequisites": ["keel-module-root"]
+    },
+    {
+      "id": "bad",
+      "label": "bad member",
+      "order": "b.51",
+      "members": [{"unknown":"x"}]
+    }
+  ]
+}`)
+
+	var discover bytes.Buffer
+	if err := writeVSCodeDiscovery(root, &discover); err != nil {
+		t.Fatalf("writeVSCodeDiscovery: %v", err)
+	}
+	var doc vscode.DiscoveryDocument
+	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
+		t.Fatalf("discovery JSON: %v\n%s", err, discover.String())
+	}
+
+	logLane, ok := discoveryItemByID(doc, "keel::lane::go-log")
+	if !ok {
+		t.Fatalf("discovery missing file lane go-log: %+v", doc.Items)
+	}
+	if logLane.ParentID != "keel::lanes" || logLane.Label != "b.40 log subsystem" || logLane.SortText != "b.040" || !logLane.Runnable {
+		t.Fatalf("go-log lane = %+v, want runnable b.40 lane under Lanes", logLane)
+	}
+	core, ok := discoveryItemByID(doc, "keel::lane::core")
+	if !ok {
+		t.Fatalf("discovery missing composed lane core: %+v", doc.Items)
+	}
+	if core.Label != "b.50 core rollup" || !stringSlicesEqual(core.RequiredResources, []string{"go-toolchain", "keel-module-root", "stub-binaries"}) {
+		t.Fatalf("core lane = %+v, want inherited required resources", core)
+	}
+	if _, ok := discoveryItemByID(doc, "keel::lane::bad"); ok {
+		t.Fatalf("lane-level invalid member should suppress only bad lane: %+v", doc.Items)
+	}
+	if !discoveryHasDiagnosticContaining(doc, "unknown member form") {
+		t.Fatalf("discovery missing lane diagnostic for unknown member: %+v", doc.Items)
+	}
+}
+
+// DHF-TEST: keel/requirement-51
+func TestVSCodeFileLaneRunDedupsGoPackages(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	if err := os.MkdirAll(filepath.Join(root, "log"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "exec"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".vscode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join("log", "logging_test.go"), "package log\n\nimport \"testing\"\n\nfunc TestLog(t *testing.T) {}\n")
+	writeFile(t, root, filepath.Join("exec", "exec_test.go"), "package exec\n\nimport \"testing\"\n\nfunc TestExec(t *testing.T) {}\n")
+	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{
+  "version": 1,
+  "lanes": [
+    {"id":"log-only","label":"log","order":"b.40","members":[{"go":"./log/..."}]},
+    {"id":"core","label":"core","order":"b.50","members":[{"lane":"log-only"},{"root":"go"},{"go":"./log/..."}]}
+  ]
+}`)
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", `
+case "$1 $2 $3 $4" in
+  "test -json ./exec ./log")
+    printf '{"Action":"pass","Package":"github.com/david-aggeler/keel/exec","Elapsed":0.01}\n'
+    printf '{"Action":"pass","Package":"github.com/david-aggeler/keel/log","Elapsed":0.01}\n'
+    ;;
+  *)
+    printf 'unexpected go invocation: %s\n' "$*" >&2
+    exit 2
+    ;;
+esac
+exit 0`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var protocol bytes.Buffer
+	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "keel::lane::core"}); err != nil {
+		t.Fatalf("core lane run: %v\nprotocol:\n%s\ncalls:\n%s", err, protocol.String(), calls(t, callsFile))
+	}
+	gotCalls := calls(t, callsFile)
+	if strings.Count(gotCalls, "./log") != 1 || !strings.Contains(gotCalls, "go test -json ./exec ./log") {
+		t.Fatalf("core lane did not dedup packages into one go test invocation:\n%s", gotCalls)
+	}
+	events := decodeRunEvents(t, protocol.String())
+	if !runEventsContain(events, "passed", "keel::lane::core") || events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode != 0 {
+		t.Fatalf("core lane events = %+v, want passed core lane and exit 0", events)
+	}
+}
+
 // DHF-TEST: keel/requirement-47
 func TestVSCodeMaintenanceItemsAdvertiseCapabilitiesAndRunActions(t *testing.T) {
 	root := t.TempDir()
@@ -1297,6 +1425,18 @@ func discoveryItemByID(doc vscode.DiscoveryDocument, id string) (vscode.TestItem
 		}
 	}
 	return vscode.TestItem{}, false
+}
+
+func discoveryHasDiagnosticContaining(doc vscode.DiscoveryDocument, text string) bool {
+	for _, item := range doc.Items {
+		if item.Kind != "group" || item.Runnable {
+			continue
+		}
+		if strings.Contains(item.Label, text) || strings.Contains(strings.Join(item.Limitations, "\n"), text) {
+			return true
+		}
+	}
+	return false
 }
 
 func assertDiscoveryKindAllowedBySchema(t *testing.T, kind string) {

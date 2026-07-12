@@ -35,6 +35,23 @@
     "live": {
       "type": "boolean"
     },
+    "requested": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "label"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "label": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "test_id": {
       "type": "string",
       "minLength": 1

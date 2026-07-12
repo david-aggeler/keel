@@ -115,6 +115,7 @@ export interface RunEvent {
   source?: 'vscode' | 'external';
   workspace?: string;
   live?: boolean;
+  requested?: Array<{ id: string; label: string }>;
   test_id?: string;
   message?: string;
   duration_ms?: number;

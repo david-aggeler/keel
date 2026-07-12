@@ -45,6 +45,130 @@ const (
 
 var vscodeLaneIDs = []string{vscodeLaneLint, vscodeLaneTestFast, vscodeLaneTestCoverage, vscodeLaneVSIXGate, vscodeLaneCI}
 
+type testLanesFile struct {
+	Version int            `json:"version"`
+	Lanes   []testFileLane `json:"lanes"`
+}
+
+type testFileLane struct {
+	ID            string       `json:"id"`
+	Label         string       `json:"label"`
+	Order         string       `json:"order"`
+	Description   string       `json:"description"`
+	Members       []laneMember `json:"members"`
+	Prerequisites []string     `json:"prerequisites"`
+}
+
+type laneMember struct {
+	Go      string
+	Root    string
+	VSIX    string
+	Lane    string
+	rawKeys []string
+}
+
+func (m *laneMember) UnmarshalJSON(data []byte) error {
+	var raw map[string]string
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	m.rawKeys = m.rawKeys[:0]
+	for key, value := range raw {
+		m.rawKeys = append(m.rawKeys, key)
+		switch key {
+		case "go":
+			m.Go = value
+		case "root":
+			m.Root = value
+		case "vsix":
+			m.VSIX = value
+		case "lane":
+			m.Lane = value
+		}
+	}
+	sort.Strings(m.rawKeys)
+	return nil
+}
+
+type laneFinding struct {
+	Rule     string `json:"rule"`
+	Severity string `json:"severity"`
+	Message  string `json:"message"`
+}
+
+type effectiveLane struct {
+	lane          testFileLane
+	id            string
+	goPackages    []string
+	vsixFiles     []string
+	systemLanes   []string
+	laneRefs      []string
+	prerequisites []string
+	findings      []laneFinding
+}
+
+type lanesState struct {
+	path         string
+	file         testLanesFile
+	byID         map[string]testFileLane
+	effective    map[string]effectiveLane
+	diagnostics  []vscode.TestItem
+	wholeFileErr error
+}
+
+type lanesListDocument struct {
+	Version     int              `json:"version"`
+	Workspace   string           `json:"workspace"`
+	GeneratedAt time.Time        `json:"generated_at"`
+	Lanes       []laneListRecord `json:"lanes"`
+}
+
+type laneListRecord struct {
+	ID            string                `json:"id"`
+	Source        string                `json:"source"`
+	Label         string                `json:"label"`
+	Order         string                `json:"order"`
+	Description   string                `json:"description,omitempty"`
+	Members       []laneMemberListEntry `json:"members"`
+	Expanded      laneExpandedMembers   `json:"expanded"`
+	Prerequisites []string              `json:"prerequisites"`
+	Findings      []laneFinding         `json:"findings"`
+	LastRun       *laneLastRun          `json:"last_run"`
+}
+
+type laneMemberListEntry map[string]string
+
+type laneExpandedMembers struct {
+	GoPackages  []string `json:"go_packages"`
+	VSIXFiles   []string `json:"vsix_files"`
+	SystemLanes []string `json:"system_lanes"`
+	LaneRefs    []string `json:"lane_refs"`
+}
+
+type laneLastRun struct {
+	RunID      string    `json:"run_id"`
+	At         time.Time `json:"at"`
+	DurationMS int64     `json:"duration_ms"`
+	ExitCode   int       `json:"exit_code"`
+}
+
+type lanesDetectDocument struct {
+	Version   int                `json:"version"`
+	File      string             `json:"file"`
+	Written   bool               `json:"written"`
+	Added     []lanesDetectEntry `json:"added"`
+	Unchanged []lanesDetectEntry `json:"unchanged"`
+	Skipped   []lanesDetectEntry `json:"skipped"`
+}
+
+type lanesDetectEntry struct {
+	ID       string `json:"id"`
+	Label    string `json:"label,omitempty"`
+	Order    string `json:"order,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+	Packages int    `json:"packages,omitempty"`
+}
+
 func vscodeCommandSpec() *cli.CommandSpec {
 	return &cli.CommandSpec{
 		Name:  "vscode",
@@ -65,6 +189,14 @@ func vscodeCommandSpec() *cli.CommandSpec {
 					{Name: "discover", Use: "vscode tests discover [--format json]", Short: "Emit the VS Code discovery document.", Flags: []cli.FlagSpec{{Name: "format", Value: "json", Short: "Output format."}}, Handler: handleVSCodeTestsDiscover},
 					{Name: "plan", Use: "vscode tests plan [--format json] [--id test-id]", Short: "Emit the VS Code setup plan.", Flags: []cli.FlagSpec{{Name: "format", Value: "json", Short: "Output format."}, {Name: "id", Value: "test-id", Short: "Selected test id."}}, Handler: handleVSCodeTestsPlan},
 					{Name: "run", Use: "vscode tests run --id test-id", Short: "Run selected VS Code test lanes.", Flags: []cli.FlagSpec{{Name: "id", Value: "test-id", Short: "Selected test id."}}, Handler: handleVSCodeTestsRun},
+				},
+			},
+			{
+				Name:  "lanes",
+				Short: "List or detect data-driven test lanes.",
+				Subcommands: []*cli.CommandSpec{
+					{Name: "list", Use: "vscode lanes list [--format json]", Short: "Emit effective lane definitions.", Flags: []cli.FlagSpec{{Name: "format", Value: "json", Short: "Output format."}}, Handler: handleVSCodeLanesList},
+					{Name: "detect", Use: "vscode lanes detect [--format json] [--dry-run]", Short: "Append detected category lanes.", Flags: []cli.FlagSpec{{Name: "format", Value: "json", Short: "Output format."}, {Name: "dry-run", Short: "Report without writing."}}, Handler: handleVSCodeLanesDetect},
 				},
 			},
 			{
@@ -127,6 +259,23 @@ func handleVSCodeTestsPlan(ctx context.Context, args []string) error {
 		return err
 	}
 	return writeVSCodePlan(state.root, ids, state.protocol)
+}
+
+func handleVSCodeLanesList(ctx context.Context, args []string) error {
+	state := stateFrom(ctx)
+	if err := rejectUnsupportedFormat(args); err != nil {
+		return err
+	}
+	return writeVSCodeLanesList(state.root, state.protocol)
+}
+
+func handleVSCodeLanesDetect(ctx context.Context, args []string) error {
+	state := stateFrom(ctx)
+	dryRun, err := parseVSCodeLanesDetectArgs(args)
+	if err != nil {
+		return err
+	}
+	return writeVSCodeLanesDetect(state.root, dryRun, state.protocol)
 }
 
 type vscodeDemoBlockState struct {
@@ -227,7 +376,7 @@ func handleVSCodeTestsRun(ctx context.Context, args []string) error {
 		}
 	}()
 
-	writer(vscode.RunEvent{Event: "run_started", Live: boolPtr(true)})
+	writer(vscode.RunEvent{Event: "run_started", Live: boolPtr(true), Requested: runRequestsForIDs(state.root, ids)})
 
 	if len(ids) == 1 && ids[0] == vscodeMaintenanceUnlock {
 		exitCode, err = runVSCodeMaintenance(state.root, ids[0])
@@ -275,7 +424,7 @@ func handleVSCodeTestsRun(ctx context.Context, args []string) error {
 	return nil
 }
 
-// DHF-REQ: keel/requirement-39, keel/requirement-43, keel/requirement-46, keel/requirement-48
+// DHF-REQ: keel/requirement-39, keel/requirement-43, keel/requirement-46, keel/requirement-48, keel/requirement-51
 func writeVSCodeDiscovery(root string, out io.Writer) error {
 	items := []vscode.TestItem{
 		groupItem(vscodeGroupMaintenance, "", "a. Maintenance", "a"),
@@ -294,6 +443,11 @@ func writeVSCodeDiscovery(root string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	lanes, err := loadLanesState(root)
+	if err != nil {
+		return err
+	}
+	items = append(items, lanes.discoveryItems()...)
 	items = append(items, goItems...)
 	doc := vscode.DiscoveryDocument{
 		Version:     1,
@@ -372,6 +526,132 @@ func writeVSCodePlan(root string, ids []string, out io.Writer) error {
 	return encodeProtocolDocument(out, plan)
 }
 
+// DHF-REQ: keel/requirement-52
+func writeVSCodeLanesList(root string, out io.Writer) error {
+	lanes, err := loadLanesState(root)
+	if err != nil {
+		return err
+	}
+	doc := lanesListDocument{
+		Version:     1,
+		Workspace:   workspaceNode(root),
+		GeneratedAt: time.Now().UTC(),
+	}
+	for _, id := range vscodeLaneIDs {
+		short := strings.TrimPrefix(id, "keel::lane::")
+		doc.Lanes = append(doc.Lanes, laneListRecord{
+			ID:            id,
+			Source:        "system",
+			Label:         short,
+			Order:         systemLaneOrder(id),
+			Members:       []laneMemberListEntry{},
+			Expanded:      laneExpandedMembers{},
+			Prerequisites: laneRequiredResources(id),
+			Findings:      []laneFinding{},
+			LastRun:       latestLaneRun(root, id),
+		})
+	}
+	ids := make([]string, 0, len(lanes.effective))
+	for id := range lanes.effective {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		a, b := lanes.effective[ids[i]], lanes.effective[ids[j]]
+		if a.lane.Order == b.lane.Order {
+			return a.lane.ID < b.lane.ID
+		}
+		return ordinalSortText(a.lane.Order) < ordinalSortText(b.lane.Order)
+	})
+	for _, id := range ids {
+		eff := lanes.effective[id]
+		doc.Lanes = append(doc.Lanes, laneListRecord{
+			ID:          eff.id,
+			Source:      "file",
+			Label:       eff.lane.Label,
+			Order:       eff.lane.Order,
+			Description: eff.lane.Description,
+			Members:     laneMembersForList(eff.lane.Members),
+			Expanded: laneExpandedMembers{
+				GoPackages:  eff.goPackages,
+				VSIXFiles:   eff.vsixFiles,
+				SystemLanes: eff.systemLanes,
+				LaneRefs:    eff.laneRefs,
+			},
+			Prerequisites: eff.prerequisites,
+			Findings:      eff.findings,
+			LastRun:       latestLaneRun(root, eff.id),
+		})
+	}
+	return encodeProtocolDocument(out, doc)
+}
+
+// DHF-REQ: keel/requirement-52
+func writeVSCodeLanesDetect(root string, dryRun bool, out io.Writer) error {
+	lanes, err := loadLanesState(root)
+	if err != nil {
+		return err
+	}
+	if lanes.wholeFileErr != nil {
+		return lanes.wholeFileErr
+	}
+	families, err := detectGoFamilies(root)
+	if err != nil {
+		return err
+	}
+	covered := map[string]bool{}
+	for _, eff := range lanes.effective {
+		for _, pkg := range eff.goPackages {
+			family := goPackageFamily(pkg)
+			if family != "" {
+				covered[family] = true
+			}
+		}
+	}
+	doc := lanesDetectDocument{Version: 1, File: ".vscode/test-lanes.json"}
+	nextSlot := nextDetectionOrderSlot(lanes.file.Lanes)
+	for _, family := range sortedKeys(families) {
+		id := "go-" + family
+		if _, exists := lanes.byID[id]; exists {
+			doc.Unchanged = append(doc.Unchanged, lanesDetectEntry{ID: id, Reason: "lane id already declared"})
+			continue
+		}
+		if covered[family] {
+			doc.Skipped = append(doc.Skipped, lanesDetectEntry{ID: id, Reason: "covered by existing lane"})
+			continue
+		}
+		order := fmt.Sprintf("b.%d", nextSlot)
+		nextSlot++
+		doc.Added = append(doc.Added, lanesDetectEntry{ID: id, Label: family, Order: order, Packages: familyPackageCount(root, family)})
+	}
+	if len(doc.Added) > 0 && !dryRun {
+		updated := lanes.file
+		if updated.Version == 0 {
+			updated.Version = 1
+		}
+		for _, added := range doc.Added {
+			updated.Lanes = append(updated.Lanes, testFileLane{
+				ID:          added.ID,
+				Label:       added.Label,
+				Order:       added.Order,
+				Description: fmt.Sprintf("detected category - %d packages", added.Packages),
+				Members:     []laneMember{{Go: "./" + added.Label + "/...", rawKeys: []string{"go"}}},
+			})
+		}
+		data, err := json.MarshalIndent(updated, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(lanes.path), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(lanes.path, append(data, '\n'), 0o644); err != nil {
+			return err
+		}
+		doc.Written = true
+	}
+	return encodeProtocolDocument(out, doc)
+}
+
 func laneItem(id, label, sortText string) vscode.TestItem {
 	profiles := []string{"run"}
 	if id == vscodeLaneTestCoverage {
@@ -399,6 +679,444 @@ func laneRequiredResources(id string) []string {
 		resources = append(resources, "pnpm")
 	}
 	return resources
+}
+
+// DHF-REQ: keel/requirement-51, keel/requirement-52, keel/requirement-54
+func loadLanesState(root string) (lanesState, error) {
+	state := lanesState{
+		path:      filepath.Join(root, ".vscode", "test-lanes.json"),
+		byID:      map[string]testFileLane{},
+		effective: map[string]effectiveLane{},
+	}
+	data, err := os.ReadFile(state.path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return state, nil
+		}
+		state.wholeFileErr = err
+		state.diagnostics = append(state.diagnostics, lanesDiagnosticItem("lanes-file", err.Error()))
+		return state, nil
+	}
+	if err := json.Unmarshal(data, &state.file); err != nil {
+		state.wholeFileErr = err
+		state.diagnostics = append(state.diagnostics, lanesDiagnosticItem("lanes-file", err.Error()))
+		return state, nil
+	}
+	if state.file.Version != 1 {
+		state.wholeFileErr = fmt.Errorf("unsupported test-lanes.json version %d", state.file.Version)
+		state.diagnostics = append(state.diagnostics, lanesDiagnosticItem("lanes-file", state.wholeFileErr.Error()))
+		return state, nil
+	}
+	seen := map[string]bool{}
+	for _, lane := range state.file.Lanes {
+		if lane.ID == "" {
+			state.diagnostics = append(state.diagnostics, lanesDiagnosticItem("lane-missing-id", "lane id is required"))
+			continue
+		}
+		if seen[lane.ID] || knownSystemLaneShortID(lane.ID) {
+			state.diagnostics = append(state.diagnostics, lanesDiagnosticItem(lane.ID, "duplicate lane id "+lane.ID))
+			continue
+		}
+		seen[lane.ID] = true
+		state.byID[lane.ID] = lane
+	}
+	for id := range state.byID {
+		if _, err := state.expand(id, nil, 0); err != nil {
+			state.diagnostics = append(state.diagnostics, lanesDiagnosticItem(id, err.Error()))
+		}
+	}
+	return state, nil
+}
+
+func (s *lanesState) expand(id string, stack []string, depth int) (effectiveLane, error) {
+	if got, ok := s.effective[id]; ok {
+		return got, nil
+	}
+	lane, ok := s.byID[id]
+	if !ok {
+		return effectiveLane{}, fmt.Errorf("unresolved lane ref %q", id)
+	}
+	if depth > 8 {
+		path := append(append([]string{}, stack...), id)
+		return effectiveLane{}, fmt.Errorf("lane composition depth > 8: %s", strings.Join(path, " -> "))
+	}
+	for _, seen := range stack {
+		if seen == id {
+			path := append(append([]string{}, stack...), id)
+			return effectiveLane{}, fmt.Errorf("lane composition cycle: %s", strings.Join(path, " -> "))
+		}
+	}
+	if lane.Label == "" || lane.Order == "" || len(lane.Members) == 0 {
+		return effectiveLane{}, fmt.Errorf("lane %q missing required label, order, or members", id)
+	}
+	eff := effectiveLane{lane: lane, id: "keel::lane::" + id}
+	prereq := map[string]bool{}
+	for _, resource := range lane.Prerequisites {
+		prereq[resource] = true
+	}
+	pkgSet := map[string]bool{}
+	systemSet := map[string]bool{}
+	vsixSet := map[string]bool{}
+	for _, member := range lane.Members {
+		switch {
+		case len(member.rawKeys) != 1:
+			return effectiveLane{}, fmt.Errorf("unknown member form in lane %q", id)
+		case member.Go != "":
+			for _, pkg := range packagesForGoPattern(s.path, member.Go) {
+				pkgSet[pkg] = true
+			}
+			prereq["go-toolchain"] = true
+			prereq["keel-module-root"] = true
+			if len(packagesForGoPattern(s.path, member.Go)) == 0 {
+				eff.findings = append(eff.findings, laneFinding{Rule: "V6", Severity: "warning", Message: "go member matches no test-bearing packages: " + member.Go})
+			}
+		case member.Root != "":
+			switch member.Root {
+			case "go":
+				for _, pkg := range packagesForGoPattern(s.path, "./...") {
+					pkgSet[pkg] = true
+				}
+				prereq["go-toolchain"] = true
+				prereq["keel-module-root"] = true
+			case "vsix":
+				prereq["pnpm"] = true
+			default:
+				return effectiveLane{}, fmt.Errorf("unknown root member %q in lane %q", member.Root, id)
+			}
+		case member.VSIX != "":
+			vsixSet[filepath.ToSlash(member.VSIX)] = true
+			prereq["pnpm"] = true
+			if !vsixTestFileExists(filepath.Dir(filepath.Dir(s.path)), member.VSIX) {
+				eff.findings = append(eff.findings, laneFinding{Rule: "V10", Severity: "warning", Message: "vsix test file not found: " + member.VSIX})
+			}
+		case member.Lane != "":
+			if short, ok := systemLaneShortID(member.Lane); ok {
+				if !systemSet[short] {
+					eff.systemLanes = append(eff.systemLanes, "keel::lane::"+short)
+					systemSet[short] = true
+				}
+				for _, resource := range laneRequiredResources("keel::lane::" + short) {
+					prereq[resource] = true
+				}
+				continue
+			}
+			child, err := s.expand(member.Lane, append(stack, id), depth+1)
+			if err != nil {
+				return effectiveLane{}, err
+			}
+			eff.laneRefs = append(eff.laneRefs, "keel::lane::"+member.Lane)
+			for _, pkg := range child.goPackages {
+				pkgSet[pkg] = true
+			}
+			for _, sys := range child.systemLanes {
+				if !systemSet[sys] {
+					eff.systemLanes = append(eff.systemLanes, sys)
+					systemSet[sys] = true
+				}
+			}
+			for _, file := range child.vsixFiles {
+				vsixSet[file] = true
+			}
+			for _, resource := range child.prerequisites {
+				prereq[resource] = true
+			}
+		default:
+			return effectiveLane{}, fmt.Errorf("unknown member form in lane %q", id)
+		}
+	}
+	eff.goPackages = sortedKeys(pkgSet)
+	eff.vsixFiles = sortedKeys(vsixSet)
+	eff.prerequisites = orderedResources(prereq)
+	s.effective[id] = eff
+	return eff, nil
+}
+
+func (s lanesState) discoveryItems() []vscode.TestItem {
+	items := append([]vscode.TestItem{}, s.diagnostics...)
+	if s.wholeFileErr != nil {
+		return items
+	}
+	ids := make([]string, 0, len(s.effective))
+	for id := range s.effective {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		a, b := s.effective[ids[i]], s.effective[ids[j]]
+		if a.lane.Order == b.lane.Order {
+			return a.lane.ID < b.lane.ID
+		}
+		return ordinalSortText(a.lane.Order) < ordinalSortText(b.lane.Order)
+	})
+	for _, id := range ids {
+		eff := s.effective[id]
+		item := laneItem(eff.id, eff.lane.Order+" "+eff.lane.Label, ordinalSortText(eff.lane.Order))
+		item.RequiredResources = eff.prerequisites
+		if eff.lane.Description != "" {
+			item.Limitations = append(item.Limitations, eff.lane.Description)
+		}
+		for _, finding := range eff.findings {
+			item.Limitations = append(item.Limitations, finding.Rule+" "+finding.Severity+": "+finding.Message)
+		}
+		items = append(items, item)
+	}
+	return items
+}
+
+func lanesDiagnosticItem(id, message string) vscode.TestItem {
+	return vscode.TestItem{
+		ID:          "keel::lane-diagnostic::" + StableIDSegment(id),
+		ParentID:    vscodeGroupLanes,
+		Label:       "lanes diagnostic: " + message,
+		Kind:        "group",
+		Runnable:    false,
+		Profiles:    []string{},
+		Limitations: []string{message},
+	}
+}
+
+func packagesForGoPattern(lanesPath, pattern string) []string {
+	root := filepath.Dir(filepath.Dir(lanesPath))
+	packages, err := parseGoTestPackages(root)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, pkg := range packages {
+		if goPackageMatchesPattern(pkg.rel, pattern) {
+			out = append(out, pkg.rel)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func goPackageMatchesPattern(pkg, pattern string) bool {
+	pattern = filepath.ToSlash(strings.TrimSpace(pattern))
+	switch pattern {
+	case "./...", "...":
+		return true
+	case "./":
+		return pkg == "."
+	}
+	if strings.HasPrefix(pattern, "./") {
+		pattern = strings.TrimPrefix(pattern, "./")
+	}
+	if strings.HasSuffix(pattern, "/...") {
+		prefix := strings.TrimSuffix(pattern, "/...")
+		return pkg == prefix || strings.HasPrefix(pkg, prefix+"/")
+	}
+	return pkg == strings.TrimSuffix(pattern, "/")
+}
+
+func vsixTestFileExists(root, rel string) bool {
+	clean := filepath.Clean(filepath.FromSlash(rel))
+	if clean == "." || clean == ".." || filepath.IsAbs(clean) || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(root, "vsix", clean)); err == nil {
+		return true
+	}
+	_, err := os.Stat(filepath.Join(root, clean))
+	return err == nil
+}
+
+func knownSystemLaneShortID(id string) bool {
+	_, ok := systemLaneShortID(id)
+	return ok
+}
+
+func systemLaneShortID(id string) (string, bool) {
+	short := strings.TrimPrefix(id, "keel::lane::")
+	switch "keel::lane::" + short {
+	case vscodeLaneLint, vscodeLaneTestFast, vscodeLaneTestCoverage, vscodeLaneVSIXGate, vscodeLaneCI:
+		return short, true
+	default:
+		return "", false
+	}
+}
+
+func systemLaneOrder(id string) string {
+	switch id {
+	case vscodeLaneLint:
+		return "b.1"
+	case vscodeLaneTestFast:
+		return "b.2"
+	case vscodeLaneTestCoverage:
+		return "b.3"
+	case vscodeLaneVSIXGate:
+		return "b.10"
+	case vscodeLaneCI:
+		return "b.30"
+	default:
+		return ""
+	}
+}
+
+func laneMembersForList(members []laneMember) []laneMemberListEntry {
+	out := make([]laneMemberListEntry, 0, len(members))
+	for _, member := range members {
+		entry := laneMemberListEntry{}
+		switch {
+		case member.Go != "":
+			entry["go"] = member.Go
+		case member.Root != "":
+			entry["root"] = member.Root
+		case member.VSIX != "":
+			entry["vsix"] = member.VSIX
+		case member.Lane != "":
+			entry["lane"] = member.Lane
+		default:
+			for _, key := range member.rawKeys {
+				entry[key] = ""
+			}
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+func latestLaneRun(root, laneID string) *laneLastRun {
+	runDir := filepath.Join(root, ".devtools", "vscode-runs")
+	entries, err := os.ReadDir(runDir)
+	if err != nil {
+		return nil
+	}
+	var best *laneLastRun
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			continue
+		}
+		got := laneRunFromStream(filepath.Join(runDir, entry.Name()), laneID)
+		if got == nil {
+			continue
+		}
+		if best == nil || got.At.After(best.At) {
+			best = got
+		}
+	}
+	return best
+}
+
+func laneRunFromStream(path, laneID string) *laneLastRun {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer file.Close()
+	var started *vscode.RunEvent
+	var finished *vscode.RunEvent
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		var event vscode.RunEvent
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			continue
+		}
+		switch event.Event {
+		case "run_started":
+			if len(event.Requested) == 1 && event.Requested[0].ID == laneID {
+				copyEvent := event
+				started = &copyEvent
+			}
+		case "run_finished":
+			copyEvent := event
+			finished = &copyEvent
+		}
+	}
+	if started == nil || finished == nil || finished.ExitCode == nil {
+		return nil
+	}
+	return &laneLastRun{RunID: started.RunID, At: started.Time, DurationMS: finished.Time.Sub(started.Time).Milliseconds(), ExitCode: *finished.ExitCode}
+}
+
+func detectGoFamilies(root string) (map[string]bool, error) {
+	packages, err := parseGoTestPackages(root)
+	if err != nil {
+		return nil, err
+	}
+	families := map[string]bool{}
+	for _, pkg := range packages {
+		if family := goPackageFamily(pkg.rel); family != "" {
+			families[family] = true
+		}
+	}
+	return families, nil
+}
+
+func goPackageFamily(pkg string) string {
+	if pkg == "." || pkg == "" {
+		return "."
+	}
+	return strings.Split(filepath.ToSlash(pkg), "/")[0]
+}
+
+func familyPackageCount(root, family string) int {
+	packages, err := parseGoTestPackages(root)
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for _, pkg := range packages {
+		if goPackageFamily(pkg.rel) == family {
+			count++
+		}
+	}
+	return count
+}
+
+func nextDetectionOrderSlot(lanes []testFileLane) int {
+	used := map[int]bool{}
+	for _, lane := range lanes {
+		if strings.HasPrefix(lane.Order, "b.") {
+			if n, err := strconv.Atoi(strings.TrimPrefix(lane.Order, "b.")); err == nil {
+				used[n] = true
+			}
+		}
+	}
+	for i := 40; i <= 99; i++ {
+		if !used[i] {
+			return i
+		}
+	}
+	return 100
+}
+
+func sortedKeys(values map[string]bool) []string {
+	out := make([]string, 0, len(values))
+	for value := range values {
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func orderedResources(values map[string]bool) []string {
+	order := []string{"go-toolchain", "keel-module-root", "stub-binaries", "pnpm"}
+	var out []string
+	for _, resource := range order {
+		if values[resource] {
+			out = append(out, resource)
+			delete(values, resource)
+		}
+	}
+	extra := sortedKeys(values)
+	return append(out, extra...)
+}
+
+func StableIDSegment(value string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(value) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		return "diagnostic"
+	}
+	return out
 }
 
 func ordinalSortText(labelPrefix string) string {
@@ -854,6 +1572,15 @@ func runVSCodeLane(ctx context.Context, logger *slog.Logger, root, laneID, runID
 		}
 		return 0, nil
 	}
+	if strings.HasPrefix(laneID, "keel::lane::") && !knownVSCodeLaneID(laneID) {
+		if logger == nil {
+			logger = vscodeDiscardLogger()
+		}
+		if err := runVSCodeFileLane(ctx, logger, root, laneID, runID, writer); err != nil {
+			return gateExitCode(err), err
+		}
+		return 0, nil
+	}
 	switch laneID {
 	case vscodeLaneLint:
 		if err := runLint(root); err != nil {
@@ -891,6 +1618,67 @@ func runVSCodeLane(ctx context.Context, logger *slog.Logger, root, laneID, runID
 		return 2, cli.NewUsageError("unknown vscode lane id %q", laneID)
 	}
 	return 0, nil
+}
+
+// DHF-REQ: keel/requirement-51
+func runVSCodeFileLane(ctx context.Context, logger *slog.Logger, root, laneID, runID string, writer vscode.RunEventWriter) error {
+	lanes, err := loadLanesState(root)
+	if err != nil {
+		return err
+	}
+	shortID := strings.TrimPrefix(laneID, "keel::lane::")
+	eff, ok := lanes.effective[shortID]
+	if !ok {
+		for _, item := range lanes.diagnostics {
+			if strings.Contains(item.ID, StableIDSegment(shortID)) {
+				return fmt.Errorf("vscode lane %s invalid: %s", laneID, strings.Join(item.Limitations, "; "))
+			}
+		}
+		return cli.NewUsageError("unknown vscode lane id %q", laneID)
+	}
+	for _, systemLane := range eff.systemLanes {
+		exit, err := runVSCodeLane(ctx, logger, root, systemLane, runID, writer)
+		if err != nil {
+			return vscodeRunError{exitCode: exit, msg: err.Error()}
+		}
+	}
+	if len(eff.goPackages) > 0 {
+		args := []string{"test", "-json"}
+		for _, pkg := range eff.goPackages {
+			args = append(args, vscode.GoPackageArg(pkg))
+		}
+		stdout, stderr, err := capture(ctx, logger, root, "go", args...)
+		emitLaneGoPackageEvents(stdout, modulePath, writer)
+		if err != nil {
+			return fmt.Errorf("go test %s: %w: %s", strings.Join(args[1:], " "), err, strings.TrimSpace(stderr))
+		}
+	}
+	if len(eff.vsixFiles) > 0 {
+		return fmt.Errorf("vscode lane %s has vsix file members but vsix file execution is not yet wired", laneID)
+	}
+	return nil
+}
+
+func emitLaneGoPackageEvents(raw, modulePath string, writer vscode.RunEventWriter) {
+	scanner := bufio.NewScanner(strings.NewReader(raw))
+	for scanner.Scan() {
+		var event vscode.GoTestJSONEvent
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil || event.Package == "" || event.Test != "" {
+			continue
+		}
+		switch event.Action {
+		case "pass", "fail", "skip":
+			pkg := vscode.GoEventPackageRel(event.Package, modulePath)
+			if pkg == "" {
+				continue
+			}
+			writer(vscode.RunEvent{
+				Event:      vscode.StatusEventName(event.Action),
+				TestID:     "go::pkg::" + filepath.ToSlash(pkg),
+				DurationMS: vscode.GoElapsedMillis(event.Elapsed, time.Now()),
+			})
+		}
+	}
 }
 
 // DHF-REQ: keel/requirement-47
@@ -1079,6 +1867,24 @@ func rejectUnsupportedFormat(args []string) error {
 	return err
 }
 
+func parseVSCodeLanesDetectArgs(args []string) (bool, error) {
+	dryRun := false
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--format":
+			if i+1 >= len(args) || args[i+1] != "json" {
+				return false, cli.NewUsageError("--format supports only json")
+			}
+			i++
+		case "--dry-run":
+			dryRun = true
+		default:
+			return false, cli.NewUsageError("unknown vscode lanes detect argument %q", args[i])
+		}
+	}
+	return dryRun, nil
+}
+
 func laneForIDs(ids []string) string {
 	for _, id := range ids {
 		if strings.HasPrefix(id, "keel::lane::") {
@@ -1086,6 +1892,32 @@ func laneForIDs(ids []string) string {
 		}
 	}
 	return ids[0]
+}
+
+// DHF-REQ: keel/requirement-53
+func runRequestsForIDs(root string, ids []string) []vscode.RunRequest {
+	out := make([]vscode.RunRequest, 0, len(ids))
+	labels := map[string]string{}
+	if lanes, err := loadLanesState(root); err == nil {
+		for _, id := range vscodeLaneIDs {
+			labels[id] = strings.TrimPrefix(id, "keel::lane::")
+		}
+		for id, eff := range lanes.effective {
+			labels["keel::lane::"+id] = eff.lane.Label
+		}
+	}
+	for _, id := range ids {
+		label := labels[id]
+		if label == "" {
+			if selection, ok := vscode.ParseGoItemID(id); ok {
+				label = goSelectionLabel(selection, id)
+			} else {
+				label = strings.TrimPrefix(id, "keel::lane::")
+			}
+		}
+		out = append(out, vscode.RunRequest{ID: id, Label: label})
+	}
+	return out
 }
 
 func encodeProtocolDocument(out io.Writer, doc any) error {
