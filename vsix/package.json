@@ -46,6 +46,10 @@
         "title": "Keel: Clear Local Test State"
       },
       {
+        "command": "keel.tests.unlock",
+        "title": "Keel: Unlock Test Bridge"
+      },
+      {
         "command": "keel.tests.toggleDemoBlock",
         "title": "Keel: Toggle Demo Block"
       }

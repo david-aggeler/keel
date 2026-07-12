@@ -44,19 +44,25 @@ if (command === 'vscode tests discover --format') {
       clear_state_test_ids: ['keel::maintenance::clear-state']
     },
     items: [
-      { id: 'keel::agents', label: 'Agents', kind: 'root', framework: 'keel', runner: 'go-test', runner_label: 'Go test', runnable: true, profiles: ['run'] },
+      { id: 'keel::maintenance', label: 'a. Maintenance', sort_text: 'a', kind: 'group', runnable: false, profiles: [] },
+      { id: 'keel::lanes', label: 'b. Lanes', sort_text: 'b', kind: 'group', runnable: false, profiles: [] },
+      { id: 'keel::frameworks', label: 'd. Frameworks', sort_text: 'd', kind: 'group', runnable: false, profiles: [] },
+      { id: 'keel::agents', parent_id: 'keel::frameworks', label: 'Agents', kind: 'root', framework: 'keel', runner: 'go-test', runner_label: 'Go test', runnable: true, profiles: ['run'] },
       { id: 'keel::file::agents/test_memory.go', parent_id: 'keel::agents', label: 'test_memory.go', kind: 'file', framework: 'keel', runner: 'go-test', runner_label: 'Go test', uri: 'agents/test_memory.go', runnable: true, profiles: ['run'] },
       { id: 'keel::test::agents/test_memory.go::TestRecall', parent_id: 'keel::file::agents/test_memory.go', label: 'TestRecall', kind: 'test', framework: 'keel', runner: 'go-test', runner_label: 'Go test', uri: 'agents/test_memory.go', runnable: true, profiles: ['run'], required_resources: ['go'] },
       { id: 'keel::test::agents/test_memory.go::TestStore', parent_id: 'keel::file::agents/test_memory.go', label: 'TestStore', kind: 'test', framework: 'keel', runner: 'go-test', runner_label: 'Go test', uri: 'agents/test_memory.go', runnable: true, profiles: ['run'], required_resources: ['go'] },
-      { id: 'go::root', parent_id: 'keel::agents', label: 'Go tests', kind: 'root', framework: 'go', runner: 'go-test', runner_label: 'Go test', runnable: true, profiles: ['run'], required_resources: ['go-toolchain', 'keel-module-root'] },
+      { id: 'go::root', parent_id: 'keel::frameworks', label: 'd.1 Go', sort_text: 'd.001', kind: 'root', framework: 'go', runner: 'go-test', runner_label: 'Go test', runnable: true, profiles: ['run'], required_resources: ['go-toolchain', 'keel-module-root'] },
       { id: 'go::pkg::log', parent_id: 'go::root', label: 'log', kind: 'package', framework: 'go', runner: 'go-test', runner_label: 'Go test', runnable: true, profiles: ['run'], required_resources: ['go-toolchain', 'keel-module-root'] },
       { id: 'go::test::log::TestLog', parent_id: 'go::pkg::log', label: 'TestLog', kind: 'test', framework: 'go', runner: 'go-test', runner_label: 'Go test', runnable: true, profiles: ['run'], required_resources: ['go-toolchain', 'keel-module-root'] },
       { id: 'go::test::log::TestMetrics', parent_id: 'go::pkg::log', label: 'TestMetrics', kind: 'test', framework: 'go', runner: 'go-test', runner_label: 'Go test', runnable: true, profiles: ['run'], required_resources: ['go-toolchain', 'keel-module-root'] },
-      { id: 'keel::lane::smoke', label: 'Smoke', kind: 'lane', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'] },
+      { id: 'keel::lane::smoke', parent_id: 'keel::lanes', label: 'Smoke', kind: 'lane', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'] },
       { id: 'alias::keel::lane::smoke::keel::test::agents/test_memory.go::TestRecall', parent_id: 'keel::lane::smoke', label: 'TestRecall', kind: 'test', framework: 'keel', runner: 'go-test', runner_label: 'Go test', canonical_id: 'keel::test::agents/test_memory.go::TestRecall', runnable: true, profiles: ['run'] },
-      { id: 'keel::lane::test-coverage', label: 'test-coverage', kind: 'lane', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['coverage'] },
-      { id: 'keel::maintenance::clear-results', label: 'clear Keel test results', kind: 'maintenance', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'] },
-      { id: 'keel::maintenance::clear-state', label: 'clear Keel local state', kind: 'maintenance', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'] }
+      { id: 'keel::lane::test-coverage', parent_id: 'keel::lanes', label: 'test-coverage', kind: 'lane', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['coverage'] },
+      { id: 'keel::lane::vsix-ci', parent_id: 'keel::lanes', label: 'b.10 vsix ci', sort_text: 'b.010', kind: 'lane', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'], required_resources: ['go-toolchain', 'keel-module-root', 'stub-binaries', 'pnpm'] },
+      { id: 'keel::lane::ci', parent_id: 'keel::lanes', label: 'b.30 ci', sort_text: 'b.030', kind: 'lane', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'], required_resources: ['go-toolchain', 'keel-module-root', 'stub-binaries'] },
+      { id: 'keel::maintenance::unlock', parent_id: 'keel::maintenance', label: 'a.2 unlock test bridge', sort_text: 'a.002', kind: 'maintenance', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'] },
+      { id: 'keel::maintenance::clear-results', parent_id: 'keel::maintenance', label: 'a.3 clear test results', sort_text: 'a.003', kind: 'maintenance', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'] },
+      { id: 'keel::maintenance::clear-state', parent_id: 'keel::maintenance', label: 'a.4 clear local test state', sort_text: 'a.004', kind: 'maintenance', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'] }
     ]
   }, null, 2));
   process.stdout.write('\n');
@@ -104,7 +110,7 @@ if (args.slice(0, 3).join(' ') === 'vscode tests run') {
     process.exit(1);
   }
   emit({ event: 'test_started', test_id: selected });
-  if (selected === 'keel::maintenance::clear-state' || selected === 'keel::maintenance::clear-results') {
+  if (selected === 'keel::maintenance::clear-state' || selected === 'keel::maintenance::clear-results' || selected === 'keel::maintenance::unlock') {
     emit({ event: 'output', test_id: selected, message: `completed ${selected}` });
     emit({ event: 'passed', test_id: selected, duration_ms: 1 });
     emit({ event: 'run_finished', exit_code: 0 });

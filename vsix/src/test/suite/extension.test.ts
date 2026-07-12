@@ -41,6 +41,7 @@ suite('Keel Test Bridge config contract', () => {
     const commands = new Set(manifest.contributes?.commands?.map((command) => command.command));
     assert.ok(commands.has('keel.tests.refresh'));
     assert.ok(commands.has('keel.tests.initConfig'));
+    assert.ok(commands.has('keel.tests.unlock'));
     assert.ok(commands.has('keel.tests.toggleDemoBlock'));
     assert.ok(!commands.has('vela.tests.refresh'));
   });
@@ -108,6 +109,7 @@ suite('Keel Test Bridge config contract', () => {
     const commands = await vscode.commands.getCommands(true);
     assert.ok(commands.includes('keel.tests.refresh'));
     assert.ok(commands.includes('keel.tests.initConfig'));
+    assert.ok(commands.includes('keel.tests.unlock'));
     assert.ok(commands.includes('keel.tests.clearTestResults'));
     assert.ok(commands.includes('keel.tests.toggleDemoBlock'));
     assert.equal(currentAdapterConfig().displayName, 'Keel');
