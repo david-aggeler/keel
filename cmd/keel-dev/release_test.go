@@ -73,8 +73,8 @@ case "$*" in
   "--dir "*" run package:vsix")
     package_dir=$2
     version=$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' "$package_dir/package.json" | head -1)
-    mkdir -p "$package_dir/dist"
-    touch "$package_dir/dist/keel-test-bridge-$version.vsix"
+    mkdir -p "$package_dir/../bin"
+    touch "$package_dir/../bin/keel-test-bridge-$version.vsix"
     ;;
 esac
 exit 0`)
@@ -138,7 +138,7 @@ func TestRunReleaseHappyPath(t *testing.T) {
 		"git tag -a v9.9.9 -m keel v9.9.9",
 		"git push origin v9.9.9",
 		"git push origin HEAD",
-		"gh release create v9.9.9 --title keel v9.9.9 --generate-notes " + filepath.Join(dir, "vsix", "dist", "keel-test-bridge-9.9.9.vsix"),
+		"gh release create v9.9.9 --title keel v9.9.9 --generate-notes " + filepath.Join(dir, "bin", "keel-test-bridge-9.9.9.vsix"),
 		"go get github.com/david-aggeler/keel@v9.9.9",
 	} {
 		if !strings.Contains(got, want) {

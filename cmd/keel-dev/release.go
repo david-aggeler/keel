@@ -156,7 +156,7 @@ func buildVSIXReleaseAsset(ctx context.Context, logger *slog.Logger, dir, versio
 	}); err != nil {
 		return "", err
 	}
-	asset := filepath.Join(vsixDir, "dist", "keel-test-bridge-"+strings.TrimPrefix(version, "v")+".vsix")
+	asset := filepath.Join(dir, "bin", "keel-test-bridge-"+strings.TrimPrefix(version, "v")+".vsix")
 	if _, err := os.Stat(asset); err != nil {
 		return "", fmt.Errorf("vsix package asset %s: %w", asset, err)
 	}
