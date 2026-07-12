@@ -13,7 +13,8 @@
     ".claude/**",
     "bin/**",
     ".logs/**",
-    "node_modules/**"
+    "node_modules/**",
+    "worktrees/**"
   ],
   "words": []
 }
