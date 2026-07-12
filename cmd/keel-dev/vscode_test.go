@@ -637,6 +637,102 @@ func TestVSCodeDiscoveryAppendsExactLaneDurationHint(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-54
+func TestVSCodeDiscoveryEmitsLaneCoversAndVSIXFileItems(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	for _, dir := range []string{"log", ".vscode", filepath.Join("vsix", "src", "test", "suite")} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, root, filepath.Join("log", "logging_test.go"), "package log\n\nimport \"testing\"\n\nfunc TestLog(t *testing.T) {}\n")
+	writeFile(t, root, filepath.Join("vsix", "src", "test", "suite", "extension.test.ts"), "suite('x', () => {});\n")
+	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{
+  "version": 1,
+  "lanes": [
+    {"id":"go-log","label":"log","order":"b.40","members":[{"go":"./log/..."}]},
+    {"id":"ui","label":"ui","order":"b.41","members":[{"vsix":"src/test/suite/extension.test.ts"},{"vsix":"src/test/suite/missing.test.ts"}]},
+    {"id":"combo","label":"combo","order":"b.42","members":[{"lane":"go-log"}]}
+  ]
+}`+"\n")
+
+	var discover bytes.Buffer
+	if err := writeVSCodeDiscovery(root, &discover); err != nil {
+		t.Fatalf("writeVSCodeDiscovery: %v", err)
+	}
+	var doc vscode.DiscoveryDocument
+	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
+		t.Fatalf("discovery JSON: %v\n%s", err, discover.String())
+	}
+	if _, ok := discoveryItemByID(doc, "vsix::file::src/test/suite/extension.test.ts"); !ok {
+		t.Fatalf("discovery missing static vsix file item: %+v", doc.Items)
+	}
+	if !discoveryHasAlias(doc, "keel::lane::go-log::covers", "go::pkg::log") ||
+		!discoveryHasAlias(doc, "keel::lane::go-log::covers", "go::file::log/logging_test.go") ||
+		!discoveryHasAlias(doc, "keel::lane::go-log::covers", "go::test::log::TestLog") {
+		t.Fatalf("go-log covers aliases missing package/file/test descendants: %+v", doc.Items)
+	}
+	if !discoveryHasAlias(doc, "keel::lane::combo::covers", "keel::lane::go-log") {
+		t.Fatalf("combo covers should alias referenced lane only: %+v", doc.Items)
+	}
+	ui, ok := discoveryItemByID(doc, "keel::lane::ui")
+	if !ok || !ui.Runnable {
+		t.Fatalf("ui lane should render despite missing vsix warning: %+v ok=%v", ui, ok)
+	}
+	if !strings.Contains(strings.Join(ui.Limitations, " "), "V10") || !discoveryHasAlias(doc, "keel::lane::ui::covers", "vsix::file::src/test/suite/extension.test.ts") {
+		t.Fatalf("ui lane limitations/covers = %+v items=%+v", ui.Limitations, doc.Items)
+	}
+}
+
+// DHF-TEST: keel/requirement-54
+func TestVSCodeFileLaneRunPassesVSIXFileFilter(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	for _, dir := range []string{".vscode", filepath.Join("vsix", "src", "test", "suite")} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, root, filepath.Join("vsix", "src", "test", "suite", "extension.test.ts"), "suite('x', () => {});\n")
+	writeFile(t, root, filepath.Join("vsix", "src", "test", "suite", "tree.test.ts"), "suite('y', () => {});\n")
+	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{"version":1,"lanes":[{"id":"ui","label":"ui","order":"b.40","members":[{"vsix":"src/test/suite/extension.test.ts"},{"vsix":"src/test/suite/tree.test.ts"}]}]}`+"\n")
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", "exit 0")
+	stub(t, bin, callsFile, "pnpm", `
+case "$*" in
+  "--dir "*"/vsix run test:headless -- src/test/suite/extension.test.ts src/test/suite/tree.test.ts")
+    exit 0
+    ;;
+  *)
+    printf 'unexpected pnpm invocation: %s\n' "$*" >&2
+    exit 2
+    ;;
+esac`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var protocol bytes.Buffer
+	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "keel::lane::ui"}); err != nil {
+		t.Fatalf("ui lane run: %v\nprotocol:\n%s\ncalls:\n%s", err, protocol.String(), calls(t, callsFile))
+	}
+	if got := calls(t, callsFile); !strings.Contains(got, "pnpm --dir "+filepath.Join(root, "vsix")+" run test:headless -- src/test/suite/extension.test.ts src/test/suite/tree.test.ts") {
+		t.Fatalf("pnpm call missing exact vsix file filter:\n%s", got)
+	}
+}
+
+func discoveryHasAlias(doc vscode.DiscoveryDocument, parentID, canonicalID string) bool {
+	for _, item := range doc.Items {
+		if item.ParentID == parentID && item.CanonicalID == canonicalID {
+			return true
+		}
+	}
+	return false
+}
+
 // DHF-TEST: keel/requirement-47
 func TestVSCodeMaintenanceItemsAdvertiseCapabilitiesAndRunActions(t *testing.T) {
 	root := t.TempDir()

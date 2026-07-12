@@ -453,6 +453,11 @@ func writeVSCodeDiscovery(root string, out io.Writer) error {
 	}
 	items = append(items, lanes.discoveryItems()...)
 	items = append(items, goItems...)
+	vsixItems, err := discoverVSIXTestItems(root)
+	if err != nil {
+		return err
+	}
+	items = append(items, vsixItems...)
 	doc := vscode.DiscoveryDocument{
 		Version:     1,
 		Workspace:   workspaceNode(root),
@@ -866,6 +871,62 @@ func (s lanesState) discoveryItems() []vscode.TestItem {
 			item.Limitations = append(item.Limitations, finding.Rule+" "+finding.Severity+": "+finding.Message)
 		}
 		items = append(items, item)
+		items = append(items, s.coverItems(eff)...)
+	}
+	return items
+}
+
+// DHF-REQ: keel/requirement-54
+func (s lanesState) coverItems(eff effectiveLane) []vscode.TestItem {
+	if len(eff.goPackages) == 0 && len(eff.vsixFiles) == 0 && len(eff.laneRefs) == 0 {
+		return nil
+	}
+	coversID := eff.id + "::covers"
+	items := []vscode.TestItem{{
+		ID:       coversID,
+		ParentID: eff.id,
+		Label:    "covers",
+		Kind:     "group",
+		Runnable: false,
+		Profiles: []string{},
+	}}
+	seen := map[string]bool{}
+	addAlias := func(canonicalID, label, kind string) {
+		if canonicalID == "" || seen[canonicalID] {
+			return
+		}
+		seen[canonicalID] = true
+		items = append(items, vscode.TestItem{
+			ID:          coversID + "::" + StableIDSegment(canonicalID),
+			ParentID:    coversID,
+			Label:       label,
+			Kind:        kind,
+			Runnable:    false,
+			Profiles:    []string{},
+			CanonicalID: canonicalID,
+		})
+	}
+	packages, _ := parseGoTestPackages(s.root)
+	byPkg := map[string]discoveredGoPackage{}
+	for _, pkg := range packages {
+		byPkg[pkg.rel] = pkg
+	}
+	for _, pkgRel := range eff.goPackages {
+		pkgID := "go::pkg::" + filepath.ToSlash(pkgRel)
+		addAlias(pkgID, pkgRel, "package")
+		for _, file := range byPkg[pkgRel].files {
+			fileID := "go::file::" + filepath.ToSlash(file.rel)
+			addAlias(fileID, filepath.Base(file.rel), "file")
+			for _, test := range file.tests {
+				addAlias("go::test::"+filepath.ToSlash(pkgRel)+"::"+test.name, test.name, "test")
+			}
+		}
+	}
+	for _, rel := range eff.vsixFiles {
+		addAlias("vsix::file::"+filepath.ToSlash(rel), filepath.Base(rel), "file")
+	}
+	for _, laneID := range eff.laneRefs {
+		addAlias(laneID, strings.TrimPrefix(laneID, "keel::lane::"), "lane")
 	}
 	return items
 }
@@ -1323,6 +1384,71 @@ func parseGoTestPackages(root string) ([]discoveredGoPackage, error) {
 	return packages, nil
 }
 
+// DHF-REQ: keel/requirement-54
+func discoverVSIXTestItems(root string) ([]vscode.TestItem, error) {
+	base := filepath.Join(root, "vsix", "src", "test")
+	if _, err := os.Stat(base); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	items := []vscode.TestItem{{
+		ID:                "vsix::root",
+		ParentID:          vscodeGroupFrameworks,
+		Label:             "d.2 Mocha (vsix)",
+		SortText:          ordinalSortText("d.2"),
+		Kind:              "root",
+		Framework:         "vsix",
+		Runner:            "mocha",
+		RunnerLabel:       "Mocha",
+		Runnable:          true,
+		Profiles:          []string{"run"},
+		RequiredResources: []string{"pnpm"},
+	}}
+	var files []string
+	err := filepath.WalkDir(base, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if entry.Name() == "node_modules" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		name := entry.Name()
+		if strings.HasSuffix(name, ".test.ts") || strings.HasSuffix(name, ".spec.ts") || strings.HasSuffix(name, ".test.tsx") || strings.HasSuffix(name, ".spec.tsx") {
+			rel, err := filepath.Rel(filepath.Join(root, "vsix"), path)
+			if err != nil {
+				return err
+			}
+			files = append(files, filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(files)
+	for _, rel := range files {
+		items = append(items, vscode.TestItem{
+			ID:                "vsix::file::" + rel,
+			ParentID:          "vsix::root",
+			Label:             filepath.Base(rel),
+			Kind:              "file",
+			Framework:         "vsix",
+			Runner:            "mocha",
+			RunnerLabel:       "Mocha",
+			URI:               filepath.ToSlash(filepath.Join("vsix", rel)),
+			Runnable:          true,
+			Profiles:          []string{"run"},
+			RequiredResources: []string{"pnpm"},
+		})
+	}
+	return items, nil
+}
+
 func goDiscoverySkipDir(path, name string) bool {
 	switch name {
 	case "vendor", "testdata", "node_modules":
@@ -1680,7 +1806,22 @@ func runVSCodeFileLane(ctx context.Context, logger *slog.Logger, root, laneID, r
 		}
 	}
 	if len(eff.vsixFiles) > 0 {
-		return fmt.Errorf("vscode lane %s has vsix file members but vsix file execution is not yet wired", laneID)
+		if err := runVSIXFileSelection(ctx, logger, root, eff.vsixFiles); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DHF-REQ: keel/requirement-54
+func runVSIXFileSelection(ctx context.Context, logger *slog.Logger, root string, files []string) error {
+	if _, err := exec.LookPath("pnpm"); err != nil {
+		return fmt.Errorf("vscode run vsix files: required tool %q not found on PATH", "pnpm")
+	}
+	args := []string{"--dir", filepath.Join(root, "vsix"), "run", "test:headless", "--"}
+	args = append(args, files...)
+	if err := runStep(ctx, logger, root, step{name: "vscode:vsix-files", program: "pnpm", args: args}); err != nil {
+		return err
 	}
 	return nil
 }
