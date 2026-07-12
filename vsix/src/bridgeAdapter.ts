@@ -108,9 +108,10 @@ export async function planTests(workspaceRoot: string, ids: string[]): Promise<S
   return parsed;
 }
 
+// DHF-REQ: keel/requirement-42
 export function runTests(workspaceRoot: string, ids: string[]): cp.ChildProcessWithoutNullStreams {
   const adapter = adapterConfig(workspaceRoot);
-  const args = [...adapter.args, 'run', '--format', 'jsonl'];
+  const args = [...adapter.args, 'run'];
   for (const id of ids) {
     args.push('--id', id);
   }
@@ -150,6 +151,17 @@ export async function setDemoBlock(workspaceRoot: string, laneID: string | undef
     env: adapterEnv(adapter),
     maxBuffer: 1024 * 1024
   });
+}
+
+// DHF-REQ: keel/requirement-42
+export async function upgradeConfig(workspaceRoot: string): Promise<{ stdout: string; stderr: string }> {
+  const adapter = adapterConfig(workspaceRoot);
+  const { stdout, stderr } = await execFile(adapter.command, ['vscode', 'config', 'upgrade'], {
+    cwd: workspaceRoot,
+    env: adapterEnv(adapter),
+    maxBuffer: 1024 * 1024
+  });
+  return { stdout, stderr };
 }
 
 function defaultAdapterCommand(workspaceRoot: string): string {

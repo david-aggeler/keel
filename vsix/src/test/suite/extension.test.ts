@@ -1,4 +1,5 @@
 import * as assert from 'node:assert/strict';
+import * as cp from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -13,7 +14,7 @@ import {
   setCurrentTreeForTest,
   shouldInvalidateResultsForEvent
 } from '../../extension';
-import { configRelativePath, currentConfigVersion, defaultConfigTemplate, readAdapterConfig } from '../../bridgeAdapter';
+import { configRelativePath, currentConfigVersion, defaultConfigTemplate, discoverTests, planTests, readAdapterConfig, readDemoBlockStatus, runTests, setDemoBlock, upgradeConfig } from '../../bridgeAdapter';
 import { publishDiscovery } from '../../tree';
 import { RunEvent } from '../../protocol';
 
@@ -102,6 +103,7 @@ suite('Keel Test Bridge config contract', () => {
     }, null, 2) + '\n');
     const before = fs.readFileSync(configPath, 'utf8');
     const callsPath = path.join(root, '.devtools', 'fake-adapter-calls.log');
+    fs.rmSync(path.join(root, '.devtools', 'vscode-demo-block.json'), { force: true });
     fs.rmSync(callsPath, { force: true });
 
     await vscode.commands.executeCommand('keel.tests.toggleDemoBlock');
@@ -110,6 +112,50 @@ suite('Keel Test Bridge config contract', () => {
     assert.equal(after, before, 'toggle must not mutate .vscode/test-bridge.json');
     const calls = fs.readFileSync(callsPath, 'utf8');
     assert.match(calls, /vscode demo (block|unblock) /);
+
+    const nextRun = await collectChild(runTests(root, ['keel::lane::test-fast']));
+    assert.notEqual(nextRun.code, 0);
+    const events = nextRun.stdout.split(/\r?\n/)
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as RunEvent);
+    assert.ok(events.some((event) => event.event === 'failed' && /lane blocked/.test(event.message ?? '')));
+    assert.equal(events.filter((event) => event.event === 'run_finished').length, 1);
+  });
+
+  // DHF-TEST: keel/requirement-42
+  test('production bridge argv is accepted by the real keel-dev binary per verb', async function () {
+    this.timeout(20_000);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-real-bridge-'));
+    fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'go.mod'), 'module github.com/david-aggeler/keel\n\ngo 1.25\n');
+    fs.writeFileSync(path.join(root, 'go.sum'), '');
+    fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+      version: currentConfigVersion,
+      command: realKeelDevBinary(),
+      args: ['vscode', 'tests'],
+      displayName: 'Keel'
+    }, null, 2) + '\n');
+
+    const discovery = await discoverTests(root);
+    assert.ok(discovery.items.some((item) => item.id === 'keel::lane::lint'));
+
+    const plan = await planTests(root, ['keel::lane::lint']);
+    assert.ok(plan.items.some((item) => item.id === 'keel::lane::lint'));
+
+    await setDemoBlock(root, 'keel::lane::test-fast');
+    const status = await readDemoBlockStatus(root);
+    assert.equal(status.blocked_lane, 'keel::lane::test-fast');
+    await setDemoBlock(root, undefined);
+
+    const run = await collectChild(runTests(root, ['keel::lane::lint']));
+    assert.doesNotMatch(run.stderr + run.stdout, /unknown flag/);
+    const terminalEvents = run.stdout.split(/\r?\n/)
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as RunEvent)
+      .filter((event) => event.event === 'run_finished');
+    assert.equal(terminalEvents.length, 1);
+
+    await upgradeConfig(root);
   });
 
   // DHF-TEST: keel/requirement-36
@@ -284,4 +330,26 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   assert.equal(predicate(), true);
+}
+
+function realKeelDevBinary(): string {
+  const exe = process.platform === 'win32' ? 'keel-dev.exe' : 'keel-dev';
+  return path.resolve(__dirname, '../../../../bin', exe);
+}
+
+async function collectChild(child: cp.ChildProcessWithoutNullStreams): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (chunk: Buffer) => {
+    stdout += chunk.toString('utf8');
+  });
+  child.stderr.on('data', (chunk: Buffer) => {
+    stderr += chunk.toString('utf8');
+  });
+  return await new Promise((resolve, reject) => {
+    child.on('error', reject);
+    child.on('close', (code) => {
+      resolve({ code, stdout, stderr });
+    });
+  });
 }

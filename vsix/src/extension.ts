@@ -4,7 +4,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as vscode from 'vscode';
-import { adapterConfig, configRelativePath, currentConfigVersion, defaultAdapterConfig, defaultConfigTemplate, discoverTests, planTests, readAdapterConfig, readDemoBlockStatus, runTests, setDemoBlock } from './bridgeAdapter';
+import { adapterConfig, configRelativePath, currentConfigVersion, defaultAdapterConfig, defaultConfigTemplate, discoverTests, planTests, readAdapterConfig, readDemoBlockStatus, runTests, setDemoBlock, upgradeConfig } from './bridgeAdapter';
 import { ExternalRunMirror, ExternalRunStateSnapshot, setExternalRunStaleMsForTest } from './externalRunMirror';
 import { publishDiscovery, PublishedTree } from './tree';
 import { DesiredState, RunEvent, SetupPlan } from './protocol';
@@ -623,18 +623,9 @@ async function migrateWorkspaceConfig(workspaceRoot: string): Promise<void> {
   if (cfg.version >= currentConfigVersion) {
     return;
   }
-  await new Promise<void>((resolve, reject) => {
-    const command = path.isAbsolute(cfg.command) ? cfg.command : path.join(workspaceRoot, cfg.command);
-    const child = cp.execFile(command, ['vscode', 'config', 'upgrade'], { cwd: workspaceRoot, env: cfg.env ? { ...process.env, ...cfg.env } : process.env }, (error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
-    });
-    child.stdout?.on('data', (chunk: Buffer) => output?.append(chunk.toString('utf8')));
-    child.stderr?.on('data', (chunk: Buffer) => output?.append(chunk.toString('utf8')));
-  });
+  const result = await upgradeConfig(workspaceRoot);
+  output?.append(result.stdout);
+  output?.append(result.stderr);
   void vscode.window.showInformationMessage(`${cfg.displayName} Test Bridge config upgraded; review the workspace git diff.`);
 }
 
