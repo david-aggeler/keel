@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strconv"
@@ -182,6 +183,33 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 		return res, fmt.Errorf("keel/exec/claude: %s exited non-zero with non-error result: %w", bin, runErr)
 	}
 	return res, nil
+}
+
+// Version returns claude's reported version by running `<bin> --version`. An
+// empty bin resolves "claude" on PATH. Output is trimmed; a spawn failure or
+// non-zero exit returns the error.
+//
+// DHF-REQ: keel/requirement-56
+func Version(ctx context.Context, bin string) (string, error) {
+	if bin == "" {
+		bin = "claude"
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	var out bytes.Buffer
+	proc, err := procexec.ProcessStart(ctx, procexec.Request{
+		Program: bin,
+		Args:    []string{"--version"},
+		Stdout:  &out,
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		return "", fmt.Errorf("keel/exec/claude: %s --version: %w", bin, err)
+	}
+	if _, err := proc.Wait(); err != nil {
+		return "", fmt.Errorf("keel/exec/claude: %s --version: %w", bin, err)
+	}
+	return strings.TrimSpace(out.String()), nil
 }
 
 func truncateBytes(b []byte, n int) string {
