@@ -49,10 +49,10 @@ func (c *testCapture) AllJSON() []map[string]any {
 func testLogger(service string) (*logging.Logger, *testCapture) {
 	cap := &testCapture{}
 	logger, err := logging.New(logging.Config{
-		Service: service,
-		Level:   slog.LevelDebug,
-		Console: logging.ConsoleJSON,
-		Writer:  cap,
+		Service:          service,
+		ConsoleVerbosity: slog.LevelDebug,
+		Console:          logging.ConsoleJSON,
+		Writer:           cap,
 	})
 	if err != nil {
 		panic(err)

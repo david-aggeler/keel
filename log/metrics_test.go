@@ -182,9 +182,9 @@ func newJSONMetricLogger(t testing.TB, service string) (*logging.Logger, *record
 	t.Helper()
 	rc := &recordCapture{}
 	return mustNewLogger(t, logging.Config{
-		Service: service,
-		Level:   slog.LevelDebug,
-		Console: logging.ConsoleJSON,
-		Writer:  rc,
+		Service:          service,
+		ConsoleVerbosity: slog.LevelDebug,
+		Console:          logging.ConsoleJSON,
+		Writer:           rc,
 	}), rc
 }

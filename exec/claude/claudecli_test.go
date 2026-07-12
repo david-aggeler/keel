@@ -218,10 +218,10 @@ func TestRun_UsesProcessStartWithClaudeStreamAdapterAndPreservesResult(t *testin
 
 	var logBuf bytes.Buffer
 	logger, err := logging.New(logging.Config{
-		Service: "claudecli-test",
-		Level:   slog.LevelDebug,
-		Console: logging.ConsoleJSON,
-		Writer:  &logBuf,
+		Service:          "claudecli-test",
+		ConsoleVerbosity: slog.LevelDebug,
+		Console:          logging.ConsoleJSON,
+		Writer:           &logBuf,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

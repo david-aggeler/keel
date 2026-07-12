@@ -239,10 +239,10 @@ func TestRun_UsesSharedProcessLifecycleLogging(t *testing.T) {
 
 	var logBuf bytes.Buffer
 	logger, err := logging.New(logging.Config{
-		Service: "codexcli-test",
-		Level:   slog.LevelDebug,
-		Console: logging.ConsoleJSON,
-		Writer:  &logBuf,
+		Service:          "codexcli-test",
+		ConsoleVerbosity: slog.LevelDebug,
+		Console:          logging.ConsoleJSON,
+		Writer:           &logBuf,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -305,10 +305,10 @@ func TestRun_EmitsCuratedCodexProgressRecords(t *testing.T) {
 
 	var logBuf bytes.Buffer
 	logger, err := logging.New(logging.Config{
-		Service: "codexcli-test",
-		Level:   slog.LevelDebug,
-		Console: logging.ConsoleJSON,
-		Writer:  &logBuf,
+		Service:          "codexcli-test",
+		ConsoleVerbosity: slog.LevelDebug,
+		Console:          logging.ConsoleJSON,
+		Writer:           &logBuf,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -344,10 +344,10 @@ func TestRun_DoesNotEmitTerminalResultAsCodexProgress(t *testing.T) {
 
 	var logBuf bytes.Buffer
 	logger, err := logging.New(logging.Config{
-		Service: "codexcli-test",
-		Level:   slog.LevelDebug,
-		Console: logging.ConsoleJSON,
-		Writer:  &logBuf,
+		Service:          "codexcli-test",
+		ConsoleVerbosity: slog.LevelDebug,
+		Console:          logging.ConsoleJSON,
+		Writer:           &logBuf,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

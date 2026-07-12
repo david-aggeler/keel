@@ -178,10 +178,10 @@ func consoleForMode(mode string) (logging.Console, error) {
 // mode and both .logs file sinks keep the field.
 func loggerConfig(level slog.Leveler) logging.Config {
 	return logging.Config{
-		Service:         "keel-dev",
-		Level:           level,
-		Writer:          os.Stdout,
-		ConsoleOmitKeys: []string{"service"},
+		Service:          "keel-dev",
+		ConsoleVerbosity: level,
+		Writer:           os.Stdout,
+		ConsoleOmitKeys:  []string{"service"},
 	}
 }
 

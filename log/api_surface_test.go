@@ -15,7 +15,6 @@ func TestPublicAPISurfaceMatchesMinimalLoggerContract(t *testing.T) {
 	pkg := parseLogPackage(t)
 
 	rejectedExports := []string{
-		"ResolveGitCommit",
 		"NewHumanFileHandler",
 		"NewJSONFileHandler",
 		"HumanLogPath",
@@ -28,10 +27,8 @@ func TestPublicAPISurfaceMatchesMinimalLoggerContract(t *testing.T) {
 		"RecordCapture",
 		"DefaultRecentCapacity",
 		"LogBuildIdentity",
-		"StartDailyBuildIdentity",
 		"Discard",
 		"ParseLevel",
-		"RedactString",
 		"FromContext",
 		"WithLogger",
 		"Metric",
@@ -54,9 +51,24 @@ func TestPublicAPISurfaceMatchesMinimalLoggerContract(t *testing.T) {
 			t.Errorf("Config.%s is still exported; public construction should use TextDir/JSONLDir", field)
 		}
 	}
-	for _, field := range []string{"TextDir", "JSONLDir"} {
+	for _, field := range []string{"TextDir", "JSONLDir", "ConsoleVerbosity", "FileVerbosity"} {
 		if !pkg.configFields[field] {
 			t.Errorf("Config.%s is missing from the public file-sink configuration", field)
+		}
+	}
+	if pkg.configFields["Level"] {
+		t.Error("Config.Level is still exported; use Config.ConsoleVerbosity and Config.FileVerbosity")
+	}
+
+	requiredExports := []string{
+		"LevelFromString",
+		"LevelToString",
+		"RedactString",
+		"ResolveGitCommit",
+	}
+	for _, name := range requiredExports {
+		if !pkg.exports[name] {
+			t.Errorf("%s is not exported from keel/log", name)
 		}
 	}
 
@@ -67,6 +79,9 @@ func TestPublicAPISurfaceMatchesMinimalLoggerContract(t *testing.T) {
 		"Fields",
 		"Emit",
 		"LogBuildIdentity",
+		"StartDailyBuildIdentity",
+		"TextLogPath",
+		"JSONLLogPath",
 	}
 	for _, name := range requiredLoggerMethods {
 		if !pkg.loggerMethods[name] {

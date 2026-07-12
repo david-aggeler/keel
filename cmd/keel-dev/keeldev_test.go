@@ -76,10 +76,10 @@ func (rc *recordCapture) LastRaw() string {
 func testLogger(service string) (*slog.Logger, *recordCapture) {
 	cap := &recordCapture{}
 	logger, err := logging.New(logging.Config{
-		Service: service,
-		Level:   slog.LevelDebug,
-		Console: logging.ConsoleJSON,
-		Writer:  cap,
+		Service:          service,
+		ConsoleVerbosity: slog.LevelDebug,
+		Console:          logging.ConsoleJSON,
+		Writer:           cap,
 	})
 	if err != nil {
 		panic(err)

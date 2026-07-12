@@ -212,13 +212,13 @@ func testLogger(t *testing.T, mode string, out *bytes.Buffer) *logging.Logger {
 		t.Fatalf("ParseMode(%q): %v", mode, err)
 	}
 	logger, err := logging.New(logging.Config{
-		Service:  "keel-demo-test",
-		Level:    slog.LevelDebug,
-		Console:  consoleForSharedMode(parsed),
-		Writer:   out,
-		TextDir:  t.TempDir(),
-		JSONLDir: t.TempDir(),
-		PerRun:   true,
+		Service:          "keel-demo-test",
+		ConsoleVerbosity: slog.LevelDebug,
+		Console:          consoleForSharedMode(parsed),
+		Writer:           out,
+		TextDir:          t.TempDir(),
+		JSONLDir:         t.TempDir(),
+		PerRun:           true,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
