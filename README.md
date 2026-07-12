@@ -24,6 +24,9 @@ same redaction path and severity vocabulary.
 - Console: sparse AI — minimal progress noise, but a precise log pointer on error
 - Console: full JSON records
 - File: plain text and JSONL
+- OpenTelemetry: optional OTLP export target via `log/otel` — importing it is
+  what opts you into the OpenTelemetry SDK dependency; the core stays
+  dependency-free
 
 Plain-text console:
 
@@ -92,12 +95,14 @@ Apache-2.0 — see [LICENSE](LICENSE).
 |---|---|---|
 | `log` | `github.com/david-aggeler/keel/log` | Structured logging: JSON + human-readable console handlers sharing one redaction path and severity vocabulary, build identity, metrics, recent-log ring, operational errors. |
 | `cli` | `github.com/david-aggeler/keel/cli` | Shared command tree, generated help, and usage-error contract for first-party developer CLIs: one `CommandSpec` model drives dispatch, flag validation, and rendered help. |
+| `log/otel` | `github.com/david-aggeler/keel/log/otel` | Optional OpenTelemetry log exporter bridge (OTLP). Quarantined sibling: only importing it pulls in the OpenTelemetry SDK; core `log` stays dependency-free. |
 | `exec` | `github.com/david-aggeler/keel/exec` | `ProcessStart` — the single seam for launching subprocesses with uniform lifecycle observability: START (full untruncated command line + cwd), DURING (streamed output), END (exit code + duration), sensitive-arg redaction. |
 | `exec/claude` | `github.com/david-aggeler/keel/exec/claude` | Adapter for headless `claude -p` invocations (streaming output). |
 | `exec/codex` | `github.com/david-aggeler/keel/exec/codex` | Adapter for headless `codex exec --json` invocations: prompt in, streaming JSONL events out, determinate result/error contract, stub-tested. |
 
 Layering: `log` ← `exec` ← {`exec/claude`, `exec/codex`}; `cli` stands
-alone. No external dependencies, no internal replace directives.
+alone. No external dependencies in the core compile graph — `log/otel` is
+the one deliberate exception — and no internal replace directives.
 
 ## Keel Test Bridge (VSIX)
 
