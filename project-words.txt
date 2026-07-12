@@ -63,6 +63,7 @@ keeldevtest
 keelverify
 libpq
 logotel
+logtest
 misattributed
 mvdan
 mydb
