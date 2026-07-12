@@ -50,6 +50,11 @@ func run(argv []string) int {
 		fmt.Fprintln(os.Stdout, versionString())
 		return 0
 	}
+	if cfg.HelpAll {
+		// DHF-REQ: keel/requirement-57
+		tree.RenderAllHelp(os.Stderr)
+		return 0
+	}
 	if cfg.Help && len(words) == 0 {
 		printUsage(tree)
 		return 0
