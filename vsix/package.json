@@ -49,7 +49,26 @@
         "command": "keel.tests.toggleDemoBlock",
         "title": "Keel: Toggle Demo Block"
       }
-    ]
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "keel.tests.refresh",
+          "when": "view == workbench.view.testing",
+          "group": "navigation@10"
+        },
+        {
+          "command": "keel.tests.clearTestResults",
+          "when": "view == workbench.view.testing",
+          "group": "navigation@20"
+        },
+        {
+          "command": "keel.tests.toggleDemoBlock",
+          "when": "view == workbench.view.testing",
+          "group": "navigation@30"
+        }
+      ]
+    }
   },
   "scripts": {
     "build:devtool": "cd .. && mkdir -p bin && go build -o bin/keel-dev ./cmd/keel-dev",
