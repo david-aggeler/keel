@@ -1,4 +1,5 @@
 aggeler
+canonicality
 checksummed
 CLAUDECLI
 codespell
@@ -11,10 +12,12 @@ coverprofile
 creds
 cret
 cspell
+custodied
 dbname
 deadcode
 DEBU
 dedup
+DFMEA
 dogfooding
 errcheck
 ERRO
@@ -50,6 +53,7 @@ gotmp
 GOTOOLCHAIN
 govulncheck
 homelab
+ilities
 ineffassign
 inspectable
 Justfiles
@@ -89,6 +93,7 @@ semconv
 Serilog
 shellcheck
 shfmt
+Shostack
 shquote
 sslmode
 sslpassword
