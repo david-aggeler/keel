@@ -16,6 +16,8 @@ let statusItem: vscode.StatusBarItem;
 let activeRunLabel = '';
 let testTreeGeneration = 0;
 let externalRunMirror: ExternalRunMirror | undefined;
+let testControllerForRunProfile: vscode.TestController | undefined;
+let testRunProfileForRunProfile: vscode.TestRunProfile | undefined;
 
 // Re-export for any caller that still imports ExternalRunMirror /
 // ExternalRunStateSnapshot from './extension' (the pre-Story-27.24 path).
@@ -41,13 +43,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await refresh(controller);
   };
 
-  const runProfile = controller.createRunProfile('Run', vscode.TestRunProfileKind.Run, (request, token) => {
-    void runSelected(controller, request, token);
-  });
+  const runProfile = controller.createRunProfile('Run', vscode.TestRunProfileKind.Run, (request, token) => runSelected(controller, request, token));
+  testControllerForRunProfile = controller;
+  testRunProfileForRunProfile = runProfile;
   context.subscriptions.push(runProfile);
-  const coverageProfile = controller.createRunProfile('Coverage', vscode.TestRunProfileKind.Coverage, (request, token) => {
-    void runSelected(controller, request, token, true);
-  });
+  const coverageProfile = controller.createRunProfile('Coverage', vscode.TestRunProfileKind.Coverage, (request, token) => runSelected(controller, request, token, true));
   coverageProfile.loadDetailedCoverage = async () => [];
   context.subscriptions.push(coverageProfile);
 
@@ -108,6 +108,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 export function deactivate(): void {
   tree = undefined;
+  testControllerForRunProfile = undefined;
+  testRunProfileForRunProfile = undefined;
   finishActiveRun();
 }
 
@@ -651,6 +653,27 @@ export function getWorkspaceRoot(): string | undefined {
 
 export function externalRunSnapshots(): ExternalRunStateSnapshot[] {
   return Array.from(externalRunMirror?.snapshots() ?? []);
+}
+
+export async function runProfileHandlerForTest(protocolID: string): Promise<void> {
+  const controller = testControllerForRunProfile;
+  const profile = testRunProfileForRunProfile;
+  if (!controller || !profile) {
+    throw new Error('Keel test run profile is not active');
+  }
+  tree = undefined;
+  await refresh(controller);
+  const refreshedTree = currentTree();
+  const item = refreshedTree?.itemsById.get(protocolID);
+  if (!item) {
+    throw new Error(`Keel test item not found: ${protocolID}`);
+  }
+  const source = new vscode.CancellationTokenSource();
+  try {
+    await profile.runHandler(new vscode.TestRunRequest([item], undefined, profile), source.token);
+  } finally {
+    source.dispose();
+  }
 }
 
 // extensionOutput + currentTree are exported for externalRunMirror.ts
