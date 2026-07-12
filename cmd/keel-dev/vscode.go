@@ -979,9 +979,7 @@ func goPackageMatchesPattern(pkg, pattern string) bool {
 	case "./":
 		return pkg == "."
 	}
-	if strings.HasPrefix(pattern, "./") {
-		pattern = strings.TrimPrefix(pattern, "./")
-	}
+	pattern = strings.TrimPrefix(pattern, "./")
 	if strings.HasSuffix(pattern, "/...") {
 		prefix := strings.TrimSuffix(pattern, "/...")
 		return pkg == prefix || strings.HasPrefix(pkg, prefix+"/")
