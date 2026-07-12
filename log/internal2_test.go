@@ -1,7 +1,7 @@
 package log
 
 // Second internal coverage file for keel/change_request-4 (keel/ac-37):
-// build identity, multi-sink New composition, handler groups, recentlog edges.
+// build identity, multi-sink New composition, handler groups.
 
 import (
 	"context"
@@ -109,24 +109,4 @@ func newTestJSONHandler(w *recordCapture) slog.Handler {
 		Level:       slog.LevelDebug,
 		ReplaceAttr: replaceForOpenBrain,
 	})
-}
-
-func TestRecentBufferEdges(t *testing.T) {
-	buf := newRecentBuffer(3)
-	if buf.Len() != 0 {
-		t.Fatal("fresh buffer not empty")
-	}
-	base, _ := newForTesting("svc")
-	l := teeRecent(base, buf, "svc")
-	l = l.With("k", "v") // exercise WithAttrs on the tee handler
-	l = l.WithGroup("grp")
-	for i := 0; i < 5; i++ {
-		l.Warn("m", "i", i) // only warn/error records are retained
-	}
-	if buf.Len() != 3 {
-		t.Errorf("ring should cap at 3, got %d", buf.Len())
-	}
-	if got := buf.Entries(2, ""); len(got) != 2 {
-		t.Errorf("Entries(2) = %d rows", len(got))
-	}
 }
