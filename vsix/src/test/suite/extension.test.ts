@@ -45,6 +45,30 @@ suite('Keel Test Bridge config contract', () => {
     assert.ok(!commands.has('vela.tests.refresh'));
   });
 
+  // DHF-TEST: keel/requirement-44
+  test('manifest surfaces only the frequent commands in Testing-view menus', () => {
+    const manifestPath = path.resolve(__dirname, '../../../package.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {
+      contributes?: {
+        menus?: Record<string, Array<{ command: string; when?: string; group?: string }>>;
+      };
+    };
+
+    const surfacedCommands = Object.values(manifest.contributes?.menus ?? {})
+      .flat()
+      .map((item) => item.command)
+      .sort();
+    assert.deepEqual(surfacedCommands, [
+      'keel.tests.clearTestResults',
+      'keel.tests.refresh',
+      'keel.tests.toggleDemoBlock'
+    ]);
+    assert.deepEqual(Object.keys(manifest.contributes?.menus ?? {}).sort(), ['view/title']);
+    for (const item of manifest.contributes?.menus?.['view/title'] ?? []) {
+      assert.equal(item.when, 'view == workbench.view.testing');
+    }
+  });
+
   // DHF-TEST: keel/requirement-40
   test('default template is the embedded current Keel config', () => {
     const parsed = JSON.parse(defaultConfigTemplate()) as { version: number; command: string; args: string[]; displayName: string };
