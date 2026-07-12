@@ -11,8 +11,9 @@
 // event, and surfaces tokens, cost, turns, and duration as the typed fields of
 // [Result].
 //
-// [Run] is the single entry point. The zero value of [Request] is not usable —
-// Prompt is required; Dir selects which project's .claude/ tree the headless
-// session discovers, and Bin points at the claude binary (empty resolves
-// "claude" on PATH, and tests point it at a stub so the package stays hermetic).
+// [Run] is the primary entry point; [Version] reports the claude binary's
+// version. The zero value of [Request] is not usable — Prompt is required; Dir
+// selects which project's .claude/ tree the headless session discovers, and Bin
+// points at the claude binary (empty resolves "claude" on PATH, and tests point
+// it at a stub so the package stays hermetic).
 package claude
