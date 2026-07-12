@@ -761,7 +761,15 @@ func clearVSCodeDevtoolsState(root string) error {
 	return nil
 }
 
+// DHF-REQ: keel/requirement-50
 func runVSCodeGoSelection(ctx context.Context, logger *slog.Logger, root, selectedID string, selection vscode.GoSelection, writer vscode.RunEventWriter) error {
+	if selection.Kind == "file" {
+		names, err := goTestNamesInFile(root, selection.File)
+		if err != nil {
+			return err
+		}
+		selection.TestNames = names
+	}
 	args := []string{"test", vscode.GoPackageArg(selection.Pkg), "-json"}
 	if selection.TestName != "" {
 		args = append(args, "-run="+vscode.GoTestNamePattern([]string{selection.TestName}))
@@ -774,6 +782,26 @@ func runVSCodeGoSelection(ctx context.Context, logger *slog.Logger, root, select
 		return fmt.Errorf("go test %s: %w: %s", strings.Join(args[1:], " "), err, strings.TrimSpace(stderr))
 	}
 	return nil
+}
+
+func goTestNamesInFile(root, rel string) ([]string, error) {
+	clean := filepath.Clean(filepath.FromSlash(rel))
+	if rel == "" || filepath.IsAbs(clean) || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return nil, fmt.Errorf("vscode run go file: invalid file selection %q", rel)
+	}
+	slashRel := filepath.ToSlash(clean)
+	file := parseGoTestFile(filepath.Join(root, clean), slashRel)
+	if file.parseErr != nil {
+		return nil, fmt.Errorf("vscode run go file parse %s: %w", slashRel, file.parseErr)
+	}
+	names := make([]string, 0, len(file.tests))
+	for _, test := range file.tests {
+		names = append(names, test.name)
+	}
+	if len(names) == 0 {
+		return nil, fmt.Errorf("vscode run go file %s: no top-level Test functions found", slashRel)
+	}
+	return names, nil
 }
 
 func emitGoTestJSONEvents(raw string, selection vscode.GoSelection, selectedID, modulePath string, writer vscode.RunEventWriter) {

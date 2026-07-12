@@ -686,6 +686,110 @@ exit 0`)
 	}
 }
 
+// DHF-TEST: keel/requirement-50
+func TestVSCodeRunGoFileSelectionRunsOnlyTestsInThatFile(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	if err := os.MkdirAll(filepath.Join(root, "log"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join("log", "selected_test.go"), `package log
+
+import "testing"
+
+func TestOne(t *testing.T) {}
+func TestTwo(t *testing.T) {}
+`)
+	writeFile(t, root, filepath.Join("log", "other_test.go"), `package log
+
+import "testing"
+
+func TestOther(t *testing.T) {}
+`)
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", `
+case "$1 $2" in
+  "test ./log")
+    found_run=
+    for arg in "$@"; do
+      case "$arg" in
+        -run=^\(TestOne\|TestTwo\)$) found_run=1 ;;
+      esac
+    done
+    if [ "$found_run" != 1 ]; then
+      printf 'missing selected file -run filter\n' >&2
+      exit 2
+    fi
+    printf '{"Action":"run","Package":"github.com/david-aggeler/keel/log","Test":"TestOne"}\n'
+    printf '{"Action":"pass","Package":"github.com/david-aggeler/keel/log","Test":"TestOne","Elapsed":0.01}\n'
+    printf '{"Action":"run","Package":"github.com/david-aggeler/keel/log","Test":"TestTwo"}\n'
+    printf '{"Action":"pass","Package":"github.com/david-aggeler/keel/log","Test":"TestTwo","Elapsed":0.02}\n'
+    printf '{"Action":"run","Package":"github.com/david-aggeler/keel/log","Test":"TestOther"}\n'
+    printf '{"Action":"pass","Package":"github.com/david-aggeler/keel/log","Test":"TestOther","Elapsed":0.03}\n'
+    printf '{"Action":"pass","Package":"github.com/david-aggeler/keel/log","Elapsed":0.04}\n'
+    ;;
+esac
+exit 0`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var protocol bytes.Buffer
+	err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "go::file::log/selected_test.go"})
+	if err != nil {
+		t.Fatalf("go file selection run: %v\nprotocol:\n%s\ncalls:\n%s", err, protocol.String(), calls(t, callsFile))
+	}
+	if !strings.Contains(calls(t, callsFile), "go test ./log -json -run=^(TestOne|TestTwo)$") {
+		t.Fatalf("go file selection did not use file test names in -run filter:\n%s", calls(t, callsFile))
+	}
+	events := decodeRunEvents(t, protocol.String())
+	for _, want := range []string{"TestOne", "TestTwo"} {
+		id := "go::test::log::" + want
+		if !runEventsContain(events, "test_started", id) || !runEventsContain(events, "passed", id) {
+			t.Fatalf("run events missing started/pass for %s: %+v", id, events)
+		}
+	}
+	if runEventsContain(events, "test_started", "go::test::log::TestOther") || runEventsContain(events, "passed", "go::test::log::TestOther") {
+		t.Fatalf("run events included test outside selected file: %+v", events)
+	}
+	if events[len(events)-1].Event != "run_finished" || events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode != 0 {
+		t.Fatalf("terminal event = %+v, want run_finished exit 0", events[len(events)-1])
+	}
+}
+
+// DHF-TEST: keel/requirement-50
+func TestVSCodeRunGoFileSelectionReportsParseFailure(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	if err := os.MkdirAll(filepath.Join(root, "log"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join("log", "broken_test.go"), "package log\n\nfunc TestBroken(\n")
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", "printf 'go test must not run after a file parse failure\\n' >&2\nexit 2")
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var protocol bytes.Buffer
+	err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "go::file::log/broken_test.go"})
+	if err == nil {
+		t.Fatalf("go file selection parse failure returned nil\nprotocol:\n%s\ncalls:\n%s", protocol.String(), calls(t, callsFile))
+	}
+	if got := strings.TrimSpace(calls(t, callsFile)); got != "" {
+		t.Fatalf("go test ran despite parse failure:\n%s", got)
+	}
+	events := decodeRunEvents(t, protocol.String())
+	if !runEventsContain(events, "errored", "") || !strings.Contains(protocol.String(), "broken_test.go") || !strings.Contains(protocol.String(), "expected") {
+		t.Fatalf("parse failure events = %+v, want errored event naming parse error", events)
+	}
+	if events[len(events)-1].Event != "run_finished" || events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode == 0 {
+		t.Fatalf("terminal event = %+v, want non-zero run_finished", events[len(events)-1])
+	}
+}
+
 // DHF-TEST: keel/requirement-43
 func TestVSCodeRunGoPackageSelectionRunsPackageWithoutRunFilter(t *testing.T) {
 	root := t.TempDir()
