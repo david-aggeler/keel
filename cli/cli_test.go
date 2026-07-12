@@ -159,6 +159,89 @@ func TestParseGlobalConfigTreatsModeAndNoHeaderAsSharedCore(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-57
+func TestParseGlobalConfigRecognizesHelpAllPositionIndependently(t *testing.T) {
+	cfg, rest, err := ParseGlobalConfig([]string{"ci", "--help-all", "--mode", "ai", "extra"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.HelpAll {
+		t.Fatalf("HelpAll = false, want true")
+	}
+	if cfg.Mode != ModeAI {
+		t.Fatalf("Mode = %q, want %q", cfg.Mode, ModeAI)
+	}
+	if strings.Join(rest, " ") != "ci extra" {
+		t.Fatalf("rest = %q, want ci extra", strings.Join(rest, " "))
+	}
+
+	cfg, rest, err = ParseGlobalConfig([]string{"--help-all=true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HelpAll || strings.Join(rest, " ") != "--help-all=true" {
+		t.Fatalf("--help-all=true parsed as cfg=%+v rest=%q, want unconsumed unknown flag", cfg, strings.Join(rest, " "))
+	}
+}
+
+// DHF-TEST: keel/requirement-57
+func TestRenderAllHelpEmitsRootAndEveryCommandOnceInTreeOrder(t *testing.T) {
+	root := &CommandSpec{
+		Name: "tool",
+		Config: Config{
+			Program:      "tool",
+			Usage:        "tool <command>",
+			HelpUsage:    "tool help [command]",
+			CommandUsage: "tool <command> --help",
+		},
+		Subcommands: []*CommandSpec{
+			{
+				Name:  "parent",
+				Short: "Parent command.",
+				Subcommands: []*CommandSpec{
+					{Name: "beta", Use: "parent beta", Short: "Second."},
+					{Name: "alpha", Use: "parent alpha", Short: "First."},
+				},
+			},
+			{Name: "status", Use: "status", Short: "Show status."},
+		},
+	}
+
+	var first bytes.Buffer
+	root.RenderAllHelp(&first)
+	var second bytes.Buffer
+	root.RenderAllHelp(&second)
+	if first.String() != second.String() {
+		t.Fatalf("RenderAllHelp is not deterministic:\nfirst:\n%s\nsecond:\n%s", first.String(), second.String())
+	}
+
+	got := first.String()
+	for _, want := range []string{
+		"Usage:\n  tool <command>",
+		"parent commands:",
+		"parent beta commands:",
+		"parent alpha commands:",
+		"status commands:",
+	} {
+		if strings.Count(got, want) != 1 {
+			t.Fatalf("RenderAllHelp count(%q) = %d, want 1\n%s", want, strings.Count(got, want), got)
+		}
+	}
+	assertBefore(t, got, "Usage:\n  tool <command>", "parent commands:")
+	assertBefore(t, got, "parent commands:", "parent beta commands:")
+	assertBefore(t, got, "parent beta commands:", "parent alpha commands:")
+	assertBefore(t, got, "parent alpha commands:", "status commands:")
+}
+
+func assertBefore(t *testing.T, text, earlier, later string) {
+	t.Helper()
+	earlierAt := strings.Index(text, earlier)
+	laterAt := strings.Index(text, later)
+	if earlierAt < 0 || laterAt < 0 || earlierAt >= laterAt {
+		t.Fatalf("expected %q before %q in:\n%s", earlier, later, text)
+	}
+}
+
 // DHF-TEST: keel/requirement-21
 func TestCommandHelpersCoverNestedAndErrorPaths(t *testing.T) {
 	var called []string

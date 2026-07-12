@@ -106,6 +106,25 @@ func TestKeelDemoHelpTreeRendersTopLevelAndNestedPerMode(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-57
+func TestKeelDemoHelpAllRendersFullCommandTreeAndExitsZero(t *testing.T) {
+	out, exitCode := runDemo(t, "--help-all")
+	if exitCode != 0 {
+		t.Fatalf("keel-demo --help-all exit code = %d, want 0\noutput:\n%s", exitCode, out)
+	}
+	for _, want := range []string{
+		"keel-demo runs the log and exec showcase.",
+		"--help-all",
+		"workflow commands:",
+		"workflow inspect commands:",
+		"workflow replay commands:",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("keel-demo --help-all missing %q\noutput:\n%s", want, out)
+		}
+	}
+}
+
 // DHF-TEST: keel/requirement-26
 func TestRunShowcaseDirectReturnsStructuredFailure(t *testing.T) {
 	var out bytes.Buffer
