@@ -6,6 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/build"
+	"go/parser"
+	"go/token"
 	"io"
 	"log/slog"
 	"os"
@@ -16,6 +20,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/david-aggeler/keel/cli"
 	"github.com/david-aggeler/keel/vscode"
@@ -408,21 +414,29 @@ func ordinalSortText(labelPrefix string) string {
 	return strings.Join(parts, ".")
 }
 
-type goListPackage struct {
-	ImportPath   string
-	Dir          string
-	TestGoFiles  []string
-	XTestGoFiles []string
+type discoveredGoPackage struct {
+	rel   string
+	files []discoveredGoFile
 }
 
+type discoveredGoFile struct {
+	rel         string
+	packageRel  string
+	packageName string
+	tests       []discoveredGoTest
+	parseErr    error
+}
+
+type discoveredGoTest struct {
+	name  string
+	rng   vscode.Range
+	order int
+}
+
+// DHF-REQ: keel/requirement-49
 // DHF-REQ: keel/requirement-43, keel/requirement-46
-func discoverGoTestItems(ctx context.Context, root string) ([]vscode.TestItem, error) {
-	logger := vscodeDiscardLogger()
-	stdout, stderr, err := capture(ctx, logger, root, "go", "list", "-json", "./...")
-	if err != nil {
-		return nil, fmt.Errorf("vscode discover go list: %w: %s", err, strings.TrimSpace(stderr))
-	}
-	packages, err := decodeGoListPackages(stdout)
+func discoverGoTestItems(_ context.Context, root string) ([]vscode.TestItem, error) {
+	packages, err := parseGoTestPackages(root)
 	if err != nil {
 		return nil, err
 	}
@@ -440,25 +454,11 @@ func discoverGoTestItems(ctx context.Context, root string) ([]vscode.TestItem, e
 		RequiredResources: []string{"go-toolchain", "keel-module-root"},
 	}}
 	for _, pkg := range packages {
-		if len(pkg.TestGoFiles)+len(pkg.XTestGoFiles) == 0 {
-			continue
-		}
-		rel := vscode.GoEventPackageRel(pkg.ImportPath, modulePath)
-		if rel == "" {
-			continue
-		}
-		tests, err := listGoPackageTests(ctx, logger, root, rel)
-		if err != nil {
-			return nil, err
-		}
-		if len(tests) == 0 {
-			continue
-		}
-		pkgID := "go::pkg::" + filepath.ToSlash(rel)
+		pkgID := "go::pkg::" + filepath.ToSlash(pkg.rel)
 		items = append(items, vscode.TestItem{
 			ID:                pkgID,
 			ParentID:          "go::root",
-			Label:             rel,
+			Label:             pkg.rel,
 			Kind:              "package",
 			Framework:         "go",
 			Runner:            "go-test",
@@ -467,55 +467,341 @@ func discoverGoTestItems(ctx context.Context, root string) ([]vscode.TestItem, e
 			Profiles:          []string{"run"},
 			RequiredResources: []string{"go-toolchain", "keel-module-root"},
 		})
-		for _, testName := range tests {
-			items = append(items, vscode.TestItem{
-				ID:                "go::test::" + filepath.ToSlash(rel) + "::" + testName,
+		for _, file := range pkg.files {
+			fileID := "go::file::" + filepath.ToSlash(file.rel)
+			item := vscode.TestItem{
+				ID:                fileID,
 				ParentID:          pkgID,
-				Label:             testName,
-				Kind:              "test",
+				Label:             filepath.Base(file.rel),
+				Kind:              "file",
 				Framework:         "go",
 				Runner:            "go-test",
 				RunnerLabel:       "Go test",
-				Runnable:          true,
+				URI:               filepath.ToSlash(file.rel),
+				Runnable:          file.parseErr == nil,
 				Profiles:          []string{"run"},
 				RequiredResources: []string{"go-toolchain", "keel-module-root"},
-			})
+			}
+			if file.parseErr != nil {
+				item.Profiles = []string{}
+				item.Limitations = []string{file.parseErr.Error()}
+			}
+			items = append(items, item)
+			for _, test := range file.tests {
+				testName := test.name
+				rng := test.rng
+				sortText := fmt.Sprintf("%06d", test.order)
+				items = append(items, vscode.TestItem{
+					ID:                "go::test::" + filepath.ToSlash(pkg.rel) + "::" + testName,
+					ParentID:          fileID,
+					Label:             testName,
+					SortText:          sortText,
+					Kind:              "test",
+					Framework:         "go",
+					Runner:            "go-test",
+					RunnerLabel:       "Go test",
+					URI:               filepath.ToSlash(file.rel),
+					Range:             &rng,
+					Runnable:          true,
+					Profiles:          []string{"run"},
+					RequiredResources: []string{"go-toolchain", "keel-module-root"},
+				})
+			}
 		}
 	}
 	return items, nil
 }
 
-func decodeGoListPackages(raw string) ([]goListPackage, error) {
-	dec := json.NewDecoder(strings.NewReader(raw))
-	var packages []goListPackage
-	for dec.More() {
-		var pkg goListPackage
-		if err := dec.Decode(&pkg); err != nil {
-			return nil, fmt.Errorf("decode go list package: %w", err)
+func parseGoTestPackages(root string) ([]discoveredGoPackage, error) {
+	byPackage := map[string]*discoveredGoPackage{}
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-		packages = append(packages, pkg)
+		if entry.IsDir() {
+			if path != root && goDiscoverySkipDir(path, entry.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(entry.Name(), "_test.go") {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		match, err := goTestFileMatchesBuild(root, rel)
+		if err != nil {
+			file := discoveredGoFile{
+				rel:        rel,
+				packageRel: goPackageRelFromFile(rel),
+				parseErr:   fmt.Errorf("%s: %w", rel, err),
+			}
+			pkg := byPackage[file.packageRel]
+			if pkg == nil {
+				pkg = &discoveredGoPackage{rel: file.packageRel}
+			}
+			byPackage[file.packageRel] = pkg
+			pkg.files = append(pkg.files, file)
+			return nil
+		}
+		if !match {
+			return nil
+		}
+		file := parseGoTestFile(path, rel)
+		pkg := byPackage[file.packageRel]
+		if pkg == nil {
+			pkg = &discoveredGoPackage{rel: file.packageRel}
+			byPackage[file.packageRel] = pkg
+		}
+		if len(file.tests) > 0 || file.parseErr != nil {
+			pkg.files = append(pkg.files, file)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("vscode discover go parser walk: %w", err)
 	}
-	sort.Slice(packages, func(i, j int) bool { return packages[i].ImportPath < packages[j].ImportPath })
+
+	packages := make([]discoveredGoPackage, 0, len(byPackage))
+	for _, pkg := range byPackage {
+		if len(pkg.files) == 0 {
+			continue
+		}
+		if err := goPackageBuildDiagnostic(root, pkg.rel); err != nil {
+			for i := range pkg.files {
+				if pkg.files[i].parseErr == nil {
+					pkg.files[i].parseErr = fmt.Errorf("%s: package has invalid Go files: %w", pkg.files[i].rel, err)
+					pkg.files[i].tests = nil
+				}
+			}
+		}
+		sort.Slice(pkg.files, func(i, j int) bool { return pkg.files[i].rel < pkg.files[j].rel })
+		packages = append(packages, *pkg)
+	}
+	sort.Slice(packages, func(i, j int) bool { return packages[i].rel < packages[j].rel })
 	return packages, nil
 }
 
-func listGoPackageTests(ctx context.Context, logger *slog.Logger, root, pkg string) ([]string, error) {
-	stdout, stderr, err := capture(ctx, logger, root, "go", "test", "-list", ".", vscode.GoPackageArg(pkg))
-	if err != nil {
-		return nil, fmt.Errorf("vscode discover go test -list %s: %w: %s", pkg, err, strings.TrimSpace(stderr))
+func goDiscoverySkipDir(path, name string) bool {
+	switch name {
+	case "vendor", "testdata", "node_modules":
+		return true
 	}
-	seen := map[string]bool{}
-	var tests []string
-	for _, line := range strings.Split(stdout, "\n") {
-		name := strings.TrimSpace(line)
-		if !strings.HasPrefix(name, "Test") || seen[name] {
+	if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") {
+		return true
+	}
+	_, err := os.Stat(filepath.Join(path, "go.mod"))
+	return err == nil
+}
+
+func goTestFileMatchesBuild(root, rel string) (bool, error) {
+	clean := filepath.Clean(filepath.FromSlash(rel))
+	if clean == "." || clean == ".." || filepath.IsAbs(clean) || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return false, fmt.Errorf("invalid module-relative Go file %q", rel)
+	}
+	dir := filepath.Join(root, filepath.Dir(clean))
+	return build.Default.MatchFile(dir, filepath.Base(clean))
+}
+
+func goPackageBuildDiagnostic(root, rel string) error {
+	dir := root
+	if rel != "." {
+		dir = filepath.Join(root, filepath.FromSlash(rel))
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	var packageName string
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		seen[name] = true
-		tests = append(tests, name)
+		match, err := build.Default.MatchFile(dir, name)
+		if err != nil {
+			return err
+		}
+		if !match {
+			continue
+		}
+		src, err := parser.ParseFile(token.NewFileSet(), filepath.Join(dir, name), nil, 0)
+		if err != nil {
+			return err
+		}
+		if src.Name == nil {
+			continue
+		}
+		if packageName == "" {
+			packageName = src.Name.Name
+			continue
+		}
+		if src.Name.Name != packageName {
+			return fmt.Errorf("found packages %s and %s in %s", packageName, src.Name.Name, dir)
+		}
 	}
-	sort.Strings(tests)
-	return tests, nil
+	return nil
+}
+
+func parseGoTestFile(path, rel string) discoveredGoFile {
+	fset := token.NewFileSet()
+	src, err := parser.ParseFile(fset, path, nil, 0)
+	file := discoveredGoFile{
+		rel:        rel,
+		packageRel: goPackageRelFromFile(rel),
+	}
+	if src != nil && src.Name != nil {
+		file.packageName = src.Name.Name
+	}
+	if err != nil {
+		file.parseErr = fmt.Errorf("%s: %w", rel, err)
+		return file
+	}
+	testingName, testingDot := testingImportBinding(src)
+	aliases := fileTypeAliases(src)
+	for _, decl := range src.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv != nil || fn.Name == nil || !isGoTestName(fn.Name.Name) {
+			continue
+		}
+		if !isGoTestFunc(fn, testingName, testingDot, aliases) {
+			continue
+		}
+		file.tests = append(file.tests, discoveredGoTest{
+			name:  fn.Name.Name,
+			rng:   goRange(fset, fn.Pos(), fn.End()),
+			order: len(file.tests) + 1,
+		})
+	}
+	return file
+}
+
+func isGoTestName(name string) bool {
+	if !strings.HasPrefix(name, "Test") {
+		return false
+	}
+	if len(name) == len("Test") {
+		return true
+	}
+	r, _ := utf8.DecodeRuneInString(name[len("Test"):])
+	return !unicode.IsLower(r)
+}
+
+func goPackageRelFromFile(rel string) string {
+	dir := filepath.ToSlash(filepath.Dir(rel))
+	if dir == "." {
+		return "."
+	}
+	return dir
+}
+
+// testingImportBinding reports how the standard "testing" package is bound in
+// src: its local selector name (default "testing", or the import alias) and
+// whether it is dot-imported. When testing is absent or blank-imported, name is
+// "" and dot is false, so no function can qualify as a runnable go test — this
+// keeps discovery from advertising `func TestX(t *fake.T)` or a local
+// `type T struct{}` receiver that `go test` would reject.
+func testingImportBinding(src *ast.File) (name string, dot bool) {
+	const testingImportPath = `"testing"`
+	for _, imp := range src.Imports {
+		if imp.Path == nil || imp.Path.Value != testingImportPath {
+			continue
+		}
+		switch {
+		case imp.Name == nil:
+			return "testing", false
+		case imp.Name.Name == ".":
+			return "", true
+		case imp.Name.Name == "_":
+			return "", false
+		default:
+			return imp.Name.Name, false
+		}
+	}
+	return "", false
+}
+
+// fileTypeAliases collects same-file type aliases (`type X = Y`) so a test
+// parameter written against a package-local alias of testing.T (e.g.
+// `type T = testing.T; func TestX(t *T)`, which go test accepts) still resolves.
+// Non-alias definitions (`type T struct{}`) are deliberately excluded.
+func fileTypeAliases(src *ast.File) map[string]ast.Expr {
+	var aliases map[string]ast.Expr
+	for _, decl := range src.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			ts, ok := spec.(*ast.TypeSpec)
+			if !ok || !ts.Assign.IsValid() || ts.Name == nil {
+				continue
+			}
+			if aliases == nil {
+				aliases = map[string]ast.Expr{}
+			}
+			aliases[ts.Name.Name] = ts.Type
+		}
+	}
+	return aliases
+}
+
+func isGoTestFunc(fn *ast.FuncDecl, testingName string, testingDot bool, aliases map[string]ast.Expr) bool {
+	if fn.Type == nil || fn.Type.TypeParams != nil && len(fn.Type.TypeParams.List) > 0 || fn.Type.Results != nil && len(fn.Type.Results.List) > 0 || fn.Type.Params == nil || len(fn.Type.Params.List) != 1 || len(fn.Type.Params.List[0].Names) > 1 {
+		return false
+	}
+	star, ok := fn.Type.Params.List[0].Type.(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	return typeDenotesTestingT(star.X, testingName, testingDot, aliases, 0)
+}
+
+// typeDenotesTestingT reports whether a type expression names testing.T: the
+// bound testing selector (`testing.T` / `alias.T`), a dot-imported bare `T`, or
+// a same-file alias chain that resolves to one of those. Anything else — a
+// foreign `fake.T` selector or a local `type T struct{}` — is rejected, so
+// discovery only advertises functions go test would actually run.
+func typeDenotesTestingT(expr ast.Expr, testingName string, testingDot bool, aliases map[string]ast.Expr, depth int) bool {
+	if depth > 8 {
+		return false
+	}
+	switch x := expr.(type) {
+	case *ast.SelectorExpr:
+		id, ok := x.X.(*ast.Ident)
+		return ok && testingName != "" && id.Name == testingName && x.Sel != nil && x.Sel.Name == "T"
+	case *ast.Ident:
+		if testingDot && x.Name == "T" {
+			return true
+		}
+		if target, ok := aliases[x.Name]; ok {
+			return typeDenotesTestingT(target, testingName, testingDot, aliases, depth+1)
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+func goRange(fset *token.FileSet, start, end token.Pos) vscode.Range {
+	startPos := fset.Position(start)
+	endPos := fset.Position(end)
+	return vscode.Range{
+		StartLine:   max(startPos.Line-1, 0),
+		StartColumn: max(startPos.Column-1, 0),
+		EndLine:     max(endPos.Line-1, 0),
+		EndColumn:   max(endPos.Column-1, 0),
+	}
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func selectedPlanItems(ids []string) []vscode.SetupPlanItem {
@@ -646,7 +932,15 @@ func clearVSCodeDevtoolsState(root string) error {
 	return nil
 }
 
+// DHF-REQ: keel/requirement-50
 func runVSCodeGoSelection(ctx context.Context, logger *slog.Logger, root, selectedID string, selection vscode.GoSelection, writer vscode.RunEventWriter) error {
+	if selection.Kind == "file" {
+		names, err := goTestNamesInFile(root, selection.File)
+		if err != nil {
+			return err
+		}
+		selection.TestNames = names
+	}
 	args := []string{"test", vscode.GoPackageArg(selection.Pkg), "-json"}
 	if selection.TestName != "" {
 		args = append(args, "-run="+vscode.GoTestNamePattern([]string{selection.TestName}))
@@ -659,6 +953,67 @@ func runVSCodeGoSelection(ctx context.Context, logger *slog.Logger, root, select
 		return fmt.Errorf("go test %s: %w: %s", strings.Join(args[1:], " "), err, strings.TrimSpace(stderr))
 	}
 	return nil
+}
+
+func goTestNamesInFile(root, rel string) ([]string, error) {
+	clean := filepath.Clean(filepath.FromSlash(rel))
+	if rel == "" || filepath.IsAbs(clean) || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return nil, fmt.Errorf("vscode run go file: invalid file selection %q", rel)
+	}
+	slashRel := filepath.ToSlash(clean)
+	if !strings.HasSuffix(slashRel, "_test.go") {
+		return nil, fmt.Errorf("vscode run go file %s: not a *_test.go file", slashRel)
+	}
+	if goFileRelHasIgnoredDir(slashRel) {
+		return nil, fmt.Errorf("vscode run go file %s: file is outside the active Go package set", slashRel)
+	}
+	if goFileRelInNestedModule(root, slashRel) {
+		return nil, fmt.Errorf("vscode run go file %s: file is in a nested Go module", slashRel)
+	}
+	match, err := goTestFileMatchesBuild(root, slashRel)
+	if err != nil {
+		return nil, fmt.Errorf("vscode run go file %s build constraints: %w", slashRel, err)
+	}
+	if !match {
+		return nil, fmt.Errorf("vscode run go file %s: file is excluded by build constraints or GOOS/GOARCH", slashRel)
+	}
+	file := parseGoTestFile(filepath.Join(root, clean), slashRel)
+	if file.parseErr != nil {
+		return nil, fmt.Errorf("vscode run go file parse %s: %w", slashRel, file.parseErr)
+	}
+	names := make([]string, 0, len(file.tests))
+	for _, test := range file.tests {
+		names = append(names, test.name)
+	}
+	if len(names) == 0 {
+		return nil, fmt.Errorf("vscode run go file %s: no top-level Test functions found", slashRel)
+	}
+	return names, nil
+}
+
+func goFileRelHasIgnoredDir(rel string) bool {
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	for _, part := range parts[:len(parts)-1] {
+		if part == "vendor" || part == "testdata" || part == "node_modules" || strings.HasPrefix(part, ".") || strings.HasPrefix(part, "_") {
+			return true
+		}
+	}
+	return false
+}
+
+func goFileRelInNestedModule(root, rel string) bool {
+	dir := filepath.Dir(filepath.Clean(filepath.FromSlash(rel)))
+	for dir != "." && dir != string(filepath.Separator) {
+		if _, err := os.Stat(filepath.Join(root, dir, "go.mod")); err == nil {
+			return true
+		}
+		next := filepath.Dir(dir)
+		if next == dir {
+			break
+		}
+		dir = next
+	}
+	return false
 }
 
 func emitGoTestJSONEvents(raw string, selection vscode.GoSelection, selectedID, modulePath string, writer vscode.RunEventWriter) {
