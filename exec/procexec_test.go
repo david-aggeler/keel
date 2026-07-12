@@ -65,10 +65,10 @@ func TestProcessStartPlainCommandStreamsCapturesAndReturnsExitCode(t *testing.T)
 func TestProcessStartLogsStructuredLifecycleAndRedactsSensitiveArgs(t *testing.T) {
 	var logBuf bytes.Buffer
 	logger := mustLogger(t, logging.Config{
-		Service: "procexec-test",
-		Level:   slog.LevelDebug,
-		Console: logging.ConsoleJSON,
-		Writer:  &logBuf,
+		Service:          "procexec-test",
+		ConsoleVerbosity: slog.LevelDebug,
+		Console:          logging.ConsoleJSON,
+		Writer:           &logBuf,
 	})
 	longArg := strings.Repeat("long-visible-argument-", 12)
 	secret := "super-secret-token"
@@ -148,10 +148,10 @@ func TestProcessStartLogsStructuredLifecycleAndRedactsSensitiveArgs(t *testing.T
 func TestProcessWaitIsIdempotentAndEmitsProcessEndOnce(t *testing.T) {
 	var logBuf bytes.Buffer
 	logger := mustLogger(t, logging.Config{
-		Service: "procexec-test",
-		Level:   slog.LevelDebug,
-		Console: logging.ConsoleJSON,
-		Writer:  &logBuf,
+		Service:          "procexec-test",
+		ConsoleVerbosity: slog.LevelDebug,
+		Console:          logging.ConsoleJSON,
+		Writer:           &logBuf,
 	})
 
 	proc, err := procexec.ProcessStart(context.Background(), procexec.Request{
@@ -236,10 +236,10 @@ func TestProcessStartHumanLifecycleShowsFullCommandWithoutEllipsis(t *testing.T)
 func TestProcessStartLogsChildOutputAsCleanPerLineRecords(t *testing.T) {
 	var logBuf bytes.Buffer
 	logger := mustLogger(t, logging.Config{
-		Service: "procexec-test",
-		Level:   slog.LevelDebug,
-		Console: logging.ConsoleJSON,
-		Writer:  &logBuf,
+		Service:          "procexec-test",
+		ConsoleVerbosity: slog.LevelDebug,
+		Console:          logging.ConsoleJSON,
+		Writer:           &logBuf,
 	})
 
 	proc, err := procexec.ProcessStart(context.Background(), procexec.Request{

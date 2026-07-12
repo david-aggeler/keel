@@ -8,7 +8,7 @@ package log
 // making RedactErr delegate) cannot silently introduce %w.
 //
 // TestRedactString cases MUST FAIL TO COMPILE until RedactString is added to
-// pkg/logging/logging.go (or operror.go) — that is the intended red state.
+// keel/log — that is the intended red state.
 
 import (
 	"errors"
@@ -122,7 +122,7 @@ func TestRedactString(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := redactString(tc.input)
+			got := RedactString(tc.input)
 			tc.check(t, got)
 		})
 	}
@@ -134,7 +134,7 @@ func TestRedactString(t *testing.T) {
 func TestRedactString_TokenOnlyUserinfo(t *testing.T) {
 	pat := "ghp_abc123XYZ"
 	input := "https://" + pat + "@github.com/org/repo.git"
-	got := redactString(input)
+	got := RedactString(input)
 	if strings.Contains(got, pat) {
 		t.Errorf("RedactString must strip token-only userinfo PAT %q; got: %s", pat, got)
 	}
@@ -148,7 +148,7 @@ func TestRedactString_TokenOnlyUserinfo(t *testing.T) {
 func TestRedactString_TokenQueryParam(t *testing.T) {
 	pat := "myPAT_secret99"
 	input := "https://gitea.internal/vault/repo.git?token=" + pat
-	got := redactString(input)
+	got := RedactString(input)
 	if strings.Contains(got, pat) {
 		t.Errorf("RedactString must strip ?token= PAT %q; got: %s", pat, got)
 	}
@@ -159,7 +159,7 @@ func TestRedactString_TokenQueryParam(t *testing.T) {
 func TestRedactString_AccessTokenQueryParam(t *testing.T) {
 	pat := "gho_accessToken42"
 	input := "https://api.github.com/repos/x?access_token=" + pat
-	got := redactString(input)
+	got := RedactString(input)
 	if strings.Contains(got, pat) {
 		t.Errorf("RedactString must strip ?access_token= PAT %q; got: %s", pat, got)
 	}

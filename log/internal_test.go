@@ -129,7 +129,7 @@ func TestHeaderSectionFieldsNilLogger(t *testing.T) {
 func TestHumanAndJSONFileHandlerLifecycle(t *testing.T) {
 	dir := t.TempDir()
 
-	hh, err := newTextFileHandler(dir, "svc", false)
+	hh, _, err := newTextFileHandler(dir, "svc", false, slog.LevelDebug)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestHumanAndJSONFileHandlerLifecycle(t *testing.T) {
 		t.Error("human file handler should be closable")
 	}
 
-	jh, _, _, err := newJSONFileHandler(dir, "svc", false, false)
+	jh, _, _, err := newJSONFileHandler(dir, "svc", false, false, slog.LevelDebug)
 	if err != nil {
 		t.Fatal(err)
 	}

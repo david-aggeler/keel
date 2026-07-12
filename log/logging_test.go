@@ -77,10 +77,10 @@ func newJSONCaptureLogger(t testing.TB, service string) (*slog.Logger, *recordCa
 	t.Helper()
 	rc := &recordCapture{}
 	return mustNewLogger(t, logging.Config{
-		Service: service,
-		Level:   slog.LevelDebug,
-		Console: logging.ConsoleJSON,
-		Writer:  rc,
+		Service:          service,
+		ConsoleVerbosity: slog.LevelDebug,
+		Console:          logging.ConsoleJSON,
+		Writer:           rc,
 	}).Slog(), rc
 }
 
@@ -88,10 +88,10 @@ func newConsoleCaptureLogger(t testing.TB, service string) (*slog.Logger, *recor
 	t.Helper()
 	rc := &recordCapture{}
 	return mustNewLogger(t, logging.Config{
-		Service: service,
-		Level:   slog.LevelDebug,
-		Console: logging.ConsolePlain,
-		Writer:  rc,
+		Service:          service,
+		ConsoleVerbosity: slog.LevelDebug,
+		Console:          logging.ConsolePlain,
+		Writer:           rc,
 	}).Slog(), rc
 }
 
@@ -195,14 +195,15 @@ func TestNewConfigExposesFourSinkLoggerSurface(t *testing.T) {
 	jsonlDir := t.TempDir()
 
 	logger := mustNewLogger(t, logging.Config{
-		Service:       "svc",
-		Level:         slog.LevelDebug,
-		Console:       logging.ConsolePlain,
-		Writer:        &console,
-		TextDir:       textDir,
-		JSONLDir:      jsonlDir,
-		PerRun:        false,
-		SourceInFiles: true,
+		Service:          "svc",
+		ConsoleVerbosity: slog.LevelDebug,
+		FileVerbosity:    slog.LevelDebug,
+		Console:          logging.ConsolePlain,
+		Writer:           &console,
+		TextDir:          textDir,
+		JSONLDir:         jsonlDir,
+		PerRun:           false,
+		SourceInFiles:    true,
 	})
 	t.Cleanup(func() {
 		if err := logger.Close(); err != nil {
@@ -347,6 +348,177 @@ func TestNewConfigPerRunJSONLSinkUsesInvocationFileAndTracksLines(t *testing.T) 
 	}
 }
 
+// DHF-TEST: keel/requirement-56
+func TestLevelConvertersUseStrictLowercaseVocabulary(t *testing.T) {
+	for name, level := range map[string]slog.Level{
+		"debug": slog.LevelDebug,
+		"info":  slog.LevelInfo,
+		"warn":  slog.LevelWarn,
+		"error": slog.LevelError,
+	} {
+		got, err := logging.LevelFromString(name)
+		if err != nil {
+			t.Fatalf("LevelFromString(%q) returned error: %v", name, err)
+		}
+		if got != level {
+			t.Fatalf("LevelFromString(%q) = %s, want %s", name, got, level)
+		}
+		if roundTrip := logging.LevelToString(level); roundTrip != name {
+			t.Fatalf("LevelToString(%s) = %q, want %q", level, roundTrip, name)
+		}
+	}
+
+	got, err := logging.LevelFromString("")
+	if err != nil {
+		t.Fatalf("LevelFromString(empty) returned error: %v", err)
+	}
+	if got != slog.LevelInfo {
+		t.Fatalf("LevelFromString(empty) = %s, want info", got)
+	}
+	if _, err := logging.LevelFromString("warning"); err == nil {
+		t.Fatal("LevelFromString(\"warning\") returned nil error; want strict lowercase vocabulary only")
+	}
+	if _, err := logging.LevelFromString("bogus"); err == nil {
+		t.Fatal("LevelFromString(\"bogus\") returned nil error; want unknown non-empty input rejected")
+	}
+}
+
+// DHF-TEST: keel/requirement-56
+func TestConfigVerbositySplitsConsoleAndFileSinks(t *testing.T) {
+	var console bytes.Buffer
+	textDir := t.TempDir()
+	jsonlDir := t.TempDir()
+
+	logger := mustNewLogger(t, logging.Config{
+		Service:          "svc",
+		ConsoleVerbosity: slog.LevelWarn,
+		FileVerbosity:    slog.LevelError,
+		Console:          logging.ConsolePlain,
+		Writer:           &console,
+		TextDir:          textDir,
+		JSONLDir:         jsonlDir,
+	})
+	t.Cleanup(func() {
+		if err := logger.Close(); err != nil {
+			t.Fatalf("Close returned error: %v", err)
+		}
+	})
+
+	logger.Info("info-record")
+	logger.Warn("warn-record")
+	logger.Error("error-record")
+
+	if out := console.String(); strings.Contains(out, "info-record") || !strings.Contains(out, "warn-record") || !strings.Contains(out, "error-record") {
+		t.Fatalf("console output = %q, want warn+error only", out)
+	}
+
+	textBytes, err := os.ReadFile(logger.TextLogPath())
+	if err != nil {
+		t.Fatalf("read text sink: %v", err)
+	}
+	text := string(textBytes)
+	if strings.Contains(text, "info-record") || strings.Contains(text, "warn-record") || !strings.Contains(text, "error-record") {
+		t.Fatalf("text sink = %q, want error only", text)
+	}
+
+	jsonlBytes, err := os.ReadFile(logger.JSONLLogPath())
+	if err != nil {
+		t.Fatalf("read jsonl sink: %v", err)
+	}
+	jsonl := string(jsonlBytes)
+	if strings.Contains(jsonl, "info-record") || strings.Contains(jsonl, "warn-record") || !strings.Contains(jsonl, "error-record") {
+		t.Fatalf("jsonl sink = %q, want error only", jsonl)
+	}
+}
+
+// DHF-TEST: keel/requirement-56
+func TestConfigVerbosityDefaultsPreserveConsoleInfoAndFileDebug(t *testing.T) {
+	var console bytes.Buffer
+	textDir := t.TempDir()
+	jsonlDir := t.TempDir()
+
+	logger := mustNewLogger(t, logging.Config{
+		Service:  "svc",
+		Console:  logging.ConsolePlain,
+		Writer:   &console,
+		TextDir:  textDir,
+		JSONLDir: jsonlDir,
+	})
+	t.Cleanup(func() {
+		if err := logger.Close(); err != nil {
+			t.Fatalf("Close returned error: %v", err)
+		}
+	})
+
+	logger.Debug("debug-record")
+	logger.Info("info-record")
+
+	if out := console.String(); strings.Contains(out, "debug-record") || !strings.Contains(out, "info-record") {
+		t.Fatalf("console output = %q, want default info threshold", out)
+	}
+	textBytes, err := os.ReadFile(logger.TextLogPath())
+	if err != nil {
+		t.Fatalf("read text sink: %v", err)
+	}
+	if text := string(textBytes); !strings.Contains(text, "debug-record") || !strings.Contains(text, "info-record") {
+		t.Fatalf("text sink = %q, want default debug threshold", text)
+	}
+	jsonlBytes, err := os.ReadFile(logger.JSONLLogPath())
+	if err != nil {
+		t.Fatalf("read jsonl sink: %v", err)
+	}
+	if jsonl := string(jsonlBytes); !strings.Contains(jsonl, "debug-record") || !strings.Contains(jsonl, "info-record") {
+		t.Fatalf("jsonl sink = %q, want default debug threshold", jsonl)
+	}
+}
+
+// DHF-TEST: keel/requirement-56
+func TestLoggerDailySinkPathAccessorsReturnOpenedPaths(t *testing.T) {
+	textDir := t.TempDir()
+	jsonlDir := t.TempDir()
+	logger := mustNewLogger(t, logging.Config{
+		Service:  "svc",
+		Console:  logging.ConsoleNone,
+		TextDir:  textDir,
+		JSONLDir: jsonlDir,
+	})
+	t.Cleanup(func() {
+		if err := logger.Close(); err != nil {
+			t.Fatalf("Close returned error: %v", err)
+		}
+	})
+
+	if got, want := logger.TextLogPath(), textLogPath(textDir, "svc"); got != want {
+		t.Fatalf("TextLogPath = %q, want opened daily text path %q", got, want)
+	}
+	if got, want := logger.JSONLLogPath(), jsonLogPath(jsonlDir, "svc"); got != want {
+		t.Fatalf("JSONLLogPath = %q, want opened daily JSONL path %q", got, want)
+	}
+
+	noFiles := mustNewLogger(t, logging.Config{Console: logging.ConsoleNone})
+	if got := noFiles.TextLogPath(); got != "" {
+		t.Fatalf("TextLogPath without TextDir = %q, want empty", got)
+	}
+	if got := noFiles.JSONLLogPath(); got != "" {
+		t.Fatalf("JSONLLogPath without JSONLDir = %q, want empty", got)
+	}
+}
+
+// DHF-TEST: keel/requirement-56
+func TestBuildIdentityPublicReExposure(t *testing.T) {
+	logger := mustNewLogger(t, logging.Config{Console: logging.ConsoleNone})
+	ctx, cancel := context.WithCancel(context.Background())
+	logger.StartDailyBuildIdentity(ctx, "1.2.3", "abc1234")
+	cancel()
+
+	if got := logging.ResolveGitCommit("abc1234"); got != "abc1234" {
+		t.Fatalf("ResolveGitCommit explicit = %q, want abc1234", got)
+	}
+	if got := logging.ResolveGitCommit(""); got == "" {
+		t.Fatal("ResolveGitCommit empty returned empty string")
+	}
+}
+
 // DHF-TEST: keel/requirement-17, keel/requirement-20
 func TestSparseAIConsoleEmitsCuratedEventsAndKeepsDebugChildOutputInFiles(t *testing.T) {
 	var console bytes.Buffer
@@ -354,12 +526,13 @@ func TestSparseAIConsoleEmitsCuratedEventsAndKeepsDebugChildOutputInFiles(t *tes
 	jsonlDir := t.TempDir()
 
 	logger := mustNewLogger(t, logging.Config{
-		Service:  "svc",
-		Level:    slog.LevelInfo,
-		Console:  logging.ConsoleSparseAI,
-		Writer:   &console,
-		TextDir:  textDir,
-		JSONLDir: jsonlDir,
+		Service:          "svc",
+		ConsoleVerbosity: slog.LevelInfo,
+		FileVerbosity:    slog.LevelDebug,
+		Console:          logging.ConsoleSparseAI,
+		Writer:           &console,
+		TextDir:          textDir,
+		JSONLDir:         jsonlDir,
 	})
 	t.Cleanup(func() {
 		if err := logger.Close(); err != nil {
@@ -432,10 +605,10 @@ func TestSparseAIConsoleEmitsCuratedEventsAndKeepsDebugChildOutputInFiles(t *tes
 func TestConsoleJSONRemainsVerboseRecordRendering(t *testing.T) {
 	var console bytes.Buffer
 	logger := mustNewLogger(t, logging.Config{
-		Service: "svc",
-		Level:   slog.LevelInfo,
-		Console: logging.ConsoleJSON,
-		Writer:  &console,
+		Service:          "svc",
+		ConsoleVerbosity: slog.LevelInfo,
+		Console:          logging.ConsoleJSON,
+		Writer:           &console,
 	})
 
 	logger.Event("step", "running gate", "step", "test")
@@ -698,12 +871,12 @@ func TestModuleContextAppearsOnlyInFileSinks(t *testing.T) {
 	textDir := t.TempDir()
 	jsonlDir := t.TempDir()
 	logger := mustNewLogger(t, logging.Config{
-		Service:  "svc",
-		Level:    slog.LevelDebug,
-		Console:  logging.ConsolePlain,
-		Writer:   &console,
-		TextDir:  textDir,
-		JSONLDir: jsonlDir,
+		Service:          "svc",
+		ConsoleVerbosity: slog.LevelDebug,
+		Console:          logging.ConsolePlain,
+		Writer:           &console,
+		TextDir:          textDir,
+		JSONLDir:         jsonlDir,
 	}).With("module", "keel/exec")
 	t.Cleanup(func() { _ = logger.Close() })
 
@@ -740,12 +913,12 @@ func TestGroupedModuleContextAppearsOnlyInFileSinks(t *testing.T) {
 	textDir := t.TempDir()
 	jsonlDir := t.TempDir()
 	logger := mustNewLogger(t, logging.Config{
-		Service:  "svc",
-		Level:    slog.LevelDebug,
-		Console:  logging.ConsolePlain,
-		Writer:   &console,
-		TextDir:  textDir,
-		JSONLDir: jsonlDir,
+		Service:          "svc",
+		ConsoleVerbosity: slog.LevelDebug,
+		Console:          logging.ConsolePlain,
+		Writer:           &console,
+		TextDir:          textDir,
+		JSONLDir:         jsonlDir,
 	}).WithGroup("ctx").With("module", "keel/exec")
 	t.Cleanup(func() { _ = logger.Close() })
 
@@ -849,11 +1022,11 @@ func TestJSONOutput_FileSinkRetainsDebugWhenConsoleUsesInfo(t *testing.T) {
 	var console bytes.Buffer
 	dir := t.TempDir()
 	logger := mustNewLogger(t, logging.Config{
-		Service:  "openbrain-client",
-		Level:    slog.LevelInfo,
-		Console:  logging.ConsoleJSON,
-		Writer:   &console,
-		JSONLDir: dir,
+		Service:          "openbrain-client",
+		ConsoleVerbosity: slog.LevelInfo,
+		Console:          logging.ConsoleJSON,
+		Writer:           &console,
+		JSONLDir:         dir,
 	})
 
 	logger.Debug("debug detail", "chunk", "stdout payload")
@@ -887,10 +1060,10 @@ func TestJSONOutput_FileSinkRetainsDebugWhenConsoleUsesInfo(t *testing.T) {
 func TestConsoleOutput_HumanReadableAndRedacted(t *testing.T) {
 	capture := &recordCapture{}
 	logger := mustNewLogger(t, logging.Config{Console: logging.ConsolePlain,
-		Service:         "cli",
-		Level:           slog.LevelDebug,
-		Writer:          capture,
-		ConsoleOmitKeys: []string{"service"},
+		Service:          "cli",
+		ConsoleVerbosity: slog.LevelDebug,
+		Writer:           capture,
+		ConsoleOmitKeys:  []string{"service"},
 	})
 
 	logger.Warn("connect failed", "dsn", "postgres://admin:s3cret@db.host:5432/openbrain", "attempt", 2)
@@ -920,10 +1093,10 @@ func TestConsoleOutput_HumanReadableAndRedacted(t *testing.T) {
 func TestConsoleOutput_OmitsConfiguredContextKeysButJSONRetainsThem(t *testing.T) {
 	var consoleBuf bytes.Buffer
 	consoleLogger := mustNewLogger(t, logging.Config{Console: logging.ConsolePlain,
-		Service:         "openbrain-client",
-		Level:           slog.LevelDebug,
-		Writer:          &consoleBuf,
-		ConsoleOmitKeys: []string{"service", "cr", "verb"},
+		Service:          "openbrain-client",
+		ConsoleVerbosity: slog.LevelDebug,
+		Writer:           &consoleBuf,
+		ConsoleOmitKeys:  []string{"service", "cr", "verb"},
 	}).With("cr", "openbrain/change_request-394", "verb", "dev")
 	consoleLogger.Info("disk check", "free_mib", 2048)
 
@@ -951,9 +1124,9 @@ func TestConsoleOutput_OmitsConfiguredContextKeysButJSONRetainsThem(t *testing.T
 func TestConsoleOutput_UsesStructuredHumanRunStyle(t *testing.T) {
 	var buf bytes.Buffer
 	logger := mustNewLogger(t, logging.Config{Console: logging.ConsolePlain,
-		Service: "openbrain-dev",
-		Level:   slog.LevelDebug,
-		Writer:  &buf,
+		Service:          "openbrain-dev",
+		ConsoleVerbosity: slog.LevelDebug,
+		Writer:           &buf,
 	})
 
 	logger.Header("openbrain-dev", "v0.0.0-dev")
@@ -1002,10 +1175,10 @@ func TestConsoleOutput_UsesStructuredHumanRunStyle(t *testing.T) {
 func TestConsoleOutput_RendersBannersByConsoleMode(t *testing.T) {
 	var plain bytes.Buffer
 	plainLogger := mustNewLogger(t, logging.Config{
-		Console: logging.ConsolePlain,
-		Service: "keel-dev",
-		Level:   slog.LevelDebug,
-		Writer:  &plain,
+		Console:          logging.ConsolePlain,
+		Service:          "keel-dev",
+		ConsoleVerbosity: slog.LevelDebug,
+		Writer:           &plain,
 	})
 	plainLogger.Header("keel-dev ci", "v1.2.3")
 	plainLogger.Section("Gate")
@@ -1079,9 +1252,9 @@ func TestConsoleOutput_LevelThresholdAndColorGating(t *testing.T) {
 
 	var plain bytes.Buffer
 	plainLogger := mustNewLogger(t, logging.Config{Console: logging.ConsolePlain,
-		Service: "cli",
-		Level:   slog.LevelInfo,
-		Writer:  &plain,
+		Service:          "cli",
+		ConsoleVerbosity: slog.LevelInfo,
+		Writer:           &plain,
 	})
 	plainLogger.Debug("hidden")
 	plainLogger.Info("visible")
@@ -1098,11 +1271,11 @@ func TestConsoleOutput_LevelThresholdAndColorGating(t *testing.T) {
 
 	var colored bytes.Buffer
 	colorLogger := mustNewLogger(t, logging.Config{Console: logging.ConsolePlain,
-		Service:      "cli",
-		Level:        slog.LevelDebug,
-		Writer:       &colored,
-		ForceColor:   true,
-		DisableColor: false,
+		Service:          "cli",
+		ConsoleVerbosity: slog.LevelDebug,
+		Writer:           &colored,
+		ForceColor:       true,
+		DisableColor:     false,
 	})
 	colorLogger.Warn("careful")
 	if got := colored.String(); !strings.Contains(got, "\x1b[90m") || !strings.Contains(got, "\x1b[33mWARN\x1b[0m") {
@@ -1112,10 +1285,10 @@ func TestConsoleOutput_LevelThresholdAndColorGating(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 	var noColor bytes.Buffer
 	noColorLogger := mustNewLogger(t, logging.Config{Console: logging.ConsolePlain,
-		Service:    "cli",
-		Level:      slog.LevelDebug,
-		Writer:     &noColor,
-		ForceColor: true,
+		Service:          "cli",
+		ConsoleVerbosity: slog.LevelDebug,
+		Writer:           &noColor,
+		ForceColor:       true,
 	})
 	noColorLogger.Error("plain error")
 	if got := noColor.String(); strings.Contains(got, "\x1b[") {
@@ -1134,10 +1307,10 @@ func TestConsoleOutput_WritesRollingHumanFileAtDebugAndRetainsTen(t *testing.T) 
 
 	var console bytes.Buffer
 	logger := mustNewLogger(t, logging.Config{Console: logging.ConsolePlain,
-		Service: "openbrain-dev",
-		Level:   slog.LevelInfo,
-		Writer:  &console,
-		TextDir: dir,
+		Service:          "openbrain-dev",
+		ConsoleVerbosity: slog.LevelInfo,
+		Writer:           &console,
+		TextDir:          dir,
 	})
 	t.Cleanup(func() { _ = logger.Close() })
 	logger.Debug("debug detail")
@@ -1180,11 +1353,11 @@ func TestLoggerFansOutToConsoleHumanFileAndJSONFile(t *testing.T) {
 
 	var console bytes.Buffer
 	logger := mustNewLogger(t, logging.Config{Console: logging.ConsolePlain,
-		Service:  "openbrain-client",
-		Level:    slog.LevelInfo,
-		Writer:   &console,
-		TextDir:  dir,
-		JSONLDir: dir,
+		Service:          "openbrain-client",
+		ConsoleVerbosity: slog.LevelInfo,
+		Writer:           &console,
+		TextDir:          dir,
+		JSONLDir:         dir,
 	})
 	t.Cleanup(func() { _ = logger.Close() })
 	logger.Debug("debug detail", "token", "secret-value")
