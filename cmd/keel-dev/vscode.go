@@ -33,9 +33,11 @@ const (
 	vscodeLaneLint         = "keel::lane::lint"
 	vscodeLaneTestFast     = "keel::lane::test-fast"
 	vscodeLaneTestCoverage = "keel::lane::test-coverage"
+	vscodeLaneVSIXGate     = "keel::lane::vsix-ci"
+	vscodeLaneCI           = "keel::lane::ci"
 )
 
-var vscodeLaneIDs = []string{vscodeLaneLint, vscodeLaneTestFast, vscodeLaneTestCoverage}
+var vscodeLaneIDs = []string{vscodeLaneLint, vscodeLaneTestFast, vscodeLaneTestCoverage, vscodeLaneVSIXGate, vscodeLaneCI}
 
 func vscodeCommandSpec() *cli.CommandSpec {
 	return &cli.CommandSpec{
@@ -267,7 +269,7 @@ func handleVSCodeTestsRun(ctx context.Context, args []string) error {
 	return nil
 }
 
-// DHF-REQ: keel/requirement-39, keel/requirement-43, keel/requirement-46
+// DHF-REQ: keel/requirement-39, keel/requirement-43, keel/requirement-46, keel/requirement-48
 func writeVSCodeDiscovery(root string, out io.Writer) error {
 	items := []vscode.TestItem{
 		groupItem(vscodeGroupMaintenance, "", "a. Maintenance", "a"),
@@ -279,6 +281,8 @@ func writeVSCodeDiscovery(root string, out io.Writer) error {
 		laneItem(vscodeLaneLint, "b.1 lint", ordinalSortText("b.1")),
 		laneItem(vscodeLaneTestFast, "b.2 test-fast", ordinalSortText("b.2")),
 		laneItem(vscodeLaneTestCoverage, "b.3 test-coverage", ordinalSortText("b.3")),
+		laneItem(vscodeLaneVSIXGate, "b.10 vsix ci", ordinalSortText("b.10")),
+		laneItem(vscodeLaneCI, "b.30 ci", ordinalSortText("b.30")),
 	}
 	goItems, err := discoverGoTestItems(context.Background(), root)
 	if err != nil {
@@ -379,8 +383,16 @@ func laneItem(id, label, sortText string) vscode.TestItem {
 		Runnable:          true,
 		Profiles:          profiles,
 		LaneID:            id,
-		RequiredResources: []string{"go-toolchain", "keel-module-root", "stub-binaries"},
+		RequiredResources: laneRequiredResources(id),
 	}
+}
+
+func laneRequiredResources(id string) []string {
+	resources := []string{"go-toolchain", "keel-module-root", "stub-binaries"}
+	if id == vscodeLaneVSIXGate {
+		resources = append(resources, "pnpm")
+	}
+	return resources
 }
 
 func ordinalSortText(labelPrefix string) string {
@@ -541,6 +553,7 @@ func goSelectionLabel(selection vscode.GoSelection, id string) string {
 	}
 }
 
+// DHF-REQ: keel/requirement-48
 func runVSCodeLane(ctx context.Context, logger *slog.Logger, root, laneID, runID string, writer vscode.RunEventWriter) (int, error) {
 	if strings.HasPrefix(laneID, "keel::maintenance::") {
 		return runVSCodeMaintenance(root, laneID)
@@ -573,6 +586,20 @@ func runVSCodeLane(ctx context.Context, logger *slog.Logger, root, laneID, runID
 		}
 		if err := runVSCodeTestCoverage(ctx, logger, root, runID, writer); err != nil {
 			return 1, err
+		}
+	case vscodeLaneVSIXGate:
+		if logger == nil {
+			logger = vscodeDiscardLogger()
+		}
+		if err := runVSIXGate(ctx, logger, root); err != nil {
+			return gateExitCode(err), err
+		}
+	case vscodeLaneCI:
+		if logger == nil {
+			logger = vscodeDiscardLogger()
+		}
+		if err := runCI(ctx, logger, root); err != nil {
+			return gateExitCode(err), err
 		}
 	default:
 		return 2, cli.NewUsageError("unknown vscode lane id %q", laneID)
@@ -696,7 +723,7 @@ type keelWorkspaceProfile struct {
 	root string
 }
 
-// DHF-REQ: keel/requirement-37
+// DHF-REQ: keel/requirement-37, keel/requirement-48
 func newKeelWorkspaceProfile(root string) keelWorkspaceProfile {
 	return keelWorkspaceProfile{root: root}
 }
@@ -720,6 +747,11 @@ func (p keelWorkspaceProfile) PrepareLane(_ context.Context, laneID string) vsco
 	}
 	if _, err := exec.LookPath("go"); err != nil {
 		return vscode.LaneReadiness{Blocked: []vscode.BlockedPrereq{{Resource: "go-toolchain", Detail: err.Error()}}}
+	}
+	if laneID == vscodeLaneVSIXGate {
+		if _, err := exec.LookPath("pnpm"); err != nil {
+			return vscode.LaneReadiness{Blocked: []vscode.BlockedPrereq{{Resource: "pnpm", Detail: err.Error()}}}
+		}
 	}
 	if _, err := os.Stat(filepath.Join(p.root, "go.mod")); err != nil {
 		return vscode.LaneReadiness{Blocked: []vscode.BlockedPrereq{{Resource: "keel-module-root", Detail: err.Error()}}}

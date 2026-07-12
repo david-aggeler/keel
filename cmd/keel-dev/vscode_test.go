@@ -376,6 +376,82 @@ func TestVSCodeMaintenanceItemsAdvertiseCapabilitiesAndRunActions(t *testing.T) 
 	}
 }
 
+// DHF-TEST: keel/requirement-48
+func TestVSCodeSystemGateLanesDiscoverPrepareAndRun(t *testing.T) {
+	originalPath := os.Getenv("PATH")
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+
+	var discover bytes.Buffer
+	if err := writeVSCodeDiscovery(root, &discover); err != nil {
+		t.Fatalf("writeVSCodeDiscovery: %v", err)
+	}
+	var doc vscode.DiscoveryDocument
+	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
+		t.Fatalf("discovery JSON: %v\n%s", err, discover.String())
+	}
+	for id, want := range map[string]struct {
+		label string
+		sort  string
+	}{
+		"keel::lane::vsix-ci": {label: "b.10 vsix ci", sort: "b.010"},
+		"keel::lane::ci":      {label: "b.30 ci", sort: "b.030"},
+	} {
+		item, ok := discoveryItemByID(doc, id)
+		if !ok {
+			t.Fatalf("discovery missing system gate lane %q", id)
+		}
+		if item.ParentID != "keel::lanes" || item.Kind != "lane" || item.Label != want.label || item.SortText != want.sort || !stringSlicesEqual(item.Profiles, []string{"run"}) {
+			t.Fatalf("system lane %q = %+v, want parent lanes label=%q sort=%q profiles=[run]", id, item, want.label, want.sort)
+		}
+	}
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", "exit 0")
+	t.Setenv("PATH", bin)
+	var protocol bytes.Buffer
+	err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "keel::lane::vsix-ci"})
+	if err == nil {
+		t.Fatal("vsix-ci without pnpm returned nil error; want structured blocked result")
+	}
+	blocked := decodeRunEvents(t, protocol.String())
+	if !runEventsContain(blocked, "failed", "keel::lane::vsix-ci") || !strings.Contains(protocol.String(), "pnpm") {
+		t.Fatalf("vsix-ci blocked events = %+v, want failed event naming pnpm", blocked)
+	}
+	if strings.Contains(calls(t, callsFile), "pnpm ") {
+		t.Fatalf("vsix-ci should not start gate work when pnpm is absent; calls:\n%s", calls(t, callsFile))
+	}
+
+	callsFile = stubTools(t, false, false)
+	goodRoot := moduleFixture(t)
+	protocol.Reset()
+	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(goodRoot, &protocol), []string{"--id", "keel::lane::ci"}); err != nil {
+		t.Fatalf("ci lane run: %v\nprotocol:\n%s\ncalls:\n%s", err, protocol.String(), calls(t, callsFile))
+	}
+	if events := decodeRunEvents(t, protocol.String()); !runEventsContain(events, "passed", "keel::lane::ci") || events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode != 0 {
+		t.Fatalf("ci lane events = %+v, want passed and exit 0", events)
+	}
+	if strings.Contains(calls(t, callsFile), "pnpm ") {
+		t.Fatalf("ci lane must not spawn node/pnpm; calls:\n%s", calls(t, callsFile))
+	}
+
+	t.Setenv("PATH", originalPath)
+	badRoot := t.TempDir()
+	writeFile(t, badRoot, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, badRoot, "bad.go", "package p\n\nvar    Y = 2\n")
+	protocol.Reset()
+	err = handleVSCodeTestsRun(contextWithVSCodeTestState(badRoot, &protocol), []string{"--id", "keel::lane::ci"})
+	if err == nil {
+		t.Fatal("failing ci lane returned nil error; want non-zero")
+	}
+	failed := decodeRunEvents(t, protocol.String())
+	if !runEventsContain(failed, "errored", "") || failed[len(failed)-1].ExitCode == nil || *failed[len(failed)-1].ExitCode == 0 || !strings.Contains(protocol.String(), "gofmt") {
+		t.Fatalf("failing ci lane events = %+v, want errored detail and non-zero run_finished", failed)
+	}
+}
+
 // DHF-TEST: keel/requirement-43
 func TestVSCodeDiscoveryEmitsGoTestTreeFromStubGo(t *testing.T) {
 	root := t.TempDir()
