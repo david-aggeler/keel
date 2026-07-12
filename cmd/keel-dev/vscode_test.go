@@ -93,6 +93,62 @@ func TestVSCodeHandlersDispatchDiscoveryPlanAndLintRun(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-41
+func TestVSCodeDemoBlockVerbsPersistStateAndRejectUnknownLanes(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+
+	var protocol bytes.Buffer
+	ctx := contextWithVSCodeTestState(root, &protocol)
+	if err := handleVSCodeDemoBlock(ctx, []string{vscodeLaneTestFast}); err != nil {
+		t.Fatalf("demo block: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".devtools", "vscode-demo-block.json")); err != nil {
+		t.Fatalf("demo block state was not persisted: %v", err)
+	}
+
+	readiness := newKeelWorkspaceProfile(root).PrepareLane(context.Background(), vscodeLaneTestFast)
+	if readiness.Ready() || len(readiness.Blocked) != 1 || readiness.Blocked[0].Resource != "KEEL_VSCODE_DEMO_BLOCK" {
+		t.Fatalf("persisted demo block readiness = %+v, want KEEL_VSCODE_DEMO_BLOCK block", readiness)
+	}
+
+	protocol.Reset()
+	if err := handleVSCodeDemoStatus(ctx, nil); err != nil {
+		t.Fatalf("demo status: %v", err)
+	}
+	var status struct {
+		BlockedLane string `json:"blocked_lane"`
+		Source      string `json:"source"`
+	}
+	if err := json.Unmarshal(protocol.Bytes(), &status); err != nil {
+		t.Fatalf("demo status JSON: %v\n%s", err, protocol.String())
+	}
+	if status.BlockedLane != vscodeLaneTestFast || status.Source != "state" {
+		t.Fatalf("demo status = %+v, want persisted test-fast block", status)
+	}
+
+	t.Setenv("KEEL_VSCODE_DEMO_BLOCK", vscodeLaneLint)
+	readiness = newKeelWorkspaceProfile(root).PrepareLane(context.Background(), vscodeLaneTestFast)
+	if !readiness.Ready() {
+		t.Fatalf("env block for a different lane should take precedence over state, got %+v", readiness)
+	}
+	readiness = newKeelWorkspaceProfile(root).PrepareLane(context.Background(), vscodeLaneLint)
+	if readiness.Ready() || readiness.Blocked[0].Detail != vscodeLaneLint {
+		t.Fatalf("env block readiness = %+v, want lint block", readiness)
+	}
+
+	if err := handleVSCodeDemoUnblock(ctx, nil); err != nil {
+		t.Fatalf("demo unblock: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".devtools", "vscode-demo-block.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("demo unblock should remove persisted state, stat err=%v", err)
+	}
+	if err := handleVSCodeDemoBlock(ctx, []string{"keel::lane::missing"}); err == nil || !strings.Contains(err.Error(), "unknown vscode lane id") {
+		t.Fatalf("unknown lane block err = %v, want structured refusal", err)
+	}
+}
+
 // DHF-TEST: keel/requirement-40
 func TestVSCodeConfigHandlersInitAndUpgrade(t *testing.T) {
 	root := t.TempDir()
