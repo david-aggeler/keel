@@ -110,6 +110,7 @@ type effectiveLane struct {
 }
 
 type lanesState struct {
+	root         string
 	path         string
 	file         testLanesFile
 	byID         map[string]testFileLane
@@ -687,6 +688,7 @@ func laneRequiredResources(id string) []string {
 // DHF-REQ: keel/requirement-51, keel/requirement-52, keel/requirement-54
 func loadLanesState(root string) (lanesState, error) {
 	state := lanesState{
+		root:      root,
 		path:      filepath.Join(root, ".vscode", "test-lanes.json"),
 		byID:      map[string]testFileLane{},
 		effective: map[string]effectiveLane{},
@@ -857,12 +859,27 @@ func (s lanesState) discoveryItems() []vscode.TestItem {
 		if eff.lane.Description != "" {
 			item.Limitations = append(item.Limitations, eff.lane.Description)
 		}
+		if hint := laneDurationHint(latestLaneRun(s.root, eff.id)); hint != "" {
+			item.Limitations = append(item.Limitations, hint)
+		}
 		for _, finding := range eff.findings {
 			item.Limitations = append(item.Limitations, finding.Rule+" "+finding.Severity+": "+finding.Message)
 		}
 		items = append(items, item)
 	}
 	return items
+}
+
+func laneDurationHint(last *laneLastRun) string {
+	if last == nil || last.DurationMS < 0 {
+		return ""
+	}
+	totalSeconds := float64(last.DurationMS) / 1000
+	if totalSeconds > 90 {
+		seconds := int(totalSeconds + 0.5)
+		return fmt.Sprintf("· last %dm %02ds", seconds/60, seconds%60)
+	}
+	return fmt.Sprintf("· last %.1fs", totalSeconds)
 }
 
 func lanesDiagnosticItem(id, message string) vscode.TestItem {
