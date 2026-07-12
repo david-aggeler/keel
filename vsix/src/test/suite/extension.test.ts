@@ -39,6 +39,7 @@ suite('Keel Test Bridge config contract', () => {
     const commands = new Set(manifest.contributes?.commands?.map((command) => command.command));
     assert.ok(commands.has('keel.tests.refresh'));
     assert.ok(commands.has('keel.tests.initConfig'));
+    assert.ok(commands.has('keel.tests.toggleDemoBlock'));
     assert.ok(!commands.has('vela.tests.refresh'));
   });
 
@@ -82,7 +83,33 @@ suite('Keel Test Bridge config contract', () => {
     assert.ok(commands.includes('keel.tests.refresh'));
     assert.ok(commands.includes('keel.tests.initConfig'));
     assert.ok(commands.includes('keel.tests.clearTestResults'));
+    assert.ok(commands.includes('keel.tests.toggleDemoBlock'));
     assert.equal(currentAdapterConfig().displayName, 'Keel');
+  });
+
+  // DHF-TEST: keel/requirement-41
+  test('demo-block toggle invokes devtool state verbs without mutating config', async function () {
+    this.timeout(10_000);
+    const root = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+    assert.ok(root, 'test workspace should be configured');
+    const configPath = path.join(root, configRelativePath);
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify({
+      version: currentConfigVersion,
+      command: process.execPath,
+      args: [path.resolve(__dirname, '../../../src/test/fixtures/fake-adapter.js'), 'vscode', 'tests'],
+      displayName: 'Keel'
+    }, null, 2) + '\n');
+    const before = fs.readFileSync(configPath, 'utf8');
+    const callsPath = path.join(root, '.devtools', 'fake-adapter-calls.log');
+    fs.rmSync(callsPath, { force: true });
+
+    await vscode.commands.executeCommand('keel.tests.toggleDemoBlock');
+
+    const after = fs.readFileSync(configPath, 'utf8');
+    assert.equal(after, before, 'toggle must not mutate .vscode/test-bridge.json');
+    const calls = fs.readFileSync(callsPath, 'utf8');
+    assert.match(calls, /vscode demo (block|unblock) /);
   });
 
   // DHF-TEST: keel/requirement-36
