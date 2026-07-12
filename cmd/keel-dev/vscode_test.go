@@ -469,8 +469,8 @@ func TestVSCodeSystemGateLanesDiscoverPrepareAndRun(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-43
-func TestVSCodeDiscoveryEmitsGoTestTreeFromStubGo(t *testing.T) {
+// DHF-TEST: keel/requirement-43, keel/requirement-49
+func TestVSCodeDiscoveryEmitsGoTestTreeFromParser(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, root, "go.sum", "")
@@ -481,21 +481,7 @@ func TestVSCodeDiscoveryEmitsGoTestTreeFromStubGo(t *testing.T) {
 
 	bin := t.TempDir()
 	callsFile := filepath.Join(bin, "calls.log")
-	stub(t, bin, callsFile, "go", `
-case "$1 $2 $3" in
-  "list -json ./...")
-    printf '{"ImportPath":"github.com/david-aggeler/keel/log","Dir":"%s","TestGoFiles":["logging_test.go"]}\n' "$PWD/log"
-    ;;
-  "test -list .")
-    case "$4" in
-      ./log)
-        printf 'TestLog\n'
-        printf 'TestMetrics\n'
-        ;;
-    esac
-    ;;
-esac
-exit 0`)
+	stub(t, bin, callsFile, "go", "printf 'discovery must not invoke go subprocesses\\n' >&2\nexit 99")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	var discover bytes.Buffer
@@ -513,10 +499,11 @@ exit 0`)
 		kind     string
 		runnable bool
 	}{
-		"go::root":                   {parent: "keel::frameworks", label: "d.1 Go", kind: "root", runnable: true},
-		"go::pkg::log":               {parent: "go::root", label: "log", kind: "package", runnable: true},
-		"go::test::log::TestLog":     {parent: "go::pkg::log", label: "TestLog", kind: "test", runnable: true},
-		"go::test::log::TestMetrics": {parent: "go::pkg::log", label: "TestMetrics", kind: "test", runnable: true},
+		"go::root":                      {parent: "keel::frameworks", label: "d.1 Go", kind: "root", runnable: true},
+		"go::pkg::log":                  {parent: "go::root", label: "log", kind: "package", runnable: true},
+		"go::file::log/logging_test.go": {parent: "go::pkg::log", label: "logging_test.go", kind: "file", runnable: true},
+		"go::test::log::TestLog":        {parent: "go::file::log/logging_test.go", label: "TestLog", kind: "test", runnable: true},
+		"go::test::log::TestMetrics":    {parent: "go::file::log/logging_test.go", label: "TestMetrics", kind: "test", runnable: true},
 	}
 	for id, wantItem := range want {
 		item, ok := discoveryItemByID(doc, id)
@@ -526,6 +513,115 @@ exit 0`)
 		if item.ParentID != wantItem.parent || item.Label != wantItem.label || item.Kind != wantItem.kind || item.Runnable != wantItem.runnable {
 			t.Fatalf("item %s = %+v, want parent=%q label=%q kind=%q runnable=%v", id, item, wantItem.parent, wantItem.label, wantItem.kind, wantItem.runnable)
 		}
+	}
+	if got := strings.TrimSpace(calls(t, callsFile)); got != "" {
+		t.Fatalf("discovery spawned go subprocesses:\n%s", got)
+	}
+}
+
+// DHF-TEST: keel/requirement-49
+func TestVSCodeDiscoveryParsesGoTestsWithoutGoSubprocesses(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	if err := os.MkdirAll(filepath.Join(root, "log"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join("log", "logging_test.go"), `package log
+
+import "testing"
+
+func TestLog(t *testing.T) {}
+
+func helper() {}
+
+func TestMetrics(t *testing.T) {}
+`)
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", "printf 'discovery must not invoke go subprocesses\\n' >&2\nexit 99")
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var discover bytes.Buffer
+	if err := writeVSCodeDiscovery(root, &discover); err != nil {
+		t.Fatalf("writeVSCodeDiscovery: %v\ncalls:\n%s", err, calls(t, callsFile))
+	}
+	if got := strings.TrimSpace(calls(t, callsFile)); got != "" {
+		t.Fatalf("discovery spawned go subprocesses:\n%s", got)
+	}
+
+	var doc vscode.DiscoveryDocument
+	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
+		t.Fatalf("discovery JSON: %v\n%s", err, discover.String())
+	}
+	pkg, ok := discoveryItemByID(doc, "go::pkg::log")
+	if !ok {
+		t.Fatalf("discovery missing package item: %+v", doc.Items)
+	}
+	if pkg.ParentID != "go::root" || pkg.Label != "log" || pkg.Kind != "package" || !pkg.Runnable {
+		t.Fatalf("package item = %+v, want runnable package under go root", pkg)
+	}
+
+	file, ok := discoveryItemByID(doc, "go::file::log/logging_test.go")
+	if !ok {
+		t.Fatalf("discovery missing file item: %+v", doc.Items)
+	}
+	if file.ParentID != "go::pkg::log" || file.Label != "logging_test.go" || file.Kind != "file" || file.URI != "log/logging_test.go" || !file.Runnable {
+		t.Fatalf("file item = %+v, want runnable file with module-relative uri", file)
+	}
+
+	for _, want := range []string{"TestLog", "TestMetrics"} {
+		id := "go::test::log::" + want
+		item, ok := discoveryItemByID(doc, id)
+		if !ok {
+			t.Fatalf("discovery missing test item %q: %+v", id, doc.Items)
+		}
+		if item.ParentID != "go::file::log/logging_test.go" || item.Label != want || item.Kind != "test" || item.URI != "log/logging_test.go" || item.Range == nil || !item.Runnable {
+			t.Fatalf("test item %q = %+v, want runnable test under file with uri and range", id, item)
+		}
+		if item.Range.StartLine < 4 || item.Range.StartColumn != 0 || item.Range.EndLine < item.Range.StartLine {
+			t.Fatalf("test item %q range = %+v, want parser-derived function position", id, item.Range)
+		}
+	}
+}
+
+// DHF-TEST: keel/requirement-49
+func TestVSCodeDiscoveryReportsGoParseErrorsAsDiagnosticFileItems(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	if err := os.MkdirAll(filepath.Join(root, "broken"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join("broken", "broken_test.go"), "package broken\n\nfunc TestBroken(\n")
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", "printf 'discovery must not invoke go subprocesses\\n' >&2\nexit 99")
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var discover bytes.Buffer
+	if err := writeVSCodeDiscovery(root, &discover); err != nil {
+		t.Fatalf("writeVSCodeDiscovery: %v\ncalls:\n%s", err, calls(t, callsFile))
+	}
+	if got := strings.TrimSpace(calls(t, callsFile)); got != "" {
+		t.Fatalf("discovery spawned go subprocesses:\n%s", got)
+	}
+
+	var doc vscode.DiscoveryDocument
+	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
+		t.Fatalf("discovery JSON: %v\n%s", err, discover.String())
+	}
+	item, ok := discoveryItemByID(doc, "go::file::broken/broken_test.go")
+	if !ok {
+		t.Fatalf("discovery missing parse diagnostic file item: %+v", doc.Items)
+	}
+	if item.ParentID != "go::pkg::broken" || item.Kind != "file" || item.Runnable || item.URI != "broken/broken_test.go" {
+		t.Fatalf("parse diagnostic item = %+v, want non-runnable file item under package", item)
+	}
+	if len(item.Limitations) == 0 || !strings.Contains(strings.Join(item.Limitations, "\n"), "expected") {
+		t.Fatalf("parse diagnostic limitations = %v, want parse error text", item.Limitations)
 	}
 }
 
@@ -641,22 +737,26 @@ exit 0`)
 	}
 }
 
-// DHF-TEST: keel/requirement-43
-func TestVSCodeDiscoveryReportsGoEnumerationFailures(t *testing.T) {
+// DHF-TEST: keel/requirement-49
+func TestVSCodeDiscoveryDoesNotRequireGoToolchain(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	if err := os.MkdirAll(filepath.Join(root, "log"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join("log", "logging_test.go"), "package log\n\nimport \"testing\"\n\nfunc TestLog(t *testing.T) {}\n")
 
 	bin := t.TempDir()
 	callsFile := filepath.Join(bin, "calls.log")
-	stub(t, bin, callsFile, "go", `
-printf 'go list exploded\n' >&2
-exit 7`)
+	stub(t, bin, callsFile, "go", "printf 'go subprocess should not run during discovery\\n' >&2\nexit 7")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	var discover bytes.Buffer
-	err := writeVSCodeDiscovery(root, &discover)
-	if err == nil || !strings.Contains(err.Error(), "vscode discover go list") || !strings.Contains(err.Error(), "go list exploded") {
-		t.Fatalf("writeVSCodeDiscovery err = %v, want loud go list failure\ncalls:\n%s", err, calls(t, callsFile))
+	if err := writeVSCodeDiscovery(root, &discover); err != nil {
+		t.Fatalf("writeVSCodeDiscovery: %v\ncalls:\n%s", err, calls(t, callsFile))
+	}
+	if got := strings.TrimSpace(calls(t, callsFile)); got != "" {
+		t.Fatalf("discovery spawned go subprocesses:\n%s", got)
 	}
 }
 
