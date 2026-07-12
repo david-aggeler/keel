@@ -303,6 +303,9 @@ func TestVSCodeDiscoveryEmitsStructuredOrderedTree(t *testing.T) {
 // DHF-TEST: keel/requirement-47
 func TestVSCodeMaintenanceItemsAdvertiseCapabilitiesAndRunActions(t *testing.T) {
 	root := t.TempDir()
+	if code, err := runVSCodeMaintenance(root, "keel::maintenance::clear-state"); err != nil || code != 0 {
+		t.Fatalf("clear-state without existing devtools = code %d, err %v; want code 0", code, err)
+	}
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, root, "go.sum", "")
 	if err := os.MkdirAll(filepath.Join(root, ".vscode"), 0o755); err != nil {
@@ -367,6 +370,20 @@ func TestVSCodeMaintenanceItemsAdvertiseCapabilitiesAndRunActions(t *testing.T) 
 	protocol.Reset()
 	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "keel::maintenance::clear-state"}); err != nil {
 		t.Fatalf("clear-state maintenance run: %v\nprotocol:\n%s", err, protocol.String())
+	}
+	clearStateEvents := decodeRunEvents(t, protocol.String())
+	clearStateRunID := clearStateEvents[0].RunID
+	streamPath := filepath.Join(root, ".devtools", "vscode-runs", clearStateRunID+".jsonl")
+	stream, err := os.ReadFile(streamPath)
+	if err != nil {
+		t.Fatalf("clear-state should preserve active run stream at %s: %v", streamPath, err)
+	}
+	streamEvents := decodeRunEvents(t, string(stream))
+	if streamEvents[len(streamEvents)-1].Event != "run_finished" || streamEvents[len(streamEvents)-1].ExitCode == nil || *streamEvents[len(streamEvents)-1].ExitCode != 0 {
+		t.Fatalf("clear-state stream terminal event = %+v, want run_finished exit 0", streamEvents[len(streamEvents)-1])
+	}
+	if _, err := os.Stat(lockPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("clear-state should release its active run lock, stat err=%v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, ".devtools", "vscode-demo-block.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("clear-state should remove devtool state, stat err=%v", err)
