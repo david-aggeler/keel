@@ -14,7 +14,7 @@ part of this loop; use `openbrain-client` from PATH for those.
 From a clean checkout of `main`:
 
 ```sh
-go run ./cmd/keel-dev release vX.Y.Z
+just publish vX.Y.Z
 ```
 
 The `release` verb runs, in order, and **aborts before creating any tag** if a
@@ -35,12 +35,12 @@ Only then does it:
    the release tag and the stamp is **committed**, so the tag's tree carries
    the same version as the release asset (one version, no dirty-stamp drift).
 7. **VSIX asset build** — `pnpm --dir vsix run package:vsix` builds the
-   release asset from that committed state.
+   release asset from that committed state into `bin/`.
 8. Create the annotated tag `vX.Y.Z` and push it — plus the release (stamp)
    commit via `git push origin HEAD` — to `origin`, so `origin/main` carries
    the stamped manifest the tag points at.
 9. Create the GitHub release with `gh release create ... --generate-notes`,
-   attaching `vsix/dist/keel-test-bridge-X.Y.Z.vsix`.
+   attaching `bin/keel-test-bridge-X.Y.Z.vsix`.
 10. **Verify anonymous resolution** — in a throwaway module with a fresh
    `GOMODCACHE` and every private-access escape hatch scrubbed
    (`GOPRIVATE`/`GOINSECURE`/`GONOSUMDB` empty, global git config ignored), run
