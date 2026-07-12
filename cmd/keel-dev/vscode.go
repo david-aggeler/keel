@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"go/ast"
+	"go/build"
 	"go/parser"
 	"go/token"
 	"io"
@@ -19,6 +20,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/david-aggeler/keel/cli"
 	"github.com/david-aggeler/keel/vscode"
@@ -430,7 +433,8 @@ type discoveredGoTest struct {
 	order int
 }
 
-// DHF-REQ: keel/requirement-43, keel/requirement-46, keel/requirement-49
+// DHF-REQ: keel/requirement-49
+// DHF-REQ: keel/requirement-43, keel/requirement-46
 func discoverGoTestItems(_ context.Context, root string) ([]vscode.TestItem, error) {
 	packages, err := parseGoTestPackages(root)
 	if err != nil {
@@ -515,11 +519,8 @@ func parseGoTestPackages(root string) ([]discoveredGoPackage, error) {
 			return err
 		}
 		if entry.IsDir() {
-			switch entry.Name() {
-			case ".git", ".logs", ".devtools", "node_modules":
-				if path != root {
-					return filepath.SkipDir
-				}
+			if path != root && goDiscoverySkipDir(path, entry.Name()) {
+				return filepath.SkipDir
 			}
 			return nil
 		}
@@ -531,6 +532,24 @@ func parseGoTestPackages(root string) ([]discoveredGoPackage, error) {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
+		match, err := goTestFileMatchesBuild(root, rel)
+		if err != nil {
+			file := discoveredGoFile{
+				rel:        rel,
+				packageRel: goPackageRelFromFile(rel),
+				parseErr:   fmt.Errorf("%s: %w", rel, err),
+			}
+			pkg := byPackage[file.packageRel]
+			if pkg == nil {
+				pkg = &discoveredGoPackage{rel: file.packageRel}
+			}
+			byPackage[file.packageRel] = pkg
+			pkg.files = append(pkg.files, file)
+			return nil
+		}
+		if !match {
+			return nil
+		}
 		file := parseGoTestFile(path, rel)
 		pkg := byPackage[file.packageRel]
 		if pkg == nil {
@@ -551,11 +570,80 @@ func parseGoTestPackages(root string) ([]discoveredGoPackage, error) {
 		if len(pkg.files) == 0 {
 			continue
 		}
+		if err := goPackageBuildDiagnostic(root, pkg.rel); err != nil {
+			for i := range pkg.files {
+				if pkg.files[i].parseErr == nil {
+					pkg.files[i].parseErr = fmt.Errorf("%s: package has invalid Go files: %w", pkg.files[i].rel, err)
+					pkg.files[i].tests = nil
+				}
+			}
+		}
 		sort.Slice(pkg.files, func(i, j int) bool { return pkg.files[i].rel < pkg.files[j].rel })
 		packages = append(packages, *pkg)
 	}
 	sort.Slice(packages, func(i, j int) bool { return packages[i].rel < packages[j].rel })
 	return packages, nil
+}
+
+func goDiscoverySkipDir(path, name string) bool {
+	switch name {
+	case "vendor", "testdata", "node_modules":
+		return true
+	}
+	if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") {
+		return true
+	}
+	_, err := os.Stat(filepath.Join(path, "go.mod"))
+	return err == nil
+}
+
+func goTestFileMatchesBuild(root, rel string) (bool, error) {
+	clean := filepath.Clean(filepath.FromSlash(rel))
+	if clean == "." || clean == ".." || filepath.IsAbs(clean) || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return false, fmt.Errorf("invalid module-relative Go file %q", rel)
+	}
+	dir := filepath.Join(root, filepath.Dir(clean))
+	return build.Default.MatchFile(dir, filepath.Base(clean))
+}
+
+func goPackageBuildDiagnostic(root, rel string) error {
+	dir := root
+	if rel != "." {
+		dir = filepath.Join(root, filepath.FromSlash(rel))
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	var packageName string
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		match, err := build.Default.MatchFile(dir, name)
+		if err != nil {
+			return err
+		}
+		if !match {
+			continue
+		}
+		src, err := parser.ParseFile(token.NewFileSet(), filepath.Join(dir, name), nil, 0)
+		if err != nil {
+			return err
+		}
+		if src.Name == nil {
+			continue
+		}
+		if packageName == "" {
+			packageName = src.Name.Name
+			continue
+		}
+		if src.Name.Name != packageName {
+			return fmt.Errorf("found packages %s and %s in %s", packageName, src.Name.Name, dir)
+		}
+	}
+	return nil
 }
 
 func parseGoTestFile(path, rel string) discoveredGoFile {
@@ -574,7 +662,7 @@ func parseGoTestFile(path, rel string) discoveredGoFile {
 	}
 	for _, decl := range src.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Recv != nil || fn.Name == nil || !strings.HasPrefix(fn.Name.Name, "Test") {
+		if !ok || fn.Recv != nil || fn.Name == nil || !isGoTestName(fn.Name.Name) {
 			continue
 		}
 		if !isGoTestFunc(fn) {
@@ -589,6 +677,17 @@ func parseGoTestFile(path, rel string) discoveredGoFile {
 	return file
 }
 
+func isGoTestName(name string) bool {
+	if !strings.HasPrefix(name, "Test") {
+		return false
+	}
+	if len(name) == len("Test") {
+		return true
+	}
+	r, _ := utf8.DecodeRuneInString(name[len("Test"):])
+	return !unicode.IsLower(r)
+}
+
 func goPackageRelFromFile(rel string) string {
 	dir := filepath.ToSlash(filepath.Dir(rel))
 	if dir == "." {
@@ -598,18 +697,17 @@ func goPackageRelFromFile(rel string) string {
 }
 
 func isGoTestFunc(fn *ast.FuncDecl) bool {
-	if fn.Type == nil || fn.Type.Params == nil || len(fn.Type.Params.List) != 1 {
+	if fn.Type == nil || fn.Type.TypeParams != nil && len(fn.Type.TypeParams.List) > 0 || fn.Type.Results != nil && len(fn.Type.Results.List) > 0 || fn.Type.Params == nil || len(fn.Type.Params.List) != 1 || len(fn.Type.Params.List[0].Names) > 1 {
 		return false
 	}
 	param := fn.Type.Params.List[0]
 	switch expr := param.Type.(type) {
 	case *ast.StarExpr:
-		sel, ok := expr.X.(*ast.SelectorExpr)
-		if !ok || sel.Sel == nil || sel.Sel.Name != "T" {
-			return false
+		if ident, ok := expr.X.(*ast.Ident); ok && ident.Name == "T" {
+			return true
 		}
-		ident, ok := sel.X.(*ast.Ident)
-		return ok && ident.Name == "testing"
+		sel, ok := expr.X.(*ast.SelectorExpr)
+		return ok && sel.Sel != nil && sel.Sel.Name == "T"
 	default:
 		return false
 	}
@@ -790,6 +888,22 @@ func goTestNamesInFile(root, rel string) ([]string, error) {
 		return nil, fmt.Errorf("vscode run go file: invalid file selection %q", rel)
 	}
 	slashRel := filepath.ToSlash(clean)
+	if !strings.HasSuffix(slashRel, "_test.go") {
+		return nil, fmt.Errorf("vscode run go file %s: not a *_test.go file", slashRel)
+	}
+	if goFileRelHasIgnoredDir(slashRel) {
+		return nil, fmt.Errorf("vscode run go file %s: file is outside the active Go package set", slashRel)
+	}
+	if goFileRelInNestedModule(root, slashRel) {
+		return nil, fmt.Errorf("vscode run go file %s: file is in a nested Go module", slashRel)
+	}
+	match, err := goTestFileMatchesBuild(root, slashRel)
+	if err != nil {
+		return nil, fmt.Errorf("vscode run go file %s build constraints: %w", slashRel, err)
+	}
+	if !match {
+		return nil, fmt.Errorf("vscode run go file %s: file is excluded by build constraints or GOOS/GOARCH", slashRel)
+	}
 	file := parseGoTestFile(filepath.Join(root, clean), slashRel)
 	if file.parseErr != nil {
 		return nil, fmt.Errorf("vscode run go file parse %s: %w", slashRel, file.parseErr)
@@ -802,6 +916,31 @@ func goTestNamesInFile(root, rel string) ([]string, error) {
 		return nil, fmt.Errorf("vscode run go file %s: no top-level Test functions found", slashRel)
 	}
 	return names, nil
+}
+
+func goFileRelHasIgnoredDir(rel string) bool {
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	for _, part := range parts[:len(parts)-1] {
+		if part == "vendor" || part == "testdata" || part == "node_modules" || strings.HasPrefix(part, ".") || strings.HasPrefix(part, "_") {
+			return true
+		}
+	}
+	return false
+}
+
+func goFileRelInNestedModule(root, rel string) bool {
+	dir := filepath.Dir(filepath.Clean(filepath.FromSlash(rel)))
+	for dir != "." && dir != string(filepath.Separator) {
+		if _, err := os.Stat(filepath.Join(root, dir, "go.mod")); err == nil {
+			return true
+		}
+		next := filepath.Dir(dir)
+		if next == dir {
+			break
+		}
+		dir = next
+	}
+	return false
 }
 
 func emitGoTestJSONEvents(raw string, selection vscode.GoSelection, selectedID, modulePath string, writer vscode.RunEventWriter) {

@@ -586,6 +586,127 @@ func TestMetrics(t *testing.T) {}
 	}
 }
 
+// DHF-TEST: keel/requirement-49, keel/requirement-50
+func TestVSCodeDiscoveryMatchesGoTestFunctionSemantics(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	if err := os.MkdirAll(filepath.Join(root, "log"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join("log", "semantics_test.go"), `package log
+
+import testingAlias "testing"
+
+type T = testingAlias.T
+
+func Test(t *T) {}
+func TestAlias(t *testingAlias.T) {}
+func TestUpper(t *testingAlias.T) {}
+func Test_underscore(t *testingAlias.T) {}
+func Test123(t *testingAlias.T) {}
+func Testcase(t *testingAlias.T) {}
+func TesticularCancer(t *testingAlias.T) {}
+func TestWrongSignature(t string) {}
+`)
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", `
+case "$1 $2" in
+  "test ./log")
+    found_run=
+    for arg in "$@"; do
+      case "$arg" in
+        -run=^\(Test\|TestAlias\|TestUpper\|Test_underscore\|Test123\)$) found_run=1 ;;
+      esac
+    done
+    if [ "$found_run" != 1 ]; then
+      printf 'missing Go-compatible selected file -run filter\n' >&2
+      exit 2
+    fi
+    printf '{"Action":"run","Package":"github.com/david-aggeler/keel/log","Test":"TestAlias"}\n'
+    printf '{"Action":"pass","Package":"github.com/david-aggeler/keel/log","Test":"TestAlias","Elapsed":0.01}\n'
+    printf '{"Action":"pass","Package":"github.com/david-aggeler/keel/log","Elapsed":0.01}\n'
+    ;;
+esac
+exit 0`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var discover bytes.Buffer
+	if err := writeVSCodeDiscovery(root, &discover); err != nil {
+		t.Fatalf("writeVSCodeDiscovery: %v\ncalls:\n%s", err, calls(t, callsFile))
+	}
+	var doc vscode.DiscoveryDocument
+	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
+		t.Fatalf("discovery JSON: %v\n%s", err, discover.String())
+	}
+	for _, want := range []string{"Test", "TestAlias", "TestUpper", "Test_underscore", "Test123"} {
+		if _, ok := discoveryItemByID(doc, "go::test::log::"+want); !ok {
+			t.Fatalf("discovery missing Go-compatible test %s: %+v", want, doc.Items)
+		}
+	}
+	for _, blocked := range []string{"Testcase", "TesticularCancer", "TestWrongSignature"} {
+		if _, ok := discoveryItemByID(doc, "go::test::log::"+blocked); ok {
+			t.Fatalf("discovery included non-Go-test function %s: %+v", blocked, doc.Items)
+		}
+	}
+
+	var protocol bytes.Buffer
+	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "go::file::log/semantics_test.go"}); err != nil {
+		t.Fatalf("go file selection run: %v\nprotocol:\n%s\ncalls:\n%s", err, protocol.String(), calls(t, callsFile))
+	}
+	if !strings.Contains(calls(t, callsFile), "go test ./log -json -run=^(Test|TestAlias|TestUpper|Test_underscore|Test123)$") {
+		t.Fatalf("go file selection did not use Go-compatible file test names:\n%s", calls(t, callsFile))
+	}
+}
+
+// DHF-TEST: keel/requirement-49
+func TestVSCodeDiscoverySkipsInactiveGoFilesAndIgnoredDirs(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	for _, dir := range []string{"log", "_scratch", ".hidden", "testdata", "vendor/acme", "nested"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, root, filepath.Join("log", "active_test.go"), "package log\n\nimport \"testing\"\n\nfunc TestActive(t *testing.T) {}\n")
+	writeFile(t, root, filepath.Join("log", "tagged_test.go"), "//go:build impossible_tag\n\npackage log\n\nimport \"testing\"\n\nfunc TestTaggedOut(t *testing.T) {}\n")
+	writeFile(t, root, filepath.Join("log", "feature_windows_test.go"), "package log\n\nimport \"testing\"\n\nfunc TestWindowsOnly(t *testing.T) {}\n")
+	writeFile(t, root, filepath.Join("_scratch", "hidden_test.go"), "package scratch\n\nimport \"testing\"\n\nfunc TestScratch(t *testing.T) {}\n")
+	writeFile(t, root, filepath.Join(".hidden", "hidden_test.go"), "package hidden\n\nimport \"testing\"\n\nfunc TestHidden(t *testing.T) {}\n")
+	writeFile(t, root, filepath.Join("testdata", "data_test.go"), "package testdata\n\nimport \"testing\"\n\nfunc TestData(t *testing.T) {}\n")
+	writeFile(t, root, filepath.Join("vendor/acme", "vendor_test.go"), "package acme\n\nimport \"testing\"\n\nfunc TestVendor(t *testing.T) {}\n")
+	writeFile(t, root, filepath.Join("nested", "go.mod"), "module nested.example\n\ngo 1.25\n")
+	writeFile(t, root, filepath.Join("nested", "nested_test.go"), "package nested\n\nimport \"testing\"\n\nfunc TestNested(t *testing.T) {}\n")
+
+	var discover bytes.Buffer
+	if err := writeVSCodeDiscovery(root, &discover); err != nil {
+		t.Fatalf("writeVSCodeDiscovery: %v", err)
+	}
+	var doc vscode.DiscoveryDocument
+	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
+		t.Fatalf("discovery JSON: %v\n%s", err, discover.String())
+	}
+	if _, ok := discoveryItemByID(doc, "go::test::log::TestActive"); !ok {
+		t.Fatalf("discovery missing active test: %+v", doc.Items)
+	}
+	for _, absent := range []string{
+		"go::test::log::TestTaggedOut",
+		"go::test::log::TestWindowsOnly",
+		"go::test::_scratch::TestScratch",
+		"go::test::.hidden::TestHidden",
+		"go::test::testdata::TestData",
+		"go::test::vendor/acme::TestVendor",
+		"go::test::nested::TestNested",
+	} {
+		if _, ok := discoveryItemByID(doc, absent); ok {
+			t.Fatalf("discovery included inactive test %s: %+v", absent, doc.Items)
+		}
+	}
+}
+
 // DHF-TEST: keel/requirement-49
 func TestVSCodeDiscoveryReportsGoParseErrorsAsDiagnosticFileItems(t *testing.T) {
 	root := t.TempDir()
@@ -622,6 +743,40 @@ func TestVSCodeDiscoveryReportsGoParseErrorsAsDiagnosticFileItems(t *testing.T) 
 	}
 	if len(item.Limitations) == 0 || !strings.Contains(strings.Join(item.Limitations, "\n"), "expected") {
 		t.Fatalf("parse diagnostic limitations = %v, want parse error text", item.Limitations)
+	}
+}
+
+// DHF-TEST: keel/requirement-49
+func TestVSCodeDiscoveryReportsPackageParseErrorsAsDiagnosticFileItems(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	if err := os.MkdirAll(filepath.Join(root, "broken"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join("broken", "broken.go"), "package broken\n\nfunc Broken(\n")
+	writeFile(t, root, filepath.Join("broken", "ok_test.go"), "package broken\n\nimport \"testing\"\n\nfunc TestOK(t *testing.T) {}\n")
+
+	var discover bytes.Buffer
+	if err := writeVSCodeDiscovery(root, &discover); err != nil {
+		t.Fatalf("writeVSCodeDiscovery: %v", err)
+	}
+	var doc vscode.DiscoveryDocument
+	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
+		t.Fatalf("discovery JSON: %v\n%s", err, discover.String())
+	}
+	item, ok := discoveryItemByID(doc, "go::file::broken/ok_test.go")
+	if !ok {
+		t.Fatalf("discovery missing package diagnostic file item: %+v", doc.Items)
+	}
+	if item.Kind != "file" || item.Runnable || item.URI != "broken/ok_test.go" {
+		t.Fatalf("package diagnostic item = %+v, want non-runnable file item", item)
+	}
+	if len(item.Limitations) == 0 || !strings.Contains(strings.Join(item.Limitations, "\n"), "broken.go") {
+		t.Fatalf("package diagnostic limitations = %v, want package parse error text", item.Limitations)
+	}
+	if _, ok := discoveryItemByID(doc, "go::test::broken::TestOK"); ok {
+		t.Fatalf("discovery included runnable test from invalid package: %+v", doc.Items)
 	}
 }
 
@@ -787,6 +942,96 @@ func TestVSCodeRunGoFileSelectionReportsParseFailure(t *testing.T) {
 	}
 	if events[len(events)-1].Event != "run_finished" || events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode == 0 {
 		t.Fatalf("terminal event = %+v, want non-zero run_finished", events[len(events)-1])
+	}
+}
+
+// DHF-TEST: keel/requirement-50
+func TestVSCodeRunGoFileSelectionRejectsInactiveFile(t *testing.T) {
+	tests := []struct {
+		name  string
+		id    string
+		want  string
+		setup func(t *testing.T, root string)
+	}{
+		{
+			name: "build constraints",
+			id:   "go::file::log/tagged_test.go",
+			want: "excluded by build constraints",
+			setup: func(t *testing.T, root string) {
+				t.Helper()
+				if err := os.MkdirAll(filepath.Join(root, "log"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				writeFile(t, root, filepath.Join("log", "tagged_test.go"), "//go:build impossible_tag\n\npackage log\n\nimport \"testing\"\n\nfunc TestTaggedOut(t *testing.T) {}\n")
+			},
+		},
+		{
+			name: "ignored directory",
+			id:   "go::file::_scratch/hidden_test.go",
+			want: "outside the active Go package set",
+			setup: func(t *testing.T, root string) {
+				t.Helper()
+				if err := os.MkdirAll(filepath.Join(root, "_scratch"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				writeFile(t, root, filepath.Join("_scratch", "hidden_test.go"), "package scratch\n\nimport \"testing\"\n\nfunc TestHidden(t *testing.T) {}\n")
+			},
+		},
+		{
+			name: "nested module",
+			id:   "go::file::nested/nested_test.go",
+			want: "nested Go module",
+			setup: func(t *testing.T, root string) {
+				t.Helper()
+				if err := os.MkdirAll(filepath.Join(root, "nested"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				writeFile(t, root, filepath.Join("nested", "go.mod"), "module nested.example\n\ngo 1.25\n")
+				writeFile(t, root, filepath.Join("nested", "nested_test.go"), "package nested\n\nimport \"testing\"\n\nfunc TestNested(t *testing.T) {}\n")
+			},
+		},
+		{
+			name: "not test file",
+			id:   "go::file::log/helper.go",
+			want: "not a *_test.go file",
+			setup: func(t *testing.T, root string) {
+				t.Helper()
+				if err := os.MkdirAll(filepath.Join(root, "log"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				writeFile(t, root, filepath.Join("log", "helper.go"), "package log\n\nfunc Helper() {}\n")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+			writeFile(t, root, "go.sum", "")
+			tt.setup(t, root)
+
+			bin := t.TempDir()
+			callsFile := filepath.Join(bin, "calls.log")
+			stub(t, bin, callsFile, "go", "printf 'go test must not run for inactive file selections\\n' >&2\nexit 2")
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+			var protocol bytes.Buffer
+			err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", tt.id})
+			if err == nil {
+				t.Fatalf("inactive go file selection returned nil\nprotocol:\n%s\ncalls:\n%s", protocol.String(), calls(t, callsFile))
+			}
+			if got := strings.TrimSpace(calls(t, callsFile)); got != "" {
+				t.Fatalf("go test ran despite inactive file selection:\n%s", got)
+			}
+			events := decodeRunEvents(t, protocol.String())
+			if !runEventsContain(events, "errored", "") || !strings.Contains(protocol.String(), tt.want) {
+				t.Fatalf("inactive file events = %+v, want errored event containing %q", events, tt.want)
+			}
+			if events[len(events)-1].Event != "run_finished" || events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode == 0 {
+				t.Fatalf("terminal event = %+v, want non-zero run_finished", events[len(events)-1])
+			}
+		})
 	}
 }
 
