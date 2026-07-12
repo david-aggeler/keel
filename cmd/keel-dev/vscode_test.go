@@ -733,6 +733,131 @@ func discoveryHasAlias(doc vscode.DiscoveryDocument, parentID, canonicalID strin
 	return false
 }
 
+func TestVSCodeLaneEdgeCases(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	if err := os.MkdirAll(filepath.Join(root, ".vscode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{"version":2,"lanes":[]}`+"\n")
+	lanes, err := loadLanesState(root)
+	if err != nil {
+		t.Fatalf("load versioned lanes: %v", err)
+	}
+	if lanes.wholeFileErr == nil || len(lanes.discoveryItems()) != 1 {
+		t.Fatalf("unsupported version state = %+v", lanes)
+	}
+
+	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{"version":1,"lanes":[{"id":"a","label":"a","order":"b.40","members":[{"lane":"b"}]},{"id":"b","label":"b","order":"b.41","members":[{"lane":"a"}]}]}`+"\n")
+	lanes, err = loadLanesState(root)
+	if err != nil {
+		t.Fatalf("load cyclic lanes: %v", err)
+	}
+	if !discoveryItemsContain(lanes.discoveryItems(), "cycle") {
+		t.Fatalf("cyclic lanes did not produce diagnostic: %+v", lanes.discoveryItems())
+	}
+
+	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{"version":1,"lanes":[{"id":"bad","label":"bad","order":"b.40","members":[{"unknown":"x"}]}]}`+"\n")
+	var protocol bytes.Buffer
+	err = handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "keel::lane::bad"})
+	if err == nil || !strings.Contains(err.Error(), "invalid") {
+		t.Fatalf("invalid lane run err = %v\n%s", err, protocol.String())
+	}
+
+	if _, err := parseVSCodeLanesDetectArgs([]string{"--format", "yaml"}); err == nil {
+		t.Fatal("non-json lanes detect format should fail")
+	}
+	if _, err := parseVSCodeLanesDetectArgs([]string{"--dry-run", "--bogus"}); err == nil {
+		t.Fatal("unknown lanes detect flag should fail")
+	}
+	if hint := laneDurationHint(&laneLastRun{DurationMS: 192000}); hint != "· last 3m 12s" {
+		t.Fatalf("long duration hint = %q", hint)
+	}
+	if hint := laneDurationHint(nil); hint != "" {
+		t.Fatalf("nil duration hint = %q", hint)
+	}
+	if got := goPackageMatchesPattern(".", "./"); !got {
+		t.Fatal("root go pattern should match root package")
+	}
+	if got := goPackageFamily("."); got != "." {
+		t.Fatalf("root package family = %q", got)
+	}
+	if items, err := discoverVSIXTestItems(filepath.Join(root, "missing")); err != nil || len(items) != 0 {
+		t.Fatalf("absent vsix discovery = %v, %v", items, err)
+	}
+
+	t.Setenv("PATH", t.TempDir())
+	if err := runVSIXFileSelection(context.Background(), discardLogger(), root, []string{"src/test/suite/x.test.ts"}); err == nil || !strings.Contains(err.Error(), "pnpm") {
+		t.Fatalf("missing pnpm err = %v", err)
+	}
+}
+
+func TestVSCodeLaneAdditionalErrorBranches(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	if err := os.MkdirAll(filepath.Join(root, ".vscode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), "{")
+	lanes, err := loadLanesState(root)
+	if err != nil {
+		t.Fatalf("load malformed lanes: %v", err)
+	}
+	if lanes.wholeFileErr == nil || !discoveryItemsContain(lanes.discoveryItems(), "unexpected") {
+		t.Fatalf("malformed lanes state = %+v items=%+v", lanes.wholeFileErr, lanes.discoveryItems())
+	}
+	var protocol bytes.Buffer
+	if err := writeVSCodeLanesDetect(root, false, &protocol); err == nil {
+		t.Fatal("detect should fail on malformed lanes file")
+	}
+
+	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{"version":1,"lanes":[{"id":"dup","label":"one","order":"b.40","members":[{"root":"go"}]},{"id":"dup","label":"two","order":"b.41","members":[{"root":"go"}]},{"id":"empty","label":"empty","order":"b.42","members":[]},{"id":"root-vsix","label":"vsix","order":"b.43","members":[{"root":"vsix"},{"lane":"vsix-ci"}]}]}`+"\n")
+	lanes, err = loadLanesState(root)
+	if err != nil {
+		t.Fatalf("load duplicate lanes: %v", err)
+	}
+	items := lanes.discoveryItems()
+	if !discoveryItemsContain(items, "duplicate lane id") || !discoveryItemsContain(items, "missing required") {
+		t.Fatalf("duplicate/empty diagnostics missing: %+v", items)
+	}
+	if _, ok := lanes.effective["root-vsix"]; !ok {
+		t.Fatalf("root-vsix lane did not expand: %+v", lanes.effective)
+	}
+	var list bytes.Buffer
+	if err := writeVSCodeLanesList(root, &list); err != nil {
+		t.Fatalf("lanes list with diagnostics: %v", err)
+	}
+	if !strings.Contains(list.String(), `"root":"vsix"`) || !strings.Contains(list.String(), `"lane":"vsix-ci"`) {
+		t.Fatalf("list did not serialize root/lane members:\n%s", list.String())
+	}
+
+	if code, err := runVSCodeMaintenance(root, vscodeMaintenanceDetectLanes); code != 2 || err == nil {
+		t.Fatalf("detect maintenance without writer = code %d err %v, want usage", code, err)
+	}
+	if code, err := runVSCodeMaintenance(root, "keel::maintenance::missing"); code != 2 || err == nil {
+		t.Fatalf("unknown maintenance = code %d err %v, want usage", code, err)
+	}
+	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), "{")
+	var events []vscode.RunEvent
+	err = runVSCodeDetectLanesMaintenance(root, func(event vscode.RunEvent) { events = append(events, event) })
+	if err == nil || len(events) == 0 || events[0].Event != "output" {
+		t.Fatalf("detect maintenance malformed err/events = %v %+v", err, events)
+	}
+}
+
+func discoveryItemsContain(items []vscode.TestItem, text string) bool {
+	for _, item := range items {
+		if strings.Contains(item.Label, text) || strings.Contains(strings.Join(item.Limitations, "\n"), text) {
+			return true
+		}
+	}
+	return false
+}
+
 // DHF-TEST: keel/requirement-47
 func TestVSCodeMaintenanceItemsAdvertiseCapabilitiesAndRunActions(t *testing.T) {
 	root := t.TempDir()
