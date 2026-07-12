@@ -26,12 +26,19 @@ type RunEvent struct {
 	Source     string       `json:"source,omitempty"`
 	Workspace  string       `json:"workspace,omitempty"`
 	Live       *bool        `json:"live,omitempty"`
+	Requested  []RunRequest `json:"requested,omitempty"`
 	TestID     string       `json:"test_id,omitempty"`
 	Message    string       `json:"message,omitempty"`
 	DurationMS int64        `json:"duration_ms,omitempty"`
 	Location   *RunLocation `json:"location,omitempty"`
 	Artifact   *RunArtifact `json:"artifact,omitempty"`
 	ExitCode   *int         `json:"exit_code,omitempty"`
+}
+
+// RunRequest records the exact test item a run was requested to execute.
+type RunRequest struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
 }
 
 // RunLocation is a source position reported alongside a run event.

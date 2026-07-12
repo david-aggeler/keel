@@ -29,8 +29,8 @@ func TestRunEventWireByteStability(t *testing.T) {
 	}{
 		{
 			name:  "run_started",
-			event: RunEvent{Version: 1, Event: "run_started", Time: fixed, RunID: "20260711T120000Z", Source: "vscode", Message: "VS Code test run started"},
-			want:  `{"version":1,"event":"run_started","time":"2026-07-11T12:00:00Z","run_id":"20260711T120000Z","source":"vscode","message":"VS Code test run started"}`,
+			event: RunEvent{Version: 1, Event: "run_started", Time: fixed, RunID: "20260711T120000Z", Source: "vscode", Requested: []RunRequest{{ID: "keel::lane::test-fast", Label: "test-fast"}}, Message: "VS Code test run started"},
+			want:  `{"version":1,"event":"run_started","time":"2026-07-11T12:00:00Z","run_id":"20260711T120000Z","source":"vscode","requested":[{"id":"keel::lane::test-fast","label":"test-fast"}],"message":"VS Code test run started"}`,
 		},
 		{
 			name:  "test_started",

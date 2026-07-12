@@ -100,7 +100,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     })
   );
 
-  const watcher = vscode.workspace.createFileSystemWatcher('**/{*_test.go,*.test.ts,*.test.tsx,*.spec.ts,.vscode/test-bridge.json}');
+  // DHF-REQ: keel/requirement-51
+  const watcher = vscode.workspace.createFileSystemWatcher('**/{*_test.go,*.test.ts,*.test.tsx,*.spec.ts,.vscode/test-bridge.json,.vscode/test-lanes.json}');
   const dispatchWatcherEvent = () => scheduleWatcherRefresh(controller);
   context.subscriptions.push(
     watcher,
