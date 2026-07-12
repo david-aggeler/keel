@@ -19,7 +19,7 @@ func logBuildIdentity(logger *slog.Logger, version, gitCommit string) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	logger.Info("build identity", "version", versionOrDev(version), "git_commit", resolveGitCommit(gitCommit))
+	logger.Info("build identity", "version", versionOrDev(version), "git_commit", ResolveGitCommit(gitCommit))
 }
 
 // DHF-REQ: openbrain/requirement-108
@@ -39,7 +39,13 @@ func startDailyBuildIdentity(ctx context.Context, logger *slog.Logger, version, 
 	}()
 }
 
-func resolveGitCommit(gitCommit string) string {
+// ResolveGitCommit resolves the git commit stamped into build-identity records.
+// An explicit non-"dev" value wins; otherwise Go build info vcs.revision is
+// used, with "-modified" appended when vcs.modified is true. If no revision is
+// available, it returns "unknown".
+//
+// DHF-REQ: keel/requirement-56
+func ResolveGitCommit(gitCommit string) string {
 	if gitCommit != "" && gitCommit != "dev" {
 		return gitCommit
 	}
@@ -62,6 +68,10 @@ func resolveGitCommit(gitCommit string) string {
 		}
 	}
 	return unknownGitCommit
+}
+
+func resolveGitCommit(gitCommit string) string {
+	return ResolveGitCommit(gitCommit)
 }
 
 func versionOrDev(version string) string {

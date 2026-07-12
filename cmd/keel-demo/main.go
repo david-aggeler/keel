@@ -112,14 +112,14 @@ func renderHelp(tree *cli.CommandSpec, mode cli.Mode, path []string) int {
 // DHF-REQ: keel/requirement-29
 func buildLogger(mode cli.Mode) (*logging.Logger, func(), error) {
 	logger, err := logging.New(logging.Config{
-		Service:         "keel-demo",
-		Level:           slog.LevelDebug,
-		Console:         consoleForSharedMode(mode),
-		Writer:          os.Stdout,
-		TextDir:         ".logs",
-		JSONLDir:        ".logs",
-		PerRun:          true,
-		ConsoleOmitKeys: []string{"service"},
+		Service:          "keel-demo",
+		ConsoleVerbosity: slog.LevelDebug,
+		Console:          consoleForSharedMode(mode),
+		Writer:           os.Stdout,
+		TextDir:          ".logs",
+		JSONLDir:         ".logs",
+		PerRun:           true,
+		ConsoleOmitKeys:  []string{"service"},
 	})
 	if err != nil {
 		return nil, nil, err
