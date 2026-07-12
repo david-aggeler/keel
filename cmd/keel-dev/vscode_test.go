@@ -234,6 +234,241 @@ func TestVSCodeDiscoveryAndPlanExposeKeelLaneSet(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-46
+func TestVSCodeDiscoveryEmitsStructuredOrderedTree(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	if err := os.MkdirAll(filepath.Join(root, "log"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join("log", "logging_test.go"), "package log\n\nimport \"testing\"\n\nfunc TestLog(t *testing.T) {}\n")
+
+	var discover bytes.Buffer
+	if err := writeVSCodeDiscovery(root, &discover); err != nil {
+		t.Fatalf("writeVSCodeDiscovery: %v", err)
+	}
+	var doc vscode.DiscoveryDocument
+	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
+		t.Fatalf("discovery JSON: %v\n%s", err, discover.String())
+	}
+
+	for _, forbidden := range []string{"keel::root"} {
+		if item, ok := discoveryItemByID(doc, forbidden); ok {
+			t.Fatalf("discovery emitted forbidden item %q: %+v", forbidden, item)
+		}
+	}
+
+	top := map[string]vscode.TestItem{}
+	for _, item := range doc.Items {
+		if item.ParentID == "" {
+			top[item.ID] = item
+		}
+		if strings.HasPrefix(item.Label, "c.") {
+			t.Fatalf("discovery emitted reserved c.* label: %+v", item)
+		}
+		if strings.Contains(item.ID, "a.") || strings.Contains(item.ID, "b.") || strings.Contains(item.ID, "d.") {
+			t.Fatalf("item id encodes ordinal %q for label %q", item.ID, item.Label)
+		}
+		assertDiscoveryKindAllowedBySchema(t, item.Kind)
+	}
+
+	wantTop := map[string]struct {
+		label string
+		sort  string
+	}{
+		"keel::maintenance": {label: "a. Maintenance", sort: "a"},
+		"keel::lanes":       {label: "b. Lanes", sort: "b"},
+		"keel::frameworks":  {label: "d. Frameworks", sort: "d"},
+	}
+	for id, want := range wantTop {
+		item, ok := top[id]
+		if !ok {
+			t.Fatalf("top-level group %q missing; top-level items: %+v", id, top)
+		}
+		if item.Label != want.label || item.Kind != "group" || item.SortText != want.sort || item.Runnable {
+			t.Fatalf("top-level group %q = %+v, want label=%q kind=group sort_text=%q runnable=false", id, item, want.label, want.sort)
+		}
+	}
+
+	goRoot, ok := discoveryItemByID(doc, "go::root")
+	if !ok {
+		t.Fatal("discovery missing go::root")
+	}
+	if goRoot.ParentID != "keel::frameworks" || goRoot.Label != "d.1 Go" || goRoot.SortText != "d.001" {
+		t.Fatalf("go::root = %+v, want parent keel::frameworks label d.1 Go sort_text d.001", goRoot)
+	}
+}
+
+// DHF-TEST: keel/requirement-47
+func TestVSCodeMaintenanceItemsAdvertiseCapabilitiesAndRunActions(t *testing.T) {
+	root := t.TempDir()
+	if code, err := runVSCodeMaintenance(root, "keel::maintenance::clear-state"); err != nil || code != 0 {
+		t.Fatalf("clear-state without existing devtools = code %d, err %v; want code 0", code, err)
+	}
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	if err := os.MkdirAll(filepath.Join(root, ".vscode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".devtools"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join(".vscode", "test-bridge.json"), `{"version":2,"command":"bin/keel-dev","args":["vscode","tests"],"displayName":"Keel"}`+"\n")
+	writeFile(t, root, filepath.Join(".devtools", "vscode-demo-block.json"), `{"blocked_lane":"keel::lane::test-fast","updated_at":"2026-07-12T00:00:00Z"}`+"\n")
+	runDir := filepath.Join(root, ".devtools", "vscode-runs")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(runDir, "run.lock")
+	if err := os.WriteFile(lockPath, []byte(`{"pid":12345,"created_at":"2026-07-12T00:00:00Z","ids":["keel::lane::test-fast"],"token":"foreign"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var discover bytes.Buffer
+	if err := writeVSCodeDiscovery(root, &discover); err != nil {
+		t.Fatalf("writeVSCodeDiscovery: %v", err)
+	}
+	var doc vscode.DiscoveryDocument
+	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
+		t.Fatalf("discovery JSON: %v\n%s", err, discover.String())
+	}
+	if got, want := doc.Capabilities.ClearResultsTestIDs, []string{"keel::maintenance::clear-results"}; !stringSlicesEqual(got, want) {
+		t.Fatalf("clear_results_test_ids = %v, want %v", got, want)
+	}
+	if got, want := doc.Capabilities.ClearStateTestIDs, []string{"keel::maintenance::clear-state"}; !stringSlicesEqual(got, want) {
+		t.Fatalf("clear_state_test_ids = %v, want %v", got, want)
+	}
+	for id, want := range map[string]struct {
+		label string
+		sort  string
+	}{
+		"keel::maintenance::unlock":        {label: "a.2 unlock test bridge", sort: "a.002"},
+		"keel::maintenance::clear-results": {label: "a.3 clear test results", sort: "a.003"},
+		"keel::maintenance::clear-state":   {label: "a.4 clear local test state", sort: "a.004"},
+	} {
+		item, ok := discoveryItemByID(doc, id)
+		if !ok {
+			t.Fatalf("discovery missing maintenance item %q", id)
+		}
+		if item.ParentID != "keel::maintenance" || item.Kind != "maintenance" || item.Label != want.label || item.SortText != want.sort || !item.Runnable {
+			t.Fatalf("maintenance item %q = %+v, want parent maintenance label=%q sort=%q runnable", id, item, want.label, want.sort)
+		}
+	}
+
+	var protocol bytes.Buffer
+	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "keel::maintenance::unlock"}); err != nil {
+		t.Fatalf("unlock maintenance run: %v\nprotocol:\n%s", err, protocol.String())
+	}
+	if _, err := os.Stat(lockPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unlock should remove stranded run.lock, stat err=%v", err)
+	}
+	if events := decodeRunEvents(t, protocol.String()); !runEventsContain(events, "passed", "keel::maintenance::unlock") || events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode != 0 {
+		t.Fatalf("unlock events = %+v, want passed and run_finished exit 0", events)
+	}
+
+	protocol.Reset()
+	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "keel::maintenance::clear-state"}); err != nil {
+		t.Fatalf("clear-state maintenance run: %v\nprotocol:\n%s", err, protocol.String())
+	}
+	clearStateEvents := decodeRunEvents(t, protocol.String())
+	clearStateRunID := clearStateEvents[0].RunID
+	streamPath := filepath.Join(root, ".devtools", "vscode-runs", clearStateRunID+".jsonl")
+	stream, err := os.ReadFile(streamPath)
+	if err != nil {
+		t.Fatalf("clear-state should preserve active run stream at %s: %v", streamPath, err)
+	}
+	streamEvents := decodeRunEvents(t, string(stream))
+	if streamEvents[len(streamEvents)-1].Event != "run_finished" || streamEvents[len(streamEvents)-1].ExitCode == nil || *streamEvents[len(streamEvents)-1].ExitCode != 0 {
+		t.Fatalf("clear-state stream terminal event = %+v, want run_finished exit 0", streamEvents[len(streamEvents)-1])
+	}
+	if _, err := os.Stat(lockPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("clear-state should release its active run lock, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".devtools", "vscode-demo-block.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("clear-state should remove devtool state, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".vscode", "test-bridge.json")); err != nil {
+		t.Fatalf("clear-state must not remove bridge config: %v", err)
+	}
+}
+
+// DHF-TEST: keel/requirement-48
+func TestVSCodeSystemGateLanesDiscoverPrepareAndRun(t *testing.T) {
+	originalPath := os.Getenv("PATH")
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+
+	var discover bytes.Buffer
+	if err := writeVSCodeDiscovery(root, &discover); err != nil {
+		t.Fatalf("writeVSCodeDiscovery: %v", err)
+	}
+	var doc vscode.DiscoveryDocument
+	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
+		t.Fatalf("discovery JSON: %v\n%s", err, discover.String())
+	}
+	for id, want := range map[string]struct {
+		label string
+		sort  string
+	}{
+		"keel::lane::vsix-ci": {label: "b.10 vsix ci", sort: "b.010"},
+		"keel::lane::ci":      {label: "b.30 ci", sort: "b.030"},
+	} {
+		item, ok := discoveryItemByID(doc, id)
+		if !ok {
+			t.Fatalf("discovery missing system gate lane %q", id)
+		}
+		if item.ParentID != "keel::lanes" || item.Kind != "lane" || item.Label != want.label || item.SortText != want.sort || !stringSlicesEqual(item.Profiles, []string{"run"}) {
+			t.Fatalf("system lane %q = %+v, want parent lanes label=%q sort=%q profiles=[run]", id, item, want.label, want.sort)
+		}
+	}
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", "exit 0")
+	t.Setenv("PATH", bin)
+	var protocol bytes.Buffer
+	err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "keel::lane::vsix-ci"})
+	if err == nil {
+		t.Fatal("vsix-ci without pnpm returned nil error; want structured blocked result")
+	}
+	blocked := decodeRunEvents(t, protocol.String())
+	if !runEventsContain(blocked, "failed", "keel::lane::vsix-ci") || !strings.Contains(protocol.String(), "pnpm") {
+		t.Fatalf("vsix-ci blocked events = %+v, want failed event naming pnpm", blocked)
+	}
+	if strings.Contains(calls(t, callsFile), "pnpm ") {
+		t.Fatalf("vsix-ci should not start gate work when pnpm is absent; calls:\n%s", calls(t, callsFile))
+	}
+
+	callsFile = stubTools(t, false, false)
+	goodRoot := moduleFixture(t)
+	protocol.Reset()
+	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(goodRoot, &protocol), []string{"--id", "keel::lane::ci"}); err != nil {
+		t.Fatalf("ci lane run: %v\nprotocol:\n%s\ncalls:\n%s", err, protocol.String(), calls(t, callsFile))
+	}
+	if events := decodeRunEvents(t, protocol.String()); !runEventsContain(events, "passed", "keel::lane::ci") || events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode != 0 {
+		t.Fatalf("ci lane events = %+v, want passed and exit 0", events)
+	}
+	if strings.Contains(calls(t, callsFile), "pnpm ") {
+		t.Fatalf("ci lane must not spawn node/pnpm; calls:\n%s", calls(t, callsFile))
+	}
+
+	t.Setenv("PATH", originalPath)
+	badRoot := t.TempDir()
+	writeFile(t, badRoot, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, badRoot, "bad.go", "package p\n\nvar    Y = 2\n")
+	protocol.Reset()
+	err = handleVSCodeTestsRun(contextWithVSCodeTestState(badRoot, &protocol), []string{"--id", "keel::lane::ci"})
+	if err == nil {
+		t.Fatal("failing ci lane returned nil error; want non-zero")
+	}
+	failed := decodeRunEvents(t, protocol.String())
+	if !runEventsContain(failed, "errored", "") || failed[len(failed)-1].ExitCode == nil || *failed[len(failed)-1].ExitCode == 0 || !strings.Contains(protocol.String(), "gofmt") {
+		t.Fatalf("failing ci lane events = %+v, want errored detail and non-zero run_finished", failed)
+	}
+}
+
 // DHF-TEST: keel/requirement-43
 func TestVSCodeDiscoveryEmitsGoTestTreeFromStubGo(t *testing.T) {
 	root := t.TempDir()
@@ -278,7 +513,7 @@ exit 0`)
 		kind     string
 		runnable bool
 	}{
-		"go::root":                   {parent: "keel::root", label: "Go tests", kind: "root", runnable: true},
+		"go::root":                   {parent: "keel::frameworks", label: "d.1 Go", kind: "root", runnable: true},
 		"go::pkg::log":               {parent: "go::root", label: "log", kind: "package", runnable: true},
 		"go::test::log::TestLog":     {parent: "go::pkg::log", label: "TestLog", kind: "test", runnable: true},
 		"go::test::log::TestMetrics": {parent: "go::pkg::log", label: "TestMetrics", kind: "test", runnable: true},
@@ -611,6 +846,30 @@ func discoveryItemByID(doc vscode.DiscoveryDocument, id string) (vscode.TestItem
 	return vscode.TestItem{}, false
 }
 
+func assertDiscoveryKindAllowedBySchema(t *testing.T, kind string) {
+	t.Helper()
+	body, err := vscode.SchemaBytes(vscode.SchemaDiscovery)
+	if err != nil {
+		t.Fatalf("read discovery schema: %v", err)
+	}
+	var schema struct {
+		Defs map[string]struct {
+			Properties map[string]struct {
+				Enum []string `json:"enum"`
+			} `json:"properties"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(body, &schema); err != nil {
+		t.Fatalf("decode discovery schema: %v", err)
+	}
+	for _, allowed := range schema.Defs["test_item"].Properties["kind"].Enum {
+		if kind == allowed {
+			return
+		}
+	}
+	t.Fatalf("discovery item kind %q is not allowed by embedded discovery schema enum %v", kind, schema.Defs["test_item"].Properties["kind"].Enum)
+}
+
 func runEventsContain(events []vscode.RunEvent, event, id string) bool {
 	for _, got := range events {
 		if got.Event == event && got.TestID == id {
@@ -618,6 +877,18 @@ func runEventsContain(events []vscode.RunEvent, event, id string) bool {
 		}
 	}
 	return false
+}
+
+func stringSlicesEqual(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func eventIndex(events []vscode.RunEvent, eventName string) int {
