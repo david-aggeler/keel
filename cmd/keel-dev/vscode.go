@@ -62,10 +62,10 @@ type testFileLane struct {
 }
 
 type laneMember struct {
-	Go      string
-	Root    string
-	VSIX    string
-	Lane    string
+	Go      string `json:"go,omitempty"`
+	Root    string `json:"root,omitempty"`
+	VSIX    string `json:"vsix,omitempty"`
+	Lane    string `json:"lane,omitempty"`
 	rawKeys []string
 }
 
@@ -99,14 +99,16 @@ type laneFinding struct {
 }
 
 type effectiveLane struct {
-	lane          testFileLane
-	id            string
-	goPackages    []string
-	vsixFiles     []string
-	systemLanes   []string
-	laneRefs      []string
-	prerequisites []string
-	findings      []laneFinding
+	lane             testFileLane
+	id               string
+	goPackages       []string
+	vsixFiles        []string
+	directGoPackages []string
+	directVSIXFiles  []string
+	systemLanes      []string
+	laneRefs         []string
+	prerequisites    []string
+	findings         []laneFinding
 }
 
 type lanesState struct {
@@ -732,11 +734,30 @@ func loadLanesState(root string) (lanesState, error) {
 	}
 	for id := range state.byID {
 		if _, err := state.expand(id, nil, 0); err != nil {
+			// Cycles and over-depth invalidate the whole file: record one
+			// file-level diagnostic (system lanes still render) and let the
+			// detect guard refuse. Other errors suppress only their own lane.
+			if errors.Is(err, errLaneCycle) || errors.Is(err, errLaneDepth) {
+				if state.wholeFileErr == nil {
+					state.wholeFileErr = err
+					state.diagnostics = append(state.diagnostics, lanesDiagnosticItem("lanes-file", err.Error()))
+				}
+				continue
+			}
 			state.diagnostics = append(state.diagnostics, lanesDiagnosticItem(id, err.Error()))
 		}
 	}
 	return state, nil
 }
+
+// errLaneCycle and errLaneDepth are whole-file composition errors per the Test
+// Lanes spec §11: they invalidate the entire file (one non-runnable diagnostic,
+// system lanes still render) rather than suppressing a single lane, and they
+// make `lanes detect` refuse to write.
+var (
+	errLaneCycle = errors.New("lane composition cycle")
+	errLaneDepth = errors.New("lane composition depth > 8")
+)
 
 func (s *lanesState) expand(id string, stack []string, depth int) (effectiveLane, error) {
 	if got, ok := s.effective[id]; ok {
@@ -748,12 +769,12 @@ func (s *lanesState) expand(id string, stack []string, depth int) (effectiveLane
 	}
 	if depth > 8 {
 		path := append(append([]string{}, stack...), id)
-		return effectiveLane{}, fmt.Errorf("lane composition depth > 8: %s", strings.Join(path, " -> "))
+		return effectiveLane{}, fmt.Errorf("%w: %s", errLaneDepth, strings.Join(path, " -> "))
 	}
 	for _, seen := range stack {
 		if seen == id {
 			path := append(append([]string{}, stack...), id)
-			return effectiveLane{}, fmt.Errorf("lane composition cycle: %s", strings.Join(path, " -> "))
+			return effectiveLane{}, fmt.Errorf("%w: %s", errLaneCycle, strings.Join(path, " -> "))
 		}
 	}
 	if lane.Label == "" || lane.Order == "" || len(lane.Members) == 0 {
@@ -767,6 +788,10 @@ func (s *lanesState) expand(id string, stack []string, depth int) (effectiveLane
 	pkgSet := map[string]bool{}
 	systemSet := map[string]bool{}
 	vsixSet := map[string]bool{}
+	// direct* hold only this lane's own concrete members; lane-ref members are
+	// aliased single-level in covers and never re-expanded into these sets.
+	directPkgSet := map[string]bool{}
+	directVsixSet := map[string]bool{}
 	for _, member := range lane.Members {
 		switch {
 		case len(member.rawKeys) != 1:
@@ -774,6 +799,7 @@ func (s *lanesState) expand(id string, stack []string, depth int) (effectiveLane
 		case member.Go != "":
 			for _, pkg := range packagesForGoPattern(s.path, member.Go) {
 				pkgSet[pkg] = true
+				directPkgSet[pkg] = true
 			}
 			prereq["go-toolchain"] = true
 			prereq["keel-module-root"] = true
@@ -785,6 +811,7 @@ func (s *lanesState) expand(id string, stack []string, depth int) (effectiveLane
 			case "go":
 				for _, pkg := range packagesForGoPattern(s.path, "./...") {
 					pkgSet[pkg] = true
+					directPkgSet[pkg] = true
 				}
 				prereq["go-toolchain"] = true
 				prereq["keel-module-root"] = true
@@ -795,6 +822,7 @@ func (s *lanesState) expand(id string, stack []string, depth int) (effectiveLane
 			}
 		case member.VSIX != "":
 			vsixSet[filepath.ToSlash(member.VSIX)] = true
+			directVsixSet[filepath.ToSlash(member.VSIX)] = true
 			prereq["pnpm"] = true
 			if !vsixTestFileExists(filepath.Dir(filepath.Dir(s.path)), member.VSIX) {
 				eff.findings = append(eff.findings, laneFinding{Rule: "V10", Severity: "warning", Message: "vsix test file not found: " + member.VSIX})
@@ -836,6 +864,8 @@ func (s *lanesState) expand(id string, stack []string, depth int) (effectiveLane
 	}
 	eff.goPackages = sortedKeys(pkgSet)
 	eff.vsixFiles = sortedKeys(vsixSet)
+	eff.directGoPackages = sortedKeys(directPkgSet)
+	eff.directVSIXFiles = sortedKeys(directVsixSet)
 	eff.prerequisites = orderedResources(prereq)
 	s.effective[id] = eff
 	return eff, nil
@@ -878,7 +908,7 @@ func (s lanesState) discoveryItems() []vscode.TestItem {
 
 // DHF-REQ: keel/requirement-54
 func (s lanesState) coverItems(eff effectiveLane) []vscode.TestItem {
-	if len(eff.goPackages) == 0 && len(eff.vsixFiles) == 0 && len(eff.laneRefs) == 0 {
+	if len(eff.directGoPackages) == 0 && len(eff.directVSIXFiles) == 0 && len(eff.laneRefs) == 0 {
 		return nil
 	}
 	coversID := eff.id + "::covers"
@@ -911,7 +941,7 @@ func (s lanesState) coverItems(eff effectiveLane) []vscode.TestItem {
 	for _, pkg := range packages {
 		byPkg[pkg.rel] = pkg
 	}
-	for _, pkgRel := range eff.goPackages {
+	for _, pkgRel := range eff.directGoPackages {
 		pkgID := "go::pkg::" + filepath.ToSlash(pkgRel)
 		addAlias(pkgID, pkgRel, "package")
 		for _, file := range byPkg[pkgRel].files {
@@ -922,7 +952,7 @@ func (s lanesState) coverItems(eff effectiveLane) []vscode.TestItem {
 			}
 		}
 	}
-	for _, rel := range eff.vsixFiles {
+	for _, rel := range eff.directVSIXFiles {
 		addAlias("vsix::file::"+filepath.ToSlash(rel), filepath.Base(rel), "file")
 	}
 	for _, laneID := range eff.laneRefs {
