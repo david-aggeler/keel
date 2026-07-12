@@ -82,6 +82,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         void vscode.window.showErrorMessage(message);
       }
     }),
+    vscode.commands.registerCommand('keel.tests.unlock', async () => {
+      try {
+        await runAdapterMaintenance(controller, ['keel::maintenance::unlock']);
+        void vscode.window.showInformationMessage(`Unlocked ${currentAdapterConfig().displayName} Test Bridge.`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        output.appendLine(`Unlock failed: ${message}`);
+        void vscode.window.showErrorMessage(message);
+      }
+    }),
     vscode.commands.registerCommand('keel.tests.toggleDemoBlock', async () => {
       await toggleDemoBlock(controller);
     }),
