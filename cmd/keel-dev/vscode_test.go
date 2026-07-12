@@ -428,6 +428,151 @@ exit 0`)
 	}
 }
 
+// DHF-TEST: keel/requirement-52
+func TestVSCodeLanesListAndDetect(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	for _, dir := range []string{"log", "exec", ".vscode"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, root, filepath.Join("log", "logging_test.go"), "package log\n\nimport \"testing\"\n\nfunc TestLog(t *testing.T) {}\n")
+	writeFile(t, root, filepath.Join("exec", "exec_test.go"), "package exec\n\nimport \"testing\"\n\nfunc TestExec(t *testing.T) {}\n")
+	lanesPath := filepath.Join(root, ".vscode", "test-lanes.json")
+	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{"version":1,"lanes":[{"id":"go-log","label":"log","order":"b.40","members":[{"go":"./log/..."}]}]}`+"\n")
+	before, err := os.ReadFile(lanesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var list bytes.Buffer
+	if err := handleVSCodeLanesList(contextWithVSCodeTestState(root, &list), []string{"--format", "json"}); err != nil {
+		t.Fatalf("lanes list: %v", err)
+	}
+	var listed struct {
+		Lanes []struct {
+			ID       string `json:"id"`
+			Source   string `json:"source"`
+			Expanded struct {
+				GoPackages []string `json:"go_packages"`
+			} `json:"expanded"`
+		} `json:"lanes"`
+	}
+	if err := json.Unmarshal(list.Bytes(), &listed); err != nil {
+		t.Fatalf("list JSON: %v\n%s", err, list.String())
+	}
+	if !lanesListHasPackage(listed.Lanes, "keel::lane::go-log", "log") {
+		t.Fatalf("lanes list missing expanded log lane: %+v", listed.Lanes)
+	}
+
+	var dry bytes.Buffer
+	if err := handleVSCodeLanesDetect(contextWithVSCodeTestState(root, &dry), []string{"--format", "json", "--dry-run"}); err != nil {
+		t.Fatalf("lanes detect --dry-run: %v", err)
+	}
+	if after, err := os.ReadFile(lanesPath); err != nil || !bytes.Equal(after, before) {
+		t.Fatalf("dry-run changed lanes file: err=%v before=%q after=%q", err, before, after)
+	}
+	var dryDoc lanesDetectDocument
+	if err := json.Unmarshal(dry.Bytes(), &dryDoc); err != nil {
+		t.Fatalf("dry-run JSON: %v\n%s", err, dry.String())
+	}
+	if dryDoc.Written || len(dryDoc.Added) != 1 || dryDoc.Added[0].ID != "go-exec" {
+		t.Fatalf("dry-run doc = %+v, want go-exec added and written=false", dryDoc)
+	}
+
+	var detect bytes.Buffer
+	if err := handleVSCodeLanesDetect(contextWithVSCodeTestState(root, &detect), []string{"--format", "json"}); err != nil {
+		t.Fatalf("lanes detect: %v", err)
+	}
+	var detectDoc lanesDetectDocument
+	if err := json.Unmarshal(detect.Bytes(), &detectDoc); err != nil {
+		t.Fatalf("detect JSON: %v\n%s", err, detect.String())
+	}
+	if !detectDoc.Written || len(detectDoc.Added) != 1 || detectDoc.Added[0].ID != "go-exec" {
+		t.Fatalf("detect doc = %+v, want go-exec written", detectDoc)
+	}
+	afterWrite, err := os.ReadFile(lanesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(afterWrite), `"id": "go-exec"`) || !strings.Contains(string(afterWrite), `"id": "go-log"`) {
+		t.Fatalf("detect did not append go-exec while preserving go-log:\n%s", afterWrite)
+	}
+
+	var second bytes.Buffer
+	if err := handleVSCodeLanesDetect(contextWithVSCodeTestState(root, &second), []string{"--format", "json"}); err != nil {
+		t.Fatalf("lanes detect second: %v", err)
+	}
+	var secondDoc lanesDetectDocument
+	if err := json.Unmarshal(second.Bytes(), &secondDoc); err != nil {
+		t.Fatalf("second detect JSON: %v\n%s", err, second.String())
+	}
+	secondBytes, err := os.ReadFile(lanesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secondDoc.Written || len(secondDoc.Added) != 0 || !bytes.Equal(secondBytes, afterWrite) {
+		t.Fatalf("second detect not idempotent: doc=%+v", secondDoc)
+	}
+}
+
+func lanesListHasPackage(lanes []struct {
+	ID       string `json:"id"`
+	Source   string `json:"source"`
+	Expanded struct {
+		GoPackages []string `json:"go_packages"`
+	} `json:"expanded"`
+}, id, pkg string) bool {
+	for _, lane := range lanes {
+		if lane.ID != id {
+			continue
+		}
+		for _, got := range lane.Expanded.GoPackages {
+			if got == pkg {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// DHF-TEST: keel/requirement-52
+func TestVSCodeDetectLanesMaintenanceItemRunsDetect(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	for _, dir := range []string{"exec", ".vscode"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, root, filepath.Join("exec", "exec_test.go"), "package exec\n\nimport \"testing\"\n\nfunc TestExec(t *testing.T) {}\n")
+	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{"version":1,"lanes":[]}`+"\n")
+
+	var discover bytes.Buffer
+	if err := writeVSCodeDiscovery(root, &discover); err != nil {
+		t.Fatalf("writeVSCodeDiscovery: %v", err)
+	}
+	var doc vscode.DiscoveryDocument
+	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
+		t.Fatalf("discovery JSON: %v\n%s", err, discover.String())
+	}
+	item, ok := discoveryItemByID(doc, vscodeMaintenanceDetectLanes)
+	if !ok || item.Label != "a.1 detect lanes" || !item.Runnable {
+		t.Fatalf("detect lanes maintenance item = %+v, ok=%v", item, ok)
+	}
+
+	var protocol bytes.Buffer
+	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", vscodeMaintenanceDetectLanes}); err != nil {
+		t.Fatalf("detect lanes maintenance run: %v\n%s", err, protocol.String())
+	}
+	if !strings.Contains(protocol.String(), "go-exec") || !runEventsContain(decodeRunEvents(t, protocol.String()), "passed", vscodeMaintenanceDetectLanes) {
+		t.Fatalf("detect lanes maintenance events = %s", protocol.String())
+	}
+}
+
 // DHF-TEST: keel/requirement-47
 func TestVSCodeMaintenanceItemsAdvertiseCapabilitiesAndRunActions(t *testing.T) {
 	root := t.TempDir()

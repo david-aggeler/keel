@@ -92,6 +92,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         void vscode.window.showErrorMessage(message);
       }
     }),
+    vscode.commands.registerCommand('keel.tests.detectLanes', async () => {
+      try {
+        await runAdapterMaintenance(controller, ['keel::maintenance::detect-lanes']);
+        void vscode.window.showInformationMessage(`Detected ${currentAdapterConfig().displayName} test lanes.`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        output.appendLine(`Detect lanes failed: ${message}`);
+        void vscode.window.showErrorMessage(message);
+      }
+    }),
     vscode.commands.registerCommand('keel.tests.toggleDemoBlock', async () => {
       await toggleDemoBlock(controller);
     }),

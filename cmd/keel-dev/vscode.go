@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -33,6 +34,7 @@ const (
 	vscodeGroupFrameworks  = "keel::frameworks"
 
 	vscodeMaintenanceUnlock       = "keel::maintenance::unlock"
+	vscodeMaintenanceDetectLanes  = "keel::maintenance::detect-lanes"
 	vscodeMaintenanceClearResults = "keel::maintenance::clear-results"
 	vscodeMaintenanceClearState   = "keel::maintenance::clear-state"
 
@@ -430,6 +432,7 @@ func writeVSCodeDiscovery(root string, out io.Writer) error {
 		groupItem(vscodeGroupMaintenance, "", "a. Maintenance", "a"),
 		groupItem(vscodeGroupLanes, "", "b. Lanes", "b"),
 		groupItem(vscodeGroupFrameworks, "", "d. Frameworks", "d"),
+		maintenanceItem(vscodeMaintenanceDetectLanes, "a.1 detect lanes", ordinalSortText("a.1")),
 		maintenanceItem(vscodeMaintenanceUnlock, "a.2 unlock test bridge", ordinalSortText("a.2")),
 		maintenanceItem(vscodeMaintenanceClearResults, "a.3 clear test results", ordinalSortText("a.3")),
 		maintenanceItem(vscodeMaintenanceClearState, "a.4 clear local test state", ordinalSortText("a.4")),
@@ -1560,6 +1563,12 @@ func goSelectionLabel(selection vscode.GoSelection, id string) string {
 // DHF-REQ: keel/requirement-48
 func runVSCodeLane(ctx context.Context, logger *slog.Logger, root, laneID, runID string, writer vscode.RunEventWriter) (int, error) {
 	if strings.HasPrefix(laneID, "keel::maintenance::") {
+		if laneID == vscodeMaintenanceDetectLanes {
+			if err := runVSCodeDetectLanesMaintenance(root, writer); err != nil {
+				return 1, err
+			}
+			return 0, nil
+		}
 		return runVSCodeMaintenance(root, laneID)
 	}
 	// DHF-REQ: keel/requirement-43
@@ -1684,6 +1693,8 @@ func emitLaneGoPackageEvents(raw, modulePath string, writer vscode.RunEventWrite
 // DHF-REQ: keel/requirement-47
 func runVSCodeMaintenance(root, id string) (int, error) {
 	switch id {
+	case vscodeMaintenanceDetectLanes:
+		return 2, cli.NewUsageError("detect lanes maintenance requires run-event writer")
 	case vscodeMaintenanceUnlock:
 		if err := os.Remove(vscodeRunLockPath(root)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return 1, err
@@ -1698,6 +1709,29 @@ func runVSCodeMaintenance(root, id string) (int, error) {
 		return 2, cli.NewUsageError("unknown vscode maintenance id %q", id)
 	}
 	return 0, nil
+}
+
+// DHF-REQ: keel/requirement-52
+func runVSCodeDetectLanesMaintenance(root string, writer vscode.RunEventWriter) error {
+	var out bytes.Buffer
+	if err := writeVSCodeLanesDetect(root, false, &out); err != nil {
+		writer(vscode.RunEvent{Event: "output", TestID: vscodeMaintenanceDetectLanes, Message: err.Error()})
+		return err
+	}
+	var doc lanesDetectDocument
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		return err
+	}
+	for _, entry := range doc.Added {
+		writer(vscode.RunEvent{Event: "output", TestID: vscodeMaintenanceDetectLanes, Message: fmt.Sprintf("added %s %s", entry.ID, entry.Order)})
+	}
+	for _, entry := range doc.Unchanged {
+		writer(vscode.RunEvent{Event: "output", TestID: vscodeMaintenanceDetectLanes, Message: fmt.Sprintf("unchanged %s: %s", entry.ID, entry.Reason)})
+	}
+	for _, entry := range doc.Skipped {
+		writer(vscode.RunEvent{Event: "output", TestID: vscodeMaintenanceDetectLanes, Message: fmt.Sprintf("skipped %s: %s", entry.ID, entry.Reason)})
+	}
+	return nil
 }
 
 func clearVSCodeDevtoolsState(root string) error {
