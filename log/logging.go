@@ -244,10 +244,12 @@ func New(cfg Config) (*Logger, error) {
 		runLogPath = path
 		runLog = counter
 	}
+	hasInjectedHandler := false
 	for _, h := range cfg.Handlers {
 		if h == nil {
 			continue
 		}
+		hasInjectedHandler = true
 		handlers = append(handlers, h)
 		if c, ok := h.(io.Closer); ok {
 			closers = append(closers, c)
@@ -261,7 +263,7 @@ func New(cfg Config) (*Logger, error) {
 	}
 
 	h := handlers[0]
-	if len(handlers) > 1 {
+	if len(handlers) > 1 || hasInjectedHandler {
 		h = multiHandler{handlers: handlers}
 	}
 	return &Logger{base: slog.New(h).With("service", cfg.Service), closers: closers, textLogPath: textLogPath, jsonlLogPath: runLogPath, runLogPath: runLogPath, runLog: runLog, sourceInFiles: cfg.SourceInFiles}, nil
