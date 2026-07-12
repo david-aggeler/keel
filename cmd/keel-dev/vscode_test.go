@@ -500,6 +500,31 @@ func TestVSCodeLanesListAndDetect(t *testing.T) {
 	if !strings.Contains(string(afterWrite), `"id": "go-exec"`) || !strings.Contains(string(afterWrite), `"id": "go-log"`) {
 		t.Fatalf("detect did not append go-exec while preserving go-log:\n%s", afterWrite)
 	}
+	// Round-trip guard: detect must rewrite the file with every existing member
+	// still in its lowercase `{"go":...}` form. A capitalized `{"Go":...}` re-read
+	// as an unknown member form would silently corrupt the hand-authored lane.
+	if strings.Contains(string(afterWrite), `"Go"`) {
+		t.Fatalf("detect wrote capitalized member keys — corrupts hand-authored lanes on reload:\n%s", afterWrite)
+	}
+	var relist bytes.Buffer
+	if err := handleVSCodeLanesList(contextWithVSCodeTestState(root, &relist), []string{"--format", "json"}); err != nil {
+		t.Fatalf("lanes list after detect: %v", err)
+	}
+	var relisted struct {
+		Lanes []struct {
+			ID       string `json:"id"`
+			Source   string `json:"source"`
+			Expanded struct {
+				GoPackages []string `json:"go_packages"`
+			} `json:"expanded"`
+		} `json:"lanes"`
+	}
+	if err := json.Unmarshal(relist.Bytes(), &relisted); err != nil {
+		t.Fatalf("relist JSON: %v\n%s", err, relist.String())
+	}
+	if !lanesListHasPackage(relisted.Lanes, "keel::lane::go-log", "log") {
+		t.Fatalf("after detect, go-log no longer resolves to the log package (corrupted round-trip): %+v", relisted.Lanes)
+	}
 
 	var second bytes.Buffer
 	if err := handleVSCodeLanesDetect(contextWithVSCodeTestState(root, &second), []string{"--format", "json"}); err != nil {
@@ -677,6 +702,9 @@ func TestVSCodeDiscoveryEmitsLaneCoversAndVSIXFileItems(t *testing.T) {
 	if !discoveryHasAlias(doc, "keel::lane::combo::covers", "keel::lane::go-log") {
 		t.Fatalf("combo covers should alias referenced lane only: %+v", doc.Items)
 	}
+	if discoveryHasAlias(doc, "keel::lane::combo::covers", "go::pkg::log") {
+		t.Fatalf("combo covers must not re-expand the referenced lane's packages (single-level alias only): %+v", doc.Items)
+	}
 	ui, ok := discoveryItemByID(doc, "keel::lane::ui")
 	if !ok || !ui.Runnable {
 		t.Fatalf("ui lane should render despite missing vsix warning: %+v ok=%v", ui, ok)
@@ -755,8 +783,18 @@ func TestVSCodeLaneEdgeCases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load cyclic lanes: %v", err)
 	}
-	if !discoveryItemsContain(lanes.discoveryItems(), "cycle") {
-		t.Fatalf("cyclic lanes did not produce diagnostic: %+v", lanes.discoveryItems())
+	// A cycle invalidates the whole file: it sets wholeFileErr and renders as
+	// exactly one file-level diagnostic (not one per lane in the cycle).
+	if lanes.wholeFileErr == nil {
+		t.Fatalf("cyclic lanes did not set wholeFileErr: %+v", lanes)
+	}
+	if items := lanes.discoveryItems(); len(items) != 1 || !discoveryItemsContain(items, "cycle") {
+		t.Fatalf("cyclic lanes want exactly one cycle diagnostic, got: %+v", items)
+	}
+	// And detect must refuse to write into the invalid file (req-52).
+	var cycleDetect bytes.Buffer
+	if err := handleVSCodeLanesDetect(contextWithVSCodeTestState(root, &cycleDetect), []string{"--format", "json"}); err == nil {
+		t.Fatalf("lanes detect must refuse a cyclic file, got success:\n%s", cycleDetect.String())
 	}
 
 	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{"version":1,"lanes":[{"id":"bad","label":"bad","order":"b.40","members":[{"unknown":"x"}]}]}`+"\n")
