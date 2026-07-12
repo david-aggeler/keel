@@ -328,6 +328,44 @@ func TestKeelDevUsesGeneratedCommandTreeHelp(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-57
+func TestKeelDevHelpAllRendersFullCommandTreeAndExitsZero(t *testing.T) {
+	exe := filepath.Join(t.TempDir(), "keel-dev")
+	build := exec.Command("go", "build", "-o", exe, ".")
+	var buildOut bytes.Buffer
+	build.Stdout = &buildOut
+	build.Stderr = &buildOut
+	if err := build.Run(); err != nil {
+		t.Fatalf("go build failed: %v\noutput:\n%s", err, buildOut.String())
+	}
+
+	cmd := exec.Command(exe, "--help-all")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("keel-dev --help-all failed: %v\noutput:\n%s", err, out.String())
+	}
+
+	got := out.String()
+	for _, want := range []string{
+		"keel-dev is keel's development CLI.",
+		"--help-all",
+		"ci commands:",
+		"release commands:",
+		"vscode commands:",
+		"vscode tests commands:",
+		"vsix commands:",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("keel-dev --help-all missing %q\noutput:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "keel-dev ci\n\nkeel-dev ci") {
+		t.Fatalf("keel-dev --help-all appears to duplicate ci help\noutput:\n%s", got)
+	}
+}
+
 // DHF-TEST: keel/requirement-21
 func TestVersionStringDefaultsAndUsesStampedVersion(t *testing.T) {
 	old := version

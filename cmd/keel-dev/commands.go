@@ -31,7 +31,7 @@ func stateFrom(ctx context.Context) runState {
 	return state
 }
 
-// DHF-REQ: keel/requirement-21
+// DHF-REQ: keel/requirement-21, keel/requirement-57
 func commandTree() *cli.CommandSpec {
 	tree := &cli.CommandSpec{
 		Name: "keel-dev",
@@ -45,6 +45,7 @@ func commandTree() *cli.CommandSpec {
 				{Name: "mode", Value: "human|ai|json", Default: "human", Short: "Console mode."},
 				{Name: "no-header", Short: "Suppress the run header for machine protocol consumers."},
 				{Name: "verbose", Short: "Include debug-level detail."},
+				{Name: "help-all", Short: "Print root help plus every command topic and exit."},
 				{Name: "version", Short: "Print version and exit."},
 			},
 			ModeHelp: []string{

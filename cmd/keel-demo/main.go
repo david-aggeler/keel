@@ -34,6 +34,10 @@ func run(argv []string) int {
 		tree.RenderRootHelp(os.Stderr)
 		return 2
 	}
+	if cfg.HelpAll {
+		// DHF-REQ: keel/requirement-57
+		return renderAllHelp(tree, mode)
+	}
 	if len(words) > 0 && words[0] == "help" {
 		return renderHelp(tree, mode, words[1:])
 	}
@@ -52,7 +56,7 @@ func run(argv []string) int {
 	return exitCodeFor(logger, tree.Dispatch(context.Background(), words))
 }
 
-// DHF-REQ: keel/requirement-28
+// DHF-REQ: keel/requirement-28, keel/requirement-57
 func commandTree() *cli.CommandSpec {
 	tree := &cli.CommandSpec{
 		Name: "keel-demo",
@@ -64,6 +68,7 @@ func commandTree() *cli.CommandSpec {
 			CommandUsage: "keel-demo <command> --help",
 			GlobalFlags: []cli.FlagSpec{
 				{Name: "mode", Value: "human|ai|json", Default: "human", Short: "Console mode."},
+				{Name: "help-all", Short: "Print root help plus every command topic and exit."},
 			},
 			ModeHelp: []string{
 				"human renders plain console output.",
@@ -106,6 +111,24 @@ func renderHelp(tree *cli.CommandSpec, mode cli.Mode, path []string) int {
 		command += " " + strings.Join(path, " ")
 	}
 	logger.Event("help", "keel-demo help", "command", command, "help", help.String(), "mode", string(mode))
+	return 0
+}
+
+// DHF-REQ: keel/requirement-57
+func renderAllHelp(tree *cli.CommandSpec, mode cli.Mode) int {
+	var help bytes.Buffer
+	tree.RenderAllHelp(&help)
+	if mode == cli.ModeHuman {
+		fmt.Fprint(os.Stdout, help.String())
+		return 0
+	}
+	logger, closeLogger, err := buildLogger(mode)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "keel-demo: "+err.Error())
+		return 1
+	}
+	defer closeLogger()
+	logger.Event("help", "keel-demo help-all", "command", "keel-demo --help-all", "help", help.String(), "mode", string(mode))
 	return 0
 }
 

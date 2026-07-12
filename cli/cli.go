@@ -13,14 +13,15 @@
 // command nodes provide their own usage suffixes, summaries, long descriptions,
 // flags, and nested subcommands. RenderRootHelp and RenderTopicHelp format that
 // model for human help output without requiring each CLI to maintain a second
-// hand-written usage text.
+// hand-written usage text. RenderAllHelp emits that same generated model in one
+// full-tree dump for operators and agents that need the whole surface at once.
 //
 // ParseGlobalConfig handles keel's shared position-independent global flags
 // before command dispatch. It returns RuntimeConfig, whose Mode selects the
-// console protocol and whose Help, Version, Verbose, and NoHeader fields let
-// binaries route shared behavior before invoking the command tree.
+// console protocol and whose Help, HelpAll, Version, Verbose, and NoHeader
+// fields let binaries route shared behavior before invoking the command tree.
 //
-// DHF-REQ: keel/requirement-21, keel/requirement-30
+// DHF-REQ: keel/requirement-21, keel/requirement-30, keel/requirement-57
 package cli
 
 import (
@@ -58,6 +59,8 @@ type RuntimeConfig struct {
 	NoHeader bool
 	// Help requests generated help instead of command execution.
 	Help bool
+	// HelpAll requests the full generated help tree instead of command execution.
+	HelpAll bool
 	// Version requests version output instead of command execution.
 	Version bool
 }
@@ -162,8 +165,10 @@ func (e UsageError) ExitCode() int { return 2 }
 
 // ParseGlobalConfig parses shared position-independent global flags and returns
 // the non-global command words. It accepts --mode, -v/--verbose, --no-header,
-// -h/--help, and --version wherever they appear in argv, leaving command and
-// positional words in their original relative order.
+// -h/--help, --help-all, and --version wherever they appear in argv, leaving
+// command and positional words in their original relative order.
+//
+// DHF-REQ: keel/requirement-57
 func ParseGlobalConfig(argv []string) (RuntimeConfig, []string, error) {
 	cfg := RuntimeConfig{Mode: ModeHuman}
 	var words []string
@@ -186,6 +191,8 @@ func ParseGlobalConfig(argv []string) (RuntimeConfig, []string, error) {
 			cfg.NoHeader = true
 		case "-h", "--help":
 			cfg.Help = true
+		case "--help-all":
+			cfg.HelpAll = true
 		case "--version":
 			cfg.Version = true
 		default:
@@ -381,6 +388,32 @@ func (c *CommandSpec) RenderTopicHelp(w io.Writer, path []string) {
 		return
 	}
 	node.RenderCommandHelp(w, path)
+}
+
+// RenderAllHelp writes generated root help followed by command-topic help for
+// every command in the tree exactly once, depth-first in declaration order.
+//
+// DHF-REQ: keel/requirement-57
+func (c *CommandSpec) RenderAllHelp(w io.Writer) {
+	c.InheritConfig()
+	c.RenderRootHelp(w)
+	for i, child := range c.Subcommands {
+		fmt.Fprintln(w)
+		if i > 0 {
+			fmt.Fprintln(w)
+		}
+		child.renderAllCommandHelp(w, []string{child.Name})
+	}
+}
+
+func (c *CommandSpec) renderAllCommandHelp(w io.Writer, path []string) {
+	c.RenderCommandHelp(w, path)
+	for _, child := range c.Subcommands {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w)
+		childPath := append(append([]string{}, path...), child.Name)
+		child.renderAllCommandHelp(w, childPath)
+	}
 }
 
 // RenderCommandHelp writes command help for one command node, including its
