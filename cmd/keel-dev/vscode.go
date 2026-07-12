@@ -660,12 +660,14 @@ func parseGoTestFile(path, rel string) discoveredGoFile {
 		file.parseErr = fmt.Errorf("%s: %w", rel, err)
 		return file
 	}
+	testingName, testingDot := testingImportBinding(src)
+	aliases := fileTypeAliases(src)
 	for _, decl := range src.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok || fn.Recv != nil || fn.Name == nil || !isGoTestName(fn.Name.Name) {
 			continue
 		}
-		if !isGoTestFunc(fn) {
+		if !isGoTestFunc(fn, testingName, testingDot, aliases) {
 			continue
 		}
 		file.tests = append(file.tests, discoveredGoTest{
@@ -696,18 +698,89 @@ func goPackageRelFromFile(rel string) string {
 	return dir
 }
 
-func isGoTestFunc(fn *ast.FuncDecl) bool {
+// testingImportBinding reports how the standard "testing" package is bound in
+// src: its local selector name (default "testing", or the import alias) and
+// whether it is dot-imported. When testing is absent or blank-imported, name is
+// "" and dot is false, so no function can qualify as a runnable go test — this
+// keeps discovery from advertising `func TestX(t *fake.T)` or a local
+// `type T struct{}` receiver that `go test` would reject.
+func testingImportBinding(src *ast.File) (name string, dot bool) {
+	const testingImportPath = `"testing"`
+	for _, imp := range src.Imports {
+		if imp.Path == nil || imp.Path.Value != testingImportPath {
+			continue
+		}
+		switch {
+		case imp.Name == nil:
+			return "testing", false
+		case imp.Name.Name == ".":
+			return "", true
+		case imp.Name.Name == "_":
+			return "", false
+		default:
+			return imp.Name.Name, false
+		}
+	}
+	return "", false
+}
+
+// fileTypeAliases collects same-file type aliases (`type X = Y`) so a test
+// parameter written against a package-local alias of testing.T (e.g.
+// `type T = testing.T; func TestX(t *T)`, which go test accepts) still resolves.
+// Non-alias definitions (`type T struct{}`) are deliberately excluded.
+func fileTypeAliases(src *ast.File) map[string]ast.Expr {
+	var aliases map[string]ast.Expr
+	for _, decl := range src.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			ts, ok := spec.(*ast.TypeSpec)
+			if !ok || !ts.Assign.IsValid() || ts.Name == nil {
+				continue
+			}
+			if aliases == nil {
+				aliases = map[string]ast.Expr{}
+			}
+			aliases[ts.Name.Name] = ts.Type
+		}
+	}
+	return aliases
+}
+
+func isGoTestFunc(fn *ast.FuncDecl, testingName string, testingDot bool, aliases map[string]ast.Expr) bool {
 	if fn.Type == nil || fn.Type.TypeParams != nil && len(fn.Type.TypeParams.List) > 0 || fn.Type.Results != nil && len(fn.Type.Results.List) > 0 || fn.Type.Params == nil || len(fn.Type.Params.List) != 1 || len(fn.Type.Params.List[0].Names) > 1 {
 		return false
 	}
-	param := fn.Type.Params.List[0]
-	switch expr := param.Type.(type) {
-	case *ast.StarExpr:
-		if ident, ok := expr.X.(*ast.Ident); ok && ident.Name == "T" {
+	star, ok := fn.Type.Params.List[0].Type.(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	return typeDenotesTestingT(star.X, testingName, testingDot, aliases, 0)
+}
+
+// typeDenotesTestingT reports whether a type expression names testing.T: the
+// bound testing selector (`testing.T` / `alias.T`), a dot-imported bare `T`, or
+// a same-file alias chain that resolves to one of those. Anything else — a
+// foreign `fake.T` selector or a local `type T struct{}` — is rejected, so
+// discovery only advertises functions go test would actually run.
+func typeDenotesTestingT(expr ast.Expr, testingName string, testingDot bool, aliases map[string]ast.Expr, depth int) bool {
+	if depth > 8 {
+		return false
+	}
+	switch x := expr.(type) {
+	case *ast.SelectorExpr:
+		id, ok := x.X.(*ast.Ident)
+		return ok && testingName != "" && id.Name == testingName && x.Sel != nil && x.Sel.Name == "T"
+	case *ast.Ident:
+		if testingDot && x.Name == "T" {
 			return true
 		}
-		sel, ok := expr.X.(*ast.SelectorExpr)
-		return ok && sel.Sel != nil && sel.Sel.Name == "T"
+		if target, ok := aliases[x.Name]; ok {
+			return typeDenotesTestingT(target, testingName, testingDot, aliases, depth+1)
+		}
+		return false
 	default:
 		return false
 	}

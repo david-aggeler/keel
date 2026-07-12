@@ -600,6 +600,8 @@ import testingAlias "testing"
 
 type T = testingAlias.T
 
+type fakeT struct{}
+
 func Test(t *T) {}
 func TestAlias(t *testingAlias.T) {}
 func TestUpper(t *testingAlias.T) {}
@@ -608,6 +610,8 @@ func Test123(t *testingAlias.T) {}
 func Testcase(t *testingAlias.T) {}
 func TesticularCancer(t *testingAlias.T) {}
 func TestWrongSignature(t string) {}
+func TestLocalStructReceiver(t *fakeT) {}
+func TestForeignSelector(t *strings.T) {}
 `)
 
 	bin := t.TempDir()
@@ -646,7 +650,7 @@ exit 0`)
 			t.Fatalf("discovery missing Go-compatible test %s: %+v", want, doc.Items)
 		}
 	}
-	for _, blocked := range []string{"Testcase", "TesticularCancer", "TestWrongSignature"} {
+	for _, blocked := range []string{"Testcase", "TesticularCancer", "TestWrongSignature", "TestLocalStructReceiver", "TestForeignSelector"} {
 		if _, ok := discoveryItemByID(doc, "go::test::log::"+blocked); ok {
 			t.Fatalf("discovery included non-Go-test function %s: %+v", blocked, doc.Items)
 		}
