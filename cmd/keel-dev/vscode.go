@@ -48,6 +48,15 @@ func vscodeCommandSpec() *cli.CommandSpec {
 					{Name: "run", Use: "vscode tests run --id test-id", Short: "Run selected VS Code test lanes.", Flags: []cli.FlagSpec{{Name: "id", Value: "test-id", Short: "Selected test id."}}, Handler: handleVSCodeTestsRun},
 				},
 			},
+			{
+				Name:  "demo",
+				Short: "Persist VS Code demo-block lane state.",
+				Subcommands: []*cli.CommandSpec{
+					{Name: "block", Use: "vscode demo block <lane-id>", Short: "Persist a synthetic block for a VS Code lane.", Handler: handleVSCodeDemoBlock},
+					{Name: "unblock", Use: "vscode demo unblock", Short: "Clear persisted demo-block state.", Handler: handleVSCodeDemoUnblock},
+					{Name: "status", Use: "vscode demo status", Short: "Emit the current demo-block state as JSON.", Handler: handleVSCodeDemoStatus},
+				},
+			},
 		},
 	}
 }
@@ -99,6 +108,60 @@ func handleVSCodeTestsPlan(ctx context.Context, args []string) error {
 		return err
 	}
 	return writeVSCodePlan(state.root, ids, state.protocol)
+}
+
+type vscodeDemoBlockState struct {
+	BlockedLane string    `json:"blocked_lane"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type vscodeDemoBlockStatus struct {
+	BlockedLane string `json:"blocked_lane,omitempty"`
+	Source      string `json:"source"`
+	Path        string `json:"path"`
+}
+
+// DHF-REQ: keel/requirement-41
+func handleVSCodeDemoBlock(ctx context.Context, args []string) error {
+	if len(args) != 1 {
+		return cli.NewUsageError("vscode demo block requires exactly one lane id")
+	}
+	laneID := args[0]
+	if !knownVSCodeLaneID(laneID) {
+		return cli.NewUsageError("unknown vscode lane id %q", laneID)
+	}
+	state := stateFrom(ctx)
+	if err := writeVSCodeDemoBlockState(state.root, laneID); err != nil {
+		return err
+	}
+	if state.logger != nil {
+		state.logger.Info("vscode demo block", "lane_id", laneID, "path", vscodeDemoBlockStatePath(state.root))
+	}
+	return nil
+}
+
+// DHF-REQ: keel/requirement-41
+func handleVSCodeDemoUnblock(ctx context.Context, args []string) error {
+	if len(args) != 0 {
+		return cli.NewUsageError("vscode demo unblock takes no arguments: got %q", args)
+	}
+	state := stateFrom(ctx)
+	if err := os.Remove(vscodeDemoBlockStatePath(state.root)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if state.logger != nil {
+		state.logger.Info("vscode demo unblock", "path", vscodeDemoBlockStatePath(state.root))
+	}
+	return nil
+}
+
+// DHF-REQ: keel/requirement-41
+func handleVSCodeDemoStatus(ctx context.Context, args []string) error {
+	if len(args) != 0 {
+		return cli.NewUsageError("vscode demo status takes no arguments: got %q", args)
+	}
+	state := stateFrom(ctx)
+	return encodeProtocolDocument(state.protocol, currentVSCodeDemoBlockStatus(state.root))
 }
 
 // DHF-REQ: keel/requirement-35, keel/requirement-36, keel/requirement-37
@@ -359,7 +422,11 @@ func (p keelWorkspaceProfile) RemediationHint() string {
 func (p keelWorkspaceProfile) ConsumerID() string { return "keel-dev" }
 func (p keelWorkspaceProfile) Node() string       { return workspaceNode(p.root) }
 func (p keelWorkspaceProfile) PrepareLane(_ context.Context, laneID string) vscode.LaneReadiness {
-	if blocked := os.Getenv("KEEL_VSCODE_DEMO_BLOCK"); blocked != "" && blocked == laneID {
+	if blocked := os.Getenv("KEEL_VSCODE_DEMO_BLOCK"); blocked != "" {
+		if blocked == laneID {
+			return vscode.LaneReadiness{Blocked: []vscode.BlockedPrereq{{Resource: "KEEL_VSCODE_DEMO_BLOCK", Detail: blocked}}}
+		}
+	} else if blocked := currentVSCodeDemoBlockStatus(p.root).BlockedLane; blocked == laneID {
 		return vscode.LaneReadiness{Blocked: []vscode.BlockedPrereq{{Resource: "KEEL_VSCODE_DEMO_BLOCK", Detail: blocked}}}
 	}
 	if _, err := exec.LookPath("go"); err != nil {
@@ -369,6 +436,63 @@ func (p keelWorkspaceProfile) PrepareLane(_ context.Context, laneID string) vsco
 		return vscode.LaneReadiness{Blocked: []vscode.BlockedPrereq{{Resource: "keel-module-root", Detail: err.Error()}}}
 	}
 	return vscode.LaneReadiness{}
+}
+
+func writeVSCodeDemoBlockState(root, laneID string) error {
+	path := vscodeDemoBlockStatePath(root)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	encErr := json.NewEncoder(file).Encode(vscodeDemoBlockState{BlockedLane: laneID, UpdatedAt: time.Now().UTC()})
+	closeErr := file.Close()
+	if encErr != nil {
+		return encErr
+	}
+	return closeErr
+}
+
+func currentVSCodeDemoBlockStatus(root string) vscodeDemoBlockStatus {
+	path := vscodeDemoBlockStatePath(root)
+	if blocked := os.Getenv("KEEL_VSCODE_DEMO_BLOCK"); blocked != "" {
+		return vscodeDemoBlockStatus{BlockedLane: blocked, Source: "env", Path: path}
+	}
+	state, err := readVSCodeDemoBlockState(root)
+	if err != nil || state.BlockedLane == "" {
+		return vscodeDemoBlockStatus{Source: "none", Path: path}
+	}
+	return vscodeDemoBlockStatus{BlockedLane: state.BlockedLane, Source: "state", Path: path}
+}
+
+func readVSCodeDemoBlockState(root string) (vscodeDemoBlockState, error) {
+	data, err := os.ReadFile(vscodeDemoBlockStatePath(root))
+	if err != nil {
+		return vscodeDemoBlockState{}, err
+	}
+	var state vscodeDemoBlockState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return vscodeDemoBlockState{}, err
+	}
+	if !knownVSCodeLaneID(state.BlockedLane) {
+		return vscodeDemoBlockState{}, fmt.Errorf("unknown persisted vscode lane id %q", state.BlockedLane)
+	}
+	return state, nil
+}
+
+func vscodeDemoBlockStatePath(root string) string {
+	return filepath.Join(root, ".devtools", "vscode-demo-block.json")
+}
+
+func knownVSCodeLaneID(laneID string) bool {
+	for _, known := range vscodeLaneIDs {
+		if laneID == known {
+			return true
+		}
+	}
+	return false
 }
 
 func newVSCodeRunWriter(root string, protocol io.Writer, stamper vscode.EventStamper, logger *slog.Logger) (vscode.RunEventWriter, func(), error) {

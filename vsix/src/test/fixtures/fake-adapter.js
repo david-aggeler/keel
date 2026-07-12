@@ -3,6 +3,16 @@
 const args = process.argv.slice(2);
 const command = args.slice(0, 4).join(' ');
 const now = () => new Date().toISOString();
+const fs = require('node:fs');
+const path = require('node:path');
+
+function logCall() {
+  const dir = path.join(process.cwd(), '.devtools');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.appendFileSync(path.join(dir, 'fake-adapter-calls.log'), `${args.join(' ')}\n`);
+}
+
+logCall();
 
 if (command === 'vscode tests discover --format') {
   const format = args[4];
@@ -81,6 +91,24 @@ if (args.slice(0, 4).join(' ') === 'vscode tests run --format') {
   emit({ event: 'artifact', test_id: selected, artifact: { name: 'fake log', uri: '/tmp/openbrain-fake.log', kind: 'log' } });
   emit({ event: 'passed', test_id: 'keel::test::agents/test_memory.go::TestRecall', duration_ms: 12 });
   emit({ event: 'run_finished', exit_code: 0 });
+  process.exit(0);
+}
+
+if (args.slice(0, 3).join(' ') === 'vscode demo status') {
+  process.stdout.write(JSON.stringify({
+    blocked_lane: '',
+    source: 'none',
+    path: path.join(process.cwd(), '.devtools', 'vscode-demo-block.json')
+  }));
+  process.stdout.write('\n');
+  process.exit(0);
+}
+
+if (args.slice(0, 3).join(' ') === 'vscode demo block') {
+  process.exit(args[3] ? 0 : 2);
+}
+
+if (args.slice(0, 3).join(' ') === 'vscode demo unblock') {
   process.exit(0);
 }
 
