@@ -73,3 +73,18 @@ read tolerantly and never rewritten.
 `KEEL_VSCODE_DEMO_BLOCK=<lane-id>` makes the named lane report a synthetic
 blocked prerequisite. It is inert when unset and exists so the structured
 lane-blocked path can be demonstrated without breaking a real toolchain.
+
+For persistent local demos, use:
+
+```bash
+go run ./cmd/keel-dev vscode demo block keel::lane::test-fast
+go run ./cmd/keel-dev vscode demo status
+go run ./cmd/keel-dev vscode demo unblock
+```
+
+The persistent state lives under `.devtools/vscode-demo-block.json`, which is
+ignored by git. `KEEL_VSCODE_DEMO_BLOCK` remains the authoritative override:
+when it is set, lane preparation uses the environment value and ignores the
+persistent state. The Keel Test Bridge command `Keel: Toggle Demo Block` toggles
+the persistent state and refreshes the test tree without editing
+`.vscode/test-bridge.json`.

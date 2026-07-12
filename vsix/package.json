@@ -44,6 +44,10 @@
       {
         "command": "keel.tests.clearLocalState",
         "title": "Keel: Clear Local Test State"
+      },
+      {
+        "command": "keel.tests.toggleDemoBlock",
+        "title": "Keel: Toggle Demo Block"
       }
     ]
   },

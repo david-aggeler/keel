@@ -17,6 +17,12 @@ export interface BridgeAdapterConfig {
   env?: Record<string, string>;
 }
 
+export interface DemoBlockStatus {
+  blocked_lane?: string;
+  source: string;
+  path: string;
+}
+
 export function adapterConfig(workspaceRoot: string): BridgeAdapterConfig {
   const config = readAdapterConfig(workspaceRoot);
   return {
@@ -124,6 +130,28 @@ export function runTests(workspaceRoot: string, ids: string[]): cp.ChildProcessW
   });
 }
 
+// DHF-REQ: keel/requirement-41
+export async function readDemoBlockStatus(workspaceRoot: string): Promise<DemoBlockStatus> {
+  const adapter = adapterConfig(workspaceRoot);
+  const { stdout } = await execFile(adapter.command, adapterDemoArgs(adapter, 'status'), {
+    cwd: workspaceRoot,
+    env: adapterEnv(adapter),
+    maxBuffer: 1024 * 1024
+  });
+  return JSON.parse(stdout) as DemoBlockStatus;
+}
+
+// DHF-REQ: keel/requirement-41
+export async function setDemoBlock(workspaceRoot: string, laneID: string | undefined): Promise<void> {
+  const adapter = adapterConfig(workspaceRoot);
+  const args = laneID ? adapterDemoArgs(adapter, 'block', laneID) : adapterDemoArgs(adapter, 'unblock');
+  await execFile(adapter.command, args, {
+    cwd: workspaceRoot,
+    env: adapterEnv(adapter),
+    maxBuffer: 1024 * 1024
+  });
+}
+
 function defaultAdapterCommand(workspaceRoot: string): string {
   return workspaceRoot ? path.join(workspaceRoot, 'bin', process.platform === 'win32' ? 'keel-dev.exe' : 'keel-dev') : 'bin/keel-dev';
 }
@@ -137,4 +165,19 @@ function resolveAdapterCommand(workspaceRoot: string, command: string): string {
 
 function adapterEnv(adapter: BridgeAdapterConfig): NodeJS.ProcessEnv {
   return adapter.env ? { ...process.env, ...adapter.env } : process.env;
+}
+
+function adapterDemoArgs(adapter: BridgeAdapterConfig, verb: string, laneID?: string): string[] {
+  const args = [...adapter.args];
+  const testsIndex = args.lastIndexOf('tests');
+  if (testsIndex >= 0) {
+    args.splice(testsIndex, 1, 'demo');
+  } else {
+    args.push('demo');
+  }
+  args.push(verb);
+  if (laneID) {
+    args.push(laneID);
+  }
+  return args;
 }
