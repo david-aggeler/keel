@@ -38,8 +38,9 @@
 // The leveled methods — [Logger.Debug], [Logger.Info], [Logger.Warn],
 // [Logger.Error] and their *Context variants — take a message and alternating
 // key/value args, exactly like [log/slog]. The minimum level emitted is set by
-// Config.Level (nil defaults to Info), so Debug is dropped unless Level is
-// lowered to slog.LevelDebug.
+// Config.ConsoleVerbosity (nil defaults to Info), so Debug is dropped unless
+// ConsoleVerbosity is lowered to slog.LevelDebug. File sinks use
+// Config.FileVerbosity (nil defaults to Debug).
 //
 // # Redaction at the boundary
 //

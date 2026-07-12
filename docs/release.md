@@ -93,3 +93,19 @@ release loop.
 Semantic versioning. Pre-1.0, breaking changes bump the minor. The subpackages
 (`log`, `exec`, `exec/claude`, `exec/codex`) share the single module version —
 there is no per-package tag.
+
+## v0.5 migration notes
+
+### keel/log sink verbosity fields
+
+`log.Config.Level` was removed for v0.5. Use the explicit sink-specific fields:
+
+- `log.Config.ConsoleVerbosity` controls the console sink minimum severity. Nil
+  preserves the previous default of `slog.LevelInfo`.
+- `log.Config.FileVerbosity` controls both file sinks (`TextDir` and
+  `JSONLDir`). Nil preserves the previous forensic default of
+  `slog.LevelDebug`.
+
+String configuration should use `log.LevelFromString` and `log.LevelToString`.
+The accepted vocabulary is `debug`, `info`, `warn`, and `error`; an empty string
+maps to `info`, and unknown non-empty strings return an error.

@@ -33,16 +33,20 @@ const (
 )
 
 // Config holds the parameters for constructing a production logger. The zero
-// value is usable: Service is blank, the level defaults to Info, and output
-// goes to os.Stdout with the sparse-AI console and no file sinks. All fields are
-// optional.
+// value is usable: Service is blank, console verbosity defaults to Info, file
+// verbosity defaults to Debug, and output goes to os.Stdout with the sparse-AI
+// console and no file sinks. All fields are optional.
 //
-// DHF-REQ: keel/requirement-30, keel/requirement-33
+// DHF-REQ: keel/requirement-30, keel/requirement-33, keel/requirement-56
 type Config struct {
 	// Service is the value stamped into the "service" field of every record.
 	Service string
-	// Level is the minimum severity emitted to the primary sink. Nil → Info.
-	Level slog.Leveler
+	// ConsoleVerbosity is the minimum severity emitted to the console sink.
+	// Nil -> Info.
+	ConsoleVerbosity slog.Leveler
+	// FileVerbosity is the minimum severity emitted to text and JSONL file
+	// sinks. Nil -> Debug.
+	FileVerbosity slog.Leveler
 	// Console selects the console rendering. Empty → ConsoleSparseAI.
 	Console Console
 	// Writer is the console sink destination. Nil → os.Stdout. Set it to a
@@ -81,6 +85,8 @@ type Config struct {
 type Logger struct {
 	base          *slog.Logger
 	closers       []io.Closer
+	textLogPath   string
+	jsonlLogPath  string
 	runLogPath    string
 	runLog        *lineCountingWriteCloser
 	sourceInFiles bool
@@ -177,11 +183,15 @@ func isSensitiveAttrKey(key string) bool {
 
 // New creates a production logger from the four-sink Config model.
 //
-// DHF-REQ: keel/requirement-16, keel/requirement-22, keel/requirement-29, keel/requirement-33, openbrain/requirement-602
+// DHF-REQ: keel/requirement-16, keel/requirement-22, keel/requirement-29, keel/requirement-33, keel/requirement-56, openbrain/requirement-602
 func New(cfg Config) (*Logger, error) {
-	level := cfg.Level
-	if level == nil {
-		level = slog.LevelInfo
+	consoleVerbosity := cfg.ConsoleVerbosity
+	if consoleVerbosity == nil {
+		consoleVerbosity = slog.LevelInfo
+	}
+	fileVerbosity := cfg.FileVerbosity
+	if fileVerbosity == nil {
+		fileVerbosity = slog.LevelDebug
 	}
 	w := cfg.Writer
 	if w == nil {
@@ -197,18 +207,19 @@ func New(cfg Config) (*Logger, error) {
 	case ConsoleNone:
 	case ConsoleJSON:
 		handlers = append(handlers, slog.NewJSONHandler(w, &slog.HandlerOptions{
-			Level:       level,
+			Level:       consoleVerbosity,
 			ReplaceAttr: replaceForConsole,
 		}))
 	case ConsoleSparseAI:
-		handlers = append(handlers, newSparseAIHandler(w, level))
+		handlers = append(handlers, newSparseAIHandler(w, consoleVerbosity))
 	default:
-		handlers = append(handlers, newConsoleHandler(w, level, colorEnabled(w, cfg.ForceColor, cfg.DisableColor), cfg.ConsoleOmitKeys))
+		handlers = append(handlers, newConsoleHandler(w, consoleVerbosity, colorEnabled(w, cfg.ForceColor, cfg.DisableColor), cfg.ConsoleOmitKeys))
 	}
 
 	closers := make([]io.Closer, 0, 2)
+	var textLogPath string
 	if cfg.TextDir != "" {
-		h, err := newTextFileHandler(cfg.TextDir, cfg.Service, cfg.SourceInFiles)
+		h, path, err := newTextFileHandler(cfg.TextDir, cfg.Service, cfg.SourceInFiles, fileVerbosity)
 		if err != nil {
 			return nil, fmt.Errorf("keel/log: open text sink: %w", err)
 		}
@@ -216,11 +227,12 @@ func New(cfg Config) (*Logger, error) {
 		if c, ok := h.(io.Closer); ok {
 			closers = append(closers, c)
 		}
+		textLogPath = path
 	}
 	var runLogPath string
 	var runLog *lineCountingWriteCloser
 	if cfg.JSONLDir != "" {
-		h, path, counter, err := newJSONFileHandler(cfg.JSONLDir, cfg.Service, cfg.PerRun, cfg.SourceInFiles)
+		h, path, counter, err := newJSONFileHandler(cfg.JSONLDir, cfg.Service, cfg.PerRun, cfg.SourceInFiles, fileVerbosity)
 		if err != nil {
 			closeAll(closers)
 			return nil, fmt.Errorf("keel/log: open jsonl sink: %w", err)
@@ -243,7 +255,7 @@ func New(cfg Config) (*Logger, error) {
 	}
 	if len(handlers) == 0 {
 		handlers = append(handlers, slog.NewJSONHandler(io.Discard, &slog.HandlerOptions{
-			Level:       level,
+			Level:       consoleVerbosity,
 			ReplaceAttr: replaceForOpenBrain,
 		}))
 	}
@@ -252,7 +264,7 @@ func New(cfg Config) (*Logger, error) {
 	if len(handlers) > 1 {
 		h = multiHandler{handlers: handlers}
 	}
-	return &Logger{base: slog.New(h).With("service", cfg.Service), closers: closers, runLogPath: runLogPath, runLog: runLog, sourceInFiles: cfg.SourceInFiles}, nil
+	return &Logger{base: slog.New(h).With("service", cfg.Service), closers: closers, textLogPath: textLogPath, jsonlLogPath: runLogPath, runLogPath: runLogPath, runLog: runLog, sourceInFiles: cfg.SourceInFiles}, nil
 }
 
 func closeAll(closers []io.Closer) {
@@ -270,6 +282,28 @@ func (l *Logger) slog() *slog.Logger {
 
 // Slog returns the wrapped slog logger for APIs that have not migrated yet.
 func (l *Logger) Slog() *slog.Logger { return l.slog() }
+
+// TextLogPath returns the daily text log path opened by this logger, or an
+// empty string when TextDir is not configured.
+//
+// DHF-REQ: keel/requirement-56
+func (l *Logger) TextLogPath() string {
+	if l == nil {
+		return ""
+	}
+	return l.textLogPath
+}
+
+// JSONLLogPath returns the JSONL file path opened by this logger, or an empty
+// string when JSONLDir is not configured.
+//
+// DHF-REQ: keel/requirement-56
+func (l *Logger) JSONLLogPath() string {
+	if l == nil {
+		return ""
+	}
+	return l.jsonlLogPath
+}
 
 // RunLogPath returns the JSONL run-log path selected by Config.PerRun, or the
 // JSONL file path for the current logger when JSONLDir is configured.
@@ -328,12 +362,12 @@ func (l *Logger) ErrorContext(ctx context.Context, msg string, args ...any) {
 
 // With returns a logger carrying the supplied attrs.
 func (l *Logger) With(args ...any) *Logger {
-	return &Logger{base: l.slog().With(args...), closers: l.closers, runLogPath: l.runLogPath, runLog: l.runLog, sourceInFiles: l.sourceInFiles}
+	return &Logger{base: l.slog().With(args...), closers: l.closers, textLogPath: l.textLogPath, jsonlLogPath: l.jsonlLogPath, runLogPath: l.runLogPath, runLog: l.runLog, sourceInFiles: l.sourceInFiles}
 }
 
 // WithGroup returns a logger that groups subsequent attrs under name.
 func (l *Logger) WithGroup(name string) *Logger {
-	return &Logger{base: l.slog().WithGroup(name), closers: l.closers, runLogPath: l.runLogPath, runLog: l.runLog, sourceInFiles: l.sourceInFiles}
+	return &Logger{base: l.slog().WithGroup(name), closers: l.closers, textLogPath: l.textLogPath, jsonlLogPath: l.jsonlLogPath, runLogPath: l.runLogPath, runLog: l.runLog, sourceInFiles: l.sourceInFiles}
 }
 
 // Event emits an INFO record with event_type set to verb.
@@ -375,6 +409,14 @@ func (l *Logger) Emit(event string, attrs ...slog.Attr) { emit(l.slog(), event, 
 // LogBuildIdentity logs a single build identity record.
 func (l *Logger) LogBuildIdentity(version, gitCommit string) {
 	logBuildIdentity(l.slog(), version, gitCommit)
+}
+
+// StartDailyBuildIdentity starts the daily build-identity heartbeat for this
+// logger. The goroutine exits when ctx is canceled.
+//
+// DHF-REQ: keel/requirement-56
+func (l *Logger) StartDailyBuildIdentity(ctx context.Context, version, gitCommit string) {
+	startDailyBuildIdentity(ctx, l.slog(), version, gitCommit)
 }
 
 // Close releases file sinks opened by New.
@@ -952,12 +994,13 @@ func formatConsoleValue(v slog.Value) string {
 type humanFileHandler struct {
 	mu     *sync.Mutex
 	w      io.Writer
+	level  slog.Leveler
 	attrs  []slog.Attr
 	groups []string
 	source bool
 }
 
-func newJSONFileHandler(dir string, service string, perRun bool, source bool) (slog.Handler, string, *lineCountingWriteCloser, error) {
+func newJSONFileHandler(dir string, service string, perRun bool, source bool, level slog.Leveler) (slog.Handler, string, *lineCountingWriteCloser, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, "", nil, err
 	}
@@ -975,7 +1018,7 @@ func newJSONFileHandler(dir string, service string, perRun bool, source bool) (s
 	return &jsonFileHandler{
 		Handler: slog.NewJSONHandler(w, &slog.HandlerOptions{
 			AddSource:   source,
-			Level:       slog.LevelDebug,
+			Level:       level,
 			ReplaceAttr: replaceForOpenBrainFile,
 		}),
 		close: w.Close,
@@ -1015,26 +1058,31 @@ func (h *jsonFileHandler) Close() error {
 	return h.close()
 }
 
-func newTextFileHandler(dir string, service string, source bool) (slog.Handler, error) {
+func newTextFileHandler(dir string, service string, source bool, level slog.Leveler) (slog.Handler, string, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if err := pruneTextLogs(dir, service, 10); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	f, err := os.OpenFile(textLogPath(dir, service), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	path := textLogPath(dir, service)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if err := pruneTextLogs(dir, service, 10); err != nil {
 		_ = f.Close()
-		return nil, err
+		return nil, "", err
 	}
-	return &humanFileHandler{mu: &sync.Mutex{}, w: f, source: source}, nil
+	return &humanFileHandler{mu: &sync.Mutex{}, w: f, level: level, source: source}, path, nil
 }
 
 func (h *humanFileHandler) Enabled(_ context.Context, level slog.Level) bool {
-	return level >= slog.LevelDebug
+	min := slog.LevelDebug
+	if h.level != nil {
+		min = h.level.Level()
+	}
+	return level >= min
 }
 
 // DHF-REQ: openbrain/requirement-152, keel/requirement-20
@@ -1136,6 +1184,7 @@ func (h *humanFileHandler) clone() *humanFileHandler {
 	return &humanFileHandler{
 		mu:     h.mu,
 		w:      h.w,
+		level:  h.level,
 		attrs:  h.attrs,
 		groups: h.groups,
 		source: h.source,
@@ -1406,6 +1455,13 @@ func redactString(s string) string {
 	return s
 }
 
+// RedactString strips DSN passwords and bearer tokens from a rendered string.
+//
+// DHF-REQ: keel/requirement-56
+func RedactString(s string) string {
+	return redactString(s)
+}
+
 // RedactErr walks the error string and strips DSN passwords and bearer tokens.
 // Returns nil for nil input. Delegates regex work to redactString; flatten-no-wrap
 // contract is unchanged — errors.Is/As do NOT see through a redacted error.
@@ -1416,19 +1472,56 @@ func RedactErr(err error) error {
 	return fmt.Errorf("%s", redactString(err.Error()))
 }
 
-func parseLevel(s string) slog.Level {
-	switch strings.ToLower(s) {
+// LevelFromString converts keel's lowercase level vocabulary to a slog level.
+// Empty input defaults to Info; unknown non-empty input is rejected.
+//
+// DHF-REQ: keel/requirement-56
+func LevelFromString(s string) (slog.Level, error) {
+	switch strings.TrimSpace(s) {
+	case "":
+		return slog.LevelInfo, nil
 	case "debug":
-		return slog.LevelDebug
-	case "info", "":
-		return slog.LevelInfo
-	case "warn", "warning":
-		return slog.LevelWarn
+		return slog.LevelDebug, nil
+	case "info":
+		return slog.LevelInfo, nil
+	case "warn":
+		return slog.LevelWarn, nil
 	case "error":
-		return slog.LevelError
+		return slog.LevelError, nil
 	default:
+		return slog.LevelInfo, fmt.Errorf("keel/log: unknown level %q", s)
+	}
+}
+
+// LevelToString converts slog's standard levels to keel's lowercase
+// vocabulary. Non-standard slog levels use slog's rendering in lowercase.
+//
+// DHF-REQ: keel/requirement-56
+func LevelToString(level slog.Level) string {
+	switch level {
+	case slog.LevelDebug:
+		return "debug"
+	case slog.LevelInfo:
+		return "info"
+	case slog.LevelWarn:
+		return "warn"
+	case slog.LevelError:
+		return "error"
+	default:
+		return strings.ToLower(level.String())
+	}
+}
+
+func parseLevel(s string) slog.Level {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "warning" {
+		return slog.LevelWarn
+	}
+	level, err := LevelFromString(s)
+	if err != nil {
 		return slog.LevelInfo
 	}
+	return level
 }
 
 // Ensure RedactErr returns a plain error without wrapping (so errors.Is

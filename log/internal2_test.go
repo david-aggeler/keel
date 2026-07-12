@@ -89,7 +89,7 @@ func TestNewWithJSONLAndSinkHandlers(t *testing.T) {
 
 	// WithGroup on the composed handlers.
 	rc := &recordCapture{}
-	lg, err := New(Config{Service: "svc", Level: slog.LevelDebug, Console: ConsolePlain, Writer: rc})
+	lg, err := New(Config{Service: "svc", ConsoleVerbosity: slog.LevelDebug, Console: ConsolePlain, Writer: rc})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
