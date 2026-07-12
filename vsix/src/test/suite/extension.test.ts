@@ -10,6 +10,7 @@ import {
   currentAdapterConfig,
   ExternalRunMirror,
   parseGoCoverageProfile,
+  runProfileHandlerForTest,
   setExternalRunStaleMsForTest,
   setCurrentTreeForTest,
   shouldInvalidateResultsForEvent
@@ -124,7 +125,7 @@ suite('Keel Test Bridge config contract', () => {
 
   // DHF-TEST: keel/requirement-42
   test('production bridge argv is accepted by the real keel-dev binary per verb', async function () {
-    this.timeout(20_000);
+    this.timeout(30_000);
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-real-bridge-'));
     fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
     fs.writeFileSync(path.join(root, 'go.mod'), 'module github.com/david-aggeler/keel\n\ngo 1.25\n');
@@ -156,6 +157,41 @@ suite('Keel Test Bridge config contract', () => {
     assert.equal(terminalEvents.length, 1);
 
     await upgradeConfig(root);
+
+    const devRoot = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+    assert.ok(devRoot, 'test workspace should be configured');
+    const devConfigPath = path.join(devRoot, configRelativePath);
+    const previousConfig = fs.existsSync(devConfigPath) ? fs.readFileSync(devConfigPath, 'utf8') : undefined;
+    fs.mkdirSync(path.dirname(devConfigPath), { recursive: true });
+    fs.writeFileSync(devConfigPath, JSON.stringify({
+      version: currentConfigVersion,
+      command: realKeelDevBinary(),
+      args: ['vscode', 'tests'],
+      displayName: 'Keel'
+    }, null, 2) + '\n');
+    const runStreamRoot = findKeelModuleRoot(devRoot);
+    const runsDir = path.join(runStreamRoot, '.devtools', 'vscode-runs');
+    fs.rmSync(path.join(runsDir, 'run.lock'), { force: true });
+    const beforeRunStreams = new Set(listRunStreams(runsDir));
+    try {
+      const extension = vscode.extensions.getExtension('aggeler.keel-test-bridge');
+      assert.ok(extension, 'extension should be discoverable');
+      await extension.activate();
+      await runProfileHandlerForTest('keel::lane::lint');
+
+      const newStreams = listRunStreams(runsDir).filter((candidate) => !beforeRunStreams.has(candidate));
+      assert.equal(newStreams.length, 1, `TestController run should create one external run stream under ${runStreamRoot}`);
+      const runEvents = parseRunEvents(fs.readFileSync(newStreams[0], 'utf8'));
+      assert.ok(runEvents.some((event) => event.event === 'run_started'));
+      assert.equal(runEvents.filter((event) => event.event === 'run_finished').length, 1);
+      assert.doesNotMatch(fs.readFileSync(newStreams[0], 'utf8'), /unknown flag/);
+    } finally {
+      if (previousConfig === undefined) {
+        fs.rmSync(devConfigPath, { force: true });
+      } else {
+        fs.writeFileSync(devConfigPath, previousConfig);
+      }
+    }
   });
 
   // DHF-TEST: keel/requirement-36
@@ -335,6 +371,37 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
 function realKeelDevBinary(): string {
   const exe = process.platform === 'win32' ? 'keel-dev.exe' : 'keel-dev';
   return path.resolve(__dirname, '../../../../bin', exe);
+}
+
+function findKeelModuleRoot(start: string): string {
+  let dir = path.resolve(start);
+  for (;;) {
+    const goMod = path.join(dir, 'go.mod');
+    if (fs.existsSync(goMod) && /^module github\.com\/david-aggeler\/keel$/m.test(fs.readFileSync(goMod, 'utf8'))) {
+      return dir;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) {
+      throw new Error(`no keel module root found from ${start}`);
+    }
+    dir = parent;
+  }
+}
+
+function listRunStreams(runsDir: string): string[] {
+  if (!fs.existsSync(runsDir)) {
+    return [];
+  }
+  return fs.readdirSync(runsDir)
+    .filter((name) => name.endsWith('.jsonl'))
+    .map((name) => path.join(runsDir, name))
+    .sort();
+}
+
+function parseRunEvents(jsonl: string): RunEvent[] {
+  return jsonl.split(/\r?\n/)
+    .filter((line) => line.trim().length > 0)
+    .map((line) => JSON.parse(line) as RunEvent);
 }
 
 async function collectChild(child: cp.ChildProcessWithoutNullStreams): Promise<{ code: number | null; stdout: string; stderr: string }> {
