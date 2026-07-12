@@ -206,6 +206,59 @@ func TestRun_AllowedToolsPathPreservedWhenSkipDisabled(t *testing.T) {
 	}
 }
 
+// TestVersion_RunsBinVersionAndTrims proves Version shells out to `<bin>
+// --version` and returns the trimmed output.
+//
+// DHF-TEST: keel/requirement-56
+func TestVersion_RunsBinVersionAndTrims(t *testing.T) {
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "claude-ver")
+	script := "#!/bin/sh\n[ \"$1\" = \"--version\" ] && printf 'claude-cli 1.2.3  \\n' || exit 2\n"
+	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Version(context.Background(), stub)
+	if err != nil {
+		t.Fatalf("Version: %v", err)
+	}
+	if got != "claude-cli 1.2.3" {
+		t.Errorf("Version = %q, want %q (trimmed)", got, "claude-cli 1.2.3")
+	}
+}
+
+// DHF-TEST: keel/requirement-56
+func TestVersion_ReturnsErrorOnNonZeroExit(t *testing.T) {
+	stub := writeStub(t, "", 7)
+
+	got, err := Version(context.Background(), stub)
+	if err == nil {
+		t.Fatal("expected error for non-zero version probe")
+	}
+	if got != "" {
+		t.Fatalf("Version output = %q, want empty string on error", got)
+	}
+	if !strings.Contains(err.Error(), "keel/exec/claude:") {
+		t.Fatalf("error = %q, want keel/exec/claude prefix", err)
+	}
+}
+
+// DHF-TEST: keel/requirement-56
+func TestVersion_ReturnsErrorOnUnresolvableBinary(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing-claude")
+
+	got, err := Version(context.Background(), missing)
+	if err == nil {
+		t.Fatal("expected error for missing binary")
+	}
+	if got != "" {
+		t.Fatalf("Version output = %q, want empty string on error", got)
+	}
+	if !strings.Contains(err.Error(), "keel/exec/claude:") {
+		t.Fatalf("error = %q, want keel/exec/claude prefix", err)
+	}
+}
+
 // DHF-TEST: keel/requirement-2
 func TestRun_UsesProcessStartWithClaudeStreamAdapterAndPreservesResult(t *testing.T) {
 	dir := t.TempDir()
