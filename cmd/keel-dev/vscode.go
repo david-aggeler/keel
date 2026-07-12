@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"log/slog"
 	"os"
@@ -408,21 +411,28 @@ func ordinalSortText(labelPrefix string) string {
 	return strings.Join(parts, ".")
 }
 
-type goListPackage struct {
-	ImportPath   string
-	Dir          string
-	TestGoFiles  []string
-	XTestGoFiles []string
+type discoveredGoPackage struct {
+	rel   string
+	files []discoveredGoFile
 }
 
-// DHF-REQ: keel/requirement-43, keel/requirement-46
-func discoverGoTestItems(ctx context.Context, root string) ([]vscode.TestItem, error) {
-	logger := vscodeDiscardLogger()
-	stdout, stderr, err := capture(ctx, logger, root, "go", "list", "-json", "./...")
-	if err != nil {
-		return nil, fmt.Errorf("vscode discover go list: %w: %s", err, strings.TrimSpace(stderr))
-	}
-	packages, err := decodeGoListPackages(stdout)
+type discoveredGoFile struct {
+	rel         string
+	packageRel  string
+	packageName string
+	tests       []discoveredGoTest
+	parseErr    error
+}
+
+type discoveredGoTest struct {
+	name  string
+	rng   vscode.Range
+	order int
+}
+
+// DHF-REQ: keel/requirement-43, keel/requirement-46, keel/requirement-49
+func discoverGoTestItems(_ context.Context, root string) ([]vscode.TestItem, error) {
+	packages, err := parseGoTestPackages(root)
 	if err != nil {
 		return nil, err
 	}
@@ -440,25 +450,11 @@ func discoverGoTestItems(ctx context.Context, root string) ([]vscode.TestItem, e
 		RequiredResources: []string{"go-toolchain", "keel-module-root"},
 	}}
 	for _, pkg := range packages {
-		if len(pkg.TestGoFiles)+len(pkg.XTestGoFiles) == 0 {
-			continue
-		}
-		rel := vscode.GoEventPackageRel(pkg.ImportPath, modulePath)
-		if rel == "" {
-			continue
-		}
-		tests, err := listGoPackageTests(ctx, logger, root, rel)
-		if err != nil {
-			return nil, err
-		}
-		if len(tests) == 0 {
-			continue
-		}
-		pkgID := "go::pkg::" + filepath.ToSlash(rel)
+		pkgID := "go::pkg::" + filepath.ToSlash(pkg.rel)
 		items = append(items, vscode.TestItem{
 			ID:                pkgID,
 			ParentID:          "go::root",
-			Label:             rel,
+			Label:             pkg.rel,
 			Kind:              "package",
 			Framework:         "go",
 			Runner:            "go-test",
@@ -467,55 +463,174 @@ func discoverGoTestItems(ctx context.Context, root string) ([]vscode.TestItem, e
 			Profiles:          []string{"run"},
 			RequiredResources: []string{"go-toolchain", "keel-module-root"},
 		})
-		for _, testName := range tests {
-			items = append(items, vscode.TestItem{
-				ID:                "go::test::" + filepath.ToSlash(rel) + "::" + testName,
+		for _, file := range pkg.files {
+			fileID := "go::file::" + filepath.ToSlash(file.rel)
+			item := vscode.TestItem{
+				ID:                fileID,
 				ParentID:          pkgID,
-				Label:             testName,
-				Kind:              "test",
+				Label:             filepath.Base(file.rel),
+				Kind:              "file",
 				Framework:         "go",
 				Runner:            "go-test",
 				RunnerLabel:       "Go test",
-				Runnable:          true,
+				URI:               filepath.ToSlash(file.rel),
+				Runnable:          file.parseErr == nil,
 				Profiles:          []string{"run"},
 				RequiredResources: []string{"go-toolchain", "keel-module-root"},
-			})
+			}
+			if file.parseErr != nil {
+				item.Profiles = []string{}
+				item.Limitations = []string{file.parseErr.Error()}
+			}
+			items = append(items, item)
+			for _, test := range file.tests {
+				testName := test.name
+				rng := test.rng
+				sortText := fmt.Sprintf("%06d", test.order)
+				items = append(items, vscode.TestItem{
+					ID:                "go::test::" + filepath.ToSlash(pkg.rel) + "::" + testName,
+					ParentID:          fileID,
+					Label:             testName,
+					SortText:          sortText,
+					Kind:              "test",
+					Framework:         "go",
+					Runner:            "go-test",
+					RunnerLabel:       "Go test",
+					URI:               filepath.ToSlash(file.rel),
+					Range:             &rng,
+					Runnable:          true,
+					Profiles:          []string{"run"},
+					RequiredResources: []string{"go-toolchain", "keel-module-root"},
+				})
+			}
 		}
 	}
 	return items, nil
 }
 
-func decodeGoListPackages(raw string) ([]goListPackage, error) {
-	dec := json.NewDecoder(strings.NewReader(raw))
-	var packages []goListPackage
-	for dec.More() {
-		var pkg goListPackage
-		if err := dec.Decode(&pkg); err != nil {
-			return nil, fmt.Errorf("decode go list package: %w", err)
+func parseGoTestPackages(root string) ([]discoveredGoPackage, error) {
+	byPackage := map[string]*discoveredGoPackage{}
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-		packages = append(packages, pkg)
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", ".logs", ".devtools", "node_modules":
+				if path != root {
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
+		if !strings.HasSuffix(entry.Name(), "_test.go") {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		file := parseGoTestFile(path, rel)
+		pkg := byPackage[file.packageRel]
+		if pkg == nil {
+			pkg = &discoveredGoPackage{rel: file.packageRel}
+			byPackage[file.packageRel] = pkg
+		}
+		if len(file.tests) > 0 || file.parseErr != nil {
+			pkg.files = append(pkg.files, file)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("vscode discover go parser walk: %w", err)
 	}
-	sort.Slice(packages, func(i, j int) bool { return packages[i].ImportPath < packages[j].ImportPath })
+
+	packages := make([]discoveredGoPackage, 0, len(byPackage))
+	for _, pkg := range byPackage {
+		if len(pkg.files) == 0 {
+			continue
+		}
+		sort.Slice(pkg.files, func(i, j int) bool { return pkg.files[i].rel < pkg.files[j].rel })
+		packages = append(packages, *pkg)
+	}
+	sort.Slice(packages, func(i, j int) bool { return packages[i].rel < packages[j].rel })
 	return packages, nil
 }
 
-func listGoPackageTests(ctx context.Context, logger *slog.Logger, root, pkg string) ([]string, error) {
-	stdout, stderr, err := capture(ctx, logger, root, "go", "test", "-list", ".", vscode.GoPackageArg(pkg))
-	if err != nil {
-		return nil, fmt.Errorf("vscode discover go test -list %s: %w: %s", pkg, err, strings.TrimSpace(stderr))
+func parseGoTestFile(path, rel string) discoveredGoFile {
+	fset := token.NewFileSet()
+	src, err := parser.ParseFile(fset, path, nil, 0)
+	file := discoveredGoFile{
+		rel:        rel,
+		packageRel: goPackageRelFromFile(rel),
 	}
-	seen := map[string]bool{}
-	var tests []string
-	for _, line := range strings.Split(stdout, "\n") {
-		name := strings.TrimSpace(line)
-		if !strings.HasPrefix(name, "Test") || seen[name] {
+	if src != nil && src.Name != nil {
+		file.packageName = src.Name.Name
+	}
+	if err != nil {
+		file.parseErr = fmt.Errorf("%s: %w", rel, err)
+		return file
+	}
+	for _, decl := range src.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv != nil || fn.Name == nil || !strings.HasPrefix(fn.Name.Name, "Test") {
 			continue
 		}
-		seen[name] = true
-		tests = append(tests, name)
+		if !isGoTestFunc(fn) {
+			continue
+		}
+		file.tests = append(file.tests, discoveredGoTest{
+			name:  fn.Name.Name,
+			rng:   goRange(fset, fn.Pos(), fn.End()),
+			order: len(file.tests) + 1,
+		})
 	}
-	sort.Strings(tests)
-	return tests, nil
+	return file
+}
+
+func goPackageRelFromFile(rel string) string {
+	dir := filepath.ToSlash(filepath.Dir(rel))
+	if dir == "." {
+		return "."
+	}
+	return dir
+}
+
+func isGoTestFunc(fn *ast.FuncDecl) bool {
+	if fn.Type == nil || fn.Type.Params == nil || len(fn.Type.Params.List) != 1 {
+		return false
+	}
+	param := fn.Type.Params.List[0]
+	switch expr := param.Type.(type) {
+	case *ast.StarExpr:
+		sel, ok := expr.X.(*ast.SelectorExpr)
+		if !ok || sel.Sel == nil || sel.Sel.Name != "T" {
+			return false
+		}
+		ident, ok := sel.X.(*ast.Ident)
+		return ok && ident.Name == "testing"
+	default:
+		return false
+	}
+}
+
+func goRange(fset *token.FileSet, start, end token.Pos) vscode.Range {
+	startPos := fset.Position(start)
+	endPos := fset.Position(end)
+	return vscode.Range{
+		StartLine:   max(startPos.Line-1, 0),
+		StartColumn: max(startPos.Column-1, 0),
+		EndLine:     max(endPos.Line-1, 0),
+		EndColumn:   max(endPos.Column-1, 0),
+	}
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func selectedPlanItems(ids []string) []vscode.SetupPlanItem {
