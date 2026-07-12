@@ -209,8 +209,9 @@ suite('Keel Test Bridge config contract', () => {
 
     await upgradeConfig(root);
 
-    const devRoot = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
-    assert.ok(devRoot, 'test workspace should be configured');
+    const devRoot = keelModuleRootFromTestLocation();
+    const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+    process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = devRoot;
     const devConfigPath = path.join(devRoot, configRelativePath);
     const previousConfig = fs.existsSync(devConfigPath) ? fs.readFileSync(devConfigPath, 'utf8') : undefined;
     fs.mkdirSync(path.dirname(devConfigPath), { recursive: true });
@@ -220,7 +221,7 @@ suite('Keel Test Bridge config contract', () => {
       args: ['vscode', 'tests'],
       displayName: 'Keel'
     }, null, 2) + '\n');
-    const runStreamRoot = findKeelModuleRoot(devRoot);
+    const runStreamRoot = devRoot;
     const runsDir = path.join(runStreamRoot, '.devtools', 'vscode-runs');
     fs.rmSync(path.join(runsDir, 'run.lock'), { force: true });
     const beforeRunStreams = new Set(listRunStreams(runsDir));
@@ -237,6 +238,11 @@ suite('Keel Test Bridge config contract', () => {
       assert.equal(runEvents.filter((event) => event.event === 'run_finished').length, 1);
       assert.doesNotMatch(fs.readFileSync(newStreams[0], 'utf8'), /unknown flag/);
     } finally {
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
       if (previousConfig === undefined) {
         fs.rmSync(devConfigPath, { force: true });
       } else {
@@ -424,19 +430,14 @@ function realKeelDevBinary(): string {
   return path.resolve(__dirname, '../../../../bin', exe);
 }
 
-function findKeelModuleRoot(start: string): string {
-  let dir = path.resolve(start);
-  for (;;) {
-    const goMod = path.join(dir, 'go.mod');
-    if (fs.existsSync(goMod) && /^module github\.com\/david-aggeler\/keel$/m.test(fs.readFileSync(goMod, 'utf8'))) {
-      return dir;
-    }
-    const parent = path.dirname(dir);
-    if (parent === dir) {
-      throw new Error(`no keel module root found from ${start}`);
-    }
-    dir = parent;
-  }
+function keelModuleRootFromTestLocation(): string {
+  const root = path.resolve(__dirname, '../../../..');
+  const goMod = path.join(root, 'go.mod');
+  assert.ok(
+    fs.existsSync(goMod) && /^module github\.com\/david-aggeler\/keel$/m.test(fs.readFileSync(goMod, 'utf8')),
+    `compiled test location should resolve to the Keel module root: ${root}`
+  );
+  return root;
 }
 
 function listRunStreams(runsDir: string): string[] {
