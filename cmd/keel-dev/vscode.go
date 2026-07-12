@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,6 +22,10 @@ import (
 )
 
 const (
+	vscodeGroupMaintenance = "keel::maintenance"
+	vscodeGroupLanes       = "keel::lanes"
+	vscodeGroupFrameworks  = "keel::frameworks"
+
 	vscodeLaneLint         = "keel::lane::lint"
 	vscodeLaneTestFast     = "keel::lane::test-fast"
 	vscodeLaneTestCoverage = "keel::lane::test-coverage"
@@ -244,13 +249,15 @@ func handleVSCodeTestsRun(ctx context.Context, args []string) error {
 	return nil
 }
 
-// DHF-REQ: keel/requirement-39, keel/requirement-43
+// DHF-REQ: keel/requirement-39, keel/requirement-43, keel/requirement-46
 func writeVSCodeDiscovery(root string, out io.Writer) error {
 	items := []vscode.TestItem{
-		{ID: "keel::root", Label: "keel", Kind: "workspace", Runnable: false, Profiles: []string{"run"}},
-		laneItem(vscodeLaneLint, "lint"),
-		laneItem(vscodeLaneTestFast, "test-fast"),
-		laneItem(vscodeLaneTestCoverage, "test-coverage"),
+		groupItem(vscodeGroupMaintenance, "", "a. Maintenance", "a"),
+		groupItem(vscodeGroupLanes, "", "b. Lanes", "b"),
+		groupItem(vscodeGroupFrameworks, "", "d. Frameworks", "d"),
+		laneItem(vscodeLaneLint, "b.1 lint", ordinalSortText("b.1")),
+		laneItem(vscodeLaneTestFast, "b.2 test-fast", ordinalSortText("b.2")),
+		laneItem(vscodeLaneTestCoverage, "b.3 test-coverage", ordinalSortText("b.3")),
 	}
 	goItems, err := discoverGoTestItems(context.Background(), root)
 	if err != nil {
@@ -270,6 +277,18 @@ func writeVSCodeDiscovery(root string, out io.Writer) error {
 		Items: items,
 	}
 	return encodeProtocolDocument(out, doc)
+}
+
+func groupItem(id, parentID, label, sortText string) vscode.TestItem {
+	return vscode.TestItem{
+		ID:       id,
+		ParentID: parentID,
+		Label:    label,
+		SortText: sortText,
+		Kind:     "group",
+		Runnable: false,
+		Profiles: []string{},
+	}
 }
 
 func writeVSCodePlan(root string, ids []string, out io.Writer) error {
@@ -305,15 +324,16 @@ func writeVSCodePlan(root string, ids []string, out io.Writer) error {
 	return encodeProtocolDocument(out, plan)
 }
 
-func laneItem(id, label string) vscode.TestItem {
+func laneItem(id, label, sortText string) vscode.TestItem {
 	profiles := []string{"run"}
 	if id == vscodeLaneTestCoverage {
 		profiles = []string{"coverage"}
 	}
 	return vscode.TestItem{
 		ID:                id,
-		ParentID:          "keel::root",
+		ParentID:          vscodeGroupLanes,
 		Label:             label,
+		SortText:          sortText,
 		Kind:              "lane",
 		Framework:         "go",
 		Runner:            "keel-dev",
@@ -325,6 +345,19 @@ func laneItem(id, label string) vscode.TestItem {
 	}
 }
 
+func ordinalSortText(labelPrefix string) string {
+	parts := strings.Split(labelPrefix, ".")
+	for i := 1; i < len(parts); i++ {
+		if parts[i] == "" {
+			continue
+		}
+		if n, err := strconv.Atoi(parts[i]); err == nil {
+			parts[i] = fmt.Sprintf("%03d", n)
+		}
+	}
+	return strings.Join(parts, ".")
+}
+
 type goListPackage struct {
 	ImportPath   string
 	Dir          string
@@ -332,7 +365,7 @@ type goListPackage struct {
 	XTestGoFiles []string
 }
 
-// DHF-REQ: keel/requirement-43
+// DHF-REQ: keel/requirement-43, keel/requirement-46
 func discoverGoTestItems(ctx context.Context, root string) ([]vscode.TestItem, error) {
 	logger := vscodeDiscardLogger()
 	stdout, stderr, err := capture(ctx, logger, root, "go", "list", "-json", "./...")
@@ -345,8 +378,9 @@ func discoverGoTestItems(ctx context.Context, root string) ([]vscode.TestItem, e
 	}
 	items := []vscode.TestItem{{
 		ID:                "go::root",
-		ParentID:          "keel::root",
-		Label:             "Go tests",
+		ParentID:          vscodeGroupFrameworks,
+		Label:             "d.1 Go",
+		SortText:          ordinalSortText("d.1"),
 		Kind:              "root",
 		Framework:         "go",
 		Runner:            "go-test",

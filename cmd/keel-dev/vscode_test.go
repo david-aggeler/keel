@@ -234,6 +234,72 @@ func TestVSCodeDiscoveryAndPlanExposeKeelLaneSet(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-46
+func TestVSCodeDiscoveryEmitsStructuredOrderedTree(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	if err := os.MkdirAll(filepath.Join(root, "log"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join("log", "logging_test.go"), "package log\n\nimport \"testing\"\n\nfunc TestLog(t *testing.T) {}\n")
+
+	var discover bytes.Buffer
+	if err := writeVSCodeDiscovery(root, &discover); err != nil {
+		t.Fatalf("writeVSCodeDiscovery: %v", err)
+	}
+	var doc vscode.DiscoveryDocument
+	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
+		t.Fatalf("discovery JSON: %v\n%s", err, discover.String())
+	}
+
+	for _, forbidden := range []string{"keel::root"} {
+		if item, ok := discoveryItemByID(doc, forbidden); ok {
+			t.Fatalf("discovery emitted forbidden item %q: %+v", forbidden, item)
+		}
+	}
+
+	top := map[string]vscode.TestItem{}
+	for _, item := range doc.Items {
+		if item.ParentID == "" {
+			top[item.ID] = item
+		}
+		if strings.HasPrefix(item.Label, "c.") {
+			t.Fatalf("discovery emitted reserved c.* label: %+v", item)
+		}
+		if strings.Contains(item.ID, "a.") || strings.Contains(item.ID, "b.") || strings.Contains(item.ID, "d.") {
+			t.Fatalf("item id encodes ordinal %q for label %q", item.ID, item.Label)
+		}
+		assertDiscoveryKindAllowedBySchema(t, item.Kind)
+	}
+
+	wantTop := map[string]struct {
+		label string
+		sort  string
+	}{
+		"keel::maintenance": {label: "a. Maintenance", sort: "a"},
+		"keel::lanes":       {label: "b. Lanes", sort: "b"},
+		"keel::frameworks":  {label: "d. Frameworks", sort: "d"},
+	}
+	for id, want := range wantTop {
+		item, ok := top[id]
+		if !ok {
+			t.Fatalf("top-level group %q missing; top-level items: %+v", id, top)
+		}
+		if item.Label != want.label || item.Kind != "group" || item.SortText != want.sort || item.Runnable {
+			t.Fatalf("top-level group %q = %+v, want label=%q kind=group sort_text=%q runnable=false", id, item, want.label, want.sort)
+		}
+	}
+
+	goRoot, ok := discoveryItemByID(doc, "go::root")
+	if !ok {
+		t.Fatal("discovery missing go::root")
+	}
+	if goRoot.ParentID != "keel::frameworks" || goRoot.Label != "d.1 Go" || goRoot.SortText != "d.001" {
+		t.Fatalf("go::root = %+v, want parent keel::frameworks label d.1 Go sort_text d.001", goRoot)
+	}
+}
+
 // DHF-TEST: keel/requirement-43
 func TestVSCodeDiscoveryEmitsGoTestTreeFromStubGo(t *testing.T) {
 	root := t.TempDir()
@@ -278,7 +344,7 @@ exit 0`)
 		kind     string
 		runnable bool
 	}{
-		"go::root":                   {parent: "keel::root", label: "Go tests", kind: "root", runnable: true},
+		"go::root":                   {parent: "keel::frameworks", label: "d.1 Go", kind: "root", runnable: true},
 		"go::pkg::log":               {parent: "go::root", label: "log", kind: "package", runnable: true},
 		"go::test::log::TestLog":     {parent: "go::pkg::log", label: "TestLog", kind: "test", runnable: true},
 		"go::test::log::TestMetrics": {parent: "go::pkg::log", label: "TestMetrics", kind: "test", runnable: true},
@@ -609,6 +675,30 @@ func discoveryItemByID(doc vscode.DiscoveryDocument, id string) (vscode.TestItem
 		}
 	}
 	return vscode.TestItem{}, false
+}
+
+func assertDiscoveryKindAllowedBySchema(t *testing.T, kind string) {
+	t.Helper()
+	body, err := vscode.SchemaBytes(vscode.SchemaDiscovery)
+	if err != nil {
+		t.Fatalf("read discovery schema: %v", err)
+	}
+	var schema struct {
+		Defs map[string]struct {
+			Properties map[string]struct {
+				Enum []string `json:"enum"`
+			} `json:"properties"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(body, &schema); err != nil {
+		t.Fatalf("decode discovery schema: %v", err)
+	}
+	for _, allowed := range schema.Defs["test_item"].Properties["kind"].Enum {
+		if kind == allowed {
+			return
+		}
+	}
+	t.Fatalf("discovery item kind %q is not allowed by embedded discovery schema enum %v", kind, schema.Defs["test_item"].Properties["kind"].Enum)
 }
 
 func runEventsContain(events []vscode.RunEvent, event, id string) bool {
