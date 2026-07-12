@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"time"
 
@@ -242,8 +244,19 @@ func handleVSCodeTestsRun(ctx context.Context, args []string) error {
 	return nil
 }
 
-// DHF-REQ: keel/requirement-39
+// DHF-REQ: keel/requirement-39, keel/requirement-43
 func writeVSCodeDiscovery(root string, out io.Writer) error {
+	items := []vscode.TestItem{
+		{ID: "keel::root", Label: "keel", Kind: "workspace", Runnable: false, Profiles: []string{"run"}},
+		laneItem(vscodeLaneLint, "lint"),
+		laneItem(vscodeLaneTestFast, "test-fast"),
+		laneItem(vscodeLaneTestCoverage, "test-coverage"),
+	}
+	goItems, err := discoverGoTestItems(context.Background(), root)
+	if err != nil {
+		return err
+	}
+	items = append(items, goItems...)
 	doc := vscode.DiscoveryDocument{
 		Version:     1,
 		Workspace:   workspaceNode(root),
@@ -254,12 +267,7 @@ func writeVSCodeDiscovery(root string, out io.Writer) error {
 			RefreshInvalidatesResults: true,
 			NeutralParentRollups:      true,
 		},
-		Items: []vscode.TestItem{
-			{ID: "keel::root", Label: "keel", Kind: "workspace", Runnable: false, Profiles: []string{"run"}},
-			laneItem(vscodeLaneLint, "lint"),
-			laneItem(vscodeLaneTestFast, "test-fast"),
-			laneItem(vscodeLaneTestCoverage, "test-coverage"),
-		},
+		Items: items,
 	}
 	return encodeProtocolDocument(out, doc)
 }
@@ -317,18 +325,161 @@ func laneItem(id, label string) vscode.TestItem {
 	}
 }
 
+type goListPackage struct {
+	ImportPath   string
+	Dir          string
+	TestGoFiles  []string
+	XTestGoFiles []string
+}
+
+// DHF-REQ: keel/requirement-43
+func discoverGoTestItems(ctx context.Context, root string) ([]vscode.TestItem, error) {
+	logger := vscodeDiscardLogger()
+	stdout, stderr, err := capture(ctx, logger, root, "go", "list", "-json", "./...")
+	if err != nil {
+		return nil, fmt.Errorf("vscode discover go list: %w: %s", err, strings.TrimSpace(stderr))
+	}
+	packages, err := decodeGoListPackages(stdout)
+	if err != nil {
+		return nil, err
+	}
+	items := []vscode.TestItem{{
+		ID:                "go::root",
+		ParentID:          "keel::root",
+		Label:             "Go tests",
+		Kind:              "root",
+		Framework:         "go",
+		Runner:            "go-test",
+		RunnerLabel:       "Go test",
+		Runnable:          true,
+		Profiles:          []string{"run"},
+		RequiredResources: []string{"go-toolchain", "keel-module-root"},
+	}}
+	for _, pkg := range packages {
+		if len(pkg.TestGoFiles)+len(pkg.XTestGoFiles) == 0 {
+			continue
+		}
+		rel := vscode.GoEventPackageRel(pkg.ImportPath, modulePath)
+		if rel == "" {
+			continue
+		}
+		tests, err := listGoPackageTests(ctx, logger, root, rel)
+		if err != nil {
+			return nil, err
+		}
+		if len(tests) == 0 {
+			continue
+		}
+		pkgID := "go::pkg::" + filepath.ToSlash(rel)
+		items = append(items, vscode.TestItem{
+			ID:                pkgID,
+			ParentID:          "go::root",
+			Label:             rel,
+			Kind:              "package",
+			Framework:         "go",
+			Runner:            "go-test",
+			RunnerLabel:       "Go test",
+			Runnable:          true,
+			Profiles:          []string{"run"},
+			RequiredResources: []string{"go-toolchain", "keel-module-root"},
+		})
+		for _, testName := range tests {
+			items = append(items, vscode.TestItem{
+				ID:                "go::test::" + filepath.ToSlash(rel) + "::" + testName,
+				ParentID:          pkgID,
+				Label:             testName,
+				Kind:              "test",
+				Framework:         "go",
+				Runner:            "go-test",
+				RunnerLabel:       "Go test",
+				Runnable:          true,
+				Profiles:          []string{"run"},
+				RequiredResources: []string{"go-toolchain", "keel-module-root"},
+			})
+		}
+	}
+	return items, nil
+}
+
+func decodeGoListPackages(raw string) ([]goListPackage, error) {
+	dec := json.NewDecoder(strings.NewReader(raw))
+	var packages []goListPackage
+	for dec.More() {
+		var pkg goListPackage
+		if err := dec.Decode(&pkg); err != nil {
+			return nil, fmt.Errorf("decode go list package: %w", err)
+		}
+		packages = append(packages, pkg)
+	}
+	sort.Slice(packages, func(i, j int) bool { return packages[i].ImportPath < packages[j].ImportPath })
+	return packages, nil
+}
+
+func listGoPackageTests(ctx context.Context, logger *slog.Logger, root, pkg string) ([]string, error) {
+	stdout, stderr, err := capture(ctx, logger, root, "go", "test", "-list", ".", vscode.GoPackageArg(pkg))
+	if err != nil {
+		return nil, fmt.Errorf("vscode discover go test -list %s: %w: %s", pkg, err, strings.TrimSpace(stderr))
+	}
+	seen := map[string]bool{}
+	var tests []string
+	for _, line := range strings.Split(stdout, "\n") {
+		name := strings.TrimSpace(line)
+		if !strings.HasPrefix(name, "Test") || seen[name] {
+			continue
+		}
+		seen[name] = true
+		tests = append(tests, name)
+	}
+	sort.Strings(tests)
+	return tests, nil
+}
+
 func selectedPlanItems(ids []string) []vscode.SetupPlanItem {
 	if len(ids) == 0 {
 		ids = vscodeLaneIDs
 	}
 	items := make([]vscode.SetupPlanItem, 0, len(ids))
 	for _, id := range ids {
+		if selection, ok := vscode.ParseGoItemID(id); ok {
+			items = append(items, vscode.SetupPlanItem{
+				ID:                id,
+				Label:             goSelectionLabel(selection, id),
+				Kind:              selection.Kind,
+				Framework:         "go",
+				Runner:            "go-test",
+				RunnerLabel:       "Go test",
+				Runnable:          true,
+				RequiredResources: []string{"go-toolchain", "keel-module-root"},
+			})
+			continue
+		}
 		items = append(items, vscode.SetupPlanItem{ID: id, Label: strings.TrimPrefix(id, "keel::lane::"), Kind: "lane", LaneID: id, Runnable: true, RequiredResources: []string{"go-toolchain", "keel-module-root", "stub-binaries"}})
 	}
 	return items
 }
 
+func goSelectionLabel(selection vscode.GoSelection, id string) string {
+	switch {
+	case selection.TestName != "":
+		return selection.TestName
+	case selection.Pkg != "":
+		return selection.Pkg
+	default:
+		return id
+	}
+}
+
 func runVSCodeLane(ctx context.Context, logger *slog.Logger, root, laneID, runID string, writer vscode.RunEventWriter) (int, error) {
+	// DHF-REQ: keel/requirement-43
+	if selection, ok := vscode.ParseGoItemID(laneID); ok {
+		if logger == nil {
+			logger = vscodeDiscardLogger()
+		}
+		if err := runVSCodeGoSelection(ctx, logger, root, laneID, selection, writer); err != nil {
+			return gateExitCode(err), err
+		}
+		return 0, nil
+	}
 	switch laneID {
 	case vscodeLaneLint:
 		if err := runLint(root); err != nil {
@@ -352,6 +503,50 @@ func runVSCodeLane(ctx context.Context, logger *slog.Logger, root, laneID, runID
 		return 2, cli.NewUsageError("unknown vscode lane id %q", laneID)
 	}
 	return 0, nil
+}
+
+func runVSCodeGoSelection(ctx context.Context, logger *slog.Logger, root, selectedID string, selection vscode.GoSelection, writer vscode.RunEventWriter) error {
+	args := []string{"test", vscode.GoPackageArg(selection.Pkg), "-json"}
+	if selection.TestName != "" {
+		args = append(args, "-run="+vscode.GoTestNamePattern([]string{selection.TestName}))
+	} else if len(selection.TestNames) > 0 {
+		args = append(args, "-run="+vscode.GoTestNamePattern(selection.TestNames))
+	}
+	stdout, stderr, err := capture(ctx, logger, root, "go", args...)
+	emitGoTestJSONEvents(stdout, selection, selectedID, modulePath, writer)
+	if err != nil {
+		return fmt.Errorf("go test %s: %w: %s", strings.Join(args[1:], " "), err, strings.TrimSpace(stderr))
+	}
+	return nil
+}
+
+func emitGoTestJSONEvents(raw string, selection vscode.GoSelection, selectedID, modulePath string, writer vscode.RunEventWriter) {
+	scanner := bufio.NewScanner(strings.NewReader(raw))
+	for scanner.Scan() {
+		var event vscode.GoTestJSONEvent
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			continue
+		}
+		testID := vscode.GoRunEventTestID(selection, event, selectedID, modulePath)
+		switch event.Action {
+		case "run":
+			if event.Test != "" && vscode.OutputBelongsToGoSelection(selection, event) {
+				writer(vscode.RunEvent{Event: "test_started", TestID: testID})
+			}
+		case "pass", "fail", "skip":
+			if vscode.GoJSONResultBelongsToSelection(selection, event) {
+				writer(vscode.RunEvent{
+					Event:      vscode.StatusEventName(event.Action),
+					TestID:     testID,
+					DurationMS: vscode.GoElapsedMillis(event.Elapsed, time.Now()),
+				})
+			}
+		case "output":
+			if vscode.OutputBelongsToGoSelection(selection, event) {
+				writer(vscode.RunEvent{Event: "output", TestID: testID, Message: event.Output})
+			}
+		}
+	}
 }
 
 func vscodeDiscardLogger() *slog.Logger {

@@ -123,6 +123,33 @@ suite('Keel Test Bridge config contract', () => {
     assert.equal(events.filter((event) => event.event === 'run_finished').length, 1);
   });
 
+  // DHF-TEST: keel/requirement-43
+  test('discovery replay renders Go package and test children from the shared fixture', async function () {
+    this.timeout(10_000);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-fake-discovery-'));
+    fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+    fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+      version: currentConfigVersion,
+      command: process.execPath,
+      args: [path.resolve(__dirname, '../../../src/test/fixtures/fake-adapter.js'), 'vscode', 'tests'],
+      displayName: 'Keel'
+    }, null, 2) + '\n');
+
+    const discovery = await discoverTests(root);
+    const controller = vscode.tests.createTestController(`keelGoDiscovery-${Date.now()}`, 'Keel Go Discovery');
+    try {
+      const tree = publishDiscovery(controller, root, discovery);
+      assert.ok(tree.discoveryItemsById.has('go::root'));
+      assert.ok(tree.discoveryItemsById.has('go::pkg::log'));
+      assert.ok(tree.discoveryItemsById.has('go::test::log::TestLog'));
+      assert.equal(tree.parentByItemId.get('go::pkg::log')?.id, 'go::root');
+      assert.equal(tree.parentByItemId.get('go::test::log::TestLog')?.id, 'go::pkg::log');
+    } finally {
+      controller.dispose();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   // DHF-TEST: keel/requirement-42
   test('production bridge argv is accepted by the real keel-dev binary per verb', async function () {
     this.timeout(30_000);

@@ -234,6 +234,197 @@ func TestVSCodeDiscoveryAndPlanExposeKeelLaneSet(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-43
+func TestVSCodeDiscoveryEmitsGoTestTreeFromStubGo(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	if err := os.MkdirAll(filepath.Join(root, "log"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join("log", "logging_test.go"), "package log\n\nimport \"testing\"\n\nfunc TestLog(t *testing.T) {}\nfunc TestMetrics(t *testing.T) {}\n")
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", `
+case "$1 $2 $3" in
+  "list -json ./...")
+    printf '{"ImportPath":"github.com/david-aggeler/keel/log","Dir":"%s","TestGoFiles":["logging_test.go"]}\n' "$PWD/log"
+    ;;
+  "test -list .")
+    case "$4" in
+      ./log)
+        printf 'TestLog\n'
+        printf 'TestMetrics\n'
+        ;;
+    esac
+    ;;
+esac
+exit 0`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var discover bytes.Buffer
+	if err := writeVSCodeDiscovery(root, &discover); err != nil {
+		t.Fatalf("writeVSCodeDiscovery: %v\ncalls:\n%s", err, calls(t, callsFile))
+	}
+	var doc vscode.DiscoveryDocument
+	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
+		t.Fatalf("discovery JSON: %v\n%s", err, discover.String())
+	}
+
+	want := map[string]struct {
+		parent   string
+		label    string
+		kind     string
+		runnable bool
+	}{
+		"go::root":                   {parent: "keel::root", label: "Go tests", kind: "root", runnable: true},
+		"go::pkg::log":               {parent: "go::root", label: "log", kind: "package", runnable: true},
+		"go::test::log::TestLog":     {parent: "go::pkg::log", label: "TestLog", kind: "test", runnable: true},
+		"go::test::log::TestMetrics": {parent: "go::pkg::log", label: "TestMetrics", kind: "test", runnable: true},
+	}
+	for id, wantItem := range want {
+		item, ok := discoveryItemByID(doc, id)
+		if !ok {
+			t.Fatalf("discovery missing %s in %+v\ncalls:\n%s", id, doc.Items, calls(t, callsFile))
+		}
+		if item.ParentID != wantItem.parent || item.Label != wantItem.label || item.Kind != wantItem.kind || item.Runnable != wantItem.runnable {
+			t.Fatalf("item %s = %+v, want parent=%q label=%q kind=%q runnable=%v", id, item, wantItem.parent, wantItem.label, wantItem.kind, wantItem.runnable)
+		}
+	}
+}
+
+// DHF-TEST: keel/requirement-43
+func TestVSCodeRunGoTestSelectionUsesRunFilterAndSelectedID(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	if err := os.MkdirAll(filepath.Join(root, "log"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join("log", "logging_test.go"), "package log\n\nimport \"testing\"\n\nfunc TestLog(t *testing.T) {}\n")
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", `
+case "$1 $2" in
+  "test ./log")
+    found_run=
+    for arg in "$@"; do
+      case "$arg" in
+        -run=^\(TestLog\)$) found_run=1 ;;
+      esac
+    done
+    if [ "$found_run" != 1 ]; then
+      printf 'missing selected -run filter\n' >&2
+      exit 2
+    fi
+    printf '{"Action":"run","Package":"github.com/david-aggeler/keel/log","Test":"TestLog"}\n'
+    printf '{"Action":"pass","Package":"github.com/david-aggeler/keel/log","Test":"TestLog","Elapsed":0.01}\n'
+    printf '{"Action":"pass","Package":"github.com/david-aggeler/keel/log","Elapsed":0.01}\n'
+    ;;
+esac
+exit 0`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var protocol bytes.Buffer
+	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "go::test::log::TestLog"}); err != nil {
+		t.Fatalf("go test selection run: %v\nprotocol:\n%s\ncalls:\n%s", err, protocol.String(), calls(t, callsFile))
+	}
+	if !strings.Contains(calls(t, callsFile), "go test ./log -json -run=^(TestLog)$") {
+		t.Fatalf("go test selection did not use package + exact -run filter:\n%s", calls(t, callsFile))
+	}
+	events := decodeRunEvents(t, protocol.String())
+	if !runEventsContain(events, "passed", "go::test::log::TestLog") {
+		t.Fatalf("run events missing selected test pass: %+v", events)
+	}
+	if events[len(events)-1].Event != "run_finished" || events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode != 0 {
+		t.Fatalf("terminal event = %+v, want run_finished exit 0", events[len(events)-1])
+	}
+
+	var plan bytes.Buffer
+	if err := writeVSCodePlan(root, []string{"go::test::log::TestLog"}, &plan); err != nil {
+		t.Fatalf("writeVSCodePlan for go test: %v", err)
+	}
+	var setup vscode.SetupPlan
+	if err := json.Unmarshal(plan.Bytes(), &setup); err != nil {
+		t.Fatalf("plan JSON: %v\n%s", err, plan.String())
+	}
+	if len(setup.Items) != 1 || setup.Items[0].ID != "go::test::log::TestLog" || setup.Items[0].Kind != "test" || setup.Items[0].Framework != "go" {
+		t.Fatalf("go selection plan items = %+v, want one Go test item", setup.Items)
+	}
+}
+
+// DHF-TEST: keel/requirement-43
+func TestVSCodeRunGoPackageSelectionRunsPackageWithoutRunFilter(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", `
+case "$1 $2" in
+  "test ./log")
+    for arg in "$@"; do
+      case "$arg" in
+        -run=*)
+          printf 'unexpected -run for package selection\n' >&2
+          exit 2
+          ;;
+      esac
+    done
+    printf '{"Action":"run","Package":"github.com/david-aggeler/keel/log"}\n'
+    printf '{"Action":"pass","Package":"github.com/david-aggeler/keel/log","Elapsed":0.02}\n'
+    ;;
+esac
+exit 0`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var protocol bytes.Buffer
+	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "go::pkg::log"}); err != nil {
+		t.Fatalf("go package run: %v\nprotocol:\n%s\ncalls:\n%s", err, protocol.String(), calls(t, callsFile))
+	}
+	if !strings.Contains(calls(t, callsFile), "go test ./log -json") || strings.Contains(calls(t, callsFile), "-run=") {
+		t.Fatalf("go package selection used wrong command:\n%s", calls(t, callsFile))
+	}
+	events := decodeRunEvents(t, protocol.String())
+	if !runEventsContain(events, "passed", "go::pkg::log") {
+		t.Fatalf("run events missing package pass: %+v", events)
+	}
+
+	var plan bytes.Buffer
+	if err := writeVSCodePlan(root, []string{"go::pkg::log", "go::root"}, &plan); err != nil {
+		t.Fatalf("writeVSCodePlan for go package/root: %v", err)
+	}
+	var setup vscode.SetupPlan
+	if err := json.Unmarshal(plan.Bytes(), &setup); err != nil {
+		t.Fatalf("plan JSON: %v\n%s", err, plan.String())
+	}
+	if len(setup.Items) != 2 || setup.Items[0].Kind != "package" || setup.Items[0].Label != "log" || setup.Items[1].Kind != "root" {
+		t.Fatalf("go package/root plan items = %+v", setup.Items)
+	}
+}
+
+// DHF-TEST: keel/requirement-43
+func TestVSCodeDiscoveryReportsGoEnumerationFailures(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", `
+printf 'go list exploded\n' >&2
+exit 7`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var discover bytes.Buffer
+	err := writeVSCodeDiscovery(root, &discover)
+	if err == nil || !strings.Contains(err.Error(), "vscode discover go list") || !strings.Contains(err.Error(), "go list exploded") {
+		t.Fatalf("writeVSCodeDiscovery err = %v, want loud go list failure\ncalls:\n%s", err, calls(t, callsFile))
+	}
+}
+
 // DHF-TEST: keel/requirement-39
 func TestVSCodeCoverageLaneEmitsPersistedCoverageArtifact(t *testing.T) {
 	root := t.TempDir()
@@ -405,6 +596,24 @@ func TestVSCodeRunWritesStampedExternalRunStream(t *testing.T) {
 func discoveryHasLane(doc vscode.DiscoveryDocument, id string) bool {
 	for _, item := range doc.Items {
 		if item.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func discoveryItemByID(doc vscode.DiscoveryDocument, id string) (vscode.TestItem, bool) {
+	for _, item := range doc.Items {
+		if item.ID == id {
+			return item, true
+		}
+	}
+	return vscode.TestItem{}, false
+}
+
+func runEventsContain(events []vscode.RunEvent, event, id string) bool {
+	for _, got := range events {
+		if got.Event == event && got.TestID == id {
 			return true
 		}
 	}
