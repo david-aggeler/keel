@@ -26,6 +26,10 @@ const (
 	vscodeGroupLanes       = "keel::lanes"
 	vscodeGroupFrameworks  = "keel::frameworks"
 
+	vscodeMaintenanceUnlock       = "keel::maintenance::unlock"
+	vscodeMaintenanceClearResults = "keel::maintenance::clear-results"
+	vscodeMaintenanceClearState   = "keel::maintenance::clear-state"
+
 	vscodeLaneLint         = "keel::lane::lint"
 	vscodeLaneTestFast     = "keel::lane::test-fast"
 	vscodeLaneTestCoverage = "keel::lane::test-coverage"
@@ -217,6 +221,20 @@ func handleVSCodeTestsRun(ctx context.Context, args []string) error {
 
 	writer(vscode.RunEvent{Event: "run_started", Live: boolPtr(true)})
 
+	if len(ids) == 1 && ids[0] == vscodeMaintenanceUnlock {
+		exitCode, err = runVSCodeMaintenance(state.root, ids[0])
+		if err != nil {
+			writer(vscode.RunEvent{Event: "errored", Message: err.Error()})
+			writer(vscode.RunEvent{Event: "run_finished", Message: err.Error(), ExitCode: &exitCode})
+			finished = true
+			return vscodeRunError{exitCode: exitCode, msg: err.Error()}
+		}
+		writer(vscode.RunEvent{Event: "passed", TestID: ids[0]})
+		writer(vscode.RunEvent{Event: "run_finished", ExitCode: &exitCode})
+		finished = true
+		return nil
+	}
+
 	releaseLock, err := acquireVSCodeRunLock(state.root, ids, runID)
 	if err != nil {
 		writer(vscode.RunEvent{Event: "errored", Message: err.Error()})
@@ -255,6 +273,9 @@ func writeVSCodeDiscovery(root string, out io.Writer) error {
 		groupItem(vscodeGroupMaintenance, "", "a. Maintenance", "a"),
 		groupItem(vscodeGroupLanes, "", "b. Lanes", "b"),
 		groupItem(vscodeGroupFrameworks, "", "d. Frameworks", "d"),
+		maintenanceItem(vscodeMaintenanceUnlock, "a.2 unlock test bridge", ordinalSortText("a.2")),
+		maintenanceItem(vscodeMaintenanceClearResults, "a.3 clear test results", ordinalSortText("a.3")),
+		maintenanceItem(vscodeMaintenanceClearState, "a.4 clear local test state", ordinalSortText("a.4")),
 		laneItem(vscodeLaneLint, "b.1 lint", ordinalSortText("b.1")),
 		laneItem(vscodeLaneTestFast, "b.2 test-fast", ordinalSortText("b.2")),
 		laneItem(vscodeLaneTestCoverage, "b.3 test-coverage", ordinalSortText("b.3")),
@@ -273,6 +294,8 @@ func writeVSCodeDiscovery(root string, out io.Writer) error {
 			ClearResults:              true,
 			RefreshInvalidatesResults: true,
 			NeutralParentRollups:      true,
+			ClearResultsTestIDs:       []string{vscodeMaintenanceClearResults},
+			ClearStateTestIDs:         []string{vscodeMaintenanceClearState},
 		},
 		Items: items,
 	}
@@ -288,6 +311,21 @@ func groupItem(id, parentID, label, sortText string) vscode.TestItem {
 		Kind:     "group",
 		Runnable: false,
 		Profiles: []string{},
+	}
+}
+
+func maintenanceItem(id, label, sortText string) vscode.TestItem {
+	return vscode.TestItem{
+		ID:          id,
+		ParentID:    vscodeGroupMaintenance,
+		Label:       label,
+		SortText:    sortText,
+		Kind:        "maintenance",
+		Framework:   "keel",
+		Runner:      "keel-dev",
+		RunnerLabel: "keel-dev",
+		Runnable:    true,
+		Profiles:    []string{"run"},
 	}
 }
 
@@ -504,6 +542,9 @@ func goSelectionLabel(selection vscode.GoSelection, id string) string {
 }
 
 func runVSCodeLane(ctx context.Context, logger *slog.Logger, root, laneID, runID string, writer vscode.RunEventWriter) (int, error) {
+	if strings.HasPrefix(laneID, "keel::maintenance::") {
+		return runVSCodeMaintenance(root, laneID)
+	}
 	// DHF-REQ: keel/requirement-43
 	if selection, ok := vscode.ParseGoItemID(laneID); ok {
 		if logger == nil {
@@ -535,6 +576,25 @@ func runVSCodeLane(ctx context.Context, logger *slog.Logger, root, laneID, runID
 		}
 	default:
 		return 2, cli.NewUsageError("unknown vscode lane id %q", laneID)
+	}
+	return 0, nil
+}
+
+// DHF-REQ: keel/requirement-47
+func runVSCodeMaintenance(root, id string) (int, error) {
+	switch id {
+	case vscodeMaintenanceUnlock:
+		if err := os.Remove(vscodeRunLockPath(root)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return 1, err
+		}
+	case vscodeMaintenanceClearResults:
+		return 0, nil
+	case vscodeMaintenanceClearState:
+		if err := os.RemoveAll(filepath.Join(root, ".devtools")); err != nil {
+			return 1, err
+		}
+	default:
+		return 2, cli.NewUsageError("unknown vscode maintenance id %q", id)
 	}
 	return 0, nil
 }
@@ -757,7 +817,7 @@ func acquireVSCodeRunLock(root string, ids []string, token string) (func() error
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(runDir, "run.lock")
+	path := vscodeRunLockPath(root)
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
@@ -794,6 +854,10 @@ func acquireVSCodeRunLock(root string, ids []string, token string) (func() error
 		}
 		return os.Remove(path)
 	}, nil
+}
+
+func vscodeRunLockPath(root string) string {
+	return filepath.Join(root, ".devtools", "vscode-runs", "run.lock")
 }
 
 func pruneOldVSCodeRuns(dir string, logger *slog.Logger) {

@@ -300,6 +300,82 @@ func TestVSCodeDiscoveryEmitsStructuredOrderedTree(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-47
+func TestVSCodeMaintenanceItemsAdvertiseCapabilitiesAndRunActions(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	if err := os.MkdirAll(filepath.Join(root, ".vscode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".devtools"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join(".vscode", "test-bridge.json"), `{"version":2,"command":"bin/keel-dev","args":["vscode","tests"],"displayName":"Keel"}`+"\n")
+	writeFile(t, root, filepath.Join(".devtools", "vscode-demo-block.json"), `{"blocked_lane":"keel::lane::test-fast","updated_at":"2026-07-12T00:00:00Z"}`+"\n")
+	runDir := filepath.Join(root, ".devtools", "vscode-runs")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(runDir, "run.lock")
+	if err := os.WriteFile(lockPath, []byte(`{"pid":12345,"created_at":"2026-07-12T00:00:00Z","ids":["keel::lane::test-fast"],"token":"foreign"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var discover bytes.Buffer
+	if err := writeVSCodeDiscovery(root, &discover); err != nil {
+		t.Fatalf("writeVSCodeDiscovery: %v", err)
+	}
+	var doc vscode.DiscoveryDocument
+	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
+		t.Fatalf("discovery JSON: %v\n%s", err, discover.String())
+	}
+	if got, want := doc.Capabilities.ClearResultsTestIDs, []string{"keel::maintenance::clear-results"}; !stringSlicesEqual(got, want) {
+		t.Fatalf("clear_results_test_ids = %v, want %v", got, want)
+	}
+	if got, want := doc.Capabilities.ClearStateTestIDs, []string{"keel::maintenance::clear-state"}; !stringSlicesEqual(got, want) {
+		t.Fatalf("clear_state_test_ids = %v, want %v", got, want)
+	}
+	for id, want := range map[string]struct {
+		label string
+		sort  string
+	}{
+		"keel::maintenance::unlock":        {label: "a.2 unlock test bridge", sort: "a.002"},
+		"keel::maintenance::clear-results": {label: "a.3 clear test results", sort: "a.003"},
+		"keel::maintenance::clear-state":   {label: "a.4 clear local test state", sort: "a.004"},
+	} {
+		item, ok := discoveryItemByID(doc, id)
+		if !ok {
+			t.Fatalf("discovery missing maintenance item %q", id)
+		}
+		if item.ParentID != "keel::maintenance" || item.Kind != "maintenance" || item.Label != want.label || item.SortText != want.sort || !item.Runnable {
+			t.Fatalf("maintenance item %q = %+v, want parent maintenance label=%q sort=%q runnable", id, item, want.label, want.sort)
+		}
+	}
+
+	var protocol bytes.Buffer
+	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "keel::maintenance::unlock"}); err != nil {
+		t.Fatalf("unlock maintenance run: %v\nprotocol:\n%s", err, protocol.String())
+	}
+	if _, err := os.Stat(lockPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unlock should remove stranded run.lock, stat err=%v", err)
+	}
+	if events := decodeRunEvents(t, protocol.String()); !runEventsContain(events, "passed", "keel::maintenance::unlock") || events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode != 0 {
+		t.Fatalf("unlock events = %+v, want passed and run_finished exit 0", events)
+	}
+
+	protocol.Reset()
+	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "keel::maintenance::clear-state"}); err != nil {
+		t.Fatalf("clear-state maintenance run: %v\nprotocol:\n%s", err, protocol.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, ".devtools", "vscode-demo-block.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("clear-state should remove devtool state, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".vscode", "test-bridge.json")); err != nil {
+		t.Fatalf("clear-state must not remove bridge config: %v", err)
+	}
+}
+
 // DHF-TEST: keel/requirement-43
 func TestVSCodeDiscoveryEmitsGoTestTreeFromStubGo(t *testing.T) {
 	root := t.TempDir()
@@ -708,6 +784,18 @@ func runEventsContain(events []vscode.RunEvent, event, id string) bool {
 		}
 	}
 	return false
+}
+
+func stringSlicesEqual(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func eventIndex(events []vscode.RunEvent, eventName string) int {
