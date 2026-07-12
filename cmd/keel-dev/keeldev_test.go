@@ -156,6 +156,7 @@ func TestRunCIGofmtGate(t *testing.T) {
 	// including the coverage floor.
 	writeFile(t, dir, "keel_test_pkg.go", "package p\n\nfunc One() int {\n\treturn 1\n}\n")
 	writeFile(t, dir, "keel_test_pkg_test.go", "package p\n\nimport \"testing\"\n\nfunc TestOne(t *testing.T) {\n\tif One() != 1 {\n\t\tt.Fatal(\"one\")\n\t}\n}\n")
+	writeFile(t, dir, "cspell.json", "{\"version\":\"0.2\",\"language\":\"en-US\",\"words\":[\"keel\"]}\n")
 	if err := runCI(context.Background(), discardLogger(), dir); err != nil {
 		t.Fatalf("clean module should pass ci, got %v", err)
 	}

@@ -277,7 +277,11 @@ func TestCspellStep_FailsOnMisspelling(t *testing.T) {
 	// A nonsense consonant run, built from runes so no unknown word literal
 	// appears in this source file.
 	bad := string([]rune{'z', 'q', 'x', 'v', 'w', 'k', 'j', 'b', 'f'})
-	fixtureDir := t.TempDir()
+	fixtureDir, err := os.MkdirTemp(root, "cspell-selftest-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(fixtureDir)
 	fixture := filepath.Join(fixtureDir, "bad.md")
 	if err := os.WriteFile(fixture, []byte("# heading\n\nThe word "+bad+" is not real.\n"), 0o644); err != nil {
 		t.Fatal(err)

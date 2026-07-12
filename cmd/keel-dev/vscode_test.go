@@ -375,7 +375,7 @@ func TestVSCodeDiscoveryRendersFileLanesAndDiagnostics(t *testing.T) {
 }
 
 // DHF-TEST: keel/requirement-51
-func TestVSCodeFileLaneRunDedupsGoPackages(t *testing.T) {
+func TestVSCodeFileLaneRunDeduplicatesGoPackages(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, root, "go.sum", "")
