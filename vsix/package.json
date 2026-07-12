@@ -50,6 +50,10 @@
         "title": "Keel: Unlock Test Bridge"
       },
       {
+        "command": "keel.tests.detectLanes",
+        "title": "Keel: Detect Test Lanes"
+      },
+      {
         "command": "keel.tests.toggleDemoBlock",
         "title": "Keel: Toggle Demo Block"
       }
