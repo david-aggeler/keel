@@ -92,6 +92,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         void vscode.window.showErrorMessage(message);
       }
     }),
+    vscode.commands.registerCommand('keel.tests.detectLanes', async () => {
+      try {
+        await runAdapterMaintenance(controller, ['keel::maintenance::detect-lanes']);
+        void vscode.window.showInformationMessage(`Detected ${currentAdapterConfig().displayName} test lanes.`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        output.appendLine(`Detect lanes failed: ${message}`);
+        void vscode.window.showErrorMessage(message);
+      }
+    }),
     vscode.commands.registerCommand('keel.tests.toggleDemoBlock', async () => {
       await toggleDemoBlock(controller);
     }),
@@ -100,7 +110,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     })
   );
 
-  const watcher = vscode.workspace.createFileSystemWatcher('**/{*_test.go,*.test.ts,*.test.tsx,*.spec.ts,.vscode/test-bridge.json}');
+  // DHF-REQ: keel/requirement-51
+  const watcher = vscode.workspace.createFileSystemWatcher('**/{*_test.go,*.test.ts,*.test.tsx,*.spec.ts,.vscode/test-bridge.json,.vscode/test-lanes.json}');
   const dispatchWatcherEvent = () => scheduleWatcherRefresh(controller);
   context.subscriptions.push(
     watcher,

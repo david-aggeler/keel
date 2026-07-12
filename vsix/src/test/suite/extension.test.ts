@@ -42,6 +42,7 @@ suite('Keel Test Bridge config contract', () => {
     assert.ok(commands.has('keel.tests.refresh'));
     assert.ok(commands.has('keel.tests.initConfig'));
     assert.ok(commands.has('keel.tests.unlock'));
+    assert.ok(commands.has('keel.tests.detectLanes'));
     assert.ok(commands.has('keel.tests.toggleDemoBlock'));
     assert.ok(!commands.has('vela.tests.refresh'));
   });
