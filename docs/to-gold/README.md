@@ -12,6 +12,7 @@ the frontmatter, and delete the file — this directory must trend to empty
 |---|---|---|
 | `architecture_description-root.md` | architecture_description | ROOT (one per product); `chapters[]` lists the test-bridge chapter |
 | `architecture_description-test-bridge.md` | architecture_description | chapter: VS Code Test Bridge & lanes (concept chapter) |
+| `architecture_description-adapter-cli.md` | architecture_description | chapter: Adapter invocation contract — exact VSIX ↔ devtool CLI wire (`keel/architecture_description-3`) |
 | `interface_spec.md` | interface_spec | one per product; §4 points at the lanes spec |
 | `threat_model.md` | threat_model | one per product; initial STRIDE pass deliberately marked pending |
 | `attachments/test-lanes-spec.md` | (attachment) | normative lanes contract; canonical copy already attached to `keel/exploration-2`; attach to the interface_spec on ingestion |

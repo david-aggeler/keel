@@ -9,6 +9,7 @@ summary: >-
 status: draft
 chapters:
   - keel/architecture_description-2   # VS Code Test Bridge & lanes (to-gold sibling)
+  - keel/architecture_description-3   # Adapter invocation contract (VSIX ↔ devtool CLI) (to-gold sibling)
 related:
   - keel/exploration-2
   - keel/prototype-1
@@ -174,6 +175,17 @@ Test Explorer tree (lettered groups, Maintenance actions, aggregation lanes
 with covers subtrees and measured cost), the planned lanes file with
 lane-in-lane composition, and the keel-dev verb contract. Read when touching
 `keel/vscode`, `cmd/keel-dev` vscode verbs, or the VSIX.
+
+**Adapter invocation contract (VSIX ↔ devtool CLI)** — the exact command-line
+wire under the concept chapter above: the six process invocations the VSIX
+emits (discover, plan, run, demo status, demo block/unblock, config upgrade),
+their literal argv, `execFile`-vs-streaming mode, buffer ceilings and
+stdout/exit semantics, plus the conformance rules a devtool must answer (args
+is a prefix; `--format` on discover/plan only, never `run`; demo args-surgery;
+hardcoded upgrade path). Read when changing any flag on either side of the
+bridge, or diagnosing an adapter skew. Names the unenforced cross-binary argv
+gap that let the 2026-07-12 stale-VSIX `run --format` failure ship past a green
+gate on both sides.
 
 *Deliberately deferred chapters (vocabulary-closure note): `keel/log` +
 `keel/log/otel` internals and `keel/exec` + adapter internals have no chapter
