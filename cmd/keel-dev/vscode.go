@@ -617,13 +617,33 @@ func runVSCodeMaintenance(root, id string) (int, error) {
 	case vscodeMaintenanceClearResults:
 		return 0, nil
 	case vscodeMaintenanceClearState:
-		if err := os.RemoveAll(filepath.Join(root, ".devtools")); err != nil {
+		if err := clearVSCodeDevtoolsState(root); err != nil {
 			return 1, err
 		}
 	default:
 		return 2, cli.NewUsageError("unknown vscode maintenance id %q", id)
 	}
 	return 0, nil
+}
+
+func clearVSCodeDevtoolsState(root string) error {
+	devtoolsDir := filepath.Join(root, ".devtools")
+	entries, err := os.ReadDir(devtoolsDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if entry.Name() == "vscode-runs" {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(devtoolsDir, entry.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func runVSCodeGoSelection(ctx context.Context, logger *slog.Logger, root, selectedID string, selection vscode.GoSelection, writer vscode.RunEventWriter) error {
