@@ -404,24 +404,34 @@ keel-dev verb: `vscode tests run --id test-id…`.
 as errored; protocol failures surface as `errored` events plus a non-zero
 `run_finished.exit_code` — never via stderr parsing.
 
-### 4. Demo block — a showcase switch, not a real feature
+### 4. Demoing — showing states a healthy repo never produces *(family leaving the wire)*
 
-*Target design: this whole verb family is **removed from the wire** — demos
-move to the `keel-demo-dev` reference consumer devtool (see target-design
-section), where blocked lanes are ordinary maintenance items run through
-interaction 3. The description below is the current wire.*
+**Goal.** Demos, screenshots, and walkthroughs need Explorer states that a
+healthy workspace cannot produce on demand: a blocked lane, failing tests,
+desired state that still needs reconciling. The bridge needs a way to show
+that rendering **honestly** — real documents through the real wire — without
+breaking anything real.
 
-**Goal.** Purely presentational (`keel/requirement-41`): let a presenter fake
-a "blocked lane" so the Test Explorer's blocked-state rendering can be
-demonstrated (screenshots, walkthroughs) without actually breaking anything.
-The devtool persists a tiny bit of local state ("lane X is blocked"), and
-discovery/run honor it until unblocked. No production behavior depends on it —
-a devtool with no demo need may answer with an empty status object.
+**Where this is going: demos become content, not protocol.** Under the target
+design the dedicated verb family below is **removed from the wire**. The demo
+vehicle becomes `keel-demo-dev`, the reference consumer devtool: every demo
+state is ordinary discovery/desired-state/run data — fake desired states
+(the provisioning story), fake lanes, real Go lanes that genuinely fail, and
+the blocked-lane toggle as a consumer-specific maintenance item (family b)
+executed through interaction 3. Nothing about demoing remains special-cased:
+the VSIX demo command, the verb family, and the args surgery below all
+disappear, and the wire shrinks to four shapes.
 
-**When it fires.** Only from an explicit VS Code command (the demo-toggle
-command). The VSIX first polls status, then toggles: if a lane is blocked it
-unblocks; otherwise it blocks the hardcoded showcase lane
-`keel::lane::test-fast` (`extension.ts`).
+**Current wire.** Today the narrowest slice — faking a *blocked lane* — is a
+dedicated verb family (`keel/requirement-41`): the devtool persists a tiny
+bit of local state ("lane X is blocked"), discovery/run honor it until
+cleared, and no production behavior depends on it. A devtool with no demo
+need may answer with an empty status object.
+
+**When it fires.** Only from the explicit VS Code demo-toggle command. The
+VSIX polls status, then toggles: if a lane is blocked it unblocks; otherwise
+it blocks the hardcoded showcase lane `keel::lane::test-fast`
+(`extension.ts`).
 
 **Invocation.** These verbs live in a different command family (`demo`, not
 `tests`), so the VSIX performs **args surgery**: it takes the configured
@@ -435,15 +445,12 @@ command <demo-args> unblock             # execFile, ≤ 1 MiB — clear it
 ```
 
 With the default config this lands as `bin/keel-dev vscode demo status` etc.
+A devtool whose configured args do *not* end in a `tests`-style token still
+receives `demo` appended and must tolerate the shape.
 
 **Devtool answer.** `status` returns one JSON object
 (`{ blocked_lane?, source, path }`); `block`/`unblock` are consumed for side
 effect. keel-dev verbs: `vscode demo status|block <lane-id>|unblock`.
-
-**Conformance note.** A devtool whose configured args do *not* end in a
-`tests`-style token still receives `demo` appended and must tolerate the
-shape. *Target design: moot — the demo family leaves the wire entirely
-(replaced by `keel-demo-dev`), taking the surgery with it.*
 
 ### 5. Config migration — keep `.vscode/test-bridge.json` current, hands-free
 
