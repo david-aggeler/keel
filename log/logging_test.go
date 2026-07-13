@@ -73,6 +73,44 @@ func mustNewLogger(t testing.TB, cfg logging.Config) *logging.Logger {
 	return logger
 }
 
+// DHF-TEST: keel/requirement-68
+func TestContextLoggerAccessorsRoundTripAndDefault(t *testing.T) {
+	if got := logging.FromContext(context.Background()); got == nil {
+		t.Fatal("FromContext returned nil for an empty context")
+	}
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	ctx := logging.WithLogger(context.Background(), logger)
+
+	if got := logging.FromContext(ctx); got != logger {
+		t.Fatal("FromContext did not return the logger stored by WithLogger")
+	}
+}
+
+// DHF-TEST: keel/requirement-68
+func TestContextLoggerAccessorsCarryRequestScopedLogger(t *testing.T) {
+	var buf bytes.Buffer
+	base := slog.New(slog.NewJSONHandler(&buf, nil))
+	ctx := logging.WithLogger(context.Background(), base.With("request_id", "req-123"))
+
+	logging.FromContext(ctx).With("user_id", "u-7").InfoContext(ctx, "request complete")
+
+	var rec map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &rec); err != nil {
+		t.Fatalf("decode log record: %v", err)
+	}
+	if rec["request_id"] != "req-123" {
+		t.Fatalf("request_id = %v, want req-123", rec["request_id"])
+	}
+	if rec["user_id"] != "u-7" {
+		t.Fatalf("user_id = %v, want u-7", rec["user_id"])
+	}
+	if rec["msg"] != "request complete" {
+		t.Fatalf("msg = %v, want request complete", rec["msg"])
+	}
+}
+
 func newJSONCaptureLogger(t testing.TB, service string) (*slog.Logger, *recordCapture) {
 	t.Helper()
 	rc := &recordCapture{}
