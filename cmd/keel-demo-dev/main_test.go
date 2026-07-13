@@ -87,6 +87,20 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 }
 
 // DHF-TEST: keel/requirement-62
+func TestKeelDemoDevUnblockMaintenanceIsIdempotent(t *testing.T) {
+	exe := buildDemoDev(t)
+	root := t.TempDir()
+
+	unblockOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::maintenance::unblock-bad-lane")
+	if code != 0 {
+		t.Fatalf("clean-workspace unblock maintenance exit = %d, want 0\n%s", code, unblockOut)
+	}
+	events := decodeRunEvents(t, unblockOut)
+	assertRunEvent(t, events, "passed", "keel-demo-dev::maintenance::unblock-bad-lane", "unblocked demo lanes")
+	assertRunFinished(t, events, 0)
+}
+
+// DHF-TEST: keel/requirement-62
 func TestDemoBridgeCommandSpecCoversProviderAndRunPaths(t *testing.T) {
 	root := t.TempDir()
 

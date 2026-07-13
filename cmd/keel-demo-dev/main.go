@@ -389,7 +389,10 @@ func writeBlockState(root, laneID string) error {
 		return err
 	}
 	if laneID == "" {
-		return os.Remove(path)
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
 	}
 	state := struct {
 		BlockedLane string `json:"blocked_lane"`
