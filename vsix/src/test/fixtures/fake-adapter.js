@@ -35,18 +35,6 @@ function upgradeConfig() {
   fs.writeFileSync(file, `${JSON.stringify(cfg, null, 2)}\n`);
 }
 
-function blockStatePath() {
-  return path.join(process.cwd(), '.devtools', 'vscode-demo-block.json');
-}
-
-function readBlockedLane() {
-  try {
-    return JSON.parse(fs.readFileSync(blockStatePath(), 'utf8')).blocked_lane ?? '';
-  } catch {
-    return '';
-  }
-}
-
 if (command === 'vscode tests discover --format' || command === 'test-bridge tests discover --format') {
   const format = args[4];
   if (format !== 'json') {
@@ -124,12 +112,6 @@ if (args.slice(0, 3).join(' ') === 'vscode tests run' || args.slice(0, 3).join('
   const emit = (event) => process.stdout.write(`${JSON.stringify({ version: 1, time: now(), run_id: 'fake-run', ...event })}\n`);
   emit({ event: 'run_started', message: 'OpenBrain fake test run started' });
   const selected = ids[0] ?? 'keel::test::agents/test_memory.go::TestRecall';
-  const blockedLane = readBlockedLane();
-  if (blockedLane && selected === blockedLane) {
-    emit({ event: 'failed', test_id: selected, message: `lane blocked: ${blockedLane}` });
-    emit({ event: 'run_finished', exit_code: 1 });
-    process.exit(1);
-  }
   emit({ event: 'test_started', test_id: selected });
   if (selected === 'keel::maintenance::clear-state' || selected === 'keel::maintenance::clear-results' || selected === 'keel::maintenance::unlock') {
     emit({ event: 'output', test_id: selected, message: `completed ${selected}` });
@@ -140,30 +122,6 @@ if (args.slice(0, 3).join(' ') === 'vscode tests run' || args.slice(0, 3).join('
   emit({ event: 'artifact', test_id: selected, artifact: { name: 'fake log', uri: '/tmp/openbrain-fake.log', kind: 'log' } });
   emit({ event: 'passed', test_id: 'keel::test::agents/test_memory.go::TestRecall', duration_ms: 12 });
   emit({ event: 'run_finished', exit_code: 0 });
-  process.exit(0);
-}
-
-if (args.slice(0, 3).join(' ') === 'vscode demo status') {
-  process.stdout.write(JSON.stringify({
-    blocked_lane: readBlockedLane(),
-    source: readBlockedLane() ? 'state' : 'none',
-    path: blockStatePath()
-  }));
-  process.stdout.write('\n');
-  process.exit(0);
-}
-
-if (args.slice(0, 3).join(' ') === 'vscode demo block') {
-  if (!args[3]) {
-    process.exit(2);
-  }
-  fs.mkdirSync(path.dirname(blockStatePath()), { recursive: true });
-  fs.writeFileSync(blockStatePath(), JSON.stringify({ blocked_lane: args[3], updated_at: now() }) + '\n');
-  process.exit(0);
-}
-
-if (args.slice(0, 3).join(' ') === 'vscode demo unblock') {
-  fs.rmSync(blockStatePath(), { force: true });
   process.exit(0);
 }
 

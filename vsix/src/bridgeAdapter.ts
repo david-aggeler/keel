@@ -17,12 +17,6 @@ export interface BridgeAdapterConfig {
   env?: Record<string, string>;
 }
 
-export interface DemoBlockStatus {
-  blocked_lane?: string;
-  source: string;
-  path: string;
-}
-
 export function adapterConfig(workspaceRoot: string): BridgeAdapterConfig {
   const config = readAdapterConfig(workspaceRoot);
   return {
@@ -134,28 +128,6 @@ export function runTests(workspaceRoot: string, ids: string[]): cp.ChildProcessW
     env: adapterEnv(adapter),
     stdio: ['pipe', 'pipe', 'pipe'],
     detached: process.platform !== 'win32'
-  });
-}
-
-// DHF-REQ: keel/requirement-41
-export async function readDemoBlockStatus(workspaceRoot: string): Promise<DemoBlockStatus> {
-  const adapter = adapterConfig(workspaceRoot);
-  const { stdout } = await execFile(adapter.command, adapterDemoArgs(adapter, 'status'), {
-    cwd: workspaceRoot,
-    env: adapterEnv(adapter),
-    maxBuffer: 1024 * 1024
-  });
-  return JSON.parse(stdout) as DemoBlockStatus;
-}
-
-// DHF-REQ: keel/requirement-41
-export async function setDemoBlock(workspaceRoot: string, laneID: string | undefined): Promise<void> {
-  const adapter = adapterConfig(workspaceRoot);
-  const args = laneID ? adapterDemoArgs(adapter, 'block', laneID) : adapterDemoArgs(adapter, 'unblock');
-  await execFile(adapter.command, args, {
-    cwd: workspaceRoot,
-    env: adapterEnv(adapter),
-    maxBuffer: 1024 * 1024
   });
 }
 
@@ -271,19 +243,9 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-// DHF-REQ: keel/requirement-59
+// DHF-REQ: keel/requirement-59, keel/requirement-61
 function canonicalTestsArgs(adapter: BridgeAdapterConfig, verb: 'discover' | 'desired-state' | 'run', extra: string[] = []): string[] {
   return [...adapter.args, 'test-bridge', 'tests', verb, ...extra];
-}
-
-function adapterDemoArgs(adapter: BridgeAdapterConfig, verb: string, laneID?: string): string[] {
-  const args = trimLegacyVSCodeTestsPrefix(adapter.args);
-  args.push('vscode', 'demo');
-  args.push(verb);
-  if (laneID) {
-    args.push(laneID);
-  }
-  return args;
 }
 
 function launcherArgsForConfigUpgrade(config: BridgeAdapterConfig): string[] {
