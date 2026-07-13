@@ -79,7 +79,7 @@
     }
   },
   "scripts": {
-    "build:devtool": "cd .. && mkdir -p bin && go build -o bin/keel-dev ./cmd/keel-dev",
+    "build:devtool": "cd .. && mkdir -p bin && go build -o bin/keel-dev ./cmd/keel-dev && go build -o bin/keel-demo-dev ./cmd/keel-demo-dev",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "tsc -p ./ --noEmit",

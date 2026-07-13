@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # setup_repo.sh — repo-level bootstrap for keel.
 # Assumes machine-level (setup_as_root.sh) and user-level (setup_user.sh)
-# setup are already complete. Builds keel-dev and keel-demo and proves the gate
-# is green.
+# setup are already complete. Builds keel-dev, keel-demo, and keel-demo-dev and
+# proves the gate is green.
 #
 # keel has no Docker stack, database, or .env — the whole "bring up services"
 # flow that openbrain's setup_repo.sh runs does not apply here. The repo is
@@ -20,14 +20,15 @@ if ! command -v go >/dev/null 2>&1; then
 	exit 1
 fi
 
-echo "Building keel-dev and keel-demo into ./bin..."
+echo "Building keel-dev, keel-demo, and keel-demo-dev into ./bin..."
 mkdir -p bin
 # DHF-REQ: keel/requirement-27
 go build -o bin/keel-dev ./cmd/keel-dev
 go build -o bin/keel-demo ./cmd/keel-demo
+go build -o bin/keel-demo-dev ./cmd/keel-demo-dev
 
 echo "Running the verification gate (keel-dev ci)..."
 go run ./cmd/keel-dev ci
 
 echo ""
-echo "Repo bootstrap complete. The gate is green; keel-dev is at ./bin/keel-dev and keel-demo is at ./bin/keel-demo."
+echo "Repo bootstrap complete. The gate is green; keel-dev is at ./bin/keel-dev, keel-demo is at ./bin/keel-demo, and keel-demo-dev is at ./bin/keel-demo-dev."

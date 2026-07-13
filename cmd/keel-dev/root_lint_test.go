@@ -247,13 +247,14 @@ func TestBuildToolingCoversAdmittedBinaries(t *testing.T) {
 		for _, want := range []string{
 			"go build -o bin/keel-dev ./cmd/keel-dev",
 			"go build -o bin/keel-demo ./cmd/keel-demo",
+			"go build -o bin/keel-demo-dev ./cmd/keel-demo-dev",
 		} {
 			if !strings.Contains(src.body, want) {
 				t.Fatalf("%s missing admitted binary build command %q", src.name, want)
 			}
 		}
 	}
-	for _, want := range []string{"./bin/keel-dev", "./bin/keel-demo"} {
+	for _, want := range []string{"./bin/keel-dev", "./bin/keel-demo", "./bin/keel-demo-dev"} {
 		if !strings.Contains(string(setupRepo), want) {
 			t.Fatalf("scripts/setup_repo.sh completion message missing %s", want)
 		}
