@@ -168,11 +168,24 @@ Around that content, the document carries its **envelope and mechanics**:
 
 - **Identity** — workspace name, module path, generation timestamp, document
   `version`.
-- **Capabilities handshake** — which optional semantics this devtool
-  supports, so the VSIX enables behavior instead of assuming it:
-  `clear_results` / `clear_state` (plus the maintenance item ids that
-  implement them — the VSIX invokes those via interaction 3),
-  `refresh_invalidates_results`, `neutral_parent_rollups`.
+- **Capabilities handshake** — the devtool declares which optional semantics
+  it supports, so the VSIX enables behavior from data instead of assuming it.
+  The two id-list keys are the working core: they name *which maintenance
+  items* (from content family b) carry bridge-visible side effects, letting
+  the VSIX trigger consumer-defined actions it has no knowledge of:
+
+  | Key | The devtool declares | What the VSIX does with it |
+  |---|---|---|
+  | `clear_results_test_ids` | "when one of these maintenance items passes, everything you are displaying is stale" | on a `passed` event for one of these ids, invalidates **all** shown results (`shouldInvalidateResultsForEvent`) — so keel's *clear test results* action wipes the Explorer state the moment the adapter confirms it |
+  | `clear_state_test_ids` | "these maintenance items clear my local test state" | the *Clear Local State* command runs exactly these ids via interaction 3; a devtool that advertises none makes the command fail with a visible "does not advertise a clear-state maintenance item" error — never a silent no-op |
+  | `clear_results` (bool) | a clear-results action exists | **declared, not read** — the id list above is what drives behavior |
+  | `refresh_invalidates_results` (bool) | results should be treated as stale on refresh | **declared, not read** — the VSIX invalidates on every refresh unconditionally (`refresh()` calls `invalidateTestResults()` first) |
+  | `neutral_parent_rollups` (bool) | parent/group items carry no verdict of their own — results live on leaves and neutral parents must not inherit failure | **declared, not read** |
+
+  The three booleans are honest-signal declarations reserved for gating: they
+  let a future VSIX condition these behaviors per devtool without a protocol
+  version bump. Until then the VSIX behaves unconditionally — a devtool
+  should still declare them truthfully (keel-dev declares all three `true`).
 - **Per-item render/run metadata** — stable `id` (ordinals live in labels +
   `sort_text` only, never in ids, so renumbering never invalidates results),
   `parent_id`, `label`, `sort_text` (VS Code has no sort concept — order is
