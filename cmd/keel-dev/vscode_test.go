@@ -178,6 +178,35 @@ func TestVSCodeConfigHandlersInitAndUpgrade(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-42
+func TestVSCodeBridgeDocsPinCanonicalTestBridgeArgv(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", "docs", "vscode-bridge.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	for _, want := range []string{
+		"go run ./cmd/keel-dev test-bridge tests discover --format json",
+		"go run ./cmd/keel-dev test-bridge tests desired-state --format json --id keel::lane::test-fast",
+		"go run ./cmd/keel-dev test-bridge tests run --id keel::lane::test-fast",
+		"go run ./cmd/keel-dev test-bridge config upgrade",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("docs/vscode-bridge.md missing canonical argv %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		"vscode tests plan",
+		"vscode tests discover",
+		"vscode tests run",
+		"vscode config upgrade",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("docs/vscode-bridge.md still contains stale wire argv %q", forbidden)
+		}
+	}
+}
+
 func contextWithVSCodeTestState(root string, protocol io.Writer) context.Context {
 	return withRunStateProtocol(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, root, protocol)
 }

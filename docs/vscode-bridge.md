@@ -1,18 +1,18 @@
 # keel VS Code Test Bridge
 
-`keel-dev vscode tests` is keel's producer for the neutral VS Code test-runner
-protocol in `github.com/david-aggeler/keel/vscode`. The Keel Test Bridge VSIX
-lives in this repo under `vsix/` and rides the same release tag as the Go
-module.
+`keel-dev test-bridge` is keel's canonical producer for the neutral VS Code
+test-runner protocol in `github.com/david-aggeler/keel/vscode`. The Keel Test
+Bridge VSIX lives in this repo under `vsix/` and rides the same release tag as
+the Go module.
 
 ## Commands
 
 ```sh
-go run ./cmd/keel-dev vscode tests discover --format json
-go run ./cmd/keel-dev vscode tests plan --format json --id keel::lane::test-fast
-go run ./cmd/keel-dev vscode tests run --id keel::lane::test-fast
-go run ./cmd/keel-dev vscode config init
-go run ./cmd/keel-dev vscode config upgrade
+go run ./cmd/keel-dev test-bridge tests discover --format json
+go run ./cmd/keel-dev test-bridge tests desired-state --format json --id keel::lane::test-fast
+go run ./cmd/keel-dev test-bridge tests run --id keel::lane::test-fast
+go run ./cmd/keel-dev test-bridge config init
+go run ./cmd/keel-dev test-bridge config upgrade
 go run ./cmd/keel-dev vsix ci
 ```
 
@@ -60,13 +60,13 @@ The JSON Schema is embedded in `keel/vscode` as `test-bridge-config` and is
 drift-checked against the Go type. `CurrentConfigVersion` is the schema version
 constant.
 
-`keel-dev vscode config init` writes the default template. `keel-dev vscode
-config upgrade` migrates supported older configs forward, preserves user values,
-and is byte-idempotent. If the config version is newer than the binary, upgrade
-refuses without writing. The extension follows the same rule on activation:
-older configs are upgraded by invoking the configured devtool's `vscode config
-upgrade` verb and notifying the user to inspect the git diff; newer configs are
-read tolerantly and never rewritten.
+`keel-dev test-bridge config init` writes the default template. `keel-dev
+test-bridge config upgrade` migrates supported older configs forward, preserves
+user values, and is byte-idempotent. If the config version is newer than the
+binary, upgrade refuses without writing. The extension follows the same rule on
+activation: older configs are upgraded by invoking the configured devtool's
+`test-bridge config upgrade` verb and notifying the user to inspect the git
+diff; newer configs are read tolerantly and never rewritten.
 
 ## Demo Block
 
