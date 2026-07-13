@@ -6,6 +6,7 @@ build:
     # DHF-REQ: keel/requirement-27
     go build -o bin/keel-dev ./cmd/keel-dev
     go build -o bin/keel-demo ./cmd/keel-demo
+    go build -o bin/keel-demo-dev ./cmd/keel-demo-dev
     # DHF-REQ: keel/requirement-45
     pnpm --dir vsix run package:vsix
 
