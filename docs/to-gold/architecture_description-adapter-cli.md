@@ -6,8 +6,10 @@ summary: >-
   Chapter: the exact command-line wire the Keel Test Bridge VSIX emits against
   a consumer devtool, organized by interaction — discovery, planning,
   execution, demo block, config migration — each with its goal, trigger,
-  literal argv, and answer contract; plus the unenforced cross-binary argv
-  gap that let the run --format skew ship; draft.
+  literal argv, and answer contract; the unenforced cross-binary argv gap
+  that let the run --format skew ship; and the agreed target design (owner,
+  2026-07-13): a hardcoded canonical `test-bridge` token with launcher-only
+  args (config v3), records pending; draft.
 status: draft
 related:
   - keel/architecture_description-1   # root (to-gold sibling)
@@ -76,6 +78,44 @@ and drives the devtool by executing `command` as a subprocess. Ground rules:
   Enforcement section for the incident this caused.
 - Buffered calls (`execFile`) carry a Node `maxBuffer` ceiling; exceeding it
   kills the call and the user sees an opaque `maxBuffer exceeded` error.
+
+### Target design — hardcoded canonical token (agreed 2026-07-13, records pending)
+
+The args-as-protocol-prefix scheme above conflates two jobs in one config
+field: *how to launch the devtool* and *where the protocol subtree lives*.
+That conflation is what forces the demo args-surgery (interaction 4) and the
+hardcoded config-upgrade exception (interaction 5), and it makes the argv
+contract user data instead of a constant — the root enabler of the
+Enforcement gap below. Owner-decided target design (2026-07-13 dialogue; no
+issue/CR filed yet — **file records before implementing**):
+
+- The VSIX hardcodes the canonical protocol token **`test-bridge`**
+  (consistent vocabulary with the extension name "Keel Test Bridge" and the
+  config file `test-bridge.json`). Every invocation becomes:
+
+  ```
+  command <launcher-args> test-bridge tests discover --format json
+  command <launcher-args> test-bridge tests plan --format json --id <id>…
+  command <launcher-args> test-bridge tests run --id <id>…
+  command <launcher-args> test-bridge demo status|block <lane-id>|unblock
+  command <launcher-args> test-bridge config upgrade
+  ```
+
+- Config `args` becomes **launcher-only** (wrappers like
+  `go run ./cmd/devtool`; default `[]`) — config schema **v3**, migrated by
+  the existing `config upgrade` machinery (v2→v3 strips a trailing
+  `vscode tests` from `args`).
+- **Aliases are the devtool's business.** The contract pins only the canonical
+  spelling the VSIX emits; keel-dev keeps `vscode` (or any shorter name) as a
+  human-facing alias for the same subtree. An alias never appears on the wire,
+  so it cannot drift it.
+- Consequences: the demo args-surgery and the upgrade exception are **removed
+  wholesale** — every verb follows the same one rule; and the full argv tail
+  becomes a constant, making the missing cross-binary contract test trivial
+  (a literal table both suites assert against).
+
+Until those records land, the sections below describe the **current** wire;
+target-design deltas are flagged inline.
 
 ### 1. Discovery — populate the tree
 
@@ -205,7 +245,8 @@ effect. keel-dev verbs: `vscode demo status|block <lane-id>|unblock`.
 
 **Conformance note.** A devtool whose configured args do *not* end in a
 `tests`-style token still receives `demo` appended and must tolerate the
-shape.
+shape. *Target design: the surgery is removed — the demo family is addressed
+directly as `test-bridge demo <verb>`.*
 
 ### 5. Config migration — keep `.vscode/test-bridge.json` current, hands-free
 
@@ -229,6 +270,10 @@ be exactly what the migration needs to fix):
 ```
 command vscode config upgrade           # execFile, ≤ 1 MiB
 ```
+
+*Target design: no longer an exception — `test-bridge config upgrade` follows
+the same rule as every other verb (launcher args retained, since they are not
+part of the protocol path and may be required to launch the devtool at all).*
 
 **Devtool answer.** Rewrite the config to the current schema; free-form
 stdout/stderr (both shown to the user). A devtool with a different verb layout
@@ -267,15 +312,21 @@ which is human/CLI-only and never adapter-emitted).
   the packaged VSIX inside VS Code was stale. Closing the gap needs a
   cross-binary argv-contract check (the five interactions asserted against
   keel-dev's real parsers) **and** repackage-reinstall discipline keeping the
-  installed VSIX in step with `out/`. *Tracking record pending — surfaced
-  2026-07-12; sibling to `keel/issue-40`. File the issue + CR before relying
-  on this being caught.*
+  installed VSIX in step with `out/`. The target design (hardcoded
+  `test-bridge` token, launcher-only args) is a precondition worth taking
+  first: it turns the argv tail into a constant, so the contract test reduces
+  to a literal table. *Tracking record pending — surfaced 2026-07-12; sibling
+  to `keel/issue-40`. File the issue + CR before relying on this being
+  caught.*
 
 ## Linked decisions
 
 Pending extraction into design_decision records: protocol-over-subprocess (no
 VS Code settings surface; `testBridge.*` intentionally unsupported); one-tag
 module+VSIX versioning (the reason both argv sides must move together);
-config-args-as-prefix with a hardcoded migration escape hatch. Deciding
-dialogue: `keel/exploration-2` (concluded 2026-07-12). Normatively carried by
+config-args-as-prefix with a hardcoded migration escape hatch (current state —
+superseded in intent by the next item); **canonical `test-bridge` token with
+launcher-only args and devtool-owned aliases** (owner-decided 2026-07-13,
+this dialogue — design_decision + issue + CR all pending). Deciding dialogue:
+`keel/exploration-2` (concluded 2026-07-12). Normatively carried by
 `keel/requirement-40` (config), `-41` (demo), `-42` (run + upgrade).
