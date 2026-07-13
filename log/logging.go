@@ -95,15 +95,30 @@ type Logger struct {
 // ctxKey is the context key for storing a *slog.Logger.
 type ctxKey struct{}
 
-func withLogger(ctx context.Context, l *slog.Logger) context.Context {
+// WithLogger returns a child context carrying l as the request-scoped logger.
+//
+// DHF-REQ: keel/requirement-68
+func WithLogger(ctx context.Context, l *slog.Logger) context.Context {
 	return context.WithValue(ctx, ctxKey{}, l)
 }
 
-func fromContext(ctx context.Context) *slog.Logger {
+// FromContext returns the request-scoped logger carried by ctx, or slog.Default
+// when no non-nil logger has been stored.
+//
+// DHF-REQ: keel/requirement-68
+func FromContext(ctx context.Context) *slog.Logger {
 	if l, ok := ctx.Value(ctxKey{}).(*slog.Logger); ok && l != nil {
 		return l
 	}
 	return slog.Default()
+}
+
+func withLogger(ctx context.Context, l *slog.Logger) context.Context {
+	return WithLogger(ctx, l)
+}
+
+func fromContext(ctx context.Context) *slog.Logger {
+	return FromContext(ctx)
 }
 
 // DHF-REQ: keel/requirement-5, keel/requirement-20

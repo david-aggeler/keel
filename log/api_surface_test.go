@@ -29,8 +29,6 @@ func TestPublicAPISurfaceMatchesMinimalLoggerContract(t *testing.T) {
 		"LogBuildIdentity",
 		"Discard",
 		"ParseLevel",
-		"FromContext",
-		"WithLogger",
 		"Metric",
 		"MetricKind",
 		"EventToolCall",
@@ -61,10 +59,12 @@ func TestPublicAPISurfaceMatchesMinimalLoggerContract(t *testing.T) {
 	}
 
 	requiredExports := []string{
+		"FromContext",
 		"LevelFromString",
 		"LevelToString",
 		"RedactString",
 		"ResolveGitCommit",
+		"WithLogger",
 	}
 	for _, name := range requiredExports {
 		if !pkg.exports[name] {
