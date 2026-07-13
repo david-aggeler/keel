@@ -112,6 +112,27 @@ func TestVSCodePlanCarriesComparableDevtoolIdentity(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-64
+func TestVSCodeRunLegacyFormatArgvFailsAsVersionSkew(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+
+	err := commandTree().Dispatch(contextWithVSCodeTestState(root, io.Discard), []string{"vscode", "tests", "run", "--format", "jsonl", "--id", vscodeLaneLint})
+	if err == nil {
+		t.Fatal("legacy vscode tests run --format returned nil error")
+	}
+	message := err.Error()
+	for _, want := range []string{"version skew", "VSIX", "legacy", "devtool", "keel-dev"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("legacy skew error = %q, want %q", message, want)
+		}
+	}
+	if strings.Contains(message, "unknown flag") || strings.Contains(message, "usage:") {
+		t.Fatalf("legacy skew error leaked usage text: %q", message)
+	}
+}
+
 // DHF-TEST: keel/requirement-41
 func TestVSCodeDemoBlockVerbsPersistStateAndRejectUnknownLanes(t *testing.T) {
 	root := t.TempDir()
