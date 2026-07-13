@@ -101,10 +101,29 @@ issue/CR filed yet — **file records before implementing**):
   command <launcher-args> test-bridge config upgrade
   ```
 
-- Config `args` becomes **launcher-only** (wrappers like
-  `go run ./cmd/devtool`; default `[]`) — config schema **v3**, migrated by
+- Config `args` becomes **launcher-only** — config schema **v3**, migrated by
   the existing `config upgrade` machinery (v2→v3 strips a trailing
   `vscode tests` from `args`).
+
+  `<launcher-args>` = the config's `args` field: the extra tokens some
+  devtools need just to **start the process**, before any protocol word. The
+  invocation is assembled as
+  `command + args (launcher) + test-bridge <family> <verb> <flags>`.
+  For most consumers it is empty:
+
+  | Devtool situation | `command` | `args` | Actual invocation |
+  |---|---|---|---|
+  | Compiled binary (keel today) | `bin/keel-dev` | `[]` | `bin/keel-dev test-bridge tests discover --format json` |
+  | Run from Go source, no build step | `go` | `["run", "./cmd/keel-dev"]` | `go run ./cmd/keel-dev test-bridge tests discover --format json` |
+  | Node-based devtool | `node` | `["dist/devtool.js"]` | `node dist/devtool.js test-bridge tests run --id x` |
+  | Version-manager wrapper | `mise` | `["exec", "--", "devtool"]` | `mise exec -- devtool test-bridge demo status` |
+
+  The point of the split: today `args = ["vscode", "tests"]` mixes two
+  concerns — *how to launch* the tool and *where the protocol subtree lives*.
+  Launching stays configurable (it genuinely varies per consumer); the
+  protocol path becomes a hardcoded constant the VSIX owns. `args` keeps only
+  the launch half — hence "launcher-args". It exists so a devtool that cannot
+  be invoked as a single executable is not locked out.
 - **Aliases are the devtool's business.** The contract pins only the canonical
   spelling the VSIX emits; keel-dev keeps `vscode` (or any shorter name) as a
   human-facing alias for the same subtree. An alias never appears on the wire,
