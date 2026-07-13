@@ -97,7 +97,6 @@ issue/CR filed yet — **file records before implementing**):
   command <launcher-args> test-bridge tests discover --format json
   command <launcher-args> test-bridge tests desired-state --format json --id <id>…
   command <launcher-args> test-bridge tests run --id <id>…
-  command <launcher-args> test-bridge demo status|block <lane-id>|unblock
   command <launcher-args> test-bridge config upgrade
   ```
 
@@ -128,6 +127,39 @@ issue/CR filed yet — **file records before implementing**):
   aligning the wire with content family (c): the verb *is* the desired-state
   report for a selection; "plan" was the vaguest name on the wire. Rides the
   same breaking change since the token/config break already forces lockstep.
+- **The demo verb family is removed from the wire** (owner, 2026-07-13) —
+  the wire shrinks to the four shapes above. Demos move to **`keel-demo-dev`**,
+  a new approved example binary (sibling of `cmd/keel-demo`): a fully-blown
+  *reference consumer devtool* implementing the whole bridge contract with a
+  few fake desired states (the provisioning story — docker environment,
+  seeded DB — faked but rendered honestly), a few fake lanes, and a few real
+  Go lanes that pass **and fail** (keel's own tree is always green, so
+  failure rendering is otherwise undemoable). Blocked-lane demos become
+  ordinary consumer-specific maintenance items (family b) in its tree,
+  toggled through interaction 3 — no dedicated verb family, no VSIX demo
+  command, and the args-surgery loses its last reason to exist.
+  `keel-demo-dev` also gives the contract a **second implementation** — the
+  natural fixture for the missing cross-binary argv test (more honest than
+  `fake-adapter.js`) and living documentation for consumer devtool authors.
+  Per repo rules an example binary outside keel-dev needs SoR requirement
+  backing — records pending.
+- **A reusable devtool-side bridge package** (owner, 2026-07-13) — so
+  `keel-dev`, `keel-demo-dev`, `openbrain-dev`, and `vela-dev` all consume
+  the test-bridge interface instead of re-implementing it. Working name:
+  `keel/testbridge` (aligned with the canonical token). It owns everything
+  contract-shaped on the devtool side: the canonical verb tree
+  (`test-bridge tests discover|desired-state|run`, `config init|upgrade`) and
+  its flag parsing, stdout/stderr sink discipline, document
+  envelopes/schemas, run-event streaming, and `run.lock` serialization — a
+  consumer devtool plugs in only its **content providers**: test trees
+  (family a), maintenance items (b), desired-state providers (c), lanes (d),
+  and runners. Builds on what exists — `keel/vscode` (types, schemas,
+  projectors) and `keel/cli` (CommandSpec) — rather than beside it.
+  Structural consequence: the VSIX **emitter** and the verb **parser** then
+  live in the same repo under the same tag, so the cross-binary argv drift
+  class reduces to "consumer hasn't bumped the module yet". keel-dev becomes
+  the first consumer (dogfooding), keel-demo-dev the second (reference),
+  openbrain-dev/vela-dev downstream. Records pending.
 - **Aliases are the devtool's business.** The contract pins only the canonical
   spelling the VSIX emits; keel-dev keeps `vscode` (or any shorter name) as a
   human-facing alias for the same subtree, and may alias `plan` →
@@ -380,6 +412,11 @@ as errored; protocol failures surface as `errored` events plus a non-zero
 
 ### 4. Demo block — a showcase switch, not a real feature
 
+*Target design: this whole verb family is **removed from the wire** — demos
+move to the `keel-demo-dev` reference consumer devtool (see target-design
+section), where blocked lanes are ordinary maintenance items run through
+interaction 3. The description below is the current wire.*
+
 **Goal.** Purely presentational (`keel/requirement-41`): let a presenter fake
 a "blocked lane" so the Test Explorer's blocked-state rendering can be
 demonstrated (screenshots, walkthroughs) without actually breaking anything.
@@ -411,8 +448,8 @@ effect. keel-dev verbs: `vscode demo status|block <lane-id>|unblock`.
 
 **Conformance note.** A devtool whose configured args do *not* end in a
 `tests`-style token still receives `demo` appended and must tolerate the
-shape. *Target design: the surgery is removed — the demo family is addressed
-directly as `test-bridge demo <verb>`.*
+shape. *Target design: moot — the demo family leaves the wire entirely
+(replaced by `keel-demo-dev`), taking the surgery with it.*
 
 ### 5. Config migration — keep `.vscode/test-bridge.json` current, hands-free
 
@@ -509,6 +546,13 @@ module+VSIX versioning (the reason both argv sides must move together);
 config-args-as-prefix with a hardcoded migration escape hatch (current state —
 superseded in intent by the next item); **canonical `test-bridge` token with
 launcher-only args and devtool-owned aliases** (owner-decided 2026-07-13,
-this dialogue — design_decision + issue + CR all pending). Deciding dialogue:
+this dialogue — design_decision + issue + CR all pending); **`plan` →
+`desired-state` verb rename** (owner-decided 2026-07-13, pending); **demo
+verb family removed in favor of the `keel-demo-dev` reference consumer
+devtool** (owner-decided 2026-07-13, pending — needs SoR requirements for the
+new example binary, supersedes keel/requirement-41's verb mechanism);
+**reusable devtool-side bridge package (`keel/testbridge`) consumed by
+keel-dev, keel-demo-dev, openbrain-dev, vela-dev** (owner-decided 2026-07-13,
+pending). Deciding dialogue:
 `keel/exploration-2` (concluded 2026-07-12). Normatively carried by
 `keel/requirement-40` (config), `-41` (demo), `-42` (run + upgrade).
