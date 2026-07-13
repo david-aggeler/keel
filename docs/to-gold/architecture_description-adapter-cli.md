@@ -145,6 +145,42 @@ Discovery is how "per-consumer variation is data, not code" actually happens:
 a different devtool answering this one verb produces a completely different
 tree with zero extension changes.
 
+**What must be discovered.** The document answers three questions — *what can
+run*, *how it nests*, and *what the UI needs to render each node*. Concretely
+(exact shapes: `keel/vscode/schemas/`; tree semantics: sibling chapter `-2`):
+
+1. **Document identity** — workspace name, module path, generation timestamp,
+   document `version`.
+2. **Capabilities handshake** — which optional semantics this devtool
+   supports, so the VSIX enables behavior instead of assuming it:
+   `clear_results` / `clear_state` (plus the maintenance item ids that
+   implement them — the VSIX invokes those via interaction 3),
+   `refresh_invalidates_results`, `neutral_parent_rollups`.
+3. **The item tree** — for keel, three families (another consumer may ship
+   entirely different ones):
+   - **Maintenance actions** (`a.*`) — runnable operational items (detect
+     lanes, unlock test bridge, clear results, clear local test state).
+     Discovered so that even recovery actions are data, not VSIX code.
+   - **Lanes** (`b.*`) — the aggregation targets: system lanes compiled into
+     the devtool (lint, test-fast, test-coverage, vsix-ci, ci) plus (planned)
+     file lanes from `.vscode/test-lanes.json`. Each lane brings its covers
+     subtree (alias items via `canonical_id`) and its measured last-run
+     duration — the gate-sizing dataset.
+   - **Frameworks** (`d.*`) — the real per-framework test trees: Go as
+     package → file → test (go/parser; `uri` + `range` for click-to-source),
+     Mocha (vsix) with per-file members.
+4. **Per-item render/run metadata** — stable `id` (ordinals live in labels +
+   `sort_text` only, never in ids, so renumbering never invalidates results),
+   `parent_id`, `label`, `sort_text` (VS Code has no sort concept — order is
+   data), `kind`, `runnable` + `profiles` (run/debug/coverage),
+   `lane_id`, `canonical_id` (alias → canonical result mirroring),
+   `required_resources` (rendered as tags), `limitations` (rendered as
+   description).
+
+The devtool discovers all of this **fresh on every invocation** — the VSIX
+caches nothing across refreshes (a generation counter discards stale
+responses), so the tree is always a pure function of the workspace state.
+
 **When it fires.** At activation, on the Test Explorer Refresh button, and on
 watcher events (config file changes; planned: `test-lanes.json` writes
 re-render the tree without a manual refresh). Stale responses are discarded
