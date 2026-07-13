@@ -93,6 +93,25 @@ func TestVSCodeHandlersDispatchDiscoveryPlanAndLintRun(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-64
+func TestVSCodePlanCarriesComparableDevtoolIdentity(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+
+	var plan bytes.Buffer
+	if err := handleVSCodeTestsPlan(contextWithVSCodeTestState(root, &plan), []string{"--format", "json", "--id", vscodeLaneLint}); err != nil {
+		t.Fatalf("plan handler: %v", err)
+	}
+	var setup vscode.SetupPlan
+	if err := json.Unmarshal(plan.Bytes(), &setup); err != nil {
+		t.Fatalf("plan JSON: %v\n%s", err, plan.String())
+	}
+	if setup.Devtool.Name != "keel-dev" || setup.Devtool.Version == "" || setup.Devtool.Commit == "" || setup.Devtool.BuiltAt == "" {
+		t.Fatalf("devtool identity = %+v, want name plus version, commit, built_at", setup.Devtool)
+	}
+}
+
 // DHF-TEST: keel/requirement-41
 func TestVSCodeDemoBlockVerbsPersistStateAndRejectUnknownLanes(t *testing.T) {
 	root := t.TempDir()

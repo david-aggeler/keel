@@ -537,7 +537,7 @@ func writeVSCodePlan(root string, ids []string, out io.Writer) error {
 	goReady := goErr == nil
 	plan := vscode.SetupPlan{
 		Version:     1,
-		Devtool:     vscode.DevtoolMetadata{Name: "keel-dev", Version: versionString(), Commit: buildCommit()},
+		Devtool:     vscode.DevtoolMetadata{Name: "keel-dev", Version: versionString(), Commit: buildCommit(), BuiltAt: buildTime()},
 		Workspace:   profile.Node(),
 		GeneratedAt: time.Now().UTC(),
 		Items:       selectedPlanItems(ids),
@@ -2397,12 +2397,25 @@ func workspaceNode(root string) string {
 func buildCommit() string {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
-		return ""
+		return "unknown"
 	}
 	for _, setting := range info.Settings {
 		if setting.Key == "vcs.revision" {
 			return setting.Value
 		}
 	}
-	return ""
+	return "unknown"
+}
+
+func buildTime() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown"
+	}
+	for _, setting := range info.Settings {
+		if setting.Key == "vcs.time" {
+			return setting.Value
+		}
+	}
+	return "unknown"
 }
