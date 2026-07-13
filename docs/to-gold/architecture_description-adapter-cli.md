@@ -231,6 +231,19 @@ policy (`protocol.ts:47-108`). The plan is printed into the run output so an
 SSH-remote user sees environment preparation instead of a silent hang. It is
 the desired-state half of the contract: run = plan + execute.
 
+**Responsibility split.** The entire matrix — which selection requires which
+resources, what state each must be in, what its *current* state is, which
+action would reconcile the two, and who owns/tears down what
+(`owned`/`reusable`) — is computed **devtool-side**. This is the
+zero-toolchain-knowledge rule applied to environments: the VSIX cannot know
+that keel's `vsix-ci` lane needs `go-toolchain` + `keel-module-root` +
+`stub-binaries`, and the `current` column comes from live devtool probes at
+plan time (keel-dev answers `"go is on PATH"` by checking, not from static
+data). The VSIX renders the plan verbatim into the run output — it performs
+no checks, takes no actions, and owns no resources. Consequence: a wrong or
+stale plan is always a devtool bug, and the VSIX's only planning decision is
+abort-on-failure (below).
+
 **When it fires.** Immediately before **every** run (interaction 3), with the
 same selection. Not user-invokable on its own.
 
