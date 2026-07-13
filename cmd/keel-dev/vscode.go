@@ -193,7 +193,7 @@ func vscodeCommandSpec() *cli.CommandSpec {
 				Subcommands: []*cli.CommandSpec{
 					{Name: "discover", Use: "vscode tests discover [--format json]", Short: "Emit the VS Code discovery document.", Flags: []cli.FlagSpec{{Name: "format", Value: "json", Short: "Output format."}}, Handler: handleVSCodeTestsDiscover},
 					{Name: "plan", Use: "vscode tests plan [--format json] [--id test-id]", Short: "Emit the VS Code setup plan.", Flags: []cli.FlagSpec{{Name: "format", Value: "json", Short: "Output format."}, {Name: "id", Value: "test-id", Short: "Selected test id."}}, Handler: handleVSCodeTestsPlan},
-					{Name: "run", Use: "vscode tests run --id test-id", Short: "Run selected VS Code test lanes.", Flags: []cli.FlagSpec{{Name: "id", Value: "test-id", Short: "Selected test id."}}, Handler: handleVSCodeTestsRun},
+					{Name: "run", Use: "vscode tests run --id test-id", Short: "Run selected VS Code test lanes.", Flags: []cli.FlagSpec{{Name: "format", Value: "jsonl", Short: "Legacy VSIX wire compatibility trap."}, {Name: "id", Value: "test-id", Short: "Selected test id."}}, Handler: handleVSCodeTestsRun},
 				},
 			},
 			{
@@ -367,7 +367,7 @@ func handleVSCodeDemoStatus(ctx context.Context, args []string) error {
 // DHF-REQ: keel/requirement-35, keel/requirement-36, keel/requirement-37
 func handleVSCodeTestsRun(ctx context.Context, args []string) error {
 	state := stateFrom(ctx)
-	ids, err := parseVSCodeIDs(args, false)
+	ids, err := parseVSCodeRunIDs(args)
 	if err != nil {
 		return err
 	}
@@ -537,7 +537,7 @@ func writeVSCodePlan(root string, ids []string, out io.Writer) error {
 	goReady := goErr == nil
 	plan := vscode.SetupPlan{
 		Version:     1,
-		Devtool:     vscode.DevtoolMetadata{Name: "keel-dev", Version: versionString(), Commit: buildCommit()},
+		Devtool:     vscode.DevtoolMetadata{Name: "keel-dev", Version: versionString(), Commit: buildCommit(), BuiltAt: buildTime()},
 		Workspace:   profile.Node(),
 		GeneratedAt: time.Now().UTC(),
 		Items:       selectedPlanItems(ids),
@@ -2109,6 +2109,40 @@ func parseVSCodeIDs(args []string, allowEmpty bool) ([]string, error) {
 	return ids, nil
 }
 
+// DHF-REQ: keel/requirement-64
+func parseVSCodeRunIDs(args []string) ([]string, error) {
+	ids := make([]string, 0)
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--format":
+			format := ""
+			if i+1 < len(args) {
+				format = args[i+1]
+			}
+			if format == "" || strings.HasPrefix(format, "-") {
+				return nil, cli.NewUsageError("--format requires a value")
+			}
+			return nil, legacyVSCodeRunFormatSkewError(format)
+		case "--id":
+			if i+1 >= len(args) {
+				return nil, cli.NewUsageError("--id requires a test id")
+			}
+			i++
+			ids = append(ids, args[i])
+		default:
+			return nil, cli.NewUsageError("unknown vscode tests argument %q", args[i])
+		}
+	}
+	if len(ids) == 0 {
+		return nil, cli.NewUsageError("--id is required")
+	}
+	return ids, nil
+}
+
+func legacyVSCodeRunFormatSkewError(format string) error {
+	return fmt.Errorf("keel test bridge version skew: VSIX legacy vscode tests run wire revision sent --format %s, but devtool keel-dev version %s commit %s built_at %s expects canonical test-bridge tests run --id; reinstall the VSIX or rebuild the workspace devtool from the same release tag", format, versionString(), buildCommit(), buildTime())
+}
+
 func rejectUnsupportedFormat(args []string) error {
 	_, err := parseVSCodeIDs(args, true)
 	return err
@@ -2397,12 +2431,25 @@ func workspaceNode(root string) string {
 func buildCommit() string {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
-		return ""
+		return "unknown"
 	}
 	for _, setting := range info.Settings {
 		if setting.Key == "vcs.revision" {
 			return setting.Value
 		}
 	}
-	return ""
+	return "unknown"
+}
+
+func buildTime() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown"
+	}
+	for _, setting := range info.Settings {
+		if setting.Key == "vcs.time" {
+			return setting.Value
+		}
+	}
+	return "unknown"
 }
