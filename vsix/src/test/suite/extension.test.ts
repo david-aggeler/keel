@@ -295,8 +295,8 @@ suite('Keel Test Bridge config contract', () => {
     }
   });
 
-  // DHF-TEST: keel/requirement-42
-  test('production bridge argv is accepted by the real keel-dev binary per verb', async function () {
+  // DHF-TEST: keel/requirement-42, keel/requirement-62
+  test('production bridge argv is accepted by the real keel-dev and keel-demo-dev binaries per verb', async function () {
     this.timeout(30_000);
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-real-bridge-'));
     fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
@@ -327,6 +327,38 @@ suite('Keel Test Bridge config contract', () => {
       .map((line) => JSON.parse(line) as RunEvent)
       .filter((event) => event.event === 'run_finished');
     assert.equal(terminalEvents.length, 1);
+
+    fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+      version: currentConfigVersion,
+      command: realKeelDemoDevBinary(),
+      args: [],
+      displayName: 'Keel Demo Dev'
+    }, null, 2) + '\n');
+
+    const demoDiscovery = await discoverTests(root);
+    assert.ok(demoDiscovery.items.some((item) => item.id === 'keel-demo-dev::lane::fake-smoke'));
+    const demoController = vscode.tests.createTestController(`keelDemoDevDiscovery-${Date.now()}`, 'Keel Demo Dev Discovery');
+    try {
+      const demoTree = publishDiscovery(demoController, root, demoDiscovery);
+      assert.ok(demoTree.discoveryItemsById.has('keel-demo-dev::maintenance'));
+      assert.ok(demoTree.discoveryItemsById.has('keel-demo-dev::lanes'));
+      assert.ok(demoTree.discoveryItemsById.has('keel-demo-dev::frameworks'));
+      assert.ok(demoTree.discoveryItemsById.has('keel-demo-dev::lane::fake-smoke'));
+    } finally {
+      demoController.dispose();
+    }
+
+    const demoPlan = await planTests(root, ['keel-demo-dev::lane::fake-smoke']);
+    assert.ok((demoPlan.desired_state ?? []).some((state) => state.resource === 'database' && state.desired !== state.current));
+
+    const demoRun = await collectChild(runTests(root, ['keel-demo-dev::lane::go-pass']));
+    assert.doesNotMatch(demoRun.stderr + demoRun.stdout, /unknown flag/);
+    const demoTerminalEvents = demoRun.stdout.split(/\r?\n/)
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as RunEvent)
+      .filter((event) => event.event === 'run_finished');
+    assert.equal(demoTerminalEvents.length, 1);
+    assert.equal(demoTerminalEvents[0].exit_code, 0);
 
     await upgradeConfig(root);
 
@@ -548,6 +580,11 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
 
 function realKeelDevBinary(): string {
   const exe = process.platform === 'win32' ? 'keel-dev.exe' : 'keel-dev';
+  return path.resolve(__dirname, '../../../../bin', exe);
+}
+
+function realKeelDemoDevBinary(): string {
+  const exe = process.platform === 'win32' ? 'keel-demo-dev.exe' : 'keel-demo-dev';
   return path.resolve(__dirname, '../../../../bin', exe);
 }
 
