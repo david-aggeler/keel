@@ -267,7 +267,7 @@ func (keelTestBridge) ConfigTemplate() vscode.TestBridgeConfig {
 
 // DHF-REQ: keel/requirement-63
 func (keelTestBridge) Workspace() testbridge.Workspace {
-	return testbridge.Workspace{Node: "unknown", ModulePath: modulePath}
+	return testbridge.Workspace{ModulePath: modulePath}
 }
 
 // DHF-REQ: keel/requirement-63
