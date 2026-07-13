@@ -136,6 +136,45 @@ issue/CR filed yet — **file records before implementing**):
 Until those records land, the sections below describe the **current** wire;
 target-design deltas are flagged inline.
 
+### What the devtool asserts — the four content families
+
+Everything the bridge shows or prepares is asserted by the devtool; the VSIX
+renders. Four content families, each arriving on a specific interaction
+(exact shapes: `keel/vscode/schemas/`; tree semantics: sibling chapter `-2`).
+*Note: these family letters are this chapter's outline, **not** the tree's
+group letters (`a. Maintenance`, `b. Lanes`, `d. Frameworks` — display
+ordinals decided in keel/exploration-2).*
+
+- **(a) The test trees — discovery proper** *(arrives: discovery,
+  interaction 1)*. The reason a test explorer exists: the real test
+  hierarchies of **whatever frameworks the consumer's workspace actually
+  contains**. The protocol mandates no framework — `framework` is a plain
+  string label on items. keel's workspace has two testable codebases, so its
+  tree has exactly two subtrees under `d. Frameworks`: Go as
+  package → file → test (go/parser; `uri` + `range` for click-to-source), and
+  Mocha for the VSIX's own headless suite under `vsix/` (per-file members). A
+  pure-Go consumer ships only a Go subtree; a Python consumer ships pytest.
+- **(b) Consumer-specific maintenance** *(arrives: discovery, interaction 1;
+  invoked: run, interaction 3)*. Runnable operational actions the devtool
+  chooses to advertise — for keel: detect lanes, unlock test bridge, clear
+  results, clear local test state. Discovered so that even recovery actions
+  are data, not VSIX code: another consumer ships a different action set with
+  zero extension changes. The capabilities id-lists (below) mark which of
+  these opaque actions carry bridge-visible side effects.
+- **(c) Desired state** *(arrives: plan, interaction 2; reconciled: inside
+  run, interaction 3)*. The environment matrix for a concrete selection —
+  which resources it requires, desired vs live-probed current state, the
+  reconciling action, ownership/teardown. Per-selection by nature, so it
+  cannot live in the discovery document; the devtool computes it fresh for
+  every plan call and establishes it itself while executing the run. Detail:
+  interaction 2.
+- **(d) The lanes** *(arrive: discovery, interaction 1; defined (planned) in
+  `.vscode/test-lanes.json`)*. The aggregation targets: system lanes compiled
+  into the devtool (lint, test-fast, test-coverage, vsix-ci, ci) plus
+  (planned) file lanes from the lanes file. Each lane brings its covers
+  subtree (alias items via `canonical_id`) and its measured last-run
+  duration — the gate-sizing dataset.
+
 ### 1. Discovery — populate the tree
 
 **Goal.** Give VS Code's Test Explorer its entire content. The devtool asserts
@@ -143,30 +182,8 @@ target-design deltas are flagged inline.
 maintenance actions, click-to-source locations — and the VSIX only renders.
 Discovery is how "per-consumer variation is data, not code" actually happens:
 a different devtool answering this one verb produces a completely different
-tree with zero extension changes.
-
-**What must be discovered.** Three kinds of content (exact shapes:
-`keel/vscode/schemas/`; tree semantics: sibling chapter `-2`):
-
-- **(a) The test trees — discovery proper.** The reason a test explorer
-  exists: the real test hierarchies of **whatever frameworks the consumer's
-  workspace actually contains**. The protocol mandates no framework —
-  `framework` is a plain string label on items. keel's workspace has two
-  testable codebases, so its tree has exactly two subtrees under
-  `d. Frameworks`: Go as package → file → test (go/parser; `uri` + `range`
-  for click-to-source), and Mocha for the VSIX's own headless suite under
-  `vsix/` (per-file members). A pure-Go consumer ships only a Go subtree; a
-  Python consumer ships pytest.
-- **(b) Consumer-specific maintenance.** Runnable operational actions the
-  devtool chooses to advertise — for keel: detect lanes, unlock test bridge,
-  clear results, clear local test state (`a.*`). Discovered so that even
-  recovery actions are data, not VSIX code: another consumer ships a
-  different action set with zero extension changes.
-- **(c) The lanes.** The aggregation targets (`b.*`): system lanes compiled
-  into the devtool (lint, test-fast, test-coverage, vsix-ci, ci) plus
-  (planned) file lanes from `.vscode/test-lanes.json`. Each lane brings its
-  covers subtree (alias items via `canonical_id`) and its measured last-run
-  duration — the gate-sizing dataset.
+tree with zero extension changes. Discovery delivers content families (a),
+(b), and (d); family (c) is plan-time.
 
 Around that content, the document carries its **envelope and mechanics**:
 
