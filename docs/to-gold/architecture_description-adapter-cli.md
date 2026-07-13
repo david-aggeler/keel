@@ -138,6 +138,17 @@ issue/CR filed yet — **file records before implementing**):
   becomes a constant, making the missing cross-binary contract test trivial
   (a literal table both suites assert against).
 
+**Candidate (idea stage, 2026-07-13 dialogue — no decision yet):** a
+`c. Resources` tree group surfacing desired state in the Explorer — one item
+per resource showing which is currently active/ready (the plan's `current`
+column at discovery time), slotting into the tree's deliberately-unassigned
+letter `c`. Needs **zero VSIX changes** (a new discovery group + status in
+labels/descriptions is pure data), and each resource item could be made
+runnable so clicking it executes its reconciling action through ordinary
+interaction 3. Open question before it graduates to a record: probe cost at
+discovery time (discovery runs on activation/refresh/watch, so probes must be
+fast or cached with a staleness marker).
+
 Until those records land, the sections below describe the **current** wire;
 target-design deltas are flagged inline.
 
@@ -167,9 +178,14 @@ ordinals decided in keel/exploration-2).*
   zero extension changes. The capabilities id-lists (below) mark which of
   these opaque actions carry bridge-visible side effects.
 - **(c) Desired state** *(arrives: plan, interaction 2; reconciled: inside
-  run, interaction 3)*. The environment matrix for a concrete selection —
-  which resources it requires, desired vs live-probed current state, the
-  reconciling action, ownership/teardown. Per-selection by nature, so it
+  run, interaction 3)*. The test-infrastructure contract for a concrete
+  selection: whatever must exist before its tests can be honest — a Docker
+  environment up, a database present *and seeded with fixture data*,
+  background services a, b, c, toolchains — expressed declaratively as
+  resource rows (desired vs live-probed current → the reconciling action),
+  with ownership flags deciding teardown: an *owned temporary* resource the
+  run spun up is torn down afterwards; a *shared reusable* one (a dev DB kept
+  warm across runs) is left standing. Per-selection by nature, so it
   cannot live in the discovery document; the devtool computes it fresh for
   every plan call and establishes it itself while executing the run.
   **Visibility:** every Run click shows it — the plan for the clicked
@@ -278,6 +294,18 @@ invisible from the outside — over Remote-SSH, a lane spending 40 seconds
 preparing its environment is indistinguishable from a hang unless the user
 was first shown what preparation was coming. Plan = preview for the human;
 run = reconcile + execute, devtool-owned end to end.
+
+**What desired-state is for — provisioning, not just preflight.** The
+document's shape gives away its ambition: `kind` per resource, `reusable` vs
+`owned`, a teardown policy splitting `owned_temporary_resources` from
+`shared_reusable_resources` — those fields exist so a lane can declare *spin
+up the Docker environment, ensure the DB exists and carries its fixture
+data, start services a, b, c*, and the devtool reconciles current reality to
+that declaration inside the run, then tears down what the run owned and
+leaves shared infrastructure warm. keel's own rows are deliberately boring
+(`go-toolchain`, `keel-module-root`, `stub-binaries`) because keel's tests
+are hermetic by policy — the protocol is sized for consumer devtools whose
+integration lanes need real provisioned environments.
 
 **When it fires.** Immediately before **every** run (interaction 3), with the
 same selection. Not user-invokable on its own.
