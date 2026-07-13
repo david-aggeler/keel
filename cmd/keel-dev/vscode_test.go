@@ -93,6 +93,46 @@ func TestVSCodeHandlersDispatchDiscoveryPlanAndLintRun(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-64
+func TestVSCodePlanCarriesComparableDevtoolIdentity(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+
+	var plan bytes.Buffer
+	if err := handleVSCodeTestsPlan(contextWithVSCodeTestState(root, &plan), []string{"--format", "json", "--id", vscodeLaneLint}); err != nil {
+		t.Fatalf("plan handler: %v", err)
+	}
+	var setup vscode.SetupPlan
+	if err := json.Unmarshal(plan.Bytes(), &setup); err != nil {
+		t.Fatalf("plan JSON: %v\n%s", err, plan.String())
+	}
+	if setup.Devtool.Name != "keel-dev" || setup.Devtool.Version == "" || setup.Devtool.Commit == "" || setup.Devtool.BuiltAt == "" {
+		t.Fatalf("devtool identity = %+v, want name plus version, commit, built_at", setup.Devtool)
+	}
+}
+
+// DHF-TEST: keel/requirement-64
+func TestVSCodeRunLegacyFormatArgvFailsAsVersionSkew(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+
+	err := commandTree().Dispatch(contextWithVSCodeTestState(root, io.Discard), []string{"vscode", "tests", "run", "--format", "jsonl", "--id", vscodeLaneLint})
+	if err == nil {
+		t.Fatal("legacy vscode tests run --format returned nil error")
+	}
+	message := err.Error()
+	for _, want := range []string{"version skew", "VSIX", "legacy", "devtool", "keel-dev"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("legacy skew error = %q, want %q", message, want)
+		}
+	}
+	if strings.Contains(message, "unknown flag") || strings.Contains(message, "usage:") {
+		t.Fatalf("legacy skew error leaked usage text: %q", message)
+	}
+}
+
 // DHF-TEST: keel/requirement-41
 func TestVSCodeDemoBlockVerbsPersistStateAndRejectUnknownLanes(t *testing.T) {
 	root := t.TempDir()
@@ -175,6 +215,35 @@ func TestVSCodeConfigHandlersInitAndUpgrade(t *testing.T) {
 	}
 	if !strings.Contains(string(body), `"command": "bin/custom"`) || !strings.Contains(string(body), `"version": 3`) || !strings.Contains(string(body), `"args": []`) {
 		t.Fatalf("upgraded config did not preserve command and stamp current version:\n%s", body)
+	}
+}
+
+// DHF-TEST: keel/requirement-42
+func TestVSCodeBridgeDocsPinCanonicalTestBridgeArgv(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", "docs", "vscode-bridge.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	for _, want := range []string{
+		"go run ./cmd/keel-dev test-bridge tests discover --format json",
+		"go run ./cmd/keel-dev test-bridge tests desired-state --format json --id keel::lane::test-fast",
+		"go run ./cmd/keel-dev test-bridge tests run --id keel::lane::test-fast",
+		"go run ./cmd/keel-dev test-bridge config upgrade",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("docs/vscode-bridge.md missing canonical argv %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		"vscode tests plan",
+		"vscode tests discover",
+		"vscode tests run",
+		"vscode config upgrade",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("docs/vscode-bridge.md still contains stale wire argv %q", forbidden)
+		}
 	}
 }
 

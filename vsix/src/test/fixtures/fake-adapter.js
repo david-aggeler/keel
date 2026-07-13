@@ -14,6 +14,11 @@ function logCall() {
 
 logCall();
 
+if (args.includes('--version')) {
+  process.stdout.write('dev\n');
+  process.exit(0);
+}
+
 function configPath() {
   return path.join(process.cwd(), '.vscode', 'test-bridge.json');
 }

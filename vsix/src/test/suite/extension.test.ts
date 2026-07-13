@@ -103,6 +103,41 @@ suite('Keel Test Bridge config contract', () => {
     assert.equal(cfg.displayName, 'Future');
   });
 
+  // DHF-TEST: keel/requirement-64
+  test('adapter fails loud on released VSIX and devtool version skew before discovery', async function () {
+    const manifest = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../../package.json'), 'utf8')) as { version: string };
+    for (const devtoolVersion of ['v0.4.2', 'v0.4.4']) {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-version-skew-'));
+      const fake = path.join(root, 'fake-devtool.js');
+      fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+      fs.writeFileSync(fake, [
+        `if (process.argv.includes('--version')) { console.log('${devtoolVersion}'); process.exit(0); }`,
+        "console.log(JSON.stringify({ version: 1, workspace: 'skew', generated_at: new Date().toISOString(), items: [] }));"
+      ].join('\n'));
+      fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+        version: currentConfigVersion,
+        command: process.execPath,
+        args: [fake],
+        displayName: 'Keel'
+      }, null, 2) + '\n');
+      try {
+        await assert.rejects(
+          discoverTests(root),
+          (err: unknown) => {
+            const message = err instanceof Error ? err.message : String(err);
+            assert.match(message, /version skew/i);
+            assert.match(message, new RegExp(`VSIX v?${manifest.version.replaceAll('.', '\\.')}`));
+            assert.match(message, new RegExp(`devtool ${devtoolVersion.replaceAll('.', '\\.')}`));
+            assert.doesNotMatch(message, /unknown flag|usage|parse/i);
+            return true;
+          }
+        );
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
   // DHF-TEST: keel/requirement-59, keel/requirement-60
   test('adapter emits canonical test-bridge argv from launcher-only config and upgrades v2 args', async function () {
     this.timeout(10_000);
@@ -134,14 +169,16 @@ suite('Keel Test Bridge config contract', () => {
     const calls = fs.readFileSync(path.join(root, '.devtools', 'fake-adapter-calls.log'), 'utf8')
       .trim()
       .split(/\r?\n/);
-    assert.deepEqual(calls, [
+    const protocolCalls = calls.filter((call) => call !== '--version');
+    assert.equal(calls.filter((call) => call === '--version').length, 4);
+    assert.deepEqual(protocolCalls, [
       'test-bridge config upgrade',
       'test-bridge tests discover --format json',
       'test-bridge tests desired-state --format json --id keel::lane::ci',
       'test-bridge tests run --id keel::lane::ci'
     ]);
-    assert.ok(calls.every((call) => !/\bvscode tests\b/.test(call)));
-    assert.ok(calls.every((call) => !/\bplan\b/.test(call)));
+    assert.ok(protocolCalls.every((call) => !/\bvscode tests\b/.test(call)));
+    assert.ok(protocolCalls.every((call) => !/\bplan\b/.test(call)));
   });
 
   // DHF-TEST: keel/requirement-60
