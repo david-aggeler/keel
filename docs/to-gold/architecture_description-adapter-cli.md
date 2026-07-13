@@ -244,6 +244,16 @@ no checks, takes no actions, and owns no resources. Consequence: a wrong or
 stale plan is always a devtool bug, and the VSIX's only planning decision is
 abort-on-failure (below).
 
+**What the VSIX needs from the plan: one bit.** Did the plan call succeed?
+That is the entire semantic consumption — everything else is passed through
+to the human. Desired-state *reconciliation* is not a separate interaction:
+the devtool establishes whatever the selection needs **inside interaction 3**
+as part of executing it. The plan exists because that reconciliation is
+invisible from the outside — over Remote-SSH, a lane spending 40 seconds
+preparing its environment is indistinguishable from a hang unless the user
+was first shown what preparation was coming. Plan = preview for the human;
+run = reconcile + execute, devtool-owned end to end.
+
 **When it fires.** Immediately before **every** run (interaction 3), with the
 same selection. Not user-invokable on its own.
 
