@@ -197,6 +197,31 @@ func TestRunErrorsAndLockConflictsUsePackagePaths(t *testing.T) {
 	}
 }
 
+func TestRunLockExemptionLeavesExistingLockForConsumerMaintenance(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.exemptRun = true
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: io.Discard, RunID: func() string { return "run-exempt" }})
+	if err := os.MkdirAll(filepath.Dir(testbridge.RunLockPath(root)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lock := []byte(`{"pid":1,"created_at":"2026-07-13T00:00:00Z","ids":["demo::maintenance::unlock"],"token":"foreign"}` + "\n")
+	if err := os.WriteFile(testbridge.RunLockPath(root), lock, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", "demo::maintenance::unlock"}); err != nil {
+		t.Fatalf("lock-exempt run dispatch: %v", err)
+	}
+	got, err := os.ReadFile(testbridge.RunLockPath(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, lock) {
+		t.Fatalf("lock-exempt run modified foreign lock:\n%s", got)
+	}
+}
+
 func TestValidationRejectsInvalidProtocolDocuments(t *testing.T) {
 	now := time.Unix(1, 0).UTC()
 	cases := []struct {
@@ -380,6 +405,7 @@ type fakeBridge struct {
 	calls           string
 	mutateDuringRun string
 	sawRunLock      bool
+	exemptRun       bool
 	runErr          error
 	discoverErr     error
 	desiredErr      error
@@ -486,6 +512,10 @@ func (f *fakeBridge) Run(_ context.Context, req testbridge.RunRequest, emit vsco
 	return 0, nil
 }
 
+func (f *fakeBridge) LockExemptRun([]string) bool {
+	return f.exemptRun
+}
+
 func (f *fakeBridge) appendCall(call string) {
 	if f.calls != "" {
 		f.calls += ","
@@ -527,4 +557,35 @@ func decodeEvents(t *testing.T, raw string) []vscode.RunEvent {
 		events = append(events, event)
 	}
 	return events
+}
+
+// EncodeDocument is the package-owned protocol JSON sink consumer devtools route
+// their protocol output through instead of hand-rolling a json.Encoder each.
+//
+// DHF-TEST: keel/requirement-63
+func TestEncodeDocumentOwnsCanonicalProtocolJSON(t *testing.T) {
+	doc := map[string]any{"module_path": "keel", "note": "a<b>c & d"}
+	var buf bytes.Buffer
+	if err := testbridge.EncodeDocument(&buf, doc); err != nil {
+		t.Fatalf("EncodeDocument: %v", err)
+	}
+	out := buf.String()
+	if !strings.HasSuffix(out, "\n") {
+		t.Fatalf("EncodeDocument output must end with a newline: %q", out)
+	}
+	// HTML escaping is disabled so protocol payloads stay byte-faithful.
+	if !strings.Contains(out, "a<b>c & d") {
+		t.Fatalf("EncodeDocument must not HTML-escape payloads: %q", out)
+	}
+	var round map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &round); err != nil {
+		t.Fatalf("re-decode encoded document: %v\n%s", err, out)
+	}
+	if round["module_path"] != "keel" {
+		t.Fatalf("round-tripped document = %+v, want module_path=keel", round)
+	}
+	// A nil writer is tolerated (discards), matching the package sink default.
+	if err := testbridge.EncodeDocument(nil, doc); err != nil {
+		t.Fatalf("EncodeDocument(nil): %v", err)
+	}
 }

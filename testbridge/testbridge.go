@@ -114,6 +114,10 @@ type Bridge interface {
 	MetadataProvider
 }
 
+type lockExemptRunner interface {
+	LockExemptRun([]string) bool
+}
+
 // RunRequest is the package-owned runner invocation contract.
 type RunRequest struct {
 	IDs   []string
@@ -197,17 +201,22 @@ func handleRun(bridge Bridge) cli.Handler {
 			return err
 		}
 		defer closeWriter()
-		releaseLock, err := acquireRunLock(runtimeRoot(rt, bridge), ids, runID)
-		if err != nil {
-			return err
-		}
-		defer func() {
-			if err := releaseLock(); err != nil && rt.Log != nil {
-				rt.Log.Warn("release testbridge run lock", "error", err.Error())
-			}
-		}()
-
+		exitCode := 1
 		writer(vscode.RunEvent{Event: "run_started", Live: boolPtr(true), Requested: runRequests(ids)})
+		if locker, ok := bridge.(lockExemptRunner); !ok || !locker.LockExemptRun(ids) {
+			releaseLock, err := acquireRunLock(runtimeRoot(rt, bridge), ids, runID)
+			if err != nil {
+				writer(vscode.RunEvent{Event: "errored", Message: err.Error()})
+				writer(vscode.RunEvent{Event: "run_finished", ExitCode: &exitCode})
+				return err
+			}
+			defer func() {
+				if err := releaseLock(); err != nil && rt.Log != nil {
+					rt.Log.Warn("release testbridge run lock", "error", err.Error())
+				}
+			}()
+		}
+
 		exitCode, runErr := bridge.Run(ctx, RunRequest{IDs: append([]string{}, ids...), RunID: runID, Root: runtimeRoot(rt, bridge)}, writer)
 		if runErr != nil {
 			writer(vscode.RunEvent{Event: "errored", Message: runErr.Error()})
@@ -277,7 +286,18 @@ func writeDocument(rt Runtime, doc any) error {
 	if err := ValidateDocument(doc); err != nil {
 		return err
 	}
-	out := rt.Protocol
+	return EncodeDocument(rt.Protocol, doc)
+}
+
+// EncodeDocument writes doc to out as canonical test-bridge protocol JSON: one
+// JSON object followed by a newline, with HTML escaping disabled. It performs no
+// schema validation — callers that emit schema-typed protocol documents validate
+// through ValidateDocument (or the package dispatch path) first. Consumer
+// devtools route their protocol output through this function so JSON assembly
+// stays owned by keel/testbridge rather than being hand-rolled per consumer.
+//
+// DHF-REQ: keel/requirement-63
+func EncodeDocument(out io.Writer, doc any) error {
 	if out == nil {
 		out = io.Discard
 	}
@@ -325,7 +345,7 @@ func newRunWriter(rt Runtime, workspace Workspace, runID string) (vscode.RunEven
 		Now:       rt.Now,
 		RunID:     runID,
 		Source:    "vscode",
-		Workspace: workspace.Node,
+		Workspace: workspaceNode(workspace, root),
 		Logf: func(message string) {
 			if rt.Log != nil {
 				rt.Log.Warn("testbridge protocol event rejected", "detail", message)
@@ -354,6 +374,16 @@ func newRunWriter(rt Runtime, workspace Workspace, runID string) (vscode.RunEven
 		_, _ = out.Write(line)
 		_, _ = external.Write(line)
 	}, closeFn, nil
+}
+
+func workspaceNode(workspace Workspace, root string) string {
+	if workspace.Node != "" {
+		return workspace.Node
+	}
+	if root != "" {
+		return filepath.Base(root)
+	}
+	return "unknown"
 }
 
 // DHF-REQ: keel/requirement-58
