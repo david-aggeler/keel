@@ -1,10 +1,10 @@
 ---
 name: run-queue
 description: "Resident-session orchestrator that drains a batch of approved change_requests one CR at a time. Each single CR is driven by a SEPARATE LLM instance (a fresh `openbrain-client run-queue` child), while the resident session supervises: it resolves the target into a CR set, reuses the client's qualify (approved+agent) + depends_on dependency-order contract, enforces an auto_merge:true stop-and-ask preflight, dispatches one `-list <cr>` child at a time (never `-epic`), and decides what to do when a child halts. Use when the user says: '/run-queue', 'run-queue iteration-2', 'run-queue epic-4', 'run-queue cr-4', 'run-queue cr-4 using claude', 'drain the queue', 'run the approved CRs of', 'work the queue for'"
-allowed-tools: mcp__gold__list_change_request, mcp__gold__get_change_request, mcp__gold__search_change_request, mcp__gold__get_epic, mcp__gold__get_iteration, mcp__gold__list_inbound_refs, mcp__gold__list_relations_for, mcp__gold__update_change_request, mcp__gold__create_issue, mcp__gold__create_action_item
-x-openbrain-source: run-queue/v1
-x-openbrain-content-source-hash: sha256:9d44875747e1d4862333331fa815bc5d91bb97333068185d92cd5f2eacd7edcb
-x-openbrain-content-hash: sha256:5e087f5d5f52cff8ab0822d3d6863ba88dd0e39364e3c86071d38c59088a4cf7
+allowed-tools: mcp__gold__list_change_request, mcp__gold__get_change_request, mcp__gold__search_change_request, mcp__gold__get_epic, mcp__gold__get_iteration, mcp__gold__update_iteration, mcp__gold__list_inbound_refs, mcp__gold__list_relations_for, mcp__gold__update_change_request, mcp__gold__create_issue, mcp__gold__create_action_item
+x-openbrain-source: run-queue/v2
+x-openbrain-content-source-hash: sha256:00a53134300a5d16b8f2c42e48e4d119ec97647f189e04b5413c8bd27e7901cc
+x-openbrain-content-hash: sha256:3d9ef71febbcf299e90507b676e02d82ad40c21c694010047354082e8067764b
 ---
 
 # Run Queue
@@ -131,7 +131,34 @@ the next CR in dependency order. **Skip the transitive dependents** of a CR that
 When the set is drained, report a short GFM table: each CR → outcome (`merged` / `parked: <reason>` /
 `skipped: <reason>`).
 
-### 7 — Leave no dangling context (capture before you clear)
+### 7 — Close the iteration when its CRs are all done (iterations only)
+
+**This step applies to `iteration-N` targets only — never to `cr-N` or `epic-N`.** A single CR or an
+epic is not an activity this loop is entitled to close; an iteration is.
+
+When the target is an `iteration-N` **and every CR in the resolved set reached `merged`/`closed`**
+(nothing parked, nothing skipped, nothing left in a dependency it never satisfied), close the
+iteration record itself:
+
+```text
+update_iteration(product, id=iteration-N, fields: {
+  status: "closed",
+  close_reason: "merged",
+  closed_by: "claude",
+  closed_at: <now, ISO8601>,
+})
+```
+
+- **Sparse `fields:` only** — a top-level update is a full REPLACE that drops every omitted field.
+- **All-or-nothing gate.** If **any** CR in the set parked, skipped, or otherwise did not reach
+  `merged`/`closed`, **leave the iteration open** — do not close it. The whole point of the gate is
+  that a closed iteration means the iteration's work actually landed. Report which CR held it open.
+- **Idempotent.** If the iteration is already `closed`, do nothing.
+- **Qualify carve-outs don't block closure.** CRs you dropped at qualify time because they were
+  *already* `merged`/`closed` still count as done; a CR dropped as `executor=human` or `draft` is
+  **not** done and keeps the iteration open.
+
+### 8 — Leave no dangling context (capture before you clear)
 
 Like an ACR (`automated-change-request`), **this loop must leave nothing important living only in the
 session context.** Before the loop ends, every loose thread must be durably captured so the context
