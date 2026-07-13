@@ -334,7 +334,7 @@ func newRunWriter(rt Runtime, workspace Workspace, runID string) (vscode.RunEven
 		Now:       rt.Now,
 		RunID:     runID,
 		Source:    "vscode",
-		Workspace: workspace.Node,
+		Workspace: workspaceNode(workspace, root),
 		Logf: func(message string) {
 			if rt.Log != nil {
 				rt.Log.Warn("testbridge protocol event rejected", "detail", message)
@@ -363,6 +363,16 @@ func newRunWriter(rt Runtime, workspace Workspace, runID string) (vscode.RunEven
 		_, _ = out.Write(line)
 		_, _ = external.Write(line)
 	}, closeFn, nil
+}
+
+func workspaceNode(workspace Workspace, root string) string {
+	if workspace.Node != "" {
+		return workspace.Node
+	}
+	if root != "" {
+		return filepath.Base(root)
+	}
+	return "unknown"
 }
 
 // DHF-REQ: keel/requirement-58

@@ -117,6 +117,39 @@ func TestCanonicalTestBridgeRunUsesPackageOwnedDispatch(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-63
+func TestCanonicalTestBridgeRunEventsUseResolvedWorkspace(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	if err := os.MkdirAll(filepath.Dir(testbridge.RunLockPath(root)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(testbridge.RunLockPath(root), []byte(`{"pid":1,"created_at":"2026-07-13T00:00:00Z","ids":["keel::lane::lint"],"token":"foreign"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var plan bytes.Buffer
+	if err := commandTree().Dispatch(contextWithVSCodeTestState(root, &plan), []string{"test-bridge", "tests", "desired-state", "--format", "json", "--id", vscodeLaneLint}); err != nil {
+		t.Fatalf("canonical desired-state: %v", err)
+	}
+	var setup vscode.SetupPlan
+	if err := json.Unmarshal(plan.Bytes(), &setup); err != nil {
+		t.Fatalf("desired-state JSON: %v\n%s", err, plan.String())
+	}
+
+	var protocol bytes.Buffer
+	err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "tests", "run", "--id", vscodeLaneLint})
+	if err == nil || !strings.Contains(err.Error(), "keel/testbridge: run lock already exists") {
+		t.Fatalf("canonical run err = %v, want package-owned run lock refusal", err)
+	}
+	for _, event := range decodeRunEvents(t, protocol.String()) {
+		if event.Workspace != setup.Workspace {
+			t.Fatalf("run event workspace = %q, want desired-state workspace %q in %+v", event.Workspace, setup.Workspace, event)
+		}
+	}
+}
+
 // DHF-TEST: keel/requirement-64
 func TestVSCodePlanCarriesComparableDevtoolIdentity(t *testing.T) {
 	root := t.TempDir()
