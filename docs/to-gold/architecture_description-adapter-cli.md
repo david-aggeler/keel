@@ -302,7 +302,9 @@ interaction the whole bridge exists for.
 
 **When it fires.** On every Run click in the Test Explorer, and internally for
 maintenance items the discovery document advertises (e.g.
-`capabilities.clear_state_test_ids`).
+`capabilities.clear_state_test_ids`). A Run click is therefore exactly **two**
+devtool processes: the plan (interaction 2, buffered) then the run
+(streaming) — discovery is not re-run on click; the tree already exists.
 
 **Invocation.** One `--id` per selected item; **no `--format` flag** (the
 output format is fixed: JSONL):
