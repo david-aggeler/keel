@@ -56,6 +56,7 @@ homelab
 ilities
 ineffassign
 inspectable
+invokable
 Justfiles
 keel
 keeldev
@@ -83,6 +84,7 @@ Prereq
 presencetool
 Println
 procexec
+pytest
 recentlog
 redactstring
 reltype
@@ -106,9 +108,11 @@ STUBEOF
 Subpackages
 supersecretvalue
 SYSFILE
+testbridge
 testdata
 topenbrain
 unanalyzed
+undemoable
 undrained
 unparseable
 unredacted
