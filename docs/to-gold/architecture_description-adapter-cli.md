@@ -149,10 +149,14 @@ tree with zero extension changes.
 `keel/vscode/schemas/`; tree semantics: sibling chapter `-2`):
 
 - **(a) The test trees — discovery proper.** The reason a test explorer
-  exists, and the part every consumer must provide: the real per-framework
-  test hierarchies. For keel: Go as package → file → test (go/parser; `uri` +
-  `range` for click-to-source) and Mocha (vsix) with per-file members —
-  rendered under `d. Frameworks`.
+  exists: the real test hierarchies of **whatever frameworks the consumer's
+  workspace actually contains**. The protocol mandates no framework —
+  `framework` is a plain string label on items. keel's workspace has two
+  testable codebases, so its tree has exactly two subtrees under
+  `d. Frameworks`: Go as package → file → test (go/parser; `uri` + `range`
+  for click-to-source), and Mocha for the VSIX's own headless suite under
+  `vsix/` (per-file members). A pure-Go consumer ships only a Go subtree; a
+  Python consumer ships pytest.
 - **(b) Consumer-specific maintenance.** Runnable operational actions the
   devtool chooses to advertise — for keel: detect lanes, unlock test bridge,
   clear results, clear local test state (`a.*`). Discovered so that even
