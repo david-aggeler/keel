@@ -41,9 +41,9 @@ func TestUpgradeTestBridgeConfigMigratesPreservesUserValuesAndIsIdempotent(t *te
 		t.Fatal(err)
 	}
 	old := []byte(`{
-  "version": 1,
+  "version": 2,
   "command": "bin/custom-dev",
-  "args": ["vscode", "tests", "--custom"],
+  "args": ["go", "run", "./cmd/custom-dev", "vscode", "tests"],
   "displayName": "Custom",
   "env": {"CUSTOM": "1"}
 }
@@ -56,15 +56,18 @@ func TestUpgradeTestBridgeConfigMigratesPreservesUserValuesAndIsIdempotent(t *te
 	if err != nil {
 		t.Fatalf("upgrade config: %v", err)
 	}
-	if !res.Changed || res.FromVersion != 1 || res.ToVersion != CurrentConfigVersion {
-		t.Fatalf("upgrade result = %+v, want changed 1 -> current", res)
+	if !res.Changed || res.FromVersion != 2 || res.ToVersion != CurrentConfigVersion {
+		t.Fatalf("upgrade result = %+v, want changed 2 -> current", res)
 	}
 	got, err := ReadTestBridgeConfig(root)
 	if err != nil {
 		t.Fatalf("read upgraded config: %v", err)
 	}
-	if got.Command != "bin/custom-dev" || got.DisplayName != "Custom" || got.Args[2] != "--custom" || got.Env["CUSTOM"] != "1" {
+	if got.Command != "bin/custom-dev" || got.DisplayName != "Custom" || got.Env["CUSTOM"] != "1" {
 		t.Fatalf("upgrade did not preserve user values: %+v", got)
+	}
+	if want := []string{"go", "run", "./cmd/custom-dev"}; !equalStrings(got.Args, want) {
+		t.Fatalf("upgraded args = %#v, want launcher-only %#v", got.Args, want)
 	}
 
 	firstBytes, err := os.ReadFile(path)
@@ -94,7 +97,7 @@ func TestUpgradeTestBridgeConfigRefusesNewerVersionWithoutWriting(t *testing.T) 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	newer := []byte(`{"version":999,"command":"bin/future","args":["vscode","tests"],"displayName":"Future"}` + "\n")
+	newer := []byte(`{"version":999,"command":"bin/future","args":["wrapper"],"displayName":"Future"}` + "\n")
 	if err := os.WriteFile(path, newer, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -132,4 +135,19 @@ func TestInitTestBridgeConfigWritesDefaultTemplate(t *testing.T) {
 	if cfg.Version != CurrentConfigVersion || cfg.Command != "bin/keel-dev" || cfg.DisplayName != "Keel" {
 		t.Fatalf("default config = %+v, want current keel template", cfg)
 	}
+	if len(cfg.Args) != 0 {
+		t.Fatalf("default args = %#v, want launcher-only empty args", cfg.Args)
+	}
+}
+
+func equalStrings(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }

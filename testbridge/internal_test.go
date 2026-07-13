@@ -112,7 +112,7 @@ func TestPrivateHelpersCoverDefaultsAndErrors(t *testing.T) {
 
 func TestConfigErrorBranches(t *testing.T) {
 	root := t.TempDir()
-	template := vscode.TestBridgeConfig{Version: vscode.CurrentConfigVersion, Command: "bin/demo", Args: []string{"test-bridge"}, DisplayName: "Demo"}
+	template := vscode.TestBridgeConfig{Version: vscode.CurrentConfigVersion, Command: "bin/demo", Args: []string{}, DisplayName: "Demo"}
 	path := vscode.TestBridgeConfigPath(root)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
@@ -127,7 +127,7 @@ func TestConfigErrorBranches(t *testing.T) {
 		t.Fatalf("UpgradeConfig malformed err = %v, want parse failure", err)
 	}
 
-	if err := os.WriteFile(path, []byte(`{"version":0,"command":"bin/demo","args":["test-bridge"],"displayName":"Demo"}`+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"version":0,"command":"bin/demo","args":[],"displayName":"Demo"}`+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := UpgradeConfig(root, template); err == nil || !strings.Contains(err.Error(), "missing or unsupported") {

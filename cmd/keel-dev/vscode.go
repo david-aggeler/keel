@@ -217,6 +217,33 @@ func vscodeCommandSpec() *cli.CommandSpec {
 	}
 }
 
+// DHF-REQ: keel/requirement-59, keel/requirement-60
+func testBridgeCommandSpec() *cli.CommandSpec {
+	return &cli.CommandSpec{
+		Name:  "test-bridge",
+		Short: "Emit canonical test-bridge protocol documents.",
+		Subcommands: []*cli.CommandSpec{
+			{
+				Name:  "config",
+				Short: "Initialize or upgrade test bridge config.",
+				Subcommands: []*cli.CommandSpec{
+					{Name: "init", Use: "test-bridge config init", Short: "Write .vscode/test-bridge.json if absent.", Handler: handleVSCodeConfigInit},
+					{Name: "upgrade", Use: "test-bridge config upgrade", Short: "Upgrade .vscode/test-bridge.json to the current schema.", Handler: handleVSCodeConfigUpgrade},
+				},
+			},
+			{
+				Name:  "tests",
+				Short: "Test discovery, desired-state reporting, and lane runs.",
+				Subcommands: []*cli.CommandSpec{
+					{Name: "discover", Use: "test-bridge tests discover [--format json]", Short: "Emit the discovery document.", Flags: []cli.FlagSpec{{Name: "format", Value: "json", Short: "Output format."}}, Handler: handleVSCodeTestsDiscover},
+					{Name: "desired-state", Use: "test-bridge tests desired-state [--format json] [--id test-id]", Short: "Emit the desired-state document.", Flags: []cli.FlagSpec{{Name: "format", Value: "json", Short: "Output format."}, {Name: "id", Value: "test-id", Short: "Selected test id."}}, Handler: handleVSCodeTestsPlan},
+					{Name: "run", Use: "test-bridge tests run --id test-id", Short: "Run selected test lanes.", Flags: []cli.FlagSpec{{Name: "id", Value: "test-id", Short: "Selected test id."}}, Handler: handleVSCodeTestsRun},
+				},
+			},
+		},
+	}
+}
+
 // DHF-REQ: keel/requirement-40
 func handleVSCodeConfigInit(ctx context.Context, args []string) error {
 	if len(args) != 0 {

@@ -13,6 +13,7 @@ import {
   runProfileHandlerForTest,
   setExternalRunStaleMsForTest,
   setCurrentTreeForTest,
+  setupPlanOutputLines,
   shouldInvalidateResultsForEvent
 } from '../../extension';
 import { configRelativePath, currentConfigVersion, defaultConfigTemplate, discoverTests, planTests, readAdapterConfig, readDemoBlockStatus, runTests, setDemoBlock, upgradeConfig } from '../../bridgeAdapter';
@@ -71,12 +72,12 @@ suite('Keel Test Bridge config contract', () => {
     }
   });
 
-  // DHF-TEST: keel/requirement-40
-  test('default template is the embedded current Keel config', () => {
+  // DHF-TEST: keel/requirement-59
+  test('default template is launcher-only config v3', () => {
     const parsed = JSON.parse(defaultConfigTemplate()) as { version: number; command: string; args: string[]; displayName: string };
     assert.equal(parsed.version, currentConfigVersion);
     assert.equal(parsed.command, 'bin/keel-dev');
-    assert.deepEqual(parsed.args, ['vscode', 'tests']);
+    assert.deepEqual(parsed.args, []);
     assert.equal(parsed.displayName, 'Keel');
   });
 
@@ -89,7 +90,7 @@ suite('Keel Test Bridge config contract', () => {
       JSON.stringify({
         version: currentConfigVersion + 1,
         command: 'bin/future-dev',
-        args: ['vscode', 'tests'],
+        args: ['wrapper'],
         displayName: 'Future',
         extraFutureField: true
       })
@@ -98,7 +99,87 @@ suite('Keel Test Bridge config contract', () => {
     const cfg = readAdapterConfig(root);
     assert.equal(cfg.version, currentConfigVersion + 1);
     assert.equal(cfg.command, 'bin/future-dev');
+    assert.deepEqual(cfg.args, ['wrapper']);
     assert.equal(cfg.displayName, 'Future');
+  });
+
+  // DHF-TEST: keel/requirement-59, keel/requirement-60
+  test('adapter emits canonical test-bridge argv from launcher-only config and upgrades v2 args', async function () {
+    this.timeout(10_000);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-canonical-wire-'));
+    const fixture = path.resolve(__dirname, '../../../src/test/fixtures/fake-adapter.js');
+    const configPath = path.join(root, configRelativePath);
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify({
+      version: 2,
+      command: process.execPath,
+      args: [fixture, 'vscode', 'tests'],
+      displayName: 'Keel'
+    }, null, 2) + '\n');
+
+    await upgradeConfig(root);
+    const migrated = readAdapterConfig(root);
+    assert.equal(migrated.version, 3);
+    assert.deepEqual(migrated.args, [fixture]);
+
+    const discovery = await discoverTests(root);
+    assert.ok(discovery.items.some((item) => item.id === 'keel::lane::ci'));
+
+    const plan = await planTests(root, ['keel::lane::ci']);
+    assert.ok(plan.items.some((item) => item.id === 'keel::lane::ci'));
+
+    const run = await collectChild(runTests(root, ['keel::lane::ci']));
+    assert.equal(run.code, 0);
+
+    const calls = fs.readFileSync(path.join(root, '.devtools', 'fake-adapter-calls.log'), 'utf8')
+      .trim()
+      .split(/\r?\n/);
+    assert.deepEqual(calls, [
+      'test-bridge config upgrade',
+      'test-bridge tests discover --format json',
+      'test-bridge tests desired-state --format json --id keel::lane::ci',
+      'test-bridge tests run --id keel::lane::ci'
+    ]);
+    assert.ok(calls.every((call) => !/\bvscode tests\b/.test(call)));
+    assert.ok(calls.every((call) => !/\bplan\b/.test(call)));
+  });
+
+  // DHF-TEST: keel/requirement-60
+  test('desired-state output renders desired/current resources and teardown split', () => {
+    const lines = setupPlanOutputLines({
+      version: 1,
+      workspace: 'keel',
+      generated_at: new Date().toISOString(),
+      items: [],
+      required_resources: ['db'],
+      desired_state: [{
+        resource: 'db',
+        kind: 'service',
+        desired: 'seeded',
+        current: 'empty',
+        status: 'missing',
+        action: 'reconcile_during_run',
+        message: 'seed during run',
+        reusable: false,
+        owned: true
+      }],
+      checks: [],
+      actions: [],
+      teardown: {
+        owned_temporary_resources: ['db'],
+        shared_reusable_resources: ['go-toolchain'],
+        policy: 'owned resources are torn down after run'
+      }
+    });
+
+    assert.deepEqual(lines, [
+      'desired state:',
+      '- db missing: empty -> seeded; action=reconcile_during_run; owned, not reusable; seed during run',
+      'teardown:',
+      '- owned: db',
+      '- reusable: go-toolchain',
+      '- policy: owned resources are torn down after run'
+    ]);
   });
 
   // DHF-TEST: keel/requirement-40
@@ -126,7 +207,7 @@ suite('Keel Test Bridge config contract', () => {
     fs.writeFileSync(configPath, JSON.stringify({
       version: currentConfigVersion,
       command: process.execPath,
-      args: [path.resolve(__dirname, '../../../src/test/fixtures/fake-adapter.js'), 'vscode', 'tests'],
+      args: [path.resolve(__dirname, '../../../src/test/fixtures/fake-adapter.js')],
       displayName: 'Keel'
     }, null, 2) + '\n');
     const before = fs.readFileSync(configPath, 'utf8');
@@ -158,7 +239,7 @@ suite('Keel Test Bridge config contract', () => {
     fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
       version: currentConfigVersion,
       command: process.execPath,
-      args: [path.resolve(__dirname, '../../../src/test/fixtures/fake-adapter.js'), 'vscode', 'tests'],
+      args: [path.resolve(__dirname, '../../../src/test/fixtures/fake-adapter.js')],
       displayName: 'Keel'
     }, null, 2) + '\n');
 
@@ -187,7 +268,7 @@ suite('Keel Test Bridge config contract', () => {
     fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
       version: currentConfigVersion,
       command: realKeelDevBinary(),
-      args: ['vscode', 'tests'],
+      args: [],
       displayName: 'Keel'
     }, null, 2) + '\n');
 
@@ -221,7 +302,7 @@ suite('Keel Test Bridge config contract', () => {
     fs.writeFileSync(devConfigPath, JSON.stringify({
       version: currentConfigVersion,
       command: realKeelDevBinary(),
-      args: ['vscode', 'tests'],
+      args: [],
       displayName: 'Keel'
     }, null, 2) + '\n');
     const runStreamRoot = devRoot;
