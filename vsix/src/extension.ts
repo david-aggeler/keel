@@ -4,7 +4,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as vscode from 'vscode';
-import { adapterConfig, configRelativePath, currentConfigVersion, defaultAdapterConfig, defaultConfigTemplate, discoverTests, planTests, readAdapterConfig, readDemoBlockStatus, runTests, setDemoBlock, upgradeConfig } from './bridgeAdapter';
+import { adapterConfig, configRelativePath, currentConfigVersion, defaultAdapterConfig, defaultConfigTemplate, discoverTests, planTests, readAdapterConfig, runTests, upgradeConfig } from './bridgeAdapter';
 import { ExternalRunMirror, ExternalRunStateSnapshot, setExternalRunStaleMsForTest } from './externalRunMirror';
 import { publishDiscovery, PublishedTree } from './tree';
 import { DesiredState, RunEvent, SetupPlan } from './protocol';
@@ -101,9 +101,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         output.appendLine(`Detect lanes failed: ${message}`);
         void vscode.window.showErrorMessage(message);
       }
-    }),
-    vscode.commands.registerCommand('keel.tests.toggleDemoBlock', async () => {
-      await toggleDemoBlock(controller);
     }),
     vscode.commands.registerCommand('keel.tests.initConfig', async () => {
       await initializeConfig();
@@ -373,31 +370,6 @@ async function runAdapterMaintenance(controller: vscode.TestController, ids: rea
     });
   });
   await refresh(controller);
-}
-
-// DHF-REQ: keel/requirement-41
-async function toggleDemoBlock(controller: vscode.TestController): Promise<void> {
-  const workspaceRoot = getWorkspaceRoot();
-  const adapter = currentAdapterConfig();
-  if (!workspaceRoot) {
-    void vscode.window.showErrorMessage(`No ${adapter.displayName} workspace is open.`);
-    return;
-  }
-  try {
-    const status = await readDemoBlockStatus(workspaceRoot);
-    if (status.blocked_lane) {
-      await setDemoBlock(workspaceRoot, undefined);
-      void vscode.window.showInformationMessage(`${adapter.displayName} demo block cleared.`);
-    } else {
-      await setDemoBlock(workspaceRoot, 'keel::lane::test-fast');
-      void vscode.window.showInformationMessage(`${adapter.displayName} demo block enabled for test-fast.`);
-    }
-    await refresh(controller);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    output.appendLine(`Demo block toggle failed: ${message}`);
-    void vscode.window.showErrorMessage(message);
-  }
 }
 
 async function runSelected(
