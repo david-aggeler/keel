@@ -166,8 +166,11 @@ ordinals decided in keel/exploration-2).*
   which resources it requires, desired vs live-probed current state, the
   reconciling action, ownership/teardown. Per-selection by nature, so it
   cannot live in the discovery document; the devtool computes it fresh for
-  every plan call and establishes it itself while executing the run. Detail:
-  interaction 2.
+  every plan call and establishes it itself while executing the run.
+  **Visibility:** every Run click shows it — the plan for the clicked
+  selection is printed at the top of that run's output, before the first
+  event streams. There is no tree-side preview: desired state is never a
+  node, and plan is not user-invokable on its own. Detail: interaction 2.
 - **(d) The lanes** *(arrive: discovery, interaction 1; defined (planned) in
   `.vscode/test-lanes.json`)*. The aggregation targets: system lanes compiled
   into the devtool (lint, test-fast, test-coverage, vsix-ci, ci) plus
