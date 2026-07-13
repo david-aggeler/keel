@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/david-aggeler/keel/testbridge"
 	"github.com/david-aggeler/keel/vscode"
 )
 
@@ -90,6 +91,29 @@ func TestVSCodeHandlersDispatchDiscoveryPlanAndLintRun(t *testing.T) {
 	events := decodeRunEvents(t, protocol.String())
 	if events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode != 0 {
 		t.Fatalf("lint run terminal = %+v, want exit 0", events[len(events)-1])
+	}
+}
+
+// DHF-TEST: keel/requirement-63
+func TestCanonicalTestBridgeRunUsesPackageOwnedDispatch(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	if err := os.MkdirAll(filepath.Dir(testbridge.RunLockPath(root)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(testbridge.RunLockPath(root), []byte(`{"pid":1,"created_at":"2026-07-13T00:00:00Z","ids":["keel::lane::lint"],"token":"foreign"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var protocol bytes.Buffer
+	err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "tests", "run", "--id", vscodeLaneLint})
+	if err == nil || !strings.Contains(err.Error(), "keel/testbridge: run lock already exists") {
+		t.Fatalf("canonical run err = %v, want package-owned run lock refusal", err)
+	}
+	events := decodeRunEvents(t, protocol.String())
+	if len(events) != 3 || events[0].Event != "run_started" || events[1].Event != "errored" || events[2].Event != "run_finished" {
+		t.Fatalf("canonical run events = %+v, want package-owned start/error/finish stream", events)
 	}
 }
 

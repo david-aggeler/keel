@@ -197,6 +197,31 @@ func TestRunErrorsAndLockConflictsUsePackagePaths(t *testing.T) {
 	}
 }
 
+func TestRunLockExemptionLeavesExistingLockForConsumerMaintenance(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.exemptRun = true
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: io.Discard, RunID: func() string { return "run-exempt" }})
+	if err := os.MkdirAll(filepath.Dir(testbridge.RunLockPath(root)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lock := []byte(`{"pid":1,"created_at":"2026-07-13T00:00:00Z","ids":["demo::maintenance::unlock"],"token":"foreign"}` + "\n")
+	if err := os.WriteFile(testbridge.RunLockPath(root), lock, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", "demo::maintenance::unlock"}); err != nil {
+		t.Fatalf("lock-exempt run dispatch: %v", err)
+	}
+	got, err := os.ReadFile(testbridge.RunLockPath(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, lock) {
+		t.Fatalf("lock-exempt run modified foreign lock:\n%s", got)
+	}
+}
+
 func TestValidationRejectsInvalidProtocolDocuments(t *testing.T) {
 	now := time.Unix(1, 0).UTC()
 	cases := []struct {
@@ -380,6 +405,7 @@ type fakeBridge struct {
 	calls           string
 	mutateDuringRun string
 	sawRunLock      bool
+	exemptRun       bool
 	runErr          error
 	discoverErr     error
 	desiredErr      error
@@ -484,6 +510,10 @@ func (f *fakeBridge) Run(_ context.Context, req testbridge.RunRequest, emit vsco
 		return 1, f.runErr
 	}
 	return 0, nil
+}
+
+func (f *fakeBridge) LockExemptRun([]string) bool {
+	return f.exemptRun
 }
 
 func (f *fakeBridge) appendCall(call string) {

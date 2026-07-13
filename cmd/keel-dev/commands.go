@@ -7,6 +7,7 @@ import (
 
 	"github.com/david-aggeler/keel/cli"
 	logging "github.com/david-aggeler/keel/log"
+	"github.com/david-aggeler/keel/testbridge"
 )
 
 type runState struct {
@@ -23,7 +24,14 @@ func withRunState(ctx context.Context, logger *slog.Logger, runLog *logging.Logg
 }
 
 func withRunStateProtocol(ctx context.Context, logger *slog.Logger, runLog *logging.Logger, root string, protocol io.Writer) context.Context {
-	return context.WithValue(ctx, runStateKey{}, runState{logger: logger, runLog: runLog, root: root, protocol: protocol})
+	state := runState{logger: logger, runLog: runLog, root: root, protocol: protocol}
+	ctx = context.WithValue(ctx, runStateKey{}, state)
+	return testbridge.WithRuntime(ctx, testbridge.Runtime{
+		Root:     root,
+		Protocol: protocol,
+		Log:      logger,
+		RunID:    newVSCodeRunID,
+	})
 }
 
 func stateFrom(ctx context.Context) runState {

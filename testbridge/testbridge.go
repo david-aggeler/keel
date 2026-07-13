@@ -114,6 +114,10 @@ type Bridge interface {
 	MetadataProvider
 }
 
+type lockExemptRunner interface {
+	LockExemptRun([]string) bool
+}
+
 // RunRequest is the package-owned runner invocation contract.
 type RunRequest struct {
 	IDs   []string
@@ -197,17 +201,22 @@ func handleRun(bridge Bridge) cli.Handler {
 			return err
 		}
 		defer closeWriter()
-		releaseLock, err := acquireRunLock(runtimeRoot(rt, bridge), ids, runID)
-		if err != nil {
-			return err
-		}
-		defer func() {
-			if err := releaseLock(); err != nil && rt.Log != nil {
-				rt.Log.Warn("release testbridge run lock", "error", err.Error())
-			}
-		}()
-
+		exitCode := 1
 		writer(vscode.RunEvent{Event: "run_started", Live: boolPtr(true), Requested: runRequests(ids)})
+		if locker, ok := bridge.(lockExemptRunner); !ok || !locker.LockExemptRun(ids) {
+			releaseLock, err := acquireRunLock(runtimeRoot(rt, bridge), ids, runID)
+			if err != nil {
+				writer(vscode.RunEvent{Event: "errored", Message: err.Error()})
+				writer(vscode.RunEvent{Event: "run_finished", ExitCode: &exitCode})
+				return err
+			}
+			defer func() {
+				if err := releaseLock(); err != nil && rt.Log != nil {
+					rt.Log.Warn("release testbridge run lock", "error", err.Error())
+				}
+			}()
+		}
+
 		exitCode, runErr := bridge.Run(ctx, RunRequest{IDs: append([]string{}, ids...), RunID: runID, Root: runtimeRoot(rt, bridge)}, writer)
 		if runErr != nil {
 			writer(vscode.RunEvent{Event: "errored", Message: runErr.Error()})
