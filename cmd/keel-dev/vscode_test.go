@@ -23,7 +23,7 @@ func TestVSCodeRunBlockedLaneUsesEngineProtocol(t *testing.T) {
 	writeFile(t, root, "go.sum", "")
 	writeFile(t, root, "main_test.go", "package p\n\nimport \"testing\"\n\nfunc TestOne(t *testing.T) {}\n")
 
-	t.Setenv("KEEL_VSCODE_DEMO_BLOCK", "keel::lane::test-fast")
+	t.Setenv("PATH", t.TempDir())
 
 	var protocol bytes.Buffer
 	err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "keel::lane::test-fast"})
@@ -133,59 +133,13 @@ func TestVSCodeRunLegacyFormatArgvFailsAsVersionSkew(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-41
-func TestVSCodeDemoBlockVerbsPersistStateAndRejectUnknownLanes(t *testing.T) {
-	root := t.TempDir()
-	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
-	writeFile(t, root, "go.sum", "")
-
-	var protocol bytes.Buffer
-	ctx := contextWithVSCodeTestState(root, &protocol)
-	if err := handleVSCodeDemoBlock(ctx, []string{vscodeLaneTestFast}); err != nil {
-		t.Fatalf("demo block: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(root, ".devtools", "vscode-demo-block.json")); err != nil {
-		t.Fatalf("demo block state was not persisted: %v", err)
-	}
-
-	readiness := newKeelWorkspaceProfile(root).PrepareLane(context.Background(), vscodeLaneTestFast)
-	if readiness.Ready() || len(readiness.Blocked) != 1 || readiness.Blocked[0].Resource != "KEEL_VSCODE_DEMO_BLOCK" {
-		t.Fatalf("persisted demo block readiness = %+v, want KEEL_VSCODE_DEMO_BLOCK block", readiness)
-	}
-
-	protocol.Reset()
-	if err := handleVSCodeDemoStatus(ctx, nil); err != nil {
-		t.Fatalf("demo status: %v", err)
-	}
-	var status struct {
-		BlockedLane string `json:"blocked_lane"`
-		Source      string `json:"source"`
-	}
-	if err := json.Unmarshal(protocol.Bytes(), &status); err != nil {
-		t.Fatalf("demo status JSON: %v\n%s", err, protocol.String())
-	}
-	if status.BlockedLane != vscodeLaneTestFast || status.Source != "state" {
-		t.Fatalf("demo status = %+v, want persisted test-fast block", status)
-	}
-
-	t.Setenv("KEEL_VSCODE_DEMO_BLOCK", vscodeLaneLint)
-	readiness = newKeelWorkspaceProfile(root).PrepareLane(context.Background(), vscodeLaneTestFast)
-	if !readiness.Ready() {
-		t.Fatalf("env block for a different lane should take precedence over state, got %+v", readiness)
-	}
-	readiness = newKeelWorkspaceProfile(root).PrepareLane(context.Background(), vscodeLaneLint)
-	if readiness.Ready() || readiness.Blocked[0].Detail != vscodeLaneLint {
-		t.Fatalf("env block readiness = %+v, want lint block", readiness)
-	}
-
-	if err := handleVSCodeDemoUnblock(ctx, nil); err != nil {
-		t.Fatalf("demo unblock: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(root, ".devtools", "vscode-demo-block.json")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("demo unblock should remove persisted state, stat err=%v", err)
-	}
-	if err := handleVSCodeDemoBlock(ctx, []string{"keel::lane::missing"}); err == nil || !strings.Contains(err.Error(), "unknown vscode lane id") {
-		t.Fatalf("unknown lane block err = %v, want structured refusal", err)
+// DHF-TEST: keel/requirement-61
+func TestVSCodeCommandSpecOmitsDemoSubtree(t *testing.T) {
+	spec := vscodeCommandSpec()
+	for _, sub := range spec.Subcommands {
+		if sub.Name == "demo" {
+			t.Fatalf("vscode command spec still exposes demo subtree: %+v", sub)
+		}
 	}
 }
 
@@ -240,9 +194,24 @@ func TestVSCodeBridgeDocsPinCanonicalTestBridgeArgv(t *testing.T) {
 		"vscode tests discover",
 		"vscode tests run",
 		"vscode config upgrade",
+		"vscode demo",
 	} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("docs/vscode-bridge.md still contains stale wire argv %q", forbidden)
+		}
+	}
+}
+
+// DHF-TEST: keel/requirement-61
+func TestVSIXChangelogSignalsDemoWireRemoval(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", "vsix", "CHANGELOG.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	for _, want := range []string{"demo-toggle", "vscode demo", "keel-demo-dev"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("vsix/CHANGELOG.md missing demo removal signal %q", want)
 		}
 	}
 }
@@ -672,7 +641,7 @@ func TestVSCodeRunStartedCarriesRequestedSelection(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, root, "go.sum", "")
-	t.Setenv("KEEL_VSCODE_DEMO_BLOCK", vscodeLaneTestFast)
+	t.Setenv("PATH", t.TempDir())
 
 	var protocol bytes.Buffer
 	err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", vscodeLaneTestFast})
@@ -1917,7 +1886,7 @@ func TestVSCodeRunWritesStampedExternalRunStream(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, root, "go.sum", "")
-	t.Setenv("KEEL_VSCODE_DEMO_BLOCK", "keel::lane::test-fast")
+	t.Setenv("PATH", t.TempDir())
 
 	var protocol bytes.Buffer
 	err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "keel::lane::test-fast"})
@@ -2086,7 +2055,6 @@ func TestVSCodeArgumentAndProfileEdges(t *testing.T) {
 	if profile.Repo() == "" || profile.ModulePath() != modulePath || profile.LogDir() == "" || profile.MaxOutputBytes() == 0 {
 		t.Fatalf("profile scalar methods returned empty values: %+v", profile)
 	}
-	t.Setenv("KEEL_VSCODE_DEMO_BLOCK", "")
 	if readiness := profile.PrepareLane(context.Background(), vscodeLaneLint); !readiness.Ready() {
 		t.Fatalf("profile should be ready with go and module root: %+v", readiness)
 	}
@@ -2101,7 +2069,7 @@ func TestVSCodeRunKeepsStdoutProtocolAndConsoleOnStderr(t *testing.T) {
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, root, "go.sum", "")
 	t.Chdir(root)
-	t.Setenv("KEEL_VSCODE_DEMO_BLOCK", "keel::lane::test-fast")
+	t.Setenv("PATH", t.TempDir())
 
 	stdout, stderr := captureProcessStreams(t, func() {
 		if code := run([]string{"--no-header", "-v", "vscode", "tests", "run", "--id", "keel::lane::test-fast"}); code == 0 {
@@ -2166,7 +2134,7 @@ func TestVSCodeRunRefusesExistingLockAndReleasesOwnLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	protocol.Reset()
-	t.Setenv("KEEL_VSCODE_DEMO_BLOCK", "keel::lane::test-fast")
+	t.Setenv("PATH", t.TempDir())
 	err = handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "keel::lane::test-fast"})
 	if err == nil {
 		t.Fatal("blocked lane returned nil error; want non-zero")

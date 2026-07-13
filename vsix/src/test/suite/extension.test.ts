@@ -16,7 +16,7 @@ import {
   setupPlanOutputLines,
   shouldInvalidateResultsForEvent
 } from '../../extension';
-import { configRelativePath, currentConfigVersion, defaultConfigTemplate, discoverTests, planTests, readAdapterConfig, readDemoBlockStatus, runTests, setDemoBlock, upgradeConfig } from '../../bridgeAdapter';
+import { configRelativePath, currentConfigVersion, defaultConfigTemplate, discoverTests, planTests, readAdapterConfig, runTests, upgradeConfig } from '../../bridgeAdapter';
 import { publishDiscovery } from '../../tree';
 import { RunEvent } from '../../protocol';
 
@@ -44,7 +44,7 @@ suite('Keel Test Bridge config contract', () => {
     assert.ok(commands.has('keel.tests.initConfig'));
     assert.ok(commands.has('keel.tests.unlock'));
     assert.ok(commands.has('keel.tests.detectLanes'));
-    assert.ok(commands.has('keel.tests.toggleDemoBlock'));
+    assert.ok(!commands.has('keel.tests.toggleDemoBlock'));
     assert.ok(!commands.has('vela.tests.refresh'));
   });
 
@@ -63,8 +63,7 @@ suite('Keel Test Bridge config contract', () => {
       .sort();
     assert.deepEqual(surfacedCommands, [
       'keel.tests.clearTestResults',
-      'keel.tests.refresh',
-      'keel.tests.toggleDemoBlock'
+      'keel.tests.refresh'
     ]);
     assert.deepEqual(Object.keys(manifest.contributes?.menus ?? {}).sort(), ['view/title']);
     for (const item of manifest.contributes?.menus?.['view/title'] ?? []) {
@@ -230,12 +229,12 @@ suite('Keel Test Bridge config contract', () => {
     assert.ok(commands.includes('keel.tests.initConfig'));
     assert.ok(commands.includes('keel.tests.unlock'));
     assert.ok(commands.includes('keel.tests.clearTestResults'));
-    assert.ok(commands.includes('keel.tests.toggleDemoBlock'));
+    assert.ok(!commands.includes('keel.tests.toggleDemoBlock'));
     assert.equal(currentAdapterConfig().displayName, 'Keel');
   });
 
-  // DHF-TEST: keel/requirement-41
-  test('demo-block toggle invokes devtool state verbs without mutating config', async function () {
+  // DHF-TEST: keel/requirement-61
+  test('extension manifest exposes no demo-toggle command', async function () {
     this.timeout(10_000);
     const root = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
     assert.ok(root, 'test workspace should be configured');
@@ -247,25 +246,19 @@ suite('Keel Test Bridge config contract', () => {
       args: [path.resolve(__dirname, '../../../src/test/fixtures/fake-adapter.js')],
       displayName: 'Keel'
     }, null, 2) + '\n');
-    const before = fs.readFileSync(configPath, 'utf8');
     const callsPath = path.join(root, '.devtools', 'fake-adapter-calls.log');
     fs.rmSync(path.join(root, '.devtools', 'vscode-demo-block.json'), { force: true });
     fs.rmSync(callsPath, { force: true });
 
-    await vscode.commands.executeCommand('keel.tests.toggleDemoBlock');
+    const commands = await vscode.commands.getCommands(true);
+    assert.ok(!commands.includes('keel.tests.toggleDemoBlock'));
 
-    const after = fs.readFileSync(configPath, 'utf8');
-    assert.equal(after, before, 'toggle must not mutate .vscode/test-bridge.json');
+    await discoverTests(root);
+    await planTests(root, ['keel::lane::ci']);
+    const nextRun = await collectChild(runTests(root, ['keel::lane::ci']));
+    assert.equal(nextRun.code, 0);
     const calls = fs.readFileSync(callsPath, 'utf8');
-    assert.match(calls, /vscode demo (block|unblock) /);
-
-    const nextRun = await collectChild(runTests(root, ['keel::lane::test-fast']));
-    assert.notEqual(nextRun.code, 0);
-    const events = nextRun.stdout.split(/\r?\n/)
-      .filter((line) => line.trim().length > 0)
-      .map((line) => JSON.parse(line) as RunEvent);
-    assert.ok(events.some((event) => event.event === 'failed' && /lane blocked/.test(event.message ?? '')));
-    assert.equal(events.filter((event) => event.event === 'run_finished').length, 1);
+    assert.doesNotMatch(calls, /\bvscode demo\b/);
   });
 
   // DHF-TEST: keel/requirement-43
@@ -315,11 +308,6 @@ suite('Keel Test Bridge config contract', () => {
     const plan = await planTests(root, ['keel::lane::lint']);
     assert.ok(plan.items.some((item) => item.id === 'keel::lane::lint'));
 
-    await setDemoBlock(root, 'keel::lane::test-fast');
-    const status = await readDemoBlockStatus(root);
-    assert.equal(status.blocked_lane, 'keel::lane::test-fast');
-    await setDemoBlock(root, undefined);
-
     const run = await collectChild(runTests(root, ['keel::lane::lint']));
     assert.doesNotMatch(run.stderr + run.stdout, /unknown flag/);
     const terminalEvents = run.stdout.split(/\r?\n/)
@@ -350,6 +338,14 @@ suite('Keel Test Bridge config contract', () => {
 
     const demoPlan = await planTests(root, ['keel-demo-dev::lane::fake-smoke']);
     assert.ok((demoPlan.desired_state ?? []).some((state) => state.resource === 'database' && state.desired !== state.current));
+
+    const demoBlock = await collectChild(runTests(root, ['keel-demo-dev::maintenance::block-bad-lane']));
+    assert.equal(demoBlock.code, 0);
+    const demoBlockedRun = await collectChild(runTests(root, ['keel-demo-dev::lane::go-fail']));
+    assert.notEqual(demoBlockedRun.code, 0);
+    assert.match(demoBlockedRun.stdout, /lane blocked/);
+    const demoUnblock = await collectChild(runTests(root, ['keel-demo-dev::maintenance::unblock-bad-lane']));
+    assert.equal(demoUnblock.code, 0);
 
     const demoRun = await collectChild(runTests(root, ['keel-demo-dev::lane::go-pass']));
     assert.doesNotMatch(demoRun.stderr + demoRun.stdout, /unknown flag/);
