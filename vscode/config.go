@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 )
 
-const CurrentConfigVersion = 2
+const CurrentConfigVersion = 3
 
 type TestBridgeConfig struct {
 	Version     int               `json:"version"`
@@ -33,7 +33,7 @@ func DefaultTestBridgeConfig() TestBridgeConfig {
 	return TestBridgeConfig{
 		Version:     CurrentConfigVersion,
 		Command:     "bin/keel-dev",
-		Args:        []string{"vscode", "tests"},
+		Args:        []string{},
 		DisplayName: "Keel",
 	}
 }
@@ -54,6 +54,9 @@ func ReadTestBridgeConfig(root string) (TestBridgeConfig, error) {
 	var cfg TestBridgeConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return TestBridgeConfig{}, fmt.Errorf("keel/vscode: parse test bridge config: %w", err)
+	}
+	if cfg.Version >= CurrentConfigVersion && hasProtocolTokens(cfg.Args) {
+		return TestBridgeConfig{}, fmt.Errorf("keel/vscode: test bridge config v3 args must be launcher-only")
 	}
 	return cfg, nil
 }
@@ -128,7 +131,17 @@ func migrateTestBridgeConfig(cfg TestBridgeConfig) (TestBridgeConfig, error) {
 			cfg.Command = DefaultTestBridgeConfig().Command
 		}
 		if len(cfg.Args) == 0 {
-			cfg.Args = append([]string(nil), DefaultTestBridgeConfig().Args...)
+			cfg.Args = []string{"vscode", "tests"}
+		}
+		if cfg.DisplayName == "" {
+			cfg.DisplayName = DefaultTestBridgeConfig().DisplayName
+		}
+		return cfg, nil
+	case 2:
+		cfg.Version = CurrentConfigVersion
+		cfg.Args = trimLegacyVSCodeTestsPrefix(cfg.Args)
+		if cfg.Command == "" {
+			cfg.Command = DefaultTestBridgeConfig().Command
 		}
 		if cfg.DisplayName == "" {
 			cfg.DisplayName = DefaultTestBridgeConfig().DisplayName
@@ -137,6 +150,26 @@ func migrateTestBridgeConfig(cfg TestBridgeConfig) (TestBridgeConfig, error) {
 	default:
 		return TestBridgeConfig{}, fmt.Errorf("keel/vscode: unsupported test bridge config version %d", cfg.Version)
 	}
+}
+
+func trimLegacyVSCodeTestsPrefix(args []string) []string {
+	out := append([]string(nil), args...)
+	if len(out) >= 2 && out[len(out)-2] == "vscode" && out[len(out)-1] == "tests" {
+		return out[:len(out)-2]
+	}
+	return out
+}
+
+func hasProtocolTokens(args []string) bool {
+	for i, arg := range args {
+		if arg == "test-bridge" {
+			return true
+		}
+		if arg == "vscode" && i+1 < len(args) && (args[i+1] == "tests" || args[i+1] == "config") {
+			return true
+		}
+	}
+	return false
 }
 
 func writeConfigFile(target string, cfg TestBridgeConfig) error {
