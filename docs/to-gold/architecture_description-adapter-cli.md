@@ -416,12 +416,28 @@ directly as `test-bridge demo <verb>`.*
 
 ### 5. Config migration — keep `.vscode/test-bridge.json` current, hands-free
 
-**Goal.** The config file that wires the whole bridge (`command`, `args`, …)
-has its own schema version (currently 2). When the VSIX ships a new config
-schema, existing workspaces must not silently break or require hand-editing:
-the devtool owns the migration logic (`config upgrade` rewrites the file
-in place), and the VSIX triggers it automatically so the user never has to
-know a migration happened.
+**Goal.** The config file solves the **bootstrap problem**. The VSIX knows
+nothing by design, so `.vscode/test-bridge.json` must answer the two
+questions that precede every other interaction: *does this workspace
+participate?* (the VSIX activates **only** on the file's presence — no file,
+dormant extension; opt-in is a fact of the repo) and *where is the devtool?*
+(`command` + launcher `args` + `env`, plus `displayName` for UI branding —
+the pointer every subsequent interaction dereferences). It is deliberately a
+**repo-owned file, not VS Code settings** (`testBridge.*` intentionally
+unsupported): the pointer is a property of the workspace, not of a user's
+editor profile — checked in, identical for every teammate and every
+Remote-SSH session with zero per-machine setup, and writable by the devtool
+itself. Same philosophy as the lanes file and go.mod: a repo file, both
+human- and tool-writable.
+
+The file has its own schema version (currently 2), and the wire interaction
+here is the maintenance half of "the bootstrap file must never rot": when the
+VSIX ships a new config schema, existing workspaces must not silently break
+or require hand-editing. The devtool owns the migration logic
+(`config upgrade` rewrites the file in place); the VSIX triggers it
+automatically so the user never has to know a migration happened. The
+bootstrap half, `config init` (scaffold the file), is human/CLI-only and
+never appears on the wire.
 
 **When it fires.** At activation: the VSIX reads the config; if
 `version < currentConfigVersion` (2), it invokes the upgrade and surfaces the
