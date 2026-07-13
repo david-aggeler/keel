@@ -139,10 +139,21 @@ issue/CR filed yet — **file records before implementing**):
   (a literal table both suites assert against).
 
 **Candidate (idea stage, 2026-07-13 dialogue — no decision yet):** a
-`c. Resources` tree group surfacing desired state in the Explorer — one item
+**Desired state** tree group surfacing family (c) in the Explorer — one item
 per resource showing which is currently active/ready (the plan's `current`
-column at discovery time), slotting into the tree's deliberately-unassigned
-letter `c`. Needs **zero VSIX changes** (a new discovery group + status in
+column at discovery time). Placement: **above Lanes** (owner) — the group
+takes letter `b.`, Lanes shifts into the previously-unassigned `c.`; the
+renumber is free by design, since ordinals live only in labels + `sort_text`
+and never in item ids, so no results are invalidated:
+
+```
+a. Maintenance
+b. Desired state     ← new group
+c. Lanes             ← consumes the reserved gap letter
+d. Frameworks
+```
+
+Needs **zero VSIX changes** (a new discovery group + status in
 labels/descriptions is pure data), and each resource item could be made
 runnable so clicking it executes its reconciling action through ordinary
 interaction 3. Open question before it graduates to a record: probe cost at
