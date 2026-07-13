@@ -25,6 +25,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/david-aggeler/keel/cli"
+	"github.com/david-aggeler/keel/testbridge"
 	"github.com/david-aggeler/keel/vscode"
 )
 
@@ -211,29 +212,67 @@ func vscodeCommandSpec() *cli.CommandSpec {
 
 // DHF-REQ: keel/requirement-59, keel/requirement-60
 func testBridgeCommandSpec() *cli.CommandSpec {
-	return &cli.CommandSpec{
-		Name:  "test-bridge",
-		Short: "Emit canonical test-bridge protocol documents.",
-		Subcommands: []*cli.CommandSpec{
-			{
-				Name:  "config",
-				Short: "Initialize or upgrade test bridge config.",
-				Subcommands: []*cli.CommandSpec{
-					{Name: "init", Use: "test-bridge config init", Short: "Write .vscode/test-bridge.json if absent.", Handler: handleVSCodeConfigInit},
-					{Name: "upgrade", Use: "test-bridge config upgrade", Short: "Upgrade .vscode/test-bridge.json to the current schema.", Handler: handleVSCodeConfigUpgrade},
-				},
-			},
-			{
-				Name:  "tests",
-				Short: "Test discovery, desired-state reporting, and lane runs.",
-				Subcommands: []*cli.CommandSpec{
-					{Name: "discover", Use: "test-bridge tests discover [--format json]", Short: "Emit the discovery document.", Flags: []cli.FlagSpec{{Name: "format", Value: "json", Short: "Output format."}}, Handler: handleVSCodeTestsDiscover},
-					{Name: "desired-state", Use: "test-bridge tests desired-state [--format json] [--id test-id]", Short: "Emit the desired-state document.", Flags: []cli.FlagSpec{{Name: "format", Value: "json", Short: "Output format."}, {Name: "id", Value: "test-id", Short: "Selected test id."}}, Handler: handleVSCodeTestsPlan},
-					{Name: "run", Use: "test-bridge tests run --id test-id", Short: "Run selected test lanes.", Flags: []cli.FlagSpec{{Name: "id", Value: "test-id", Short: "Selected test id."}}, Handler: handleVSCodeTestsRun},
-				},
-			},
-		},
+	spec := testbridge.CommandSpec(keelTestBridge{})
+	return spec.Subcommands[0]
+}
+
+type keelTestBridge struct{}
+
+// DHF-REQ: keel/requirement-63
+func (keelTestBridge) Discover(ctx context.Context) (vscode.DiscoveryDocument, error) {
+	return buildVSCodeDiscovery(stateFrom(ctx).root)
+}
+
+// DHF-REQ: keel/requirement-63
+func (keelTestBridge) DesiredState(ctx context.Context, ids []string) (vscode.SetupPlan, error) {
+	return buildVSCodePlan(stateFrom(ctx).root, ids)
+}
+
+// DHF-REQ: keel/requirement-63
+func (keelTestBridge) Run(ctx context.Context, req testbridge.RunRequest, writer vscode.RunEventWriter) (int, error) {
+	state := stateFrom(ctx)
+	root := req.Root
+	if root == "" {
+		root = state.root
 	}
+	if len(req.IDs) == 1 && req.IDs[0] == vscodeMaintenanceUnlock {
+		exitCode, err := runVSCodeMaintenance(root, req.IDs[0])
+		if err != nil {
+			return exitCode, err
+		}
+		writer(vscode.RunEvent{Event: "passed", TestID: req.IDs[0]})
+		return exitCode, nil
+	}
+	laneID := laneForIDs(req.IDs)
+	if ready := vscode.NewEngine(newKeelWorkspaceProfile(root)).Prepare(ctx, laneID, req.IDs, writer); !ready {
+		return 1, fmt.Errorf("vscode lane blocked")
+	}
+	exitCode, err := runVSCodeLane(ctx, state.logger, root, laneID, req.RunID, writer)
+	if err != nil {
+		return exitCode, err
+	}
+	writer(vscode.RunEvent{Event: "passed", TestID: laneID})
+	return exitCode, nil
+}
+
+// DHF-REQ: keel/requirement-63
+func (keelTestBridge) LockExemptRun(ids []string) bool {
+	return len(ids) == 1 && ids[0] == vscodeMaintenanceUnlock
+}
+
+// DHF-REQ: keel/requirement-63
+func (keelTestBridge) ConfigTemplate() vscode.TestBridgeConfig {
+	return vscode.DefaultTestBridgeConfig()
+}
+
+// DHF-REQ: keel/requirement-63
+func (keelTestBridge) Workspace() testbridge.Workspace {
+	return testbridge.Workspace{Node: "unknown", ModulePath: modulePath}
+}
+
+// DHF-REQ: keel/requirement-63
+func (keelTestBridge) Metadata() vscode.DevtoolMetadata {
+	return vscode.DevtoolMetadata{Name: "keel-dev", Version: versionString(), Commit: buildCommit(), BuiltAt: buildTime()}
 }
 
 // DHF-REQ: keel/requirement-40
@@ -269,20 +308,11 @@ func handleVSCodeConfigUpgrade(ctx context.Context, args []string) error {
 }
 
 func handleVSCodeTestsDiscover(ctx context.Context, args []string) error {
-	state := stateFrom(ctx)
-	if err := rejectUnsupportedFormat(args); err != nil {
-		return err
-	}
-	return writeVSCodeDiscovery(state.root, state.protocol)
+	return dispatchTestBridgeAlias(ctx, append([]string{"test-bridge", "tests", "discover"}, args...))
 }
 
 func handleVSCodeTestsPlan(ctx context.Context, args []string) error {
-	state := stateFrom(ctx)
-	ids, err := parseVSCodeIDs(args, true)
-	if err != nil {
-		return err
-	}
-	return writeVSCodePlan(state.root, ids, state.protocol)
+	return dispatchTestBridgeAlias(ctx, append([]string{"test-bridge", "tests", "desired-state"}, args...))
 }
 
 func handleVSCodeLanesList(ctx context.Context, args []string) error {
@@ -304,98 +334,31 @@ func handleVSCodeLanesDetect(ctx context.Context, args []string) error {
 
 // DHF-REQ: keel/requirement-35, keel/requirement-36, keel/requirement-37
 func handleVSCodeTestsRun(ctx context.Context, args []string) error {
-	state := stateFrom(ctx)
 	ids, err := parseVSCodeRunIDs(args)
 	if err != nil {
 		return err
 	}
-	if len(ids) == 0 {
-		return cli.NewUsageError("vscode tests run requires at least one --id")
+	canonical := []string{"test-bridge", "tests", "run"}
+	for _, id := range ids {
+		canonical = append(canonical, "--id", id)
 	}
+	return dispatchTestBridgeAlias(ctx, canonical)
+}
 
-	runID := newVSCodeRunID()
-	profile := newKeelWorkspaceProfile(state.root)
-	attr := vscode.NewRunAttribution(profile, runID)
-	if state.logger != nil {
-		state.logger.Info(attr.LogLine())
-	}
-	stamper := vscode.EventStamper{
-		Now:       time.Now,
-		RunID:     runID,
-		Source:    "vscode",
-		Workspace: attr.Node,
-		Logf:      func(message string) { state.logger.Warn("vscode protocol event rejected", "detail", message) },
-	}
-	writer, closeWriter, err := newVSCodeRunWriter(state.root, state.protocol, stamper, state.logger)
-	if err != nil {
-		return err
-	}
-	defer closeWriter()
-
-	finished := false
-	exitCode := 1
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			writer(vscode.RunEvent{Event: "errored", Message: fmt.Sprintf("panic: %v", recovered)})
-			writer(vscode.RunEvent{Event: "run_finished", Message: "panic during vscode run", ExitCode: &exitCode})
-			panic(recovered)
-		}
-		if !finished {
-			writer(vscode.RunEvent{Event: "errored", Message: "run ended before terminal event"})
-			writer(vscode.RunEvent{Event: "run_finished", Message: "run ended before terminal event", ExitCode: &exitCode})
-		}
-	}()
-
-	writer(vscode.RunEvent{Event: "run_started", Live: boolPtr(true), Requested: runRequestsForIDs(state.root, ids)})
-
-	if len(ids) == 1 && ids[0] == vscodeMaintenanceUnlock {
-		exitCode, err = runVSCodeMaintenance(state.root, ids[0])
-		if err != nil {
-			writer(vscode.RunEvent{Event: "errored", Message: err.Error()})
-			writer(vscode.RunEvent{Event: "run_finished", Message: err.Error(), ExitCode: &exitCode})
-			finished = true
-			return vscodeRunError{exitCode: exitCode, msg: err.Error()}
-		}
-		writer(vscode.RunEvent{Event: "passed", TestID: ids[0]})
-		writer(vscode.RunEvent{Event: "run_finished", ExitCode: &exitCode})
-		finished = true
-		return nil
-	}
-
-	releaseLock, err := acquireVSCodeRunLock(state.root, ids, runID)
-	if err != nil {
-		writer(vscode.RunEvent{Event: "errored", Message: err.Error()})
-		writer(vscode.RunEvent{Event: "run_finished", Message: err.Error(), ExitCode: &exitCode})
-		finished = true
-		return vscodeRunError{exitCode: 1, msg: err.Error()}
-	}
-	defer func() {
-		if err := releaseLock(); err != nil && state.logger != nil {
-			state.logger.Warn("release vscode run lock", "error", err.Error())
-		}
-	}()
-
-	laneID := laneForIDs(ids)
-	if ready := vscode.NewEngine(profile).Prepare(ctx, laneID, ids, writer); !ready {
-		finished = true
-		return vscodeRunError{exitCode: 1, msg: "vscode lane blocked"}
-	}
-
-	exitCode, err = runVSCodeLane(ctx, state.logger, state.root, laneID, runID, writer)
-	if err != nil {
-		writer(vscode.RunEvent{Event: "errored", Message: err.Error()})
-		writer(vscode.RunEvent{Event: "run_finished", Message: err.Error(), ExitCode: &exitCode})
-		finished = true
-		return vscodeRunError{exitCode: exitCode, msg: err.Error()}
-	}
-	writer(vscode.RunEvent{Event: "passed", TestID: laneID})
-	writer(vscode.RunEvent{Event: "run_finished", ExitCode: &exitCode})
-	finished = true
-	return nil
+func dispatchTestBridgeAlias(ctx context.Context, args []string) error {
+	return testbridge.CommandSpec(keelTestBridge{}).Dispatch(ctx, args)
 }
 
 // DHF-REQ: keel/requirement-39, keel/requirement-43, keel/requirement-46, keel/requirement-48, keel/requirement-51
 func writeVSCodeDiscovery(root string, out io.Writer) error {
+	doc, err := buildVSCodeDiscovery(root)
+	if err != nil {
+		return err
+	}
+	return writeVSCodeProtocolDocument(out, doc)
+}
+
+func buildVSCodeDiscovery(root string) (vscode.DiscoveryDocument, error) {
 	items := []vscode.TestItem{
 		groupItem(vscodeGroupMaintenance, "", "a. Maintenance", "a"),
 		groupItem(vscodeGroupLanes, "", "b. Lanes", "b"),
@@ -412,20 +375,20 @@ func writeVSCodeDiscovery(root string, out io.Writer) error {
 	}
 	goItems, err := discoverGoTestItems(context.Background(), root)
 	if err != nil {
-		return err
+		return vscode.DiscoveryDocument{}, err
 	}
 	lanes, err := loadLanesState(root)
 	if err != nil {
-		return err
+		return vscode.DiscoveryDocument{}, err
 	}
 	items = append(items, lanes.discoveryItems()...)
 	items = append(items, goItems...)
 	vsixItems, err := discoverVSIXTestItems(root)
 	if err != nil {
-		return err
+		return vscode.DiscoveryDocument{}, err
 	}
 	items = append(items, vsixItems...)
-	doc := vscode.DiscoveryDocument{
+	return vscode.DiscoveryDocument{
 		Version:     1,
 		Workspace:   workspaceNode(root),
 		ModulePath:  modulePath,
@@ -438,8 +401,7 @@ func writeVSCodeDiscovery(root string, out io.Writer) error {
 			ClearStateTestIDs:         []string{vscodeMaintenanceClearState},
 		},
 		Items: items,
-	}
-	return encodeProtocolDocument(out, doc)
+	}, nil
 }
 
 func groupItem(id, parentID, label, sortText string) vscode.TestItem {
@@ -470,10 +432,18 @@ func maintenanceItem(id, label, sortText string) vscode.TestItem {
 }
 
 func writeVSCodePlan(root string, ids []string, out io.Writer) error {
+	plan, err := buildVSCodePlan(root, ids)
+	if err != nil {
+		return err
+	}
+	return writeVSCodeProtocolDocument(out, plan)
+}
+
+func buildVSCodePlan(root string, ids []string) (vscode.SetupPlan, error) {
 	profile := newKeelWorkspaceProfile(root)
 	_, goErr := exec.LookPath("go")
 	goReady := goErr == nil
-	plan := vscode.SetupPlan{
+	return vscode.SetupPlan{
 		Version:     1,
 		Devtool:     vscode.DevtoolMetadata{Name: "keel-dev", Version: versionString(), Commit: buildCommit(), BuiltAt: buildTime()},
 		Workspace:   profile.Node(),
@@ -485,9 +455,9 @@ func writeVSCodePlan(root string, ids []string, out io.Writer) error {
 			"stub-binaries",
 		},
 		DesiredState: []vscode.DesiredState{
-			{Resource: "go-toolchain", Kind: "tool", Desired: "available", Current: statusWord(goReady), Status: statusWord(goReady), Action: "install-go", Message: "Go toolchain is required.", Reusable: true, Owned: false},
-			{Resource: "keel-module-root", Kind: "workspace", Desired: modulePath, Current: modulePath, Status: "ready", Action: "none", Message: "keel module root resolved.", Reusable: true, Owned: false},
-			{Resource: "stub-binaries", Kind: "build", Desired: "buildable", Current: "checked-by-ci", Status: "ready", Action: "none", Message: "stub binaries are built by keel-dev ci.", Reusable: true, Owned: false},
+			{Resource: "go-toolchain", Kind: "tool", Desired: "available", Current: statusWord(goReady), Status: desiredStateStatus(goReady), Action: desiredStateAction(goReady), Message: "Go toolchain is required.", Reusable: true, Owned: false},
+			{Resource: "keel-module-root", Kind: "unknown", Desired: modulePath, Current: modulePath, Status: "satisfied", Action: "reuse", Message: "keel module root resolved.", Reusable: true, Owned: false},
+			{Resource: "stub-binaries", Kind: "binary", Desired: "buildable", Current: "checked-by-ci", Status: "satisfied", Action: "reuse", Message: "stub binaries are built by keel-dev ci.", Reusable: true, Owned: false},
 		},
 		Checks: []vscode.PrereqCheck{
 			{ID: "go-toolchain", OK: goReady, Message: "go is on PATH"},
@@ -495,11 +465,10 @@ func writeVSCodePlan(root string, ids []string, out io.Writer) error {
 			{ID: "stub-binaries", OK: true, Message: "stub binaries build in the gate"},
 		},
 		Actions: []vscode.SetupPlanAction{
-			{Resource: "go-toolchain", Status: statusWord(goReady), Message: "Install Go if this check is blocked.", Reusable: true, Owned: false},
+			{Resource: "go-toolchain", Status: desiredStateAction(goReady), Message: "Install Go if this check is blocked.", Reusable: true, Owned: false},
 		},
 		Teardown: vscode.SetupPlanTeardown{Policy: "none"},
-	}
-	return encodeProtocolDocument(out, plan)
+	}, nil
 }
 
 // DHF-REQ: keel/requirement-52
@@ -558,7 +527,7 @@ func writeVSCodeLanesList(root string, out io.Writer) error {
 			LastRun:       latestLaneRun(root, eff.id),
 		})
 	}
-	return encodeProtocolDocument(out, doc)
+	return encodeVSCodeDocument(out, doc)
 }
 
 // DHF-REQ: keel/requirement-52
@@ -625,7 +594,7 @@ func writeVSCodeLanesDetect(root string, dryRun bool, out io.Writer) error {
 		}
 		doc.Written = true
 	}
-	return encodeProtocolDocument(out, doc)
+	return encodeVSCodeDocument(out, doc)
 }
 
 func laneItem(id, label, sortText string) vscode.TestItem {
@@ -1847,7 +1816,7 @@ func runVSCodeMaintenance(root, id string) (int, error) {
 	case vscodeMaintenanceDetectLanes:
 		return 2, cli.NewUsageError("detect lanes maintenance requires run-event writer")
 	case vscodeMaintenanceUnlock:
-		if err := os.Remove(vscodeRunLockPath(root)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := os.Remove(testbridge.RunLockPath(root)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return 1, err
 		}
 	case vscodeMaintenanceClearResults:
@@ -2113,33 +2082,14 @@ func laneForIDs(ids []string) string {
 	return ids[0]
 }
 
-// DHF-REQ: keel/requirement-53
-func runRequestsForIDs(root string, ids []string) []vscode.RunRequest {
-	out := make([]vscode.RunRequest, 0, len(ids))
-	labels := map[string]string{}
-	if lanes, err := loadLanesState(root); err == nil {
-		for _, id := range vscodeLaneIDs {
-			labels[id] = strings.TrimPrefix(id, "keel::lane::")
-		}
-		for id, eff := range lanes.effective {
-			labels["keel::lane::"+id] = eff.lane.Label
-		}
+func writeVSCodeProtocolDocument(out io.Writer, doc any) error {
+	if err := testbridge.ValidateDocument(doc); err != nil {
+		return err
 	}
-	for _, id := range ids {
-		label := labels[id]
-		if label == "" {
-			if selection, ok := vscode.ParseGoItemID(id); ok {
-				label = goSelectionLabel(selection, id)
-			} else {
-				label = strings.TrimPrefix(id, "keel::lane::")
-			}
-		}
-		out = append(out, vscode.RunRequest{ID: id, Label: label})
-	}
-	return out
+	return encodeVSCodeDocument(out, doc)
 }
 
-func encodeProtocolDocument(out io.Writer, doc any) error {
+func encodeVSCodeDocument(out io.Writer, doc any) error {
 	enc := json.NewEncoder(out)
 	enc.SetEscapeHTML(false)
 	return enc.Encode(doc)
@@ -2187,111 +2137,12 @@ func knownVSCodeLaneID(laneID string) bool {
 	return false
 }
 
-func newVSCodeRunWriter(root string, protocol io.Writer, stamper vscode.EventStamper, logger *slog.Logger) (vscode.RunEventWriter, func(), error) {
-	if protocol == nil {
-		protocol = io.Discard
-	}
-	runDir := filepath.Join(root, ".devtools", "vscode-runs")
-	if err := os.MkdirAll(runDir, 0o755); err != nil {
-		return nil, nil, err
-	}
-	pruneOldVSCodeRuns(runDir, logger)
-	external, err := os.Create(filepath.Join(runDir, stamper.RunID+".jsonl"))
-	if err != nil {
-		return nil, nil, err
-	}
-	closeFn := func() { _ = external.Close() }
-	return func(event vscode.RunEvent) {
-		stamped := stamper.Stamp(event)
-		line, err := vscode.MarshalRunEventJSONL(stamped)
-		if err != nil {
-			if logger != nil {
-				logger.Error("marshal vscode run event", "error", err.Error())
-			}
-			return
-		}
-		_, _ = protocol.Write(line)
-		_, _ = external.Write(line)
-	}, closeFn, nil
-}
-
-func acquireVSCodeRunLock(root string, ids []string, token string) (func() error, error) {
-	runDir := filepath.Join(root, ".devtools", "vscode-runs")
-	if err := os.MkdirAll(runDir, 0o755); err != nil {
-		return nil, err
-	}
-	path := vscodeRunLockPath(root)
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return nil, fmt.Errorf("vscode run lock already exists at %s", path)
-		}
-		return nil, fmt.Errorf("create vscode run lock: %w", err)
-	}
-	lock := vscode.RunLockFile{
-		PID:       os.Getpid(),
-		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
-		IDs:       append([]string{}, ids...),
-		Token:     token,
-	}
-	encErr := json.NewEncoder(file).Encode(lock)
-	closeErr := file.Close()
-	if encErr != nil || closeErr != nil {
-		_ = os.Remove(path)
-		if encErr != nil {
-			return nil, encErr
-		}
-		return nil, closeErr
-	}
-	return func() error {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		var current vscode.RunLockFile
-		if err := json.Unmarshal(data, &current); err != nil {
-			return err
-		}
-		if current.Token != token {
-			return fmt.Errorf("vscode run lock token mismatch at %s", path)
-		}
-		return os.Remove(path)
-	}, nil
-}
-
-func vscodeRunLockPath(root string) string {
-	return filepath.Join(root, ".devtools", "vscode-runs", "run.lock")
-}
-
-func pruneOldVSCodeRuns(dir string, logger *slog.Logger) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	cutoff := time.Now().Add(-7 * 24 * time.Hour)
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
-			continue
-		}
-		path := filepath.Join(dir, entry.Name())
-		info, err := entry.Info()
-		if err != nil || info.ModTime().After(cutoff) {
-			continue
-		}
-		if err := os.Remove(path); err != nil && logger != nil {
-			logger.Warn("remove old vscode run stream", "path", path, "error", err.Error())
-		}
-	}
-}
-
 type vscodeRunError struct {
 	exitCode int
 	msg      string
 }
 
 func (e vscodeRunError) Error() string { return e.msg }
-
-func boolPtr(v bool) *bool { return &v }
 
 func newVSCodeRunID() string {
 	return time.Now().UTC().Format("20060102T150405.000000000Z")
@@ -2302,6 +2153,20 @@ func statusWord(ok bool) string {
 		return "ready"
 	}
 	return "blocked"
+}
+
+func desiredStateStatus(ok bool) string {
+	if ok {
+		return "satisfied"
+	}
+	return "blocked"
+}
+
+func desiredStateAction(ok bool) string {
+	if ok {
+		return "reuse"
+	}
+	return "manual_setup_required"
 }
 
 func workspaceNode(root string) string {
