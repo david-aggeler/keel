@@ -350,14 +350,6 @@ func dispatchTestBridgeAlias(ctx context.Context, args []string) error {
 }
 
 // DHF-REQ: keel/requirement-39, keel/requirement-43, keel/requirement-46, keel/requirement-48, keel/requirement-51
-func writeVSCodeDiscovery(root string, out io.Writer) error {
-	doc, err := buildVSCodeDiscovery(root)
-	if err != nil {
-		return err
-	}
-	return writeVSCodeProtocolDocument(out, doc)
-}
-
 func buildVSCodeDiscovery(root string) (vscode.DiscoveryDocument, error) {
 	items := []vscode.TestItem{
 		groupItem(vscodeGroupMaintenance, "", "a. Maintenance", "a"),
@@ -429,14 +421,6 @@ func maintenanceItem(id, label, sortText string) vscode.TestItem {
 		Runnable:    true,
 		Profiles:    []string{"run"},
 	}
-}
-
-func writeVSCodePlan(root string, ids []string, out io.Writer) error {
-	plan, err := buildVSCodePlan(root, ids)
-	if err != nil {
-		return err
-	}
-	return writeVSCodeProtocolDocument(out, plan)
 }
 
 func buildVSCodePlan(root string, ids []string) (vscode.SetupPlan, error) {
@@ -527,7 +511,7 @@ func writeVSCodeLanesList(root string, out io.Writer) error {
 			LastRun:       latestLaneRun(root, eff.id),
 		})
 	}
-	return encodeVSCodeDocument(out, doc)
+	return testbridge.EncodeDocument(out, doc)
 }
 
 // DHF-REQ: keel/requirement-52
@@ -594,7 +578,7 @@ func writeVSCodeLanesDetect(root string, dryRun bool, out io.Writer) error {
 		}
 		doc.Written = true
 	}
-	return encodeVSCodeDocument(out, doc)
+	return testbridge.EncodeDocument(out, doc)
 }
 
 func laneItem(id, label, sortText string) vscode.TestItem {
@@ -2080,19 +2064,6 @@ func laneForIDs(ids []string) string {
 		}
 	}
 	return ids[0]
-}
-
-func writeVSCodeProtocolDocument(out io.Writer, doc any) error {
-	if err := testbridge.ValidateDocument(doc); err != nil {
-		return err
-	}
-	return encodeVSCodeDocument(out, doc)
-}
-
-func encodeVSCodeDocument(out io.Writer, doc any) error {
-	enc := json.NewEncoder(out)
-	enc.SetEscapeHTML(false)
-	return enc.Encode(doc)
 }
 
 type keelWorkspaceProfile struct {
