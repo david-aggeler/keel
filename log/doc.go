@@ -42,6 +42,14 @@
 // ConsoleVerbosity is lowered to slog.LevelDebug. File sinks use
 // Config.FileVerbosity (nil defaults to Debug).
 //
+// # Request-scoped loggers
+//
+// [WithLogger] carries a request-scoped [log/slog.Logger] through a
+// [context.Context], and [FromContext] reads it back at downstream call sites,
+// falling back to slog.Default when the context has no logger. Callers enrich
+// the logger with slog's own With method before storing or emitting; keel does
+// not interpret context values or inject attributes itself.
+//
 // # Redaction at the boundary
 //
 // Every rendered string — messages, attr values, and error text — passes through
