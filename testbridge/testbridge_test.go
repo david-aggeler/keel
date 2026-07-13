@@ -558,3 +558,34 @@ func decodeEvents(t *testing.T, raw string) []vscode.RunEvent {
 	}
 	return events
 }
+
+// EncodeDocument is the package-owned protocol JSON sink consumer devtools route
+// their protocol output through instead of hand-rolling a json.Encoder each.
+//
+// DHF-TEST: keel/requirement-63
+func TestEncodeDocumentOwnsCanonicalProtocolJSON(t *testing.T) {
+	doc := map[string]any{"module_path": "keel", "note": "a<b>c & d"}
+	var buf bytes.Buffer
+	if err := testbridge.EncodeDocument(&buf, doc); err != nil {
+		t.Fatalf("EncodeDocument: %v", err)
+	}
+	out := buf.String()
+	if !strings.HasSuffix(out, "\n") {
+		t.Fatalf("EncodeDocument output must end with a newline: %q", out)
+	}
+	// HTML escaping is disabled so protocol payloads stay byte-faithful.
+	if !strings.Contains(out, "a<b>c & d") {
+		t.Fatalf("EncodeDocument must not HTML-escape payloads: %q", out)
+	}
+	var round map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &round); err != nil {
+		t.Fatalf("re-decode encoded document: %v\n%s", err, out)
+	}
+	if round["module_path"] != "keel" {
+		t.Fatalf("round-tripped document = %+v, want module_path=keel", round)
+	}
+	// A nil writer is tolerated (discards), matching the package sink default.
+	if err := testbridge.EncodeDocument(nil, doc); err != nil {
+		t.Fatalf("EncodeDocument(nil): %v", err)
+	}
+}

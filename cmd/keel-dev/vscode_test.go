@@ -302,9 +302,13 @@ func TestVSCodeDiscoveryAndPlanExposeKeelLaneSet(t *testing.T) {
 	}
 	writeFile(t, root, filepath.Join("log", "logging_test.go"), "package log\n\nimport \"testing\"\n\nfunc TestLog(t *testing.T) {}\n")
 
+	built0, buildErr0 := buildVSCodeDiscovery(root)
+	if buildErr0 != nil {
+		t.Fatalf("buildVSCodeDiscovery: %v", buildErr0)
+	}
 	var discover bytes.Buffer
-	if err := writeVSCodeDiscovery(root, &discover); err != nil {
-		t.Fatalf("writeVSCodeDiscovery: %v", err)
+	if err := testbridge.EncodeDocument(&discover, built0); err != nil {
+		t.Fatalf("encode protocol document: %v", err)
 	}
 	var doc vscode.DiscoveryDocument
 	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
@@ -316,9 +320,13 @@ func TestVSCodeDiscoveryAndPlanExposeKeelLaneSet(t *testing.T) {
 		}
 	}
 
+	built1, buildErr1 := buildVSCodePlan(root, []string{"keel::lane::test-fast"})
+	if buildErr1 != nil {
+		t.Fatalf("buildVSCodePlan: %v", buildErr1)
+	}
 	var plan bytes.Buffer
-	if err := writeVSCodePlan(root, []string{"keel::lane::test-fast"}, &plan); err != nil {
-		t.Fatalf("writeVSCodePlan: %v", err)
+	if err := testbridge.EncodeDocument(&plan, built1); err != nil {
+		t.Fatalf("encode protocol document: %v", err)
 	}
 	var setup vscode.SetupPlan
 	if err := json.Unmarshal(plan.Bytes(), &setup); err != nil {
@@ -339,9 +347,13 @@ func TestVSCodeDiscoveryEmitsStructuredOrderedTree(t *testing.T) {
 	}
 	writeFile(t, root, filepath.Join("log", "logging_test.go"), "package log\n\nimport \"testing\"\n\nfunc TestLog(t *testing.T) {}\n")
 
+	built2, buildErr2 := buildVSCodeDiscovery(root)
+	if buildErr2 != nil {
+		t.Fatalf("buildVSCodeDiscovery: %v", buildErr2)
+	}
 	var discover bytes.Buffer
-	if err := writeVSCodeDiscovery(root, &discover); err != nil {
-		t.Fatalf("writeVSCodeDiscovery: %v", err)
+	if err := testbridge.EncodeDocument(&discover, built2); err != nil {
+		t.Fatalf("encode protocol document: %v", err)
 	}
 	var doc vscode.DiscoveryDocument
 	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
@@ -438,9 +450,13 @@ func TestVSCodeDiscoveryRendersFileLanesAndDiagnostics(t *testing.T) {
   ]
 }`)
 
+	built3, buildErr3 := buildVSCodeDiscovery(root)
+	if buildErr3 != nil {
+		t.Fatalf("buildVSCodeDiscovery: %v", buildErr3)
+	}
 	var discover bytes.Buffer
-	if err := writeVSCodeDiscovery(root, &discover); err != nil {
-		t.Fatalf("writeVSCodeDiscovery: %v", err)
+	if err := testbridge.EncodeDocument(&discover, built3); err != nil {
+		t.Fatalf("encode protocol document: %v", err)
 	}
 	var doc vscode.DiscoveryDocument
 	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
@@ -671,9 +687,13 @@ func TestVSCodeDetectLanesMaintenanceItemRunsDetect(t *testing.T) {
 	writeFile(t, root, filepath.Join("exec", "exec_test.go"), "package exec\n\nimport \"testing\"\n\nfunc TestExec(t *testing.T) {}\n")
 	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{"version":1,"lanes":[]}`+"\n")
 
+	built4, buildErr4 := buildVSCodeDiscovery(root)
+	if buildErr4 != nil {
+		t.Fatalf("buildVSCodeDiscovery: %v", buildErr4)
+	}
 	var discover bytes.Buffer
-	if err := writeVSCodeDiscovery(root, &discover); err != nil {
-		t.Fatalf("writeVSCodeDiscovery: %v", err)
+	if err := testbridge.EncodeDocument(&discover, built4); err != nil {
+		t.Fatalf("encode protocol document: %v", err)
 	}
 	var doc vscode.DiscoveryDocument
 	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
@@ -740,9 +760,13 @@ func TestVSCodeDiscoveryAppendsExactLaneDurationHint(t *testing.T) {
 		`{"version":1,"event":"run_finished","time":"2026-07-12T10:20:09.800Z","run_id":"new","exit_code":1}`,
 	}, "\n")+"\n")
 
+	built5, buildErr5 := buildVSCodeDiscovery(root)
+	if buildErr5 != nil {
+		t.Fatalf("buildVSCodeDiscovery: %v", buildErr5)
+	}
 	var discover bytes.Buffer
-	if err := writeVSCodeDiscovery(root, &discover); err != nil {
-		t.Fatalf("writeVSCodeDiscovery: %v", err)
+	if err := testbridge.EncodeDocument(&discover, built5); err != nil {
+		t.Fatalf("encode protocol document: %v", err)
 	}
 	var doc vscode.DiscoveryDocument
 	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
@@ -778,9 +802,13 @@ func TestVSCodeDiscoveryEmitsLaneCoversAndVSIXFileItems(t *testing.T) {
   ]
 }`+"\n")
 
+	built6, buildErr6 := buildVSCodeDiscovery(root)
+	if buildErr6 != nil {
+		t.Fatalf("buildVSCodeDiscovery: %v", buildErr6)
+	}
 	var discover bytes.Buffer
-	if err := writeVSCodeDiscovery(root, &discover); err != nil {
-		t.Fatalf("writeVSCodeDiscovery: %v", err)
+	if err := testbridge.EncodeDocument(&discover, built6); err != nil {
+		t.Fatalf("encode protocol document: %v", err)
 	}
 	var doc vscode.DiscoveryDocument
 	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
@@ -1016,9 +1044,13 @@ func TestVSCodeMaintenanceItemsAdvertiseCapabilitiesAndRunActions(t *testing.T) 
 		t.Fatal(err)
 	}
 
+	built7, buildErr7 := buildVSCodeDiscovery(root)
+	if buildErr7 != nil {
+		t.Fatalf("buildVSCodeDiscovery: %v", buildErr7)
+	}
 	var discover bytes.Buffer
-	if err := writeVSCodeDiscovery(root, &discover); err != nil {
-		t.Fatalf("writeVSCodeDiscovery: %v", err)
+	if err := testbridge.EncodeDocument(&discover, built7); err != nil {
+		t.Fatalf("encode protocol document: %v", err)
 	}
 	var doc vscode.DiscoveryDocument
 	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
@@ -1091,9 +1123,13 @@ func TestVSCodeSystemGateLanesDiscoverPrepareAndRun(t *testing.T) {
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, root, "go.sum", "")
 
+	built8, buildErr8 := buildVSCodeDiscovery(root)
+	if buildErr8 != nil {
+		t.Fatalf("buildVSCodeDiscovery: %v", buildErr8)
+	}
 	var discover bytes.Buffer
-	if err := writeVSCodeDiscovery(root, &discover); err != nil {
-		t.Fatalf("writeVSCodeDiscovery: %v", err)
+	if err := testbridge.EncodeDocument(&discover, built8); err != nil {
+		t.Fatalf("encode protocol document: %v", err)
 	}
 	var doc vscode.DiscoveryDocument
 	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
@@ -1175,9 +1211,13 @@ func TestVSCodeDiscoveryEmitsGoTestTreeFromParser(t *testing.T) {
 	stub(t, bin, callsFile, "go", "printf 'discovery must not invoke go subprocesses\\n' >&2\nexit 99")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
+	built9, buildErr9 := buildVSCodeDiscovery(root)
+	if buildErr9 != nil {
+		t.Fatalf("buildVSCodeDiscovery: %v\ncalls:\n%s", buildErr9, calls(t, callsFile))
+	}
 	var discover bytes.Buffer
-	if err := writeVSCodeDiscovery(root, &discover); err != nil {
-		t.Fatalf("writeVSCodeDiscovery: %v\ncalls:\n%s", err, calls(t, callsFile))
+	if err := testbridge.EncodeDocument(&discover, built9); err != nil {
+		t.Fatalf("encode protocol document: %v", err)
 	}
 	var doc vscode.DiscoveryDocument
 	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
@@ -1234,14 +1274,18 @@ func TestMetrics(t *testing.T) {}
 	stub(t, bin, callsFile, "go", "printf 'discovery must not invoke go subprocesses\\n' >&2\nexit 99")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	var discover bytes.Buffer
-	if err := writeVSCodeDiscovery(root, &discover); err != nil {
-		t.Fatalf("writeVSCodeDiscovery: %v\ncalls:\n%s", err, calls(t, callsFile))
+	reBuilt0, reBuiltErr0 := buildVSCodeDiscovery(root)
+	if reBuiltErr0 != nil {
+		t.Fatalf("buildVSCodeDiscovery: %v\ncalls:\n%s", reBuiltErr0, calls(t, callsFile))
 	}
 	if got := strings.TrimSpace(calls(t, callsFile)); got != "" {
 		t.Fatalf("discovery spawned go subprocesses:\n%s", got)
 	}
 
+	var discover bytes.Buffer
+	if err := testbridge.EncodeDocument(&discover, reBuilt0); err != nil {
+		t.Fatalf("encode protocol document: %v", err)
+	}
 	var doc vscode.DiscoveryDocument
 	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
 		t.Fatalf("discovery JSON: %v\n%s", err, discover.String())
@@ -1328,9 +1372,13 @@ esac
 exit 0`)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
+	built10, buildErr10 := buildVSCodeDiscovery(root)
+	if buildErr10 != nil {
+		t.Fatalf("buildVSCodeDiscovery: %v\ncalls:\n%s", buildErr10, calls(t, callsFile))
+	}
 	var discover bytes.Buffer
-	if err := writeVSCodeDiscovery(root, &discover); err != nil {
-		t.Fatalf("writeVSCodeDiscovery: %v\ncalls:\n%s", err, calls(t, callsFile))
+	if err := testbridge.EncodeDocument(&discover, built10); err != nil {
+		t.Fatalf("encode protocol document: %v", err)
 	}
 	var doc vscode.DiscoveryDocument
 	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
@@ -1376,9 +1424,13 @@ func TestVSCodeDiscoverySkipsInactiveGoFilesAndIgnoredDirs(t *testing.T) {
 	writeFile(t, root, filepath.Join("nested", "go.mod"), "module nested.example\n\ngo 1.25\n")
 	writeFile(t, root, filepath.Join("nested", "nested_test.go"), "package nested\n\nimport \"testing\"\n\nfunc TestNested(t *testing.T) {}\n")
 
+	built11, buildErr11 := buildVSCodeDiscovery(root)
+	if buildErr11 != nil {
+		t.Fatalf("buildVSCodeDiscovery: %v", buildErr11)
+	}
 	var discover bytes.Buffer
-	if err := writeVSCodeDiscovery(root, &discover); err != nil {
-		t.Fatalf("writeVSCodeDiscovery: %v", err)
+	if err := testbridge.EncodeDocument(&discover, built11); err != nil {
+		t.Fatalf("encode protocol document: %v", err)
 	}
 	var doc vscode.DiscoveryDocument
 	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
@@ -1417,14 +1469,18 @@ func TestVSCodeDiscoveryReportsGoParseErrorsAsDiagnosticFileItems(t *testing.T) 
 	stub(t, bin, callsFile, "go", "printf 'discovery must not invoke go subprocesses\\n' >&2\nexit 99")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	var discover bytes.Buffer
-	if err := writeVSCodeDiscovery(root, &discover); err != nil {
-		t.Fatalf("writeVSCodeDiscovery: %v\ncalls:\n%s", err, calls(t, callsFile))
+	reBuilt1, reBuiltErr1 := buildVSCodeDiscovery(root)
+	if reBuiltErr1 != nil {
+		t.Fatalf("buildVSCodeDiscovery: %v\ncalls:\n%s", reBuiltErr1, calls(t, callsFile))
 	}
 	if got := strings.TrimSpace(calls(t, callsFile)); got != "" {
 		t.Fatalf("discovery spawned go subprocesses:\n%s", got)
 	}
 
+	var discover bytes.Buffer
+	if err := testbridge.EncodeDocument(&discover, reBuilt1); err != nil {
+		t.Fatalf("encode protocol document: %v", err)
+	}
 	var doc vscode.DiscoveryDocument
 	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
 		t.Fatalf("discovery JSON: %v\n%s", err, discover.String())
@@ -1452,9 +1508,13 @@ func TestVSCodeDiscoveryReportsPackageParseErrorsAsDiagnosticFileItems(t *testin
 	writeFile(t, root, filepath.Join("broken", "broken.go"), "package broken\n\nfunc Broken(\n")
 	writeFile(t, root, filepath.Join("broken", "ok_test.go"), "package broken\n\nimport \"testing\"\n\nfunc TestOK(t *testing.T) {}\n")
 
+	built12, buildErr12 := buildVSCodeDiscovery(root)
+	if buildErr12 != nil {
+		t.Fatalf("buildVSCodeDiscovery: %v", buildErr12)
+	}
 	var discover bytes.Buffer
-	if err := writeVSCodeDiscovery(root, &discover); err != nil {
-		t.Fatalf("writeVSCodeDiscovery: %v", err)
+	if err := testbridge.EncodeDocument(&discover, built12); err != nil {
+		t.Fatalf("encode protocol document: %v", err)
 	}
 	var doc vscode.DiscoveryDocument
 	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
@@ -1523,9 +1583,13 @@ exit 0`)
 		t.Fatalf("terminal event = %+v, want run_finished exit 0", events[len(events)-1])
 	}
 
+	built13, buildErr13 := buildVSCodePlan(root, []string{"go::test::log::TestLog"})
+	if buildErr13 != nil {
+		t.Fatalf("buildVSCodePlan for go test: %v", buildErr13)
+	}
 	var plan bytes.Buffer
-	if err := writeVSCodePlan(root, []string{"go::test::log::TestLog"}, &plan); err != nil {
-		t.Fatalf("writeVSCodePlan for go test: %v", err)
+	if err := testbridge.EncodeDocument(&plan, built13); err != nil {
+		t.Fatalf("encode protocol document: %v", err)
 	}
 	var setup vscode.SetupPlan
 	if err := json.Unmarshal(plan.Bytes(), &setup); err != nil {
@@ -1768,9 +1832,13 @@ exit 0`)
 		t.Fatalf("run events missing package pass: %+v", events)
 	}
 
+	built14, buildErr14 := buildVSCodePlan(root, []string{"go::pkg::log", "go::root"})
+	if buildErr14 != nil {
+		t.Fatalf("buildVSCodePlan for go package/root: %v", buildErr14)
+	}
 	var plan bytes.Buffer
-	if err := writeVSCodePlan(root, []string{"go::pkg::log", "go::root"}, &plan); err != nil {
-		t.Fatalf("writeVSCodePlan for go package/root: %v", err)
+	if err := testbridge.EncodeDocument(&plan, built14); err != nil {
+		t.Fatalf("encode protocol document: %v", err)
 	}
 	var setup vscode.SetupPlan
 	if err := json.Unmarshal(plan.Bytes(), &setup); err != nil {
@@ -1795,9 +1863,8 @@ func TestVSCodeDiscoveryDoesNotRequireGoToolchain(t *testing.T) {
 	stub(t, bin, callsFile, "go", "printf 'go subprocess should not run during discovery\\n' >&2\nexit 7")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	var discover bytes.Buffer
-	if err := writeVSCodeDiscovery(root, &discover); err != nil {
-		t.Fatalf("writeVSCodeDiscovery: %v\ncalls:\n%s", err, calls(t, callsFile))
+	if _, err := buildVSCodeDiscovery(root); err != nil {
+		t.Fatalf("buildVSCodeDiscovery: %v\ncalls:\n%s", err, calls(t, callsFile))
 	}
 	if got := strings.TrimSpace(calls(t, callsFile)); got != "" {
 		t.Fatalf("discovery spawned go subprocesses:\n%s", got)
@@ -1811,9 +1878,13 @@ func TestVSCodeCoverageLaneEmitsPersistedCoverageArtifact(t *testing.T) {
 	writeFile(t, root, "go.sum", "")
 	writeFile(t, root, "main_test.go", "package p\n\nimport \"testing\"\n\nfunc TestOne(t *testing.T) {}\n")
 
+	built15, buildErr15 := buildVSCodeDiscovery(root)
+	if buildErr15 != nil {
+		t.Fatalf("buildVSCodeDiscovery: %v", buildErr15)
+	}
 	var discover bytes.Buffer
-	if err := writeVSCodeDiscovery(root, &discover); err != nil {
-		t.Fatalf("writeVSCodeDiscovery: %v", err)
+	if err := testbridge.EncodeDocument(&discover, built15); err != nil {
+		t.Fatalf("encode protocol document: %v", err)
 	}
 	var doc map[string]any
 	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {

@@ -286,7 +286,18 @@ func writeDocument(rt Runtime, doc any) error {
 	if err := ValidateDocument(doc); err != nil {
 		return err
 	}
-	out := rt.Protocol
+	return EncodeDocument(rt.Protocol, doc)
+}
+
+// EncodeDocument writes doc to out as canonical test-bridge protocol JSON: one
+// JSON object followed by a newline, with HTML escaping disabled. It performs no
+// schema validation — callers that emit schema-typed protocol documents validate
+// through ValidateDocument (or the package dispatch path) first. Consumer
+// devtools route their protocol output through this function so JSON assembly
+// stays owned by keel/testbridge rather than being hand-rolled per consumer.
+//
+// DHF-REQ: keel/requirement-63
+func EncodeDocument(out io.Writer, doc any) error {
 	if out == nil {
 		out = io.Discard
 	}
