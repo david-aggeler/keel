@@ -95,7 +95,7 @@ issue/CR filed yet — **file records before implementing**):
 
   ```
   command <launcher-args> test-bridge tests discover --format json
-  command <launcher-args> test-bridge tests plan --format json --id <id>…
+  command <launcher-args> test-bridge tests desired-state --format json --id <id>…
   command <launcher-args> test-bridge tests run --id <id>…
   command <launcher-args> test-bridge demo status|block <lane-id>|unblock
   command <launcher-args> test-bridge config upgrade
@@ -124,10 +124,15 @@ issue/CR filed yet — **file records before implementing**):
   protocol path becomes a hardcoded constant the VSIX owns. `args` keeps only
   the launch half — hence "launcher-args". It exists so a devtool that cannot
   be invoked as a single executable is not locked out.
+- **The `plan` verb renames to `desired-state`** (owner, 2026-07-13) —
+  aligning the wire with content family (c): the verb *is* the desired-state
+  report for a selection; "plan" was the vaguest name on the wire. Rides the
+  same breaking change since the token/config break already forces lockstep.
 - **Aliases are the devtool's business.** The contract pins only the canonical
   spelling the VSIX emits; keel-dev keeps `vscode` (or any shorter name) as a
-  human-facing alias for the same subtree. An alias never appears on the wire,
-  so it cannot drift it.
+  human-facing alias for the same subtree, and may alias `plan` →
+  `desired-state` likewise. An alias never appears on the wire, so it cannot
+  drift it.
 - Consequences: the demo args-surgery and the upgrade exception are **removed
   wholesale** — every verb follows the same one rule; and the full argv tail
   becomes a constant, making the missing cross-binary contract test trivial
@@ -286,7 +291,9 @@ command <args> plan --format json --id <id> [--id <id> …]    # execFile
 **Devtool answer.** Exactly one setup-plan JSON document (`version: 1`,
 `items[]`), exit 0, ≤ **16 MiB**. Read-only — the plan *describes* actions; it
 must not perform them. keel-dev verb:
-`vscode tests plan [--format json] [--id test-id]…`.
+`vscode tests plan [--format json] [--id test-id]…`. *Target design: the verb
+renames to `desired-state` (aligning the wire with family (c)); `plan` may
+survive as a devtool alias.*
 
 **On failure.** A failed plan **aborts the run** — the VSIX reports the error
 into the run output and never spawns interaction 3 (`extension.ts`).
