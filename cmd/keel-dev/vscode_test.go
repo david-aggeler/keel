@@ -173,7 +173,7 @@ func TestVSCodeConfigHandlersInitAndUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read upgraded config: %v", err)
 	}
-	if !strings.Contains(string(body), `"command": "bin/custom"`) || !strings.Contains(string(body), `"version": 2`) {
+	if !strings.Contains(string(body), `"command": "bin/custom"`) || !strings.Contains(string(body), `"version": 3`) || !strings.Contains(string(body), `"args": []`) {
 		t.Fatalf("upgraded config did not preserve command and stamp current version:\n%s", body)
 	}
 }

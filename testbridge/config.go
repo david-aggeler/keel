@@ -82,12 +82,22 @@ func migrateConfig(cfg, template vscode.TestBridgeConfig) (vscode.TestBridgeConf
 	case 0:
 		return vscode.TestBridgeConfig{}, fmt.Errorf("keel/testbridge: test bridge config version is missing or unsupported")
 	case 1:
-		cfg.Version = vscode.CurrentConfigVersion
+		cfg.Version = 2
 		if cfg.Command == "" {
 			cfg.Command = template.Command
 		}
 		if len(cfg.Args) == 0 {
-			cfg.Args = append([]string(nil), template.Args...)
+			cfg.Args = []string{"vscode", "tests"}
+		}
+		if cfg.DisplayName == "" {
+			cfg.DisplayName = template.DisplayName
+		}
+		return cfg, nil
+	case 2:
+		cfg.Version = vscode.CurrentConfigVersion
+		cfg.Args = trimLegacyVSCodeTestsPrefix(cfg.Args)
+		if cfg.Command == "" {
+			cfg.Command = template.Command
 		}
 		if cfg.DisplayName == "" {
 			cfg.DisplayName = template.DisplayName
@@ -96,6 +106,14 @@ func migrateConfig(cfg, template vscode.TestBridgeConfig) (vscode.TestBridgeConf
 	default:
 		return vscode.TestBridgeConfig{}, fmt.Errorf("keel/testbridge: unsupported test bridge config version %d", cfg.Version)
 	}
+}
+
+func trimLegacyVSCodeTestsPrefix(args []string) []string {
+	out := append([]string(nil), args...)
+	if len(out) >= 2 && out[len(out)-2] == "vscode" && out[len(out)-1] == "tests" {
+		return out[:len(out)-2]
+	}
+	return out
 }
 
 func readConfig(path string) (vscode.TestBridgeConfig, error) {

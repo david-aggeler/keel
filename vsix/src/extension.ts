@@ -506,6 +506,7 @@ async function runSelected(
   });
 }
 
+// DHF-REQ: keel/requirement-60
 export function setupPlanOutputLines(plan: SetupPlan): string[] {
   const lines: string[] = [];
   if (!plan.desired_state?.length) {
@@ -521,6 +522,14 @@ export function setupPlanOutputLines(plan: SetupPlan): string[] {
   }
   for (const state of plan.desired_state) {
     lines.push(`- ${formatDesiredState(state)}`);
+  }
+  if (plan.teardown) {
+    lines.push('teardown:');
+    lines.push(`- owned: ${formatList(plan.teardown.owned_temporary_resources)}`);
+    lines.push(`- reusable: ${formatList(plan.teardown.shared_reusable_resources)}`);
+    if (plan.teardown.policy) {
+      lines.push(`- policy: ${plan.teardown.policy}`);
+    }
   }
   return lines;
 }
@@ -607,6 +616,10 @@ function formatDesiredState(state: DesiredState): string {
   const reuse = state.reusable ? 'reusable' : 'not reusable';
   const detail = state.detail ? ` (${state.detail})` : '';
   return `${state.resource} ${state.status}: ${state.current} -> ${state.desired}; action=${state.action}; ${ownership}, ${reuse}; ${state.message}${detail}`;
+}
+
+function formatList(values: readonly string[] | undefined): string {
+  return values?.length ? values.join(', ') : '(none)';
 }
 
 function protocolIDForTestItem(item: vscode.TestItem): string {

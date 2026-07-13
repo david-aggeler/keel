@@ -14,6 +14,22 @@ function logCall() {
 
 logCall();
 
+function configPath() {
+  return path.join(process.cwd(), '.vscode', 'test-bridge.json');
+}
+
+function upgradeConfig() {
+  const file = configPath();
+  const cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (cfg.version === 2) {
+    cfg.version = 3;
+    if (Array.isArray(cfg.args) && cfg.args.length >= 2 && cfg.args[cfg.args.length - 2] === 'vscode' && cfg.args[cfg.args.length - 1] === 'tests') {
+      cfg.args = cfg.args.slice(0, -2);
+    }
+  }
+  fs.writeFileSync(file, `${JSON.stringify(cfg, null, 2)}\n`);
+}
+
 function blockStatePath() {
   return path.join(process.cwd(), '.devtools', 'vscode-demo-block.json');
 }
@@ -26,7 +42,7 @@ function readBlockedLane() {
   }
 }
 
-if (command === 'vscode tests discover --format') {
+if (command === 'vscode tests discover --format' || command === 'test-bridge tests discover --format') {
   const format = args[4];
   if (format !== 'json') {
     process.stderr.write(`unsupported format ${format}\n`);
@@ -69,7 +85,7 @@ if (command === 'vscode tests discover --format') {
   process.exit(0);
 }
 
-if (args.slice(0, 4).join(' ') === 'vscode tests plan --format') {
+if (args.slice(0, 4).join(' ') === 'vscode tests plan --format' || args.slice(0, 4).join(' ') === 'test-bridge tests desired-state --format') {
   const ids = [];
   for (let i = 5; i < args.length; i += 1) {
     if (args[i] === '--id' && args[i + 1]) {
@@ -92,7 +108,7 @@ if (args.slice(0, 4).join(' ') === 'vscode tests plan --format') {
   process.exit(0);
 }
 
-if (args.slice(0, 3).join(' ') === 'vscode tests run') {
+if (args.slice(0, 3).join(' ') === 'vscode tests run' || args.slice(0, 3).join(' ') === 'test-bridge tests run') {
   const ids = [];
   for (let i = 3; i < args.length; i += 1) {
     if (args[i] === '--id' && args[i + 1]) {
@@ -143,6 +159,11 @@ if (args.slice(0, 3).join(' ') === 'vscode demo block') {
 
 if (args.slice(0, 3).join(' ') === 'vscode demo unblock') {
   fs.rmSync(blockStatePath(), { force: true });
+  process.exit(0);
+}
+
+if (args.slice(0, 3).join(' ') === 'test-bridge config upgrade') {
+  upgradeConfig();
   process.exit(0);
 }
 

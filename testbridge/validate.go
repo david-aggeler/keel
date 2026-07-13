@@ -181,7 +181,22 @@ func validateConfig(cfg vscode.TestBridgeConfig) error {
 	if cfg.Command == "" || cfg.DisplayName == "" {
 		return fmt.Errorf("keel/testbridge: config missing command or displayName")
 	}
+	if hasProtocolTokens(cfg.Args) {
+		return fmt.Errorf("keel/testbridge: config v3 args must be launcher-only")
+	}
 	return nil
+}
+
+func hasProtocolTokens(args []string) bool {
+	for i, arg := range args {
+		if arg == "test-bridge" {
+			return true
+		}
+		if arg == "vscode" && i+1 < len(args) && (args[i+1] == "tests" || args[i+1] == "config") {
+			return true
+		}
+	}
+	return false
 }
 
 func in(got string, allowed ...string) bool {
