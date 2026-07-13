@@ -4,7 +4,7 @@ product: keel
 title: Adapter invocation contract (VSIX ↔ devtool CLI)
 summary: >-
   Chapter: the exact command-line wire the Keel Test Bridge VSIX emits against
-  a consumer devtool, organized by interaction — discovery, planning,
+  a consumer devtool, organized by interaction — discovery, desired state,
   execution, demo block, config migration — each with its goal, trigger,
   literal argv, and answer contract; the unenforced cross-binary argv gap
   that let the run --format skew ship; and the agreed target design (owner,
@@ -115,7 +115,7 @@ issue/CR filed yet — **file records before implementing**):
   | Compiled binary (keel today) | `bin/keel-dev` | `[]` | `bin/keel-dev test-bridge tests discover --format json` |
   | Run from Go source, no build step | `go` | `["run", "./cmd/keel-dev"]` | `go run ./cmd/keel-dev test-bridge tests discover --format json` |
   | Node-based devtool | `node` | `["dist/devtool.js"]` | `node dist/devtool.js test-bridge tests run --id x` |
-  | Version-manager wrapper | `mise` | `["exec", "--", "devtool"]` | `mise exec -- devtool test-bridge demo status` |
+  | Version-manager wrapper | `mise` | `["exec", "--", "devtool"]` | `mise exec -- devtool test-bridge tests run --id x` |
 
   The point of the split: today `args = ["vscode", "tests"]` mixes two
   concerns — *how to launch* the tool and *where the protocol subtree lives*.
@@ -220,7 +220,7 @@ ordinals decided in keel/exploration-2).*
   are data, not VSIX code: another consumer ships a different action set with
   zero extension changes. The capabilities id-lists (below) mark which of
   these opaque actions carry bridge-visible side effects.
-- **(c) Desired state** *(arrives: plan, interaction 2; reconciled: inside
+- **(c) Desired state** *(arrives: the desired-state call, interaction 2; reconciled: inside
   run, interaction 3)*. The test-infrastructure contract for a concrete
   selection: whatever must exist before its tests can be honest — a Docker
   environment up, a database present *and seeded with fixture data*,
@@ -230,11 +230,11 @@ ordinals decided in keel/exploration-2).*
   run spun up is torn down afterwards; a *shared reusable* one (a dev DB kept
   warm across runs) is left standing. Per-selection by nature, so it
   cannot live in the discovery document; the devtool computes it fresh for
-  every plan call and establishes it itself while executing the run.
-  **Visibility:** every Run click shows it — the plan for the clicked
-  selection is printed at the top of that run's output, before the first
+  every desired-state call and establishes it itself while executing the run.
+  **Visibility:** every Run click shows it — the desired-state report for the
+  clicked selection is printed at the top of that run's output, before the first
   event streams. There is no tree-side preview: desired state is never a
-  node, and plan is not user-invokable on its own. Detail: interaction 2.
+  node, and the call is not user-invokable on its own. Detail: interaction 2.
 - **(d) The lanes** *(arrive: discovery, interaction 1; defined (planned) in
   `.vscode/test-lanes.json`)*. The aggregation targets: system lanes compiled
   into the devtool (lint, test-fast, test-coverage, vsix-ci, ci) plus
@@ -250,7 +250,7 @@ maintenance actions, click-to-source locations — and the VSIX only renders.
 Discovery is how "per-consumer variation is data, not code" actually happens:
 a different devtool answering this one verb produces a completely different
 tree with zero extension changes. Discovery delivers content families (a),
-(b), and (d); family (c) is plan-time.
+(b), and (d); family (c) arrives per selection via interaction 2.
 
 Around that content, the document carries its **envelope and mechanics**:
 
@@ -305,69 +305,63 @@ state. keel-dev verb: `vscode tests discover [--format json]`.
 the tree and reports to the output channel; the tree never renders a
 half-parsed document.
 
-### 2. Planning — show what the run needs before running
+### 2. Desired state — what must exist before the tests can be honest
 
-**Goal.** Before executing anything, tell the user what the selected run
-requires and what the devtool would do about it: a devtool identity block, the
-resolved run items, `required_resources`, **desired-state rows** (resource ×
-current vs desired × action), preflight `checks`, `actions`, and the teardown
-policy (`protocol.ts:47-108`). The plan is printed into the run output so an
-SSH-remote user sees environment preparation instead of a silent hang. It is
-the desired-state half of the contract: run = plan + execute.
+**Goal.** A selection's tests are only meaningful against the right
+infrastructure: the Docker environment up, the database present *and seeded
+with its fixture data*, services a, b, c running. **Desired state** is the
+devtool's declaration of exactly that, per selection — resource rows of
+desired vs live-probed current state with the reconciling action per row,
+plus preflight `checks`, `actions`, and a teardown policy split by ownership
+(`owned_temporary_resources` are torn down after the run;
+`shared_reusable_resources` — a dev DB kept warm — are left standing)
+(`protocol.ts:47-108`). The devtool then **establishes** that state itself,
+inside interaction 3, as part of executing the run: run = reconcile +
+execute. keel's own rows are deliberately boring (`go-toolchain`,
+`keel-module-root`, `stub-binaries`) because keel's tests are hermetic by
+policy — the document's shape is sized for consumer devtools whose
+integration lanes need real provisioned environments.
+
+**Why it is a separate wire call.** Reconciliation is invisible from the
+outside — over Remote-SSH, a lane spending 40 seconds bringing up its
+environment is indistinguishable from a hang. So before every run, the VSIX
+fetches the selection's desired-state report and prints it at the top of the
+run output: the user sees what infrastructure is coming, which of it already
+exists, and what the run will do about the rest. This call is the **preview**
+of family (c); the *establishment* happens in the run.
 
 **Responsibility split.** The entire matrix — which selection requires which
-resources, what state each must be in, what its *current* state is, which
-action would reconcile the two, and who owns/tears down what
-(`owned`/`reusable`) — is computed **devtool-side**. This is the
-zero-toolchain-knowledge rule applied to environments: the VSIX cannot know
-that keel's `vsix-ci` lane needs `go-toolchain` + `keel-module-root` +
-`stub-binaries`, and the `current` column comes from live devtool probes at
-plan time (keel-dev answers `"go is on PATH"` by checking, not from static
-data). The VSIX renders the plan verbatim into the run output — it performs
-no checks, takes no actions, and owns no resources. Consequence: a wrong or
-stale plan is always a devtool bug, and the VSIX's only planning decision is
-abort-on-failure (below).
-
-**What the VSIX needs from the plan: one bit.** Did the plan call succeed?
-That is the entire semantic consumption — everything else is passed through
-to the human. Desired-state *reconciliation* is not a separate interaction:
-the devtool establishes whatever the selection needs **inside interaction 3**
-as part of executing it. The plan exists because that reconciliation is
-invisible from the outside — over Remote-SSH, a lane spending 40 seconds
-preparing its environment is indistinguishable from a hang unless the user
-was first shown what preparation was coming. Plan = preview for the human;
-run = reconcile + execute, devtool-owned end to end.
-
-**What desired-state is for — provisioning, not just preflight.** The
-document's shape gives away its ambition: `kind` per resource, `reusable` vs
-`owned`, a teardown policy splitting `owned_temporary_resources` from
-`shared_reusable_resources` — those fields exist so a lane can declare *spin
-up the Docker environment, ensure the DB exists and carries its fixture
-data, start services a, b, c*, and the devtool reconciles current reality to
-that declaration inside the run, then tears down what the run owned and
-leaves shared infrastructure warm. keel's own rows are deliberately boring
-(`go-toolchain`, `keel-module-root`, `stub-binaries`) because keel's tests
-are hermetic by policy — the protocol is sized for consumer devtools whose
-integration lanes need real provisioned environments.
+resources, desired vs current per resource, the reconciling action, ownership
+and teardown — is computed **devtool-side**, the zero-toolchain-knowledge
+rule applied to environments. The VSIX cannot know that keel's `vsix-ci` lane
+needs `go-toolchain` + `keel-module-root` + `stub-binaries`; the `current`
+column comes from live devtool probes at call time (keel-dev answers
+`"go is on PATH"` by checking, not from static data). The VSIX renders the
+report verbatim — it performs no checks, takes no actions, owns no resources.
+Its entire semantic consumption is **one bit**: did the call succeed
+(failure aborts the run, below). A wrong or stale report is always a devtool
+bug.
 
 **When it fires.** Immediately before **every** run (interaction 3), with the
 same selection. Not user-invokable on its own.
 
-**Invocation.** One `--id` per selected item (repeatable):
+**Invocation.** One `--id` per selected item (repeatable). The current wire
+verb is `plan` — the name predates the desired-state framing; *target design:
+the canonical verb becomes `desired-state`, with `plan` at most a devtool
+alias*:
 
 ```
 command <args> plan --format json --id <id> [--id <id> …]    # execFile
 ```
 
-**Devtool answer.** Exactly one setup-plan JSON document (`version: 1`,
-`items[]`), exit 0, ≤ **16 MiB**. Read-only — the plan *describes* actions; it
-must not perform them. keel-dev verb:
-`vscode tests plan [--format json] [--id test-id]…`. *Target design: the verb
-renames to `desired-state` (aligning the wire with family (c)); `plan` may
-survive as a devtool alias.*
+**Devtool answer.** Exactly one desired-state JSON document (wire name:
+setup plan; `version: 1`, `items[]`), exit 0, ≤ **16 MiB**. Read-only — this
+call *describes* reconciliation; it must never perform it. keel-dev verb:
+`vscode tests plan [--format json] [--id test-id]…`.
 
-**On failure.** A failed plan **aborts the run** — the VSIX reports the error
-into the run output and never spawns interaction 3 (`extension.ts`).
+**On failure.** A failed desired-state call **aborts the run** — the VSIX
+reports the error into the run output and never spawns interaction 3
+(`extension.ts`).
 
 ### 3. Execution — run the selection, stream live results
 
@@ -381,7 +375,7 @@ interaction the whole bridge exists for.
 **When it fires.** On every Run click in the Test Explorer, and internally for
 maintenance items the discovery document advertises (e.g.
 `capabilities.clear_state_test_ids`). A Run click is therefore exactly **two**
-devtool processes: the plan (interaction 2, buffered) then the run
+devtool processes: the desired-state call (interaction 2, buffered) then the run
 (streaming) — discovery is not re-run on click; the tree already exists.
 
 **Invocation.** One `--id` per selected item; **no `--format` flag** (the
