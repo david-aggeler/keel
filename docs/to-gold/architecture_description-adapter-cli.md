@@ -468,6 +468,26 @@ Remote-SSH session with zero per-machine setup, and writable by the devtool
 itself. Same philosophy as the lanes file and go.mod: a repo file, both
 human- and tool-writable.
 
+**Who configures whom.** Despite living under `.vscode/`, this file does
+**not** configure the VSIX — the VSIX has nothing to configure. It carries no
+settings and no behavior toggles; everything it *does* (tree content,
+capabilities, desired state) arrives over the wire as discovery data. Every
+field in the file describes the **devtool**: its path, its launch arguments,
+its environment, its display name. It is the devtool's business card left in
+the repo, and ownership follows that direction of knowledge: **once the file
+exists, the devtool is its only writer** (`config init` scaffolds it,
+`config upgrade` migrates it), the VSIX its reader. The single exception is
+bootstrap: the extension's *Initialize Config* command writes the
+VSIX-embedded default template directly (`extension.ts` `initializeConfig`;
+requirement-40 AC), because before the file exists there is no pointer to any
+devtool to delegate to — the devtool-side `config init` is the CLI
+counterpart for humans. Every write *after* bootstrap is devtool-performed:
+in the migration below, the VSIX only *detects* staleness and *triggers* the
+devtool's own rewrite — it never edits the file itself, because a migration
+can require devtool knowledge the VSIX lacks (the target v2→v3 step strips a
+trailing `vscode tests` from `args`, which means knowing what those tokens
+meant to *that* devtool).
+
 The file has its own schema version (currently 2), and the wire interaction
 here is the maintenance half of "the bootstrap file must never rot": when the
 VSIX ships a new config schema, existing workspaces must not silently break
@@ -476,6 +496,23 @@ or require hand-editing. The devtool owns the migration logic
 automatically so the user never has to know a migration happened. The
 bootstrap half, `config init` (scaffold the file), is human/CLI-only and
 never appears on the wire.
+
+**Why the VSIX is the trigger.** Staleness is only detectable at the read
+site, and the VSIX is the read site. The file goes stale at exactly one
+moment — an extension update raises the expected schema version — and that
+moment changes nothing devtool-side: the devtool is not a daemon, it runs
+only when spawned, so it has no occasion to notice the rot on its own (a
+self-migrate-on-any-CLI-use scheme fails the same way: a user who never runs
+the devtool by hand would never trigger it, yet the file must be current
+*before* the first bridge interaction). The version expectation also belongs
+to the reader — `currentConfigVersion` is a fact about the installed VSIX
+build, and the installed extension can legitimately lag or lead the repo's
+devtool binary between tags. And the harm lands VSIX-side: a stale pointer
+breaks the bridge, not the devtool's own CLI. So the VSIX's control is
+deliberately **one bit**: at activation, `version < expected` ⇒ fire
+`config upgrade`. Detector and trigger only — the *how* of the migration
+stays devtool-owned, per the ownership split above. Manual invocation of the
+same verb remains the human fallback, not the mechanism.
 
 **When it fires.** At activation: the VSIX reads the config; if
 `version < currentConfigVersion` (2), it invokes the upgrade and surfaces the
