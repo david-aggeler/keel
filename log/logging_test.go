@@ -90,24 +90,63 @@ func TestContextLoggerAccessorsRoundTripAndDefault(t *testing.T) {
 
 // DHF-TEST: keel/requirement-68
 func TestContextLoggerAccessorsCarryRequestScopedLogger(t *testing.T) {
-	var buf bytes.Buffer
-	base := slog.New(slog.NewJSONHandler(&buf, nil))
-	ctx := logging.WithLogger(context.Background(), base.With("request_id", "req-123"))
+	var console bytes.Buffer
+	textDir := t.TempDir()
+	jsonlDir := t.TempDir()
+	base := mustNewLogger(t, logging.Config{
+		Service:          "svc",
+		ConsoleVerbosity: slog.LevelDebug,
+		FileVerbosity:    slog.LevelDebug,
+		Console:          logging.ConsoleJSON,
+		Writer:           &console,
+		TextDir:          textDir,
+		JSONLDir:         jsonlDir,
+	})
+	ctx := logging.WithLogger(context.Background(), base.Slog().With("request_id", "req-123"))
 
 	logging.FromContext(ctx).With("user_id", "u-7").InfoContext(ctx, "request complete")
+	if err := base.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
 
-	var rec map[string]any
-	if err := json.Unmarshal(buf.Bytes(), &rec); err != nil {
-		t.Fatalf("decode log record: %v", err)
+	var consoleRec map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(console.Bytes()), &consoleRec); err != nil {
+		t.Fatalf("decode console record: %v; body=%q", err, console.String())
 	}
-	if rec["request_id"] != "req-123" {
-		t.Fatalf("request_id = %v, want req-123", rec["request_id"])
+	assertRequestScopedRecord(t, "console sink", consoleRec)
+
+	textBytes, err := os.ReadFile(base.TextLogPath())
+	if err != nil {
+		t.Fatalf("read text sink: %v", err)
 	}
-	if rec["user_id"] != "u-7" {
-		t.Fatalf("user_id = %v, want u-7", rec["user_id"])
+	text := string(textBytes)
+	for _, want := range []string{"request complete", "request_id=req-123", "user_id=u-7"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("text sink = %q, want %q", text, want)
+		}
 	}
-	if rec["msg"] != "request complete" {
-		t.Fatalf("msg = %v, want request complete", rec["msg"])
+
+	jsonlBytes, err := os.ReadFile(base.JSONLLogPath())
+	if err != nil {
+		t.Fatalf("read jsonl sink: %v", err)
+	}
+	var jsonlRec map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(jsonlBytes), &jsonlRec); err != nil {
+		t.Fatalf("decode jsonl record: %v; body=%q", err, string(jsonlBytes))
+	}
+	assertRequestScopedRecord(t, "jsonl sink", jsonlRec)
+}
+
+func assertRequestScopedRecord(t testing.TB, sink string, rec map[string]any) {
+	t.Helper()
+	for key, want := range map[string]any{
+		"request_id": "req-123",
+		"user_id":    "u-7",
+		"msg":        "request complete",
+	} {
+		if rec[key] != want {
+			t.Fatalf("%s %s = %v, want %v; record=%#v", sink, key, rec[key], want, rec)
+		}
 	}
 }
 
