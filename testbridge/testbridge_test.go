@@ -138,7 +138,7 @@ func TestConfigHelpersInitUpgradeAndRefuseNewer(t *testing.T) {
 	}
 
 	path := filepath.Join(root, ".vscode", "test-bridge.json")
-	old := `{"version":1,"command":"bin/custom","args":["old"],"displayName":"Custom","env":{"A":"B"}}` + "\n"
+	old := `{"version":2,"command":"bin/custom","args":["go","run","./cmd/custom","vscode","tests"],"displayName":"Custom","env":{"A":"B"}}` + "\n"
 	if err := os.WriteFile(path, []byte(old), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -146,8 +146,8 @@ func TestConfigHelpersInitUpgradeAndRefuseNewer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upgrade config: %v", err)
 	}
-	if !upgraded.Changed || upgraded.FromVersion != 1 || upgraded.ToVersion != vscode.CurrentConfigVersion {
-		t.Fatalf("upgrade result = %+v, want changed 1 -> current", upgraded)
+	if !upgraded.Changed || upgraded.FromVersion != 2 || upgraded.ToVersion != vscode.CurrentConfigVersion {
+		t.Fatalf("upgrade result = %+v, want changed 2 -> current", upgraded)
 	}
 	var cfg vscode.TestBridgeConfig
 	body, err := os.ReadFile(path)
@@ -157,11 +157,14 @@ func TestConfigHelpersInitUpgradeAndRefuseNewer(t *testing.T) {
 	if err := json.Unmarshal(body, &cfg); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Command != "bin/custom" || cfg.Args[0] != "old" || cfg.Env["A"] != "B" {
+	if cfg.Command != "bin/custom" || cfg.Env["A"] != "B" {
 		t.Fatalf("upgrade did not preserve consumer values: %+v", cfg)
 	}
+	if want := []string{"go", "run", "./cmd/custom"}; !equalStrings(cfg.Args, want) {
+		t.Fatalf("upgrade args = %#v, want launcher-only %#v", cfg.Args, want)
+	}
 
-	if err := os.WriteFile(path, []byte(`{"version":999,"command":"bin/future","args":["test-bridge"],"displayName":"Future"}`+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"version":999,"command":"bin/future","args":["wrapper"],"displayName":"Future"}`+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := testbridge.UpgradeConfig(root, template); err == nil || !strings.Contains(err.Error(), "newer than this binary") {
@@ -369,6 +372,7 @@ func TestValidationCoversClosedEnumsAndRequiredFields(t *testing.T) {
 	assertInvalid("run lock id", vscode.RunLockFile{PID: 1, CreatedAt: now.Format(time.RFC3339Nano), IDs: []string{""}, Token: "t"}, "empty id")
 	assertInvalid("run lock token", vscode.RunLockFile{PID: 1, CreatedAt: now.Format(time.RFC3339Nano), IDs: []string{"x"}}, "token")
 	assertInvalid("config missing", vscode.TestBridgeConfig{Version: vscode.CurrentConfigVersion}, "missing command")
+	assertInvalid("config protocol args", vscode.TestBridgeConfig{Version: vscode.CurrentConfigVersion, Command: "bin/demo", Args: []string{"vscode", "tests"}, DisplayName: "Demo"}, "launcher-only")
 }
 
 type fakeBridge struct {
@@ -394,7 +398,19 @@ func (f *fakeBridge) Workspace() testbridge.Workspace {
 }
 
 func (f *fakeBridge) ConfigTemplate() vscode.TestBridgeConfig {
-	return vscode.TestBridgeConfig{Version: vscode.CurrentConfigVersion, Command: "bin/demo-dev", Args: []string{"test-bridge"}, DisplayName: "Demo"}
+	return vscode.TestBridgeConfig{Version: vscode.CurrentConfigVersion, Command: "bin/demo-dev", Args: []string{}, DisplayName: "Demo"}
+}
+
+func equalStrings(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (f *fakeBridge) Discover(_ context.Context) (vscode.DiscoveryDocument, error) {

@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import { DiscoveryDocument, SetupPlan } from './protocol';
 
 const execFile = promisify(cp.execFile);
-export const currentConfigVersion = 2;
+export const currentConfigVersion = 3;
 export const configRelativePath = path.join('.vscode', 'test-bridge.json');
 
 export interface BridgeAdapterConfig {
@@ -39,13 +39,13 @@ export function defaultAdapterConfig(workspaceRoot: string): BridgeAdapterConfig
   return {
     version: currentConfigVersion,
     command: defaultAdapterCommand(workspaceRoot),
-    args: ['vscode', 'tests'],
+    args: [],
     displayName: 'Keel',
     outputChannel: 'Keel Test Bridge'
   };
 }
 
-// DHF-REQ: keel/requirement-40
+// DHF-REQ: keel/requirement-59
 export function defaultConfigTemplate(): string {
   return `${JSON.stringify(defaultAdapterConfig(''), ['version', 'command', 'args', 'displayName', 'env'], 2)}\n`;
 }
@@ -63,6 +63,9 @@ export function readAdapterConfig(workspaceRoot: string): BridgeAdapterConfig {
   if (!Array.isArray(parsed.args) || !parsed.args.every((arg) => typeof arg === 'string')) {
     throw new Error('test bridge config args must be strings');
   }
+  if (parsed.version >= currentConfigVersion && hasProtocolTokens(parsed.args)) {
+    throw new Error('test bridge config v3 args must be launcher-only');
+  }
   if (typeof parsed.displayName !== 'string' || parsed.displayName.length === 0) {
     throw new Error('test bridge config is missing displayName');
   }
@@ -78,7 +81,7 @@ export function readAdapterConfig(workspaceRoot: string): BridgeAdapterConfig {
 
 export async function discoverTests(workspaceRoot: string): Promise<DiscoveryDocument> {
   const adapter = adapterConfig(workspaceRoot);
-  const { stdout } = await execFile(adapter.command, [...adapter.args, 'discover', '--format', 'json'], {
+  const { stdout } = await execFile(adapter.command, canonicalTestsArgs(adapter, 'discover', ['--format', 'json']), {
     cwd: workspaceRoot,
     env: adapterEnv(adapter),
     maxBuffer: 16 * 1024 * 1024
@@ -92,7 +95,7 @@ export async function discoverTests(workspaceRoot: string): Promise<DiscoveryDoc
 
 export async function planTests(workspaceRoot: string, ids: string[]): Promise<SetupPlan> {
   const adapter = adapterConfig(workspaceRoot);
-  const args = [...adapter.args, 'plan', '--format', 'json'];
+  const args = canonicalTestsArgs(adapter, 'desired-state', ['--format', 'json']);
   for (const id of ids) {
     args.push('--id', id);
   }
@@ -111,7 +114,7 @@ export async function planTests(workspaceRoot: string, ids: string[]): Promise<S
 // DHF-REQ: keel/requirement-42
 export function runTests(workspaceRoot: string, ids: string[]): cp.ChildProcessWithoutNullStreams {
   const adapter = adapterConfig(workspaceRoot);
-  const args = [...adapter.args, 'run'];
+  const args = canonicalTestsArgs(adapter, 'run');
   for (const id of ids) {
     args.push('--id', id);
   }
@@ -153,10 +156,15 @@ export async function setDemoBlock(workspaceRoot: string, laneID: string | undef
   });
 }
 
-// DHF-REQ: keel/requirement-42
+// DHF-REQ: keel/requirement-59
 export async function upgradeConfig(workspaceRoot: string): Promise<{ stdout: string; stderr: string }> {
-  const adapter = adapterConfig(workspaceRoot);
-  const { stdout, stderr } = await execFile(adapter.command, ['vscode', 'config', 'upgrade'], {
+  const raw = readAdapterConfig(workspaceRoot);
+  const adapter: BridgeAdapterConfig = {
+    ...raw,
+    command: resolveAdapterCommand(workspaceRoot, raw.command),
+    args: launcherArgsForConfigUpgrade(raw)
+  };
+  const { stdout, stderr } = await execFile(adapter.command, [...adapter.args, 'test-bridge', 'config', 'upgrade'], {
     cwd: workspaceRoot,
     env: adapterEnv(adapter),
     maxBuffer: 1024 * 1024
@@ -179,17 +187,36 @@ function adapterEnv(adapter: BridgeAdapterConfig): NodeJS.ProcessEnv {
   return adapter.env ? { ...process.env, ...adapter.env } : process.env;
 }
 
+// DHF-REQ: keel/requirement-59
+function canonicalTestsArgs(adapter: BridgeAdapterConfig, verb: 'discover' | 'desired-state' | 'run', extra: string[] = []): string[] {
+  return [...adapter.args, 'test-bridge', 'tests', verb, ...extra];
+}
+
 function adapterDemoArgs(adapter: BridgeAdapterConfig, verb: string, laneID?: string): string[] {
-  const args = [...adapter.args];
-  const testsIndex = args.lastIndexOf('tests');
-  if (testsIndex >= 0) {
-    args.splice(testsIndex, 1, 'demo');
-  } else {
-    args.push('demo');
-  }
+  const args = trimLegacyVSCodeTestsPrefix(adapter.args);
+  args.push('vscode', 'demo');
   args.push(verb);
   if (laneID) {
     args.push(laneID);
   }
   return args;
+}
+
+function launcherArgsForConfigUpgrade(config: BridgeAdapterConfig): string[] {
+  if (config.version < currentConfigVersion) {
+    return trimLegacyVSCodeTestsPrefix(config.args);
+  }
+  return [...config.args];
+}
+
+function trimLegacyVSCodeTestsPrefix(args: readonly string[]): string[] {
+  const out = [...args];
+  if (out.length >= 2 && out[out.length - 2] === 'vscode' && out[out.length - 1] === 'tests') {
+    return out.slice(0, -2);
+  }
+  return out;
+}
+
+function hasProtocolTokens(args: readonly string[]): boolean {
+  return args.includes('test-bridge') || args.some((arg, index) => arg === 'vscode' && (args[index + 1] === 'tests' || args[index + 1] === 'config'));
 }
