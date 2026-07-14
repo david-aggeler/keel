@@ -206,23 +206,29 @@ suite('Keel Test Bridge config contract', () => {
   });
 
   // DHF-TEST: keel/requirement-60
-  test('desired-state output renders desired/current resources and teardown split', () => {
+  test('desired-state output renders groups, active rows, resources, and teardown split', () => {
     const lines = setupPlanOutputLines({
-      version: 1,
+      version: 2,
       workspace: 'keel',
       generated_at: new Date().toISOString(),
       items: [],
       required_resources: ['db'],
-      desired_state: [{
-        resource: 'db',
-        kind: 'service',
-        desired: 'seeded',
-        current: 'empty',
-        status: 'missing',
-        action: 'reconcile_during_run',
-        message: 'seed during run',
-        reusable: false,
-        owned: true
+      groups: [{
+        label: 'Data Set',
+        order: 10,
+        mutually_exclusive: true,
+        rows: [{
+          resource: 'db',
+          kind: 'service',
+          desired: 'seeded',
+          current: 'empty',
+          status: 'reconcilable',
+          action: 'reconcile_during_run',
+          message: 'seed during run',
+          reusable: false,
+          owned: true,
+          active: true
+        }]
       }],
       checks: [],
       actions: [],
@@ -235,7 +241,8 @@ suite('Keel Test Bridge config contract', () => {
 
     assert.deepEqual(lines, [
       'desired state:',
-      '- db missing: empty -> seeded; action=reconcile_during_run; owned, not reusable; seed during run',
+      'Data Set (mutually exclusive)',
+      '- [active] db reconcilable: empty -> seeded; action=reconcile_during_run; owned, not reusable; seed during run',
       'teardown:',
       '- owned: db',
       '- reusable: go-toolchain',
@@ -370,7 +377,7 @@ suite('Keel Test Bridge config contract', () => {
     }
 
     const demoPlan = await planTests(root, ['keel-demo-dev::lane::fake-smoke']);
-    assert.ok((demoPlan.desired_state ?? []).some((state) => state.resource === 'database' && state.desired !== state.current));
+    assert.ok(demoPlan.groups.some((group) => group.rows.some((state) => state.resource === 'database' && state.desired !== state.current)));
 
     const demoBlock = await collectChild(runTests(root, ['keel-demo-dev::maintenance::block-bad-lane']));
     assert.equal(demoBlock.code, 0);

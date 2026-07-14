@@ -119,19 +119,19 @@ type Range struct {
 // SetupPlan is the JSON document emitted by
 // `test-bridge tests desired-state --format json`.
 //
-// DHF-REQ: keel/requirement-23, keel/requirement-34
+// DHF-REQ: keel/requirement-23, keel/requirement-34, keel/requirement-60
 type SetupPlan struct {
-	Version           int               `json:"version"`
-	Devtool           DevtoolMetadata   `json:"devtool"`
-	Workspace         string            `json:"workspace"`
-	GeneratedAt       time.Time         `json:"generated_at"`
-	Items             []SetupPlanItem   `json:"items"`
-	RequiredResources []string          `json:"required_resources"`
-	DesiredState      []DesiredState    `json:"desired_state"`
-	Checks            []PrereqCheck     `json:"checks"`
-	Actions           []SetupPlanAction `json:"actions"`
-	Teardown          SetupPlanTeardown `json:"teardown"`
-	Limitations       []string          `json:"limitations,omitempty"`
+	Version           int                 `json:"version"`
+	Devtool           DevtoolMetadata     `json:"devtool"`
+	Workspace         string              `json:"workspace"`
+	GeneratedAt       time.Time           `json:"generated_at"`
+	Items             []SetupPlanItem     `json:"items"`
+	RequiredResources []string            `json:"required_resources"`
+	Groups            []DesiredStateGroup `json:"groups"`
+	Checks            []PrereqCheck       `json:"checks"`
+	Actions           []SetupPlanAction   `json:"actions"`
+	Teardown          SetupPlanTeardown   `json:"teardown"`
+	Limitations       []string            `json:"limitations,omitempty"`
 }
 
 // DevtoolMetadata identifies the producer that generated a setup plan.
@@ -179,6 +179,15 @@ type DesiredState struct {
 	Detail   string `json:"detail,omitempty"`
 	Reusable bool   `json:"reusable"`
 	Owned    bool   `json:"owned"`
+	Active   bool   `json:"active,omitempty"`
+}
+
+// DesiredStateGroup is a consumer-declared desired-state row cluster.
+type DesiredStateGroup struct {
+	Label             string         `json:"label"`
+	Order             int            `json:"order"`
+	MutuallyExclusive bool           `json:"mutually_exclusive"`
+	Rows              []DesiredState `json:"rows"`
 }
 
 // PrereqCheck is a consumer-specific readiness check included in a setup plan.

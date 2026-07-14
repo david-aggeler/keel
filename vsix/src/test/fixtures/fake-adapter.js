@@ -87,12 +87,17 @@ if (args.slice(0, 4).join(' ') === 'test-bridge tests desired-state --format') {
     }
   }
   process.stdout.write(JSON.stringify({
-    version: 1,
+    version: 2,
     workspace: process.cwd(),
     generated_at: now(),
     items: ids.map((id) => ({ id, runnable: true, framework: 'openbrain', runner: 'python-test', runner_label: 'Python test' })),
     required_resources: ['python'],
-    desired_state: [{ resource: 'python', kind: 'tool', desired: 'available', current: 'available', status: 'satisfied', action: 'reuse', message: 'python available', reusable: true, owned: false }],
+    groups: [{
+      label: 'Test Preconditions',
+      order: 10,
+      mutually_exclusive: false,
+      rows: [{ resource: 'python', kind: 'tool', desired: 'available', current: 'available', status: 'satisfied', action: 'reuse', message: 'python available', reusable: true, owned: false }]
+    }],
     checks: [{ id: 'python', ok: true, message: 'python available' }],
     actions: [{ resource: 'python', status: 'reuse', message: 'python available', reusable: true, owned: false }],
     teardown: { owned_temporary_resources: [], shared_reusable_resources: ['python'], policy: 'reuse fake python' }

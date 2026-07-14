@@ -7,7 +7,7 @@ import * as vscode from 'vscode';
 import { adapterConfig, configRelativePath, currentConfigVersion, defaultAdapterConfig, defaultConfigTemplate, discoverTests, planTests, readAdapterConfig, runTests, upgradeConfig } from './bridgeAdapter';
 import { ExternalRunMirror, ExternalRunStateSnapshot, setExternalRunStaleMsForTest } from './externalRunMirror';
 import { publishDiscovery, PublishedTree } from './tree';
-import { DesiredState, RunEvent, SetupPlan } from './protocol';
+import { DesiredState, DesiredStateGroup, RunEvent, SetupPlan } from './protocol';
 
 let tree: PublishedTree | undefined;
 let output: vscode.OutputChannel;
@@ -481,7 +481,7 @@ async function runSelected(
 // DHF-REQ: keel/requirement-60
 export function setupPlanOutputLines(plan: SetupPlan): string[] {
   const lines: string[] = [];
-  if (!plan.desired_state?.length) {
+  if (!plan.groups?.some((group) => group.rows.length > 0)) {
     return lines;
   }
   if (plan.devtool) {
@@ -492,8 +492,11 @@ export function setupPlanOutputLines(plan: SetupPlan): string[] {
   } else {
     lines.push('desired state:');
   }
-  for (const state of plan.desired_state) {
-    lines.push(`- ${formatDesiredState(state)}`);
+  for (const group of [...plan.groups].sort((a, b) => a.order - b.order)) {
+    lines.push(formatDesiredStateGroup(group));
+    for (const state of group.rows) {
+      lines.push(`- ${formatDesiredState(state)}`);
+    }
   }
   if (plan.teardown) {
     lines.push('teardown:');
@@ -504,6 +507,10 @@ export function setupPlanOutputLines(plan: SetupPlan): string[] {
     }
   }
   return lines;
+}
+
+function formatDesiredStateGroup(group: DesiredStateGroup): string {
+  return group.mutually_exclusive ? `${group.label} (mutually exclusive)` : group.label;
 }
 
 function appendSetupPlan(run: vscode.TestRun, plan: SetupPlan): void {
@@ -587,7 +594,8 @@ function formatDesiredState(state: DesiredState): string {
   const ownership = state.owned ? 'owned' : 'shared';
   const reuse = state.reusable ? 'reusable' : 'not reusable';
   const detail = state.detail ? ` (${state.detail})` : '';
-  return `${state.resource} ${state.status}: ${state.current} -> ${state.desired}; action=${state.action}; ${ownership}, ${reuse}; ${state.message}${detail}`;
+  const active = state.active ? '[active] ' : '';
+  return `${active}${state.resource} ${state.status}: ${state.current} -> ${state.desired}; action=${state.action}; ${ownership}, ${reuse}; ${state.message}${detail}`;
 }
 
 function formatList(values: readonly string[] | undefined): string {
