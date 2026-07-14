@@ -178,7 +178,7 @@ func TestCanonicalBridgeSurfaceHasNoVSCodeOrLanesVerbs(t *testing.T) {
 		"test-bridge config upgrade",
 		"test-bridge tests discover [--format json]",
 		"test-bridge tests desired-state [--format json] [--id test-id]",
-		"test-bridge tests run --id test-id",
+		"test-bridge tests run [--dry-run] --id test-id",
 	}
 	if !stringSlicesEqual(got, want) {
 		t.Fatalf("test-bridge leaves = %#v, want %#v", got, want)
