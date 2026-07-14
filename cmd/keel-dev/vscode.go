@@ -45,6 +45,10 @@ const (
 	vscodeLaneTestCoverage = "keel::lane::test-coverage"
 	vscodeLaneVSIXGate     = "keel::lane::vsix-ci"
 	vscodeLaneCI           = "keel::lane::ci"
+
+	vscodeDesiredStateGoToolchain  = "keel::desired-state::go-toolchain"
+	vscodeDesiredStateModuleRoot   = "keel::desired-state::keel-module-root"
+	vscodeDesiredStateStubBinaries = "keel::desired-state::stub-binaries"
 )
 
 var vscodeLaneIDs = []string{vscodeLaneLint, vscodeLaneTestFast, vscodeLaneTestCoverage, vscodeLaneVSIXGate, vscodeLaneCI}
@@ -252,6 +256,11 @@ func (keelTestBridge) Run(ctx context.Context, req testbridge.RunRequest, writer
 		}
 		writer(vscode.RunEvent{Event: "passed", TestID: req.IDs[0]})
 		return exitCode, nil
+	}
+	if len(req.IDs) == 1 {
+		if exitCode, handled, err := runVSCodeDesiredStateRow(root, req.IDs[0], writer); handled {
+			return exitCode, err
+		}
 	}
 	laneID := laneForIDs(req.IDs)
 	if ready := vscode.NewEngine(newKeelWorkspaceProfile(root)).Prepare(ctx, laneID, req.IDs, writer); !ready {
@@ -463,6 +472,29 @@ func profilesForDesiredStateRow(state vscode.DesiredState) []string {
 	return []string{"run"}
 }
 
+// DHF-REQ: keel/requirement-60
+func runVSCodeDesiredStateRow(root, id string, writer vscode.RunEventWriter) (int, bool, error) {
+	plan, err := buildVSCodePlan(root, []string{id})
+	if err != nil {
+		writer(vscode.RunEvent{Event: "failed", TestID: id, Message: err.Error()})
+		return 1, true, nil
+	}
+	for _, group := range plan.Groups {
+		for _, row := range group.Rows {
+			if row.RunID != id {
+				continue
+			}
+			if row.Status == "satisfied" {
+				writer(vscode.RunEvent{Event: "passed", TestID: id, Message: row.Message})
+				return 0, true, nil
+			}
+			writer(vscode.RunEvent{Event: "failed", TestID: id, Message: row.Message})
+			return 1, true, nil
+		}
+	}
+	return 0, false, nil
+}
+
 func groupItem(id, parentID, label, sortText string) vscode.TestItem {
 	return vscode.TestItem{
 		ID:       id,
@@ -510,9 +542,9 @@ func buildVSCodePlan(root string, ids []string) (vscode.SetupPlan, error) {
 			Label: "Test Preconditions",
 			Order: 10,
 			Rows: []vscode.DesiredState{
-				{Resource: "go-toolchain", Kind: "tool", Desired: "available", Current: statusWord(goReady), Status: desiredStateStatus(goReady), Action: desiredStateAction(goReady), Message: "Go toolchain is required.", Reusable: true, Owned: false},
-				{Resource: "keel-module-root", Kind: "unknown", Desired: modulePath, Current: modulePath, Status: "satisfied", Action: "reuse", Message: "keel module root resolved.", Reusable: true, Owned: false},
-				{Resource: "stub-binaries", Kind: "binary", Desired: "buildable", Current: "checked-by-ci", Status: "satisfied", Action: "reuse", Message: "stub binaries are built by keel-dev ci.", Reusable: true, Owned: false},
+				{RunID: vscodeDesiredStateGoToolchain, Resource: "go-toolchain", Kind: "tool", Desired: "available", Current: statusWord(goReady), Status: desiredStateStatus(goReady), Action: desiredStateAction(goReady), Message: "Install Go if this check is blocked.", Reusable: true, Owned: false},
+				{RunID: vscodeDesiredStateModuleRoot, Resource: "keel-module-root", Kind: "unknown", Desired: modulePath, Current: modulePath, Status: "satisfied", Action: "reuse", Message: "keel module root resolved.", Reusable: true, Owned: false},
+				{RunID: vscodeDesiredStateStubBinaries, Resource: "stub-binaries", Kind: "binary", Desired: "buildable", Current: "checked-by-ci", Status: "satisfied", Action: "reuse", Message: "stub binaries are built by keel-dev ci.", Reusable: true, Owned: false},
 			},
 		}},
 		Checks: []vscode.PrereqCheck{
