@@ -49,11 +49,11 @@ const (
 var vscodeLaneIDs = []string{vscodeLaneLint, vscodeLaneTestFast, vscodeLaneTestCoverage, vscodeLaneVSIXGate, vscodeLaneCI}
 
 var vscodeGateLaneDefs = []testFileLane{
-	{ID: "lint", Label: "lint", Order: "c.1", Description: "Run keel-dev lint checks.", Members: []laneMember{{Lane: "lint"}}},
-	{ID: "test-fast", Label: "test-fast", Order: "c.2", Description: "Run the fast Go test lane.", Members: []laneMember{{Lane: "test-fast"}}},
-	{ID: "test-coverage", Label: "test-coverage", Order: "c.3", Description: "Run the coverage test lane.", Members: []laneMember{{Lane: "test-coverage"}}},
-	{ID: "vsix-ci", Label: "vsix ci", Order: "c.10", Description: "Run the VSIX gate.", Members: []laneMember{{Lane: "vsix-ci"}}},
-	{ID: "ci", Label: "ci", Order: "c.30", Description: "Run the full keel-dev CI gate.", Members: []laneMember{{Lane: "ci"}}},
+	{ID: "lint", Label: "lint", Order: "c.1", Description: "Run keel-dev lint checks.", Members: []laneMember{{Root: "go"}}},
+	{ID: "test-fast", Label: "test-fast", Order: "c.2", Description: "Run the fast Go test lane.", Members: []laneMember{{Root: "go"}}},
+	{ID: "test-coverage", Label: "test-coverage", Order: "c.3", Description: "Run the coverage test lane.", Members: []laneMember{{Root: "go"}}},
+	{ID: "vsix-ci", Label: "vsix ci", Order: "c.10", Description: "Run the VSIX gate.", Members: []laneMember{{Root: "vsix"}}},
+	{ID: "ci", Label: "ci", Order: "c.30", Description: "Run the full keel-dev CI gate.", Members: []laneMember{{Lane: "lint"}, {Lane: "test-coverage"}}},
 }
 
 type testLanesFile struct {
@@ -114,6 +114,7 @@ type effectiveLane struct {
 	vsixFiles        []string
 	directGoPackages []string
 	directVSIXFiles  []string
+	directRootIDs    []string
 	systemLanes      []string
 	laneRefs         []string
 	prerequisites    []string
@@ -545,7 +546,7 @@ func writeVSCodeLanesDetect(root string, dryRun bool, out io.Writer) error {
 	}
 	nextSlot := nextDetectionOrderSlot(lanes.file.Lanes)
 	for _, family := range sortedKeys(families) {
-		id := "go-" + family
+		id := detectedFamilyLaneID(family)
 		if _, exists := lanes.byID[id]; exists {
 			doc.Unchanged = append(doc.Unchanged, lanesDetectEntry{ID: id, Reason: "lane id already declared"})
 			continue
@@ -556,13 +557,14 @@ func writeVSCodeLanesDetect(root string, dryRun bool, out io.Writer) error {
 		}
 		order := fmt.Sprintf("c.%d", nextSlot)
 		nextSlot++
-		doc.Added = append(doc.Added, lanesDetectEntry{ID: id, Label: family, Order: order, Packages: familyPackageCount(root, family)})
+		member := detectedFamilyLaneMember(family)
+		doc.Added = append(doc.Added, lanesDetectEntry{ID: id, Label: detectedFamilyLaneLabel(family), Order: order, Packages: familyPackageCount(root, family)})
 		updated.Lanes = append(updated.Lanes, testFileLane{
 			ID:          id,
-			Label:       family,
+			Label:       detectedFamilyLaneLabel(family),
 			Order:       order,
 			Description: fmt.Sprintf("detected category - %d packages", familyPackageCount(root, family)),
-			Members:     []laneMember{{Go: "./" + family + "/..."}},
+			Members:     []laneMember{member},
 		})
 	}
 	if len(doc.Added) > 0 && !dryRun {
@@ -706,6 +708,7 @@ func (s *lanesState) expand(id string, stack []string, depth int) (effectiveLane
 	pkgSet := map[string]bool{}
 	systemSet := map[string]bool{}
 	vsixSet := map[string]bool{}
+	rootSet := map[string]bool{}
 	// direct* hold only this lane's own concrete members; lane-ref members are
 	// aliased single-level in covers and never re-expanded into these sets.
 	directPkgSet := map[string]bool{}
@@ -715,25 +718,29 @@ func (s *lanesState) expand(id string, stack []string, depth int) (effectiveLane
 		case len(member.rawKeys) != 1:
 			return effectiveLane{}, fmt.Errorf("unknown member form in lane %q", id)
 		case member.Go != "":
-			for _, pkg := range packagesForGoPattern(s.path, member.Go) {
+			packages := packagesForGoPattern(s.path, member.Go)
+			for _, pkg := range packages {
 				pkgSet[pkg] = true
 				directPkgSet[pkg] = true
 			}
 			prereq["go-toolchain"] = true
 			prereq["keel-module-root"] = true
-			if len(packagesForGoPattern(s.path, member.Go)) == 0 {
+			if len(packages) == 0 {
 				eff.findings = append(eff.findings, laneFinding{Rule: "V6", Severity: "warning", Message: "go member matches no test-bearing packages: " + member.Go})
 			}
 		case member.Root != "":
 			switch member.Root {
 			case "go":
-				for _, pkg := range packagesForGoPattern(s.path, "./...") {
+				packages := packagesForGoPattern(s.path, "./...")
+				for _, pkg := range packages {
 					pkgSet[pkg] = true
 					directPkgSet[pkg] = true
 				}
+				rootSet["go::root"] = true
 				prereq["go-toolchain"] = true
 				prereq["keel-module-root"] = true
 			case "vsix":
+				rootSet["vsix::root"] = true
 				prereq["pnpm"] = true
 			default:
 				return effectiveLane{}, fmt.Errorf("unknown root member %q in lane %q", member.Root, id)
@@ -747,11 +754,12 @@ func (s *lanesState) expand(id string, stack []string, depth int) (effectiveLane
 			}
 		case member.Lane != "":
 			if short, ok := systemLaneShortID(member.Lane); ok {
-				if !systemSet[short] {
-					eff.systemLanes = append(eff.systemLanes, "keel::lane::"+short)
-					systemSet[short] = true
+				fullID := "keel::lane::" + short
+				if !systemSet[fullID] {
+					eff.systemLanes = append(eff.systemLanes, fullID)
+					systemSet[fullID] = true
 				}
-				for _, resource := range laneRequiredResources("keel::lane::" + short) {
+				for _, resource := range laneRequiredResources(fullID) {
 					prereq[resource] = true
 				}
 				continue
@@ -784,6 +792,7 @@ func (s *lanesState) expand(id string, stack []string, depth int) (effectiveLane
 	eff.vsixFiles = sortedKeys(vsixSet)
 	eff.directGoPackages = sortedKeys(directPkgSet)
 	eff.directVSIXFiles = sortedKeys(directVsixSet)
+	eff.directRootIDs = sortedKeys(rootSet)
 	eff.prerequisites = orderedResources(prereq)
 	s.effective[id] = eff
 	return eff, nil
@@ -826,7 +835,7 @@ func (s lanesState) discoveryItems() []vscode.TestItem {
 
 // DHF-REQ: keel/requirement-54
 func (s lanesState) coverItems(eff effectiveLane) []vscode.TestItem {
-	if len(eff.directGoPackages) == 0 && len(eff.directVSIXFiles) == 0 && len(eff.laneRefs) == 0 {
+	if len(eff.directGoPackages) == 0 && len(eff.directVSIXFiles) == 0 && len(eff.directRootIDs) == 0 && len(eff.systemLanes) == 0 && len(eff.laneRefs) == 0 {
 		return nil
 	}
 	coversID := eff.id + "::covers"
@@ -872,6 +881,22 @@ func (s lanesState) coverItems(eff effectiveLane) []vscode.TestItem {
 	}
 	for _, rel := range eff.directVSIXFiles {
 		addAlias("vsix::file::"+filepath.ToSlash(rel), filepath.Base(rel), "file")
+	}
+	for _, rootID := range eff.directRootIDs {
+		switch rootID {
+		case "go::root":
+			addAlias(rootID, "Go", "root")
+		case "vsix::root":
+			addAlias(rootID, "Mocha (vsix)", "root")
+		default:
+			addAlias(rootID, strings.TrimSuffix(strings.TrimPrefix(rootID, "keel::"), "::root"), "root")
+		}
+	}
+	for _, laneID := range eff.systemLanes {
+		if laneID == eff.id {
+			continue
+		}
+		addAlias(laneID, strings.TrimPrefix(laneID, "keel::lane::"), "lane")
 	}
 	for _, laneID := range eff.laneRefs {
 		addAlias(laneID, strings.TrimPrefix(laneID, "keel::lane::"), "lane")
@@ -1049,9 +1074,24 @@ func detectGoFamilies(root string) (map[string]bool, error) {
 
 func goPackageFamily(pkg string) string {
 	if pkg == "." || pkg == "" {
-		return "."
+		return "root"
 	}
 	return strings.Split(filepath.ToSlash(pkg), "/")[0]
+}
+
+func detectedFamilyLaneID(family string) string {
+	return "go-" + family
+}
+
+func detectedFamilyLaneLabel(family string) string {
+	return family
+}
+
+func detectedFamilyLaneMember(family string) laneMember {
+	if family == "root" {
+		return laneMember{Go: "./"}
+	}
+	return laneMember{Go: "./" + family + "/..."}
 }
 
 func familyPackageCount(root, family string) int {
