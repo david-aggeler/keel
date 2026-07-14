@@ -177,18 +177,14 @@ func (b demoBridge) Discover(ctx context.Context) (vscode.DiscoveryDocument, err
 	}, nil
 }
 
-// DHF-REQ: keel/requirement-62
-func (b demoBridge) DesiredState(ctx context.Context, ids []string) (vscode.SetupPlan, error) {
-	return vscode.SetupPlan{
-		Version:     3,
-		Devtool:     b.Metadata(),
-		Workspace:   b.workspace(ctx).Root,
-		GeneratedAt: time.Now().UTC(),
-		Groups: []vscode.DesiredStateGroup{
+// DHF-REQ: keel/requirement-62, keel/requirement-75
+func (b demoBridge) DesiredState(ctx context.Context, ids []string) (testbridge.DesiredStatePlan, error) {
+	return testbridge.DesiredStatePlan{
+		Groups: []testbridge.DesiredStateGroup{
 			{
 				Label: "Test Preconditions",
 				Order: 10,
-				Rows: []vscode.DesiredState{
+				Rows: []testbridge.DesiredStateRow{
 					desired(idDesiredDockerEnv, "docker-env", "dependency", "ready", "absent", "provision_demo_environment", false, false),
 					desired(idDesiredPostgres, "postgres", "fixture-data", "present+seeded", "missing", "create_and_seed_demo_database", false, false),
 					desired(idDesiredServiceA, "service-a", "service", "running", "stopped", "start_demo_service", true, false),
@@ -203,7 +199,7 @@ func (b demoBridge) DesiredState(ctx context.Context, ids []string) (vscode.Setu
 				Label:             "app-db data set",
 				Order:             20,
 				MutuallyExclusive: true,
-				Rows: []vscode.DesiredState{
+				Rows: []testbridge.DesiredStateRow{
 					desired(idDataSetEmpty, "app-db-empty", "fixture-data", "empty", "small", "select_empty_data_set", false, false),
 					desired(idDataSetSmall, "app-db-small", "fixture-data", "small", "small", "reuse_small_data_set", false, true),
 					desired(idDataSetFull, "app-db-full", "fixture-data", "full", "small", "select_full_data_set", false, false),
@@ -265,11 +261,6 @@ func (b demoBridge) runOne(ctx context.Context, root, id string, emit vscode.Run
 		emit(vscode.RunEvent{Event: "test_started", TestID: id})
 		emit(vscode.RunEvent{Event: "output", TestID: id, Message: "fake provisioning preview: environment/database/services need reconcile_during_run"})
 		emit(vscode.RunEvent{Event: "passed", TestID: id, Message: "fake provisioning preview rendered"})
-		return 0, nil
-	case idDesiredDockerEnv, idDesiredPostgres, idDesiredServiceA, idDesiredServiceB, idDesiredServiceC, idDesiredSDK, idDesiredDNS, idDesiredPing,
-		idDataSetEmpty, idDataSetSmall, idDataSetFull:
-		emit(vscode.RunEvent{Event: "test_started", TestID: id})
-		emit(vscode.RunEvent{Event: "passed", TestID: id, Message: "reconciled fake desired-state row " + id})
 		return 0, nil
 	case idLaneGoPass, idTestGoPass:
 		return runGoLane(ctx, root, id, true, emit)
@@ -354,19 +345,22 @@ func test(id, parent, label, laneID string) vscode.TestItem {
 	return vscode.TestItem{ID: id, ParentID: parent, Label: label, Kind: "test", Framework: "keel-demo-dev", Runner: "keel-demo-dev", RunnerLabel: "Keel Demo Dev", Runnable: true, Profiles: []string{"run"}, LaneID: laneID}
 }
 
-func desired(runID, resource, kind, want, current, actionName string, reusable, active bool) vscode.DesiredState {
-	return vscode.DesiredState{
+func desired(runID, resource, kind, want, current, actionName string, reusable, active bool) testbridge.DesiredStateRow {
+	return testbridge.DesiredStateRow{
 		RunID:    runID,
 		Resource: resource,
 		Kind:     kind,
 		Desired:  want,
-		Current:  current,
-		Status:   "reconcilable",
-		Action:   "reconcile_during_run",
-		Message:  "named action " + actionName + " would reconcile this fake resource during a demo run",
 		Reusable: reusable,
 		Owned:    !reusable,
 		Active:   active,
+		Probe: func(context.Context, testbridge.DesiredStateProbeRequest) testbridge.DesiredStateProbeResult {
+			return testbridge.DesiredStateProbeResult{
+				Current:   current,
+				Satisfied: current == want,
+				Message:   "named action " + actionName + " would reconcile this fake resource during a demo run",
+			}
+		},
 	}
 }
 
