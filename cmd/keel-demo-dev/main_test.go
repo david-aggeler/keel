@@ -15,7 +15,7 @@ import (
 	"github.com/david-aggeler/keel/vscode"
 )
 
-// DHF-TEST: keel/requirement-62, keel/requirement-74, keel/requirement-75
+// DHF-TEST: keel/requirement-62, keel/requirement-74, keel/requirement-75, keel/requirement-76
 func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	exe := buildDemoDev(t)
 	root := t.TempDir()
@@ -33,31 +33,12 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	assertItem(t, discovery.Items, "keel-demo-dev::maintenance::detect-lanes", "maintenance", true)
 	assertItem(t, discovery.Items, "keel-demo-dev::maintenance::block-bad-lane", "maintenance", true)
 	assertItem(t, discovery.Items, "keel-demo-dev::maintenance::unblock-bad-lane", "maintenance", true)
-	assertItem(t, discovery.Items, "keel::desired-state::group::test-preconditions", "group", false)
-	dataSetGroup := assertItem(t, discovery.Items, "keel::desired-state::group::app-db-data-set", "group", false)
-	if dataSetGroup.SortText != "b.020" || !strings.Contains(strings.Join(dataSetGroup.Limitations, " "), "mutually_exclusive=true") {
-		t.Fatalf("data-set discovery group = %+v, want order and exclusivity surfaced", dataSetGroup)
-	}
+	assertMissingItem(t, discovery.Items, "keel::desired-state::group::test-preconditions")
+	assertMissingItem(t, discovery.Items, "keel::desired-state::group::app-db-data-set")
 	for _, id := range []string{"keel-demo-dev::desired-state::docker-env", "keel-demo-dev::desired-state::dataset::small"} {
-		item := assertItem(t, discovery.Items, id, "group", true)
-		if item.ParentID != "keel::desired-state::group::test-preconditions" && item.ParentID != "keel::desired-state::group::app-db-data-set" {
-			t.Fatalf("desired-state row %s parent = %q, want derived desired-state group", id, item.ParentID)
-		}
+		assertMissingItem(t, discovery.Items, id)
 	}
 	assertMissingItem(t, discovery.Items, "keel-demo-dev::lane::go-pass")
-
-	desiredStateOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "desired-state", "--format", "json", "--id", "keel-demo-dev::lane::fake-smoke")
-	if code != 0 {
-		t.Fatalf("desired-state exit = %d, want 0\n%s", code, desiredStateOut)
-	}
-	var desiredState vscode.DesiredStateDocument
-	decodeJSON(t, desiredStateOut, &desiredState)
-	assertDesiredState(t, desiredState.Groups, "docker-env", "ready", "absent", "provision_demo_environment")
-	assertDesiredState(t, desiredState.Groups, "postgres", "present+seeded", "missing", "create_and_seed_demo_database")
-	assertDesiredState(t, desiredState.Groups, "service-a", "running", "stopped", "start_demo_service")
-	assertDesiredState(t, desiredState.Groups, "service-b", "running", "stopped", "start_demo_service")
-	assertDesiredState(t, desiredState.Groups, "service-c", "running", "stopped", "start_demo_service")
-	assertExclusiveDataSetGroup(t, desiredState.Groups)
 
 	detectOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::maintenance::detect-lanes")
 	if code != 0 {
@@ -75,6 +56,30 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	assertItem(t, discovery.Items, "keel-demo-dev::lane::fake-smoke", "lane", true)
 	assertItem(t, discovery.Items, "go::test::passing::TestReferencePass", "test", true)
 	assertItem(t, discovery.Items, "go::test::failing::TestReferenceFailure", "test", true)
+	assertItem(t, discovery.Items, "keel::desired-state::group::test-preconditions", "group", false)
+	dataSetGroup := assertItem(t, discovery.Items, "keel::desired-state::group::app-db-data-set", "group", false)
+	if dataSetGroup.SortText != "b.020" || !strings.Contains(strings.Join(dataSetGroup.Limitations, " "), "mutually_exclusive=true") {
+		t.Fatalf("data-set discovery group = %+v, want order and exclusivity surfaced", dataSetGroup)
+	}
+	for _, id := range []string{"keel-demo-dev::desired-state::docker-env", "keel-demo-dev::desired-state::dataset::small"} {
+		item := assertItem(t, discovery.Items, id, "group", true)
+		if item.ParentID != "keel::desired-state::group::test-preconditions" && item.ParentID != "keel::desired-state::group::app-db-data-set" {
+			t.Fatalf("desired-state row %s parent = %q, want derived desired-state group", id, item.ParentID)
+		}
+	}
+
+	desiredStateOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "desired-state", "--format", "json", "--id", "keel-demo-dev::lane::fake-smoke")
+	if code != 0 {
+		t.Fatalf("desired-state exit = %d, want 0\n%s", code, desiredStateOut)
+	}
+	var desiredState vscode.DesiredStateDocument
+	decodeJSON(t, desiredStateOut, &desiredState)
+	assertDesiredState(t, desiredState.Groups, "docker-env", "ready", "ready", "verified")
+	assertDesiredState(t, desiredState.Groups, "postgres", "present+seeded", "present+seeded", "verified")
+	assertDesiredState(t, desiredState.Groups, "service-a", "running", "running", "verified")
+	assertDesiredState(t, desiredState.Groups, "service-b", "running", "running", "verified")
+	assertDesiredState(t, desiredState.Groups, "service-c", "running", "running", "verified")
+	assertExclusiveDataSetGroup(t, desiredState.Groups)
 
 	failOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::lane::go-fail")
 	if code == 0 {
@@ -113,10 +118,14 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-62, keel/requirement-75
+// DHF-TEST: keel/requirement-62, keel/requirement-75, keel/requirement-76
 func TestKeelDemoDevDesiredStateRowsAreRunnable(t *testing.T) {
 	exe := buildDemoDev(t)
 	root := t.TempDir()
+	detectOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::maintenance::detect-lanes")
+	if code != 0 {
+		t.Fatalf("detect-lanes maintenance exit = %d, want 0\n%s", code, detectOut)
+	}
 
 	cases := []struct {
 		id      string
@@ -124,7 +133,7 @@ func TestKeelDemoDevDesiredStateRowsAreRunnable(t *testing.T) {
 		event   string
 		message string
 	}{
-		{id: "keel-demo-dev::desired-state::docker-env", code: 1, event: "failed", message: "provision_demo_environment"},
+		{id: "keel-demo-dev::desired-state::docker-env", code: 0, event: "passed", message: "provision_demo_environment"},
 		{id: "keel-demo-dev::desired-state::dataset::small", code: 0, event: "passed", message: "reuse_small_data_set"},
 	}
 	for _, tc := range cases {
@@ -140,12 +149,31 @@ func TestKeelDemoDevDesiredStateRowsAreRunnable(t *testing.T) {
 		"--id", "keel-demo-dev::desired-state::docker-env",
 		"--id", "keel-demo-dev::desired-state::dataset::small",
 	)
-	if code != 1 {
-		t.Fatalf("multi desired-state row exit = %d, want 1\n%s", code, out)
+	if code != 0 {
+		t.Fatalf("multi desired-state row exit = %d, want 0\n%s", code, out)
 	}
 	events := decodeRunEvents(t, out)
-	assertRunEvent(t, events, "failed", "keel-demo-dev::desired-state::docker-env", "provision_demo_environment")
+	assertRunEvent(t, events, "passed", "keel-demo-dev::desired-state::docker-env", "provision_demo_environment")
 	assertRunEvent(t, events, "passed", "keel-demo-dev::desired-state::dataset::small", "reuse_small_data_set")
+
+	if err := os.Remove(demoReadyPath(root, "docker-env")); err != nil {
+		t.Fatal(err)
+	}
+	out, code = runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::desired-state::docker-env")
+	if code == 0 {
+		t.Fatalf("broken docker-env row exit = 0, want non-zero\n%s", out)
+	}
+	assertRunEvent(t, decodeRunEvents(t, out), "failed", "keel-demo-dev::desired-state::docker-env", "provision_demo_environment")
+
+	detectOut, code = runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::maintenance::detect-lanes")
+	if code != 0 {
+		t.Fatalf("repair detect-lanes exit = %d, want 0\n%s", code, detectOut)
+	}
+	out, code = runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::desired-state::docker-env")
+	if code != 0 {
+		t.Fatalf("repaired docker-env row exit = %d, want 0\n%s", code, out)
+	}
+	assertRunEvent(t, decodeRunEvents(t, out), "passed", "keel-demo-dev::desired-state::docker-env", "provision_demo_environment")
 }
 
 // DHF-TEST: keel/requirement-62
@@ -190,7 +218,7 @@ func TestDemoBridgeCommandSpecCoversProviderAndRunPaths(t *testing.T) {
 	}
 	var desiredState vscode.DesiredStateDocument
 	decodeJSON(t, desiredStateOut, &desiredState)
-	assertDesiredState(t, desiredState.Groups, "postgres", "present+seeded", "missing", "create_and_seed_demo_database")
+	assertDesiredState(t, desiredState.Groups, "postgres", "present+seeded", "present+seeded", "verified")
 
 	defaultDesiredStateOut, err := dispatchDemoBridge(t, root, "test-bridge", "tests", "desired-state", "--format", "json")
 	if err != nil {
@@ -201,7 +229,7 @@ func TestDemoBridgeCommandSpecCoversProviderAndRunPaths(t *testing.T) {
 	if defaultDesiredState.Version != 3 {
 		t.Fatalf("default desired-state version = %d, want 3", defaultDesiredState.Version)
 	}
-	assertDesiredState(t, defaultDesiredState.Groups, "docker-env", "ready", "absent", "provision_demo_environment")
+	assertDesiredState(t, defaultDesiredState.Groups, "docker-env", "ready", "ready", "verified")
 	assertExclusiveDataSetGroup(t, defaultDesiredState.Groups)
 
 	runOut, err := dispatchDemoBridge(t, root, "test-bridge", "tests", "run", "--id", idLaneFakeSmoke)

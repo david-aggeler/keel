@@ -1,7 +1,9 @@
 .gitignore
 .vscode-test.mjs
+.vscode-test-packaged.mjs
 .vscode/**
 .vscode-test/**
+packaged-e2e-driver/**
 dist/**
 node_modules/**
 src/**
@@ -11,4 +13,5 @@ test-jsonl-reporter.cjs
 tsconfig.json
 pnpm-lock.yaml
 pnpm-workspace.yaml
+scripts/install-packaged-vsix.mjs
 *.vsix

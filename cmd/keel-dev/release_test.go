@@ -214,6 +214,50 @@ func TestCommitVSIXStampSkipsWhenAlreadyCommitted(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-76
+func TestRunVSIXGateIncludesPackagedE2ELane(t *testing.T) {
+	callsFile := stubTools(t, false, false)
+	dir := moduleFixture(t)
+
+	if err := runVSIXGate(context.Background(), discardLogger(), dir); err != nil {
+		t.Fatalf("vsix gate failed: %v", err)
+	}
+
+	got := calls(t, callsFile)
+	for _, want := range []string{
+		"pnpm --dir " + filepath.Join(dir, "vsix") + " run ci",
+		"pnpm --dir " + filepath.Join(dir, "vsix") + " run test:e2e:packaged",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("vsix gate missing call %q; calls:\n%s", want, got)
+		}
+	}
+}
+
+// DHF-TEST: keel/requirement-76
+func TestRunReleaseRefusesWhenPackagedE2ELaneFails(t *testing.T) {
+	callsFile := stubTools(t, false, false)
+	bin := filepath.Dir(callsFile)
+	stub(t, bin, callsFile, "pnpm", `
+case "$*" in
+  "--dir "*" run test:e2e:packaged") exit 7 ;;
+esac
+exit 0`)
+	dir := moduleFixture(t)
+
+	err := runRelease(context.Background(), discardLogger(), dir, "v9.9.9")
+	if err == nil {
+		t.Fatal("release succeeded with red packaged e2e lane; want refusal")
+	}
+	if !strings.Contains(err.Error(), "release preflight") || !strings.Contains(err.Error(), "run test:e2e:packaged") {
+		t.Fatalf("release error = %v, want preflight packaged e2e failure", err)
+	}
+	got := calls(t, callsFile)
+	if strings.Contains(got, "git tag -a") || strings.Contains(got, "gh release create") {
+		t.Fatalf("release mutated after red e2e lane; calls:\n%s", got)
+	}
+}
+
 // TestStampVSIXPackageVersionPreservesManifestShape pins that the stamp is a
 // one-line version bump: key order, unrelated lines, and && in script values
 // survive byte-for-byte.

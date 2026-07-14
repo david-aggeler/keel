@@ -30,16 +30,23 @@ func handleVSIXGate(ctx context.Context, args []string) error {
 	return runVSIXGate(ctx, state.logger, state.root)
 }
 
-// DHF-REQ: keel/requirement-40
+// DHF-REQ: keel/requirement-40, keel/requirement-76
 func runVSIXGate(ctx context.Context, logger *slog.Logger, dir string) error {
 	for _, tool := range []string{"node", "pnpm", "xvfb-run"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			return fmt.Errorf("keel-dev vsix ci: required tool %q not found on PATH", tool)
 		}
 	}
-	return runStep(ctx, logger, dir, step{
+	if err := runStep(ctx, logger, dir, step{
 		name:    "vsix:ci",
 		program: "pnpm",
 		args:    []string{"--dir", filepath.Join(dir, "vsix"), "run", "ci"},
+	}); err != nil {
+		return err
+	}
+	return runStep(ctx, logger, dir, step{
+		name:    "vsix:e2e-packaged",
+		program: "pnpm",
+		args:    []string{"--dir", filepath.Join(dir, "vsix"), "run", "test:e2e:packaged"},
 	})
 }
