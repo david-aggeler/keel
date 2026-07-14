@@ -265,13 +265,18 @@ suite('Keel Test Bridge config contract', () => {
       displayName: 'Keel'
     }, null, 2) + '\n');
 
+    // The fake adapter is strict like the real bridge: it rejects ids it did
+    // not serve. The runnable row is keyed by its served run_id; the
+    // informational row keeps the VSIX-private display id and never reaches
+    // the wire (formal_review-80).
+    const servedRunID = 'keel::action::provision-python-venv';
     const rowGroup: DesiredStateGroup = {
       label: 'Test Preconditions',
       order: 10,
       mutually_exclusive: false,
       rows: []
     };
-    const rowID = desiredStateRowProtocolID(rowGroup, {
+    const informationalRowID = desiredStateRowProtocolID(rowGroup, {
       resource: 'python',
       kind: 'tool',
       desired: 'available',
@@ -287,13 +292,22 @@ suite('Keel Test Bridge config contract', () => {
       const extension = vscode.extensions.getExtension('aggeler.keel-test-bridge');
       assert.ok(extension, 'extension should be discoverable');
       await extension.activate();
-      await runProfileHandlerForTest(rowID);
 
-      const calls = fs.readFileSync(path.join(root, '.devtools', 'fake-adapter-calls.log'), 'utf8')
+      await runProfileHandlerForTest(servedRunID);
+      const callsAfterRunnable = fs.readFileSync(path.join(root, '.devtools', 'fake-adapter-calls.log'), 'utf8')
         .trim()
         .split(/\r?\n/);
-      assert.ok(calls.includes(`test-bridge tests desired-state --format json --id ${rowID}`));
-      assert.ok(calls.includes(`test-bridge tests run --id ${rowID}`));
+      assert.ok(callsAfterRunnable.includes(`test-bridge tests desired-state --format json --id ${servedRunID}`));
+      assert.ok(callsAfterRunnable.includes(`test-bridge tests run --id ${servedRunID}`));
+
+      await runProfileHandlerForTest(informationalRowID);
+      const callsAfterInformational = fs.readFileSync(path.join(root, '.devtools', 'fake-adapter-calls.log'), 'utf8')
+        .trim()
+        .split(/\r?\n/);
+      const informationalRuns = callsAfterInformational.filter((call) => call.includes('tests run') && call.includes(informationalRowID));
+      assert.equal(informationalRuns.length, 0, 'informational rows must never be submitted on the wire');
+      const informationalPlans = callsAfterInformational.filter((call) => call.includes('desired-state') && call.includes(informationalRowID));
+      assert.equal(informationalPlans.length, 0, 'informational display ids must never be planned on the wire');
     } finally {
       if (previousDevWorkspace === undefined) {
         delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;

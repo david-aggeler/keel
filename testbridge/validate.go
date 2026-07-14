@@ -105,6 +105,7 @@ func validateSetupPlan(plan vscode.SetupPlan) error {
 			return fmt.Errorf("keel/testbridge: setup-plan item missing id")
 		}
 	}
+	runIDs := map[string]string{}
 	for _, group := range plan.Groups {
 		if group.Label == "" {
 			return fmt.Errorf("keel/testbridge: desired-state group missing label")
@@ -116,6 +117,12 @@ func validateSetupPlan(plan vscode.SetupPlan) error {
 		for _, state := range group.Rows {
 			if err := validateDesiredStateRow(state); err != nil {
 				return err
+			}
+			if state.RunID != "" {
+				if owner, dup := runIDs[state.RunID]; dup {
+					return fmt.Errorf("keel/testbridge: desired-state run_id %q served by both %q and %q; run ids must be unique", state.RunID, owner, state.Resource)
+				}
+				runIDs[state.RunID] = state.Resource
 			}
 			if state.Active {
 				active++

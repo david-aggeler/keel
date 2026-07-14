@@ -168,7 +168,14 @@ type SetupPlanAction struct {
 }
 
 // DesiredState describes the target and current state for a required resource.
+// RunID, when present, is the canonical devtool-served id that makes the row
+// runnable through the ordinary run interaction (test-bridge tests run --id):
+// a consumer that serves run_id MUST resolve that id in its run path. Rows
+// without RunID are informational and are never submitted on the wire.
+//
+// DHF-REQ: keel/requirement-60
 type DesiredState struct {
+	RunID    string `json:"run_id,omitempty"`
 	Resource string `json:"resource"`
 	Kind     string `json:"kind"`
 	Desired  string `json:"desired"`
