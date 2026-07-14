@@ -1,11 +1,4 @@
 {
   "version": 1,
-  "entries": [
-    {
-      "id": "vsix:req-72:runnable-id-dry-run-sweep",
-      "requirement": "keel/requirement-72",
-      "fixing_cr": "keel/change_request-78",
-      "reason": "Current real binary has no dry-run resolution mode for sweeping every discovery-served runnable id."
-    }
-  ]
+  "entries": []
 }

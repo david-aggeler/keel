@@ -118,6 +118,54 @@ func TestDesiredStateIsReadOnly(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-72
+func TestRunDryRunResolvesDiscoveryServedIDsReadOnly(t *testing.T) {
+	root := t.TempDir()
+	marker := filepath.Join(root, "marker")
+	fake := newFakeBridge(root)
+	fake.mutateDuringRun = marker
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: io.Discard})
+
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--dry-run", "--id", "demo::lane::fast"}); err != nil {
+		t.Fatalf("dry-run dispatch: %v", err)
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("dry-run mutated workspace marker, stat err=%v", err)
+	}
+	if fake.sawRunLock || len(fake.runIDs) != 0 {
+		t.Fatalf("dry-run executed run path: sawRunLock=%v runIDs=%v", fake.sawRunLock, fake.runIDs)
+	}
+
+	err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--dry-run", "--id", "demo::missing"})
+	var usage cli.UsageError
+	if !errors.As(err, &usage) || !strings.Contains(err.Error(), "unknown test id") {
+		t.Fatalf("unknown dry-run err = %v, want structured unknown-id usage error", err)
+	}
+}
+
+// DHF-TEST: keel/requirement-72
+func TestRunResolvesAliasToCanonicalBeforeRunner(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{{
+		ID:          "demo::alias::fast",
+		ParentID:    "demo::lane::fast",
+		Label:       "fast alias",
+		Kind:        "test",
+		Runnable:    true,
+		Profiles:    []string{"run"},
+		CanonicalID: "demo::lane::fast",
+	}}
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: io.Discard})
+
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", "demo::alias::fast"}); err != nil {
+		t.Fatalf("alias run dispatch: %v", err)
+	}
+	if !equalStrings(fake.runIDs, []string{"demo::lane::fast"}) {
+		t.Fatalf("runner ids = %v, want canonical id only", fake.runIDs)
+	}
+}
+
 func TestConfigHelpersInitUpgradeAndRefuseNewer(t *testing.T) {
 	root := t.TempDir()
 	template := newFakeBridge(root).ConfigTemplate()
@@ -538,6 +586,8 @@ func cloneDesiredStateGroups(groups []vscode.DesiredStateGroup) []vscode.Desired
 type fakeBridge struct {
 	root                   string
 	calls                  string
+	extraItems             []vscode.TestItem
+	runIDs                 []string
 	mutateDuringRun        string
 	sawRunLock             bool
 	exemptRun              bool
@@ -590,14 +640,14 @@ func (f *fakeBridge) Discover(_ context.Context) (vscode.DiscoveryDocument, erro
 			RefreshInvalidatesResults: true,
 			NeutralParentRollups:      true,
 		},
-		Items: []vscode.TestItem{{
+		Items: append([]vscode.TestItem{{
 			ID:       "demo::lane::fast",
 			Label:    "fast",
 			Kind:     "lane",
 			Runnable: true,
 			Profiles: []string{"run"},
 			LaneID:   "demo::lane::fast",
-		}},
+		}}, f.extraItems...),
 	}, nil
 }
 
@@ -634,6 +684,7 @@ func (f *fakeBridge) DesiredState(_ context.Context, ids []string) (vscode.Setup
 }
 
 func (f *fakeBridge) Run(_ context.Context, req testbridge.RunRequest, emit vscode.RunEventWriter) (int, error) {
+	f.runIDs = append([]string{}, req.IDs...)
 	if _, err := os.Stat(filepath.Join(f.root, ".devtools", "vscode-runs", "run.lock")); err == nil {
 		f.sawRunLock = true
 	}
