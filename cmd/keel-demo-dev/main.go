@@ -161,19 +161,23 @@ func (b demoBridge) Discover(ctx context.Context) (vscode.DiscoveryDocument, err
 func (b demoBridge) DesiredState(ctx context.Context, ids []string) (vscode.SetupPlan, error) {
 	selected := selectedItems(ids)
 	return vscode.SetupPlan{
-		Version:           1,
+		Version:           2,
 		Devtool:           b.Metadata(),
 		Workspace:         b.Workspace().Root,
 		GeneratedAt:       time.Now().UTC(),
 		Items:             selected,
 		RequiredResources: []string{"demo-environment", "demo-database", "demo-services"},
-		DesiredState: []vscode.DesiredState{
-			desired("environment", "dependency", "ready", "absent", "provision_demo_environment", false),
-			desired("database", "fixture-data", "present+seeded", "missing", "create_and_seed_demo_database", false),
-			desired("service-a", "service", "running", "stopped", "start_demo_service", true),
-			desired("service-b", "service", "running", "stopped", "start_demo_service", true),
-			desired("service-c", "service", "running", "stopped", "start_demo_service", true),
-		},
+		Groups: []vscode.DesiredStateGroup{{
+			Label: "Test Preconditions",
+			Order: 10,
+			Rows: []vscode.DesiredState{
+				desired("environment", "dependency", "ready", "absent", "provision_demo_environment", false),
+				desired("database", "fixture-data", "present+seeded", "missing", "create_and_seed_demo_database", false),
+				desired("service-a", "service", "running", "stopped", "start_demo_service", true),
+				desired("service-b", "service", "running", "stopped", "start_demo_service", true),
+				desired("service-c", "service", "running", "stopped", "start_demo_service", true),
+			},
+		}},
 		Checks: []vscode.PrereqCheck{
 			{ID: "demo-env-preview", OK: true, Message: "fake infrastructure preview only; no real resources are mutated"},
 		},

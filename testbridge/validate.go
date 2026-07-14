@@ -92,9 +92,10 @@ func validateDiscovery(doc vscode.DiscoveryDocument) error {
 	return nil
 }
 
+// DHF-REQ: keel/requirement-60
 func validateSetupPlan(plan vscode.SetupPlan) error {
-	if plan.Version != 1 {
-		return fmt.Errorf("keel/testbridge: setup-plan version = %d, want 1", plan.Version)
+	if plan.Version != 2 {
+		return fmt.Errorf("keel/testbridge: setup-plan version = %d, want 2", plan.Version)
 	}
 	if plan.Devtool.Name == "" || plan.Devtool.Version == "" || plan.Workspace == "" || plan.GeneratedAt.IsZero() {
 		return fmt.Errorf("keel/testbridge: setup-plan missing devtool, workspace, or generated_at")
@@ -104,18 +105,31 @@ func validateSetupPlan(plan vscode.SetupPlan) error {
 			return fmt.Errorf("keel/testbridge: setup-plan item missing id")
 		}
 	}
-	for _, state := range plan.DesiredState {
-		if state.Resource == "" || state.Kind == "" || state.Desired == "" || state.Current == "" || state.Status == "" || state.Action == "" {
-			return fmt.Errorf("keel/testbridge: desired_state row %q missing required fields", state.Resource)
+	runIDs := map[string]string{}
+	for _, group := range plan.Groups {
+		if group.Label == "" {
+			return fmt.Errorf("keel/testbridge: desired-state group missing label")
 		}
-		if !in(state.Kind, "tool", "dependency", "binary", "host-port-set", "fixture-data", "credential", "service", "unknown") {
-			return fmt.Errorf("keel/testbridge: desired_state row %q has invalid kind %q", state.Resource, state.Kind)
+		if len(group.Rows) == 0 {
+			return fmt.Errorf("keel/testbridge: desired-state group %q has no rows", group.Label)
 		}
-		if !in(state.Status, "satisfied", "blocked", "reconcilable") {
-			return fmt.Errorf("keel/testbridge: desired_state row %q has invalid status %q", state.Resource, state.Status)
+		active := 0
+		for _, state := range group.Rows {
+			if err := validateDesiredStateRow(state); err != nil {
+				return err
+			}
+			if state.RunID != "" {
+				if owner, dup := runIDs[state.RunID]; dup {
+					return fmt.Errorf("keel/testbridge: desired-state run_id %q served by both %q and %q; run ids must be unique", state.RunID, owner, state.Resource)
+				}
+				runIDs[state.RunID] = state.Resource
+			}
+			if state.Active {
+				active++
+			}
 		}
-		if !in(state.Action, "reuse", "manual_setup_required", "reconcile", "reconcile_during_run") {
-			return fmt.Errorf("keel/testbridge: desired_state row %q has invalid action %q", state.Resource, state.Action)
+		if group.MutuallyExclusive && active != 1 {
+			return fmt.Errorf("keel/testbridge: desired-state exclusive group %q has %d active rows, want exactly one active row", group.Label, active)
 		}
 	}
 	for _, check := range plan.Checks {
@@ -133,6 +147,22 @@ func validateSetupPlan(plan vscode.SetupPlan) error {
 	}
 	if plan.Teardown.Policy == "" {
 		return fmt.Errorf("keel/testbridge: setup-plan teardown policy is required")
+	}
+	return nil
+}
+
+func validateDesiredStateRow(state vscode.DesiredState) error {
+	if state.Resource == "" || state.Kind == "" || state.Desired == "" || state.Current == "" || state.Status == "" || state.Action == "" {
+		return fmt.Errorf("keel/testbridge: desired-state row %q missing required fields", state.Resource)
+	}
+	if !in(state.Kind, "tool", "dependency", "binary", "host-port-set", "fixture-data", "credential", "service", "unknown") {
+		return fmt.Errorf("keel/testbridge: desired-state row %q has invalid kind %q", state.Resource, state.Kind)
+	}
+	if !in(state.Status, "satisfied", "blocked", "reconcilable") {
+		return fmt.Errorf("keel/testbridge: desired-state row %q has invalid status %q", state.Resource, state.Status)
+	}
+	if !in(state.Action, "reuse", "manual_setup_required", "reconcile", "reconcile_during_run") {
+		return fmt.Errorf("keel/testbridge: desired-state row %q has invalid action %q", state.Resource, state.Action)
 	}
 	return nil
 }
