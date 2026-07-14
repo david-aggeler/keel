@@ -83,8 +83,8 @@ func TestVSCodeHandlersDispatchDiscoveryPlanAndLintRun(t *testing.T) {
 	if err := json.Unmarshal(plan.Bytes(), &setup); err != nil {
 		t.Fatalf("plan JSON: %v", err)
 	}
-	if len(setup.Items) != 1 || setup.Items[0].ID != vscodeLaneLint {
-		t.Fatalf("plan items = %+v, want lint lane", setup.Items)
+	if setup.Version != 3 || len(setup.Groups) != 1 || len(setup.Groups[0].Rows) == 0 {
+		t.Fatalf("setup plan = %+v, want v3 desired-state groups", setup)
 	}
 
 	var protocol bytes.Buffer
@@ -467,8 +467,8 @@ func TestVSCodeDiscoveryAndPlanExposeKeelLaneSet(t *testing.T) {
 	if err := json.Unmarshal(plan.Bytes(), &setup); err != nil {
 		t.Fatalf("plan JSON: %v\n%s", err, plan.String())
 	}
-	if len(setup.Checks) == 0 {
-		t.Fatalf("plan checks empty; want keel prerequisites")
+	if setup.Version != 3 || !setupPlanHasRunID(setup.Groups, vscodeDesiredStateGoToolchain) {
+		t.Fatalf("setup plan = %+v, want v3 desired-state go-toolchain row", setup)
 	}
 }
 
@@ -1821,8 +1821,8 @@ exit 0`)
 	if err := json.Unmarshal(plan.Bytes(), &setup); err != nil {
 		t.Fatalf("plan JSON: %v\n%s", err, plan.String())
 	}
-	if len(setup.Items) != 1 || setup.Items[0].ID != "go::test::log::TestLog" || setup.Items[0].Kind != "test" || setup.Items[0].Framework != "go" {
-		t.Fatalf("go selection plan items = %+v, want one Go test item", setup.Items)
+	if setup.Version != 3 || !setupPlanHasRunID(setup.Groups, vscodeDesiredStateModuleRoot) {
+		t.Fatalf("go selection setup plan = %+v, want v3 desired-state groups", setup)
 	}
 }
 
@@ -2070,8 +2070,8 @@ exit 0`)
 	if err := json.Unmarshal(plan.Bytes(), &setup); err != nil {
 		t.Fatalf("plan JSON: %v\n%s", err, plan.String())
 	}
-	if len(setup.Items) != 2 || setup.Items[0].Kind != "package" || setup.Items[0].Label != "log" || setup.Items[1].Kind != "root" {
-		t.Fatalf("go package/root plan items = %+v", setup.Items)
+	if setup.Version != 3 || !setupPlanHasRunID(setup.Groups, vscodeDesiredStateStubBinaries) {
+		t.Fatalf("go package/root setup plan = %+v, want v3 desired-state groups", setup)
 	}
 }
 
@@ -2274,6 +2274,17 @@ func discoveryHasLane(doc vscode.DiscoveryDocument, id string) bool {
 	for _, item := range doc.Items {
 		if item.ID == id {
 			return true
+		}
+	}
+	return false
+}
+
+func setupPlanHasRunID(groups []vscode.DesiredStateGroup, runID string) bool {
+	for _, group := range groups {
+		for _, row := range group.Rows {
+			if row.RunID == runID {
+				return true
+			}
 		}
 	}
 	return false
