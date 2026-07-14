@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { applyRunEvent, setCurrentTreeForTest } from '../../extension';
 import { configRelativePath, currentConfigVersion, discoverTests, runTests } from '../../bridgeAdapter';
-import { DiscoveryDocument, RunEvent } from '../../protocol';
+import { DiscoveryDocument, DiscoveryItem, RunEvent } from '../../protocol';
 import { publishDiscovery } from '../../tree';
 
 suite('Keel Test Bridge expected-red specs', () => {
@@ -73,16 +73,22 @@ suite('Keel Test Bridge expected-red specs', () => {
       try {
         const root = os.tmpdir();
         const firstTree = publishDiscovery(controller, root, reconcileDiscovery('first'), 1);
+        const firstLanes = firstTree.itemsById.get('keel::lanes');
+        assert.ok(firstLanes);
         const firstLane = firstTree.itemsById.get('keel::lane::lint');
         assert.ok(firstLane);
         firstLane.description = 'terminal result state marker';
 
         const secondTree = publishDiscovery(controller, root, reconcileDiscovery('second'), 2);
+        const secondLanes = secondTree.itemsById.get('keel::lanes');
+        assert.equal(secondLanes, firstLanes, 'refresh should preserve surviving parent TestItem objects');
         const secondLane = secondTree.itemsById.get('keel::lane::lint');
         assert.ok(secondLane);
         assert.equal(secondLane, firstLane, 'refresh should preserve the TestItem object for a surviving protocol id');
         assert.equal(secondLane.id, firstLane.id, 'refresh should not mint a generation-prefixed VS Code item id for a surviving protocol id');
         assert.equal(secondLane.description, 'updated by second discovery');
+        assert.ok(secondTree.itemsById.has('keel::lane::unit'), 'new discovery ids should be added under the existing parent');
+        assert.equal(secondLanes.children.get('keel::lane::stale'), undefined, 'ids absent from discovery should be deleted from their parent');
       } finally {
         controller.dispose();
       }
@@ -259,6 +265,25 @@ function createRealBridgeWorkspace(prefix: string): string {
 }
 
 function reconcileDiscovery(labelSuffix: string): DiscoveryDocument {
+  const changingLane: DiscoveryItem = labelSuffix === 'first'
+    ? {
+      id: 'keel::lane::stale',
+      parent_id: 'keel::lanes',
+      label: 'stale',
+      sort_text: 'c.002',
+      kind: 'lane',
+      runnable: true,
+      profiles: ['run']
+    }
+    : {
+      id: 'keel::lane::unit',
+      parent_id: 'keel::lanes',
+      label: 'unit',
+      sort_text: 'c.002',
+      kind: 'lane',
+      runnable: true,
+      profiles: ['run']
+    };
   return {
     version: 1,
     workspace: `req-70-${labelSuffix}`,
@@ -274,7 +299,8 @@ function reconcileDiscovery(labelSuffix: string): DiscoveryDocument {
         runnable: true,
         profiles: ['run'],
         limitations: [`updated by ${labelSuffix} discovery`]
-      }
+      },
+      changingLane
     ]
   };
 }

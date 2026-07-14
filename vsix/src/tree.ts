@@ -19,7 +19,8 @@ export function publishDiscovery(
   discovery: DiscoveryDocument,
   generation = 0
 ): PublishedTree {
-  controller.items.replace([]);
+  void generation;
+  const existing = collectExistingItems(controller);
   const itemsById = new Map<string, vscode.TestItem>();
   const protocolIdByItemId = new Map<string, string>();
   const canonicalIdByAliasId = new Map<string, string>();
@@ -29,10 +30,8 @@ export function publishDiscovery(
   const pending = topologicalOrder(discovery.items);
 
   for (const item of pending) {
-    const testItem = toTestItem(controller, workspaceRoot, item, generation);
-    testItem.canResolveChildren = false;
-    testItem.description = item.limitations?.join('; ');
-    testItem.tags = item.required_resources?.map((resource) => new vscode.TestTag(resource)) ?? [];
+    const testItem = existing.itemsById.get(item.id) ?? toTestItem(controller, workspaceRoot, item);
+    updateTestItem(testItem, item);
     itemsById.set(item.id, testItem);
     discoveryItemsById.set(item.id, item);
     protocolIdByItemId.set(testItem.id, item.id);
@@ -53,6 +52,7 @@ export function publishDiscovery(
     }
     controller.items.add(testItem);
   }
+  deleteMissingItems(controller, existing.parentById, itemsById);
 
   return {
     itemsById,
@@ -66,10 +66,62 @@ export function publishDiscovery(
   };
 }
 
-function toTestItem(controller: vscode.TestController, workspaceRoot: string, item: DiscoveryItem, generation: number): vscode.TestItem {
+function collectExistingItems(controller: vscode.TestController): {
+  itemsById: Map<string, vscode.TestItem>;
+  parentById: Map<string, vscode.TestItem>;
+} {
+  const itemsById = new Map<string, vscode.TestItem>();
+  const parentById = new Map<string, vscode.TestItem>();
+  const visit = (item: vscode.TestItem, parent?: vscode.TestItem) => {
+    itemsById.set(item.id, item);
+    if (parent) {
+      parentById.set(item.id, parent);
+    }
+    item.children.forEach((child) => visit(child, item));
+  };
+  controller.items.forEach((item) => visit(item));
+  return { itemsById, parentById };
+}
+
+function deleteMissingItems(
+  controller: vscode.TestController,
+  oldParentById: Map<string, vscode.TestItem>,
+  nextItemsById: Map<string, vscode.TestItem>
+): void {
+  const existingIds = new Set([...oldParentById.keys()]);
+  controller.items.forEach((item) => existingIds.add(item.id));
+  const deleted = new Set<string>();
+  const deleteOne = (id: string) => {
+    if (nextItemsById.has(id) || deleted.has(id)) {
+      return;
+    }
+    deleted.add(id);
+    const parent = oldParentById.get(id);
+    if (parent) {
+      parent.children.delete(id);
+      return;
+    }
+    controller.items.delete(id);
+  };
+  for (const id of existingIds) {
+    deleteOne(id);
+  }
+}
+
+function toTestItem(controller: vscode.TestController, workspaceRoot: string, item: DiscoveryItem): vscode.TestItem {
   const uri = item.uri ? vscode.Uri.file(path.join(workspaceRoot, item.uri)) : undefined;
-  const testItem = controller.createTestItem(vscodeItemID(item.id, generation), item.label, uri);
+  const testItem = controller.createTestItem(item.id, item.label, uri);
+  updateTestItem(testItem, item);
+  return testItem;
+}
+
+// DHF-REQ: keel/requirement-70
+function updateTestItem(testItem: vscode.TestItem, item: DiscoveryItem): void {
+  testItem.label = item.label;
   testItem.sortText = item.sort_text;
+  testItem.canResolveChildren = false;
+  testItem.description = item.limitations?.join('; ');
+  testItem.tags = item.required_resources?.map((resource) => new vscode.TestTag(resource)) ?? [];
   if (item.range) {
     testItem.range = new vscode.Range(
       item.range.start_line,
@@ -77,15 +129,9 @@ function toTestItem(controller: vscode.TestController, workspaceRoot: string, it
       item.range.end_line,
       item.range.end_column
     );
+  } else {
+    testItem.range = undefined;
   }
-  return testItem;
-}
-
-function vscodeItemID(protocolID: string, generation: number): string {
-  if (generation <= 0) {
-    return protocolID;
-  }
-  return `keel-v${generation}::${protocolID}`;
 }
 
 // topologicalOrder returns the discovery items in an order where every
