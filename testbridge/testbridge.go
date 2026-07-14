@@ -386,7 +386,7 @@ func workspaceNode(workspace Workspace, root string) string {
 	return "unknown"
 }
 
-// DHF-REQ: keel/requirement-58
+// DHF-REQ: keel/requirement-58, keel/requirement-67
 func acquireRunLock(root string, ids []string, token string) (func() error, error) {
 	runDir := filepath.Join(root, ".devtools", "vscode-runs")
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
@@ -423,6 +423,9 @@ func acquireRunLock(root string, ids []string, token string) (func() error, erro
 	return func() error {
 		data, err := os.ReadFile(path)
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
 			return err
 		}
 		var current vscode.RunLockFile
