@@ -39,7 +39,7 @@ func stateFrom(ctx context.Context) runState {
 	return state
 }
 
-// DHF-REQ: keel/requirement-21, keel/requirement-57
+// DHF-REQ: keel/requirement-21, keel/requirement-57, keel/requirement-65
 func commandTree() *cli.CommandSpec {
 	tree := &cli.CommandSpec{
 		Name: "keel-dev",
@@ -68,7 +68,6 @@ func commandTree() *cli.CommandSpec {
 			{Name: "release", Use: "release vX.Y.Z", Short: "Cut a release after a clean preflight.", Handler: handleRelease},
 			{Name: "verify", Use: "verify vX.Y.Z", Short: "Re-verify anonymous module fetch for an existing tag.", Handler: handleVerify},
 			testBridgeCommandSpec(),
-			vscodeCommandSpec(),
 			vsixCommandSpec(),
 		},
 	}

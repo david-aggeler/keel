@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/david-aggeler/keel/cli"
 	"github.com/david-aggeler/keel/testbridge"
 	"github.com/david-aggeler/keel/vscode"
 )
@@ -59,6 +60,7 @@ func TestVSCodeHandlersDispatchDiscoveryPlanAndLintRun(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, root, "go.sum", "")
+	seedDetectedLanes(t, root)
 
 	var discover bytes.Buffer
 	if err := handleVSCodeTestsDiscover(contextWithVSCodeTestState(root, &discover), []string{"--format", "json"}); err != nil {
@@ -150,6 +152,91 @@ func TestCanonicalTestBridgeRunEventsUseResolvedWorkspace(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-65
+func TestCanonicalBridgeSurfaceHasNoVSCodeOrLanesVerbs(t *testing.T) {
+	tree := commandTree()
+	if commandSpecHasName(tree, "vscode") {
+		t.Fatal("command tree still exposes vscode command")
+	}
+	if commandSpecHasName(tree, "lanes") {
+		t.Fatal("command tree still exposes lanes verb")
+	}
+
+	err := tree.Dispatch(contextWithVSCodeTestState(t.TempDir(), io.Discard), []string{"vscode"})
+	if err == nil || !strings.Contains(err.Error(), "unknown command") {
+		t.Fatalf("vscode dispatch err = %v, want unknown command", err)
+	}
+
+	testBridge := commandSpecByPath(tree, "test-bridge")
+	if testBridge == nil {
+		t.Fatal("missing canonical test-bridge command")
+	}
+	got := commandLeafUses(testBridge)
+	want := []string{
+		"test-bridge config init",
+		"test-bridge config upgrade",
+		"test-bridge tests discover [--format json]",
+		"test-bridge tests desired-state [--format json] [--id test-id]",
+		"test-bridge tests run --id test-id",
+	}
+	if !stringSlicesEqual(got, want) {
+		t.Fatalf("test-bridge leaves = %#v, want %#v", got, want)
+	}
+}
+
+// DHF-TEST: keel/requirement-65
+func TestDetectLanesProducesFileBackedLaneTree(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	if err := os.MkdirAll(filepath.Join(root, "exec"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join("exec", "exec_test.go"), "package exec\n\nimport \"testing\"\n\nfunc TestExec(t *testing.T) {}\n")
+
+	before, err := buildVSCodeDiscovery(root)
+	if err != nil {
+		t.Fatalf("buildVSCodeDiscovery before detect: %v", err)
+	}
+	lanesGroup, ok := discoveryItemByID(before, vscodeGroupLanes)
+	if !ok || lanesGroup.Label != "C - Lanes" {
+		t.Fatalf("lanes group before detect = %+v, ok=%v; want C - Lanes", lanesGroup, ok)
+	}
+	for _, item := range before.Items {
+		if item.ParentID == vscodeGroupLanes {
+			t.Fatalf("fresh workspace emitted lane child before detect: %+v", item)
+		}
+	}
+
+	var protocol bytes.Buffer
+	if err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "tests", "run", "--id", vscodeMaintenanceDetectLanes}); err != nil {
+		t.Fatalf("detect lanes maintenance run: %v\n%s", err, protocol.String())
+	}
+	if !runEventsContain(decodeRunEvents(t, protocol.String()), "passed", vscodeMaintenanceDetectLanes) {
+		t.Fatalf("detect lanes maintenance events = %s", protocol.String())
+	}
+
+	data, err := os.ReadFile(filepath.Join(root, ".vscode", "test-lanes.json"))
+	if err != nil {
+		t.Fatalf("detect lanes did not write test-lanes.json: %v", err)
+	}
+	for _, want := range []string{`"id": "lint"`, `"id": "test-fast"`, `"id": "test-coverage"`, `"id": "vsix-ci"`, `"id": "ci"`, `"id": "go-exec"`} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("test-lanes.json missing %s:\n%s", want, data)
+		}
+	}
+
+	after, err := buildVSCodeDiscovery(root)
+	if err != nil {
+		t.Fatalf("buildVSCodeDiscovery after detect: %v", err)
+	}
+	for _, want := range []string{vscodeLaneLint, vscodeLaneTestFast, vscodeLaneTestCoverage, vscodeLaneVSIXGate, vscodeLaneCI, "keel::lane::go-exec"} {
+		if !discoveryHasLane(after, want) {
+			t.Fatalf("discovery after detect missing %q: %+v", want, after.Items)
+		}
+	}
+}
+
 // DHF-TEST: keel/requirement-64
 func TestVSCodePlanCarriesComparableDevtoolIdentity(t *testing.T) {
 	root := t.TempDir()
@@ -169,24 +256,19 @@ func TestVSCodePlanCarriesComparableDevtoolIdentity(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-64
-func TestVSCodeRunLegacyFormatArgvFailsAsVersionSkew(t *testing.T) {
+// DHF-TEST: keel/requirement-65
+func TestLegacyVSCodeCommandIsUnknown(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, root, "go.sum", "")
 
 	err := commandTree().Dispatch(contextWithVSCodeTestState(root, io.Discard), []string{"vscode", "tests", "run", "--format", "jsonl", "--id", vscodeLaneLint})
 	if err == nil {
-		t.Fatal("legacy vscode tests run --format returned nil error")
+		t.Fatal("legacy vscode command returned nil error")
 	}
 	message := err.Error()
-	for _, want := range []string{"version skew", "VSIX", "legacy", "devtool", "keel-dev"} {
-		if !strings.Contains(message, want) {
-			t.Fatalf("legacy skew error = %q, want %q", message, want)
-		}
-	}
-	if strings.Contains(message, "unknown flag") || strings.Contains(message, "usage:") {
-		t.Fatalf("legacy skew error leaked usage text: %q", message)
+	if !strings.Contains(message, "unknown command") || !strings.Contains(message, "vscode") {
+		t.Fatalf("legacy vscode error = %q, want unknown command", message)
 	}
 }
 
@@ -297,6 +379,7 @@ func TestVSCodeDiscoveryAndPlanExposeKeelLaneSet(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, root, "go.sum", "")
+	seedDetectedLanes(t, root)
 	if err := os.MkdirAll(filepath.Join(root, "log"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +468,7 @@ func TestVSCodeDiscoveryEmitsStructuredOrderedTree(t *testing.T) {
 		sort  string
 	}{
 		"keel::maintenance": {label: "a. Maintenance", sort: "a"},
-		"keel::lanes":       {label: "b. Lanes", sort: "b"},
+		"keel::lanes":       {label: "C - Lanes", sort: "c"},
 		"keel::frameworks":  {label: "d. Frameworks", sort: "d"},
 	}
 	for id, want := range wantTop {
@@ -589,7 +672,7 @@ func TestVSCodeLanesListAndDetect(t *testing.T) {
 	if err := json.Unmarshal(dry.Bytes(), &dryDoc); err != nil {
 		t.Fatalf("dry-run JSON: %v\n%s", err, dry.String())
 	}
-	if dryDoc.Written || len(dryDoc.Added) != 1 || dryDoc.Added[0].ID != "go-exec" {
+	if dryDoc.Written || !lanesDetectAdded(dryDoc, "go-exec") {
 		t.Fatalf("dry-run doc = %+v, want go-exec added and written=false", dryDoc)
 	}
 
@@ -601,7 +684,7 @@ func TestVSCodeLanesListAndDetect(t *testing.T) {
 	if err := json.Unmarshal(detect.Bytes(), &detectDoc); err != nil {
 		t.Fatalf("detect JSON: %v\n%s", err, detect.String())
 	}
-	if !detectDoc.Written || len(detectDoc.Added) != 1 || detectDoc.Added[0].ID != "go-exec" {
+	if !detectDoc.Written || !lanesDetectAdded(detectDoc, "go-exec") {
 		t.Fatalf("detect doc = %+v, want go-exec written", detectDoc)
 	}
 	afterWrite, err := os.ReadFile(lanesPath)
@@ -1123,6 +1206,7 @@ func TestVSCodeSystemGateLanesDiscoverPrepareAndRun(t *testing.T) {
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, root, "go.sum", "")
 
+	seedDetectedLanes(t, root)
 	built8, buildErr8 := buildVSCodeDiscovery(root)
 	if buildErr8 != nil {
 		t.Fatalf("buildVSCodeDiscovery: %v", buildErr8)
@@ -1139,8 +1223,8 @@ func TestVSCodeSystemGateLanesDiscoverPrepareAndRun(t *testing.T) {
 		label string
 		sort  string
 	}{
-		"keel::lane::vsix-ci": {label: "b.10 vsix ci", sort: "b.010"},
-		"keel::lane::ci":      {label: "b.30 ci", sort: "b.030"},
+		"keel::lane::vsix-ci": {label: "c.10 vsix ci", sort: "c.010"},
+		"keel::lane::ci":      {label: "c.30 ci", sort: "c.030"},
 	} {
 		item, ok := discoveryItemByID(doc, id)
 		if !ok {
@@ -1877,6 +1961,7 @@ func TestVSCodeCoverageLaneEmitsPersistedCoverageArtifact(t *testing.T) {
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, root, "go.sum", "")
 	writeFile(t, root, "main_test.go", "package p\n\nimport \"testing\"\n\nfunc TestOne(t *testing.T) {}\n")
+	seedDetectedLanes(t, root)
 
 	built15, buildErr15 := buildVSCodeDiscovery(root)
 	if buildErr15 != nil {
@@ -2061,6 +2146,62 @@ func discoveryItemByID(doc vscode.DiscoveryDocument, id string) (vscode.TestItem
 	return vscode.TestItem{}, false
 }
 
+func seedDetectedLanes(t *testing.T, root string) {
+	t.Helper()
+	if err := runVSCodeDetectLanesMaintenance(root, func(vscode.RunEvent) {}); err != nil {
+		t.Fatalf("seed detected lanes: %v", err)
+	}
+}
+
+func lanesDetectAdded(doc lanesDetectDocument, id string) bool {
+	for _, entry := range doc.Added {
+		if entry.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func commandSpecHasName(spec *cli.CommandSpec, name string) bool {
+	if spec.Name == name {
+		return true
+	}
+	for _, child := range spec.Subcommands {
+		if commandSpecHasName(child, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func commandSpecByPath(spec *cli.CommandSpec, path ...string) *cli.CommandSpec {
+	if len(path) == 0 {
+		return spec
+	}
+	for _, child := range spec.Subcommands {
+		if child.Name == path[0] {
+			return commandSpecByPath(child, path[1:]...)
+		}
+	}
+	return nil
+}
+
+func commandLeafUses(spec *cli.CommandSpec) []string {
+	var out []string
+	var walk func(*cli.CommandSpec)
+	walk = func(node *cli.CommandSpec) {
+		if len(node.Subcommands) == 0 {
+			out = append(out, node.Use)
+			return
+		}
+		for _, child := range node.Subcommands {
+			walk(child)
+		}
+	}
+	walk(spec)
+	return out
+}
+
 func discoveryHasDiagnosticContaining(doc vscode.DiscoveryDocument, text string) bool {
 	for _, item := range doc.Items {
 		if item.Kind != "group" || item.Runnable {
@@ -2200,8 +2341,8 @@ func TestVSCodeRunKeepsStdoutProtocolAndConsoleOnStderr(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
 	stdout, stderr := captureProcessStreams(t, func() {
-		if code := run([]string{"--no-header", "-v", "vscode", "tests", "run", "--id", "keel::lane::test-fast"}); code == 0 {
-			t.Fatal("blocked vscode run exit = 0, want non-zero")
+		if code := run([]string{"--no-header", "-v", "test-bridge", "tests", "run", "--id", "keel::lane::test-fast"}); code == 0 {
+			t.Fatal("blocked test-bridge run exit = 0, want non-zero")
 		}
 	})
 

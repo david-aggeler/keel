@@ -2,7 +2,7 @@
 
 **Status:** DRAFT rev 2 for owner review — nothing in here is implemented.
 Rev 2 incorporates the Cassandra/Winston review (2026-07-12) and the owner
-decision that lane definitions are 100% devtool-owned (`lanes detect` writes;
+decision that lane definitions are 100% devtool-owned (`detect-lanes` maintenance writes;
 go.mod model). Lane-duration attribution follows the reviewers'/assistant's
 recommendation — the owner delegated that mechanism (see §6).
 **Deciding records:** `keel/exploration-2` (dialogue), `keel/prototype-1`
@@ -13,7 +13,7 @@ composition, the new CLI verbs, discovery projection, run semantics, and cost
 measurement.
 **Non-goals:** VS Code tasks integration (rejected), tree-driven editing of
 any config file other than the devtool-owned lanes file written by
-`lanes detect`, CR-class → merge-gate mapping (a later change-control policy
+`detect-lanes` maintenance, CR-class → merge-gate mapping (a later change-control policy
 that *consumes* this interface).
 
 ---
@@ -35,7 +35,7 @@ that *consumes* this interface).
 
 - Path: **`.vscode/test-lanes.json`**, checked into the consumer repo.
 - **Ownership: 100% the consumer devtool's** (owner decision, 2026-07-12) —
-  the go.mod model: keel-dev owns the file and writes it (`lanes detect`);
+  the go.mod model: keel-dev owns the file and writes it (`detect-lanes` maintenance);
   the human edits it by hand; both are first-class writers. The VSIX never
   reads the file — it only watches the path to trigger re-discovery.
 - The VSIX adds the path to its existing file-watch glob; any write (hand
@@ -147,23 +147,23 @@ than declared is the one unforgivable failure of a merge-gate candidate).
 ## 4. CLI verbs (the VSIX ↔ devtool contract)
 
 All verbs: protocol JSON on **stdout** only, logs to stderr + `.logs/` sinks
-(existing keel-dev vscode output rule). Exit 0 = document produced (even with
+(existing keel-dev test-bridge output rule). Exit 0 = document produced (even with
 validation warnings); non-zero = verb itself failed.
 
 | Verb | Status | Contract |
 |---|---|---|
-| `vscode tests discover` | exists; extension planned | Full tree document. Lanes = system lanes + file lanes, each with ordinal label, `sort_text`, covers aliases, duration hint, `required_resources`. Lanes-file diagnostics appear as the 2.1 diagnostic item. |
-| `vscode tests plan [--id]` | exists; extension planned | The **desired-state detection** verb. `desired_state` rows gain real per-resource checks (go toolchain, module root, pnpm for vsix members, lanes-file validity as a resource). |
-| `vscode tests run --id` | exists; extension planned | Accepts file-lane ids. Run semantics in §7. |
-| `vscode lanes list` | planned (NEW) | Effective lane definitions as JSON: per lane — id, label, order, direct members, **expanded** member set, inherited prerequisites, validation findings, last measured duration. This is also the artifact a future CR-class→gate mapping consumes. |
-| `vscode lanes detect` | planned (NEW) | Scans the module (`WalkDir`, no compilation) and **writes** category lanes for top-level package families not yet covered by any lane into `.vscode/test-lanes.json` (creating the file if absent). A first-class write under the devtool-ownership model — not a config-policy exception, and not silent (runs only as explicit user action: verb or tree item a.1). Idempotent; append-only; never edits or removes existing entries, hand-authored or previously detected. Reports the delta as JSON `{added, unchanged, skipped}`; run through the tree, the delta is emitted as `output` events so the run shows what changed, and the file write itself triggers watcher-driven re-discovery — new lanes appear without a restart. |
+| `test-bridge tests discover` | exists; extension planned | Full tree document. Lanes = system lanes + file lanes, each with ordinal label, `sort_text`, covers aliases, duration hint, `required_resources`. Lanes-file diagnostics appear as the 2.1 diagnostic item. |
+| `test-bridge tests desired-state [--id]` | exists; extension planned | The **desired-state detection** verb. `desired_state` rows gain real per-resource checks (go toolchain, module root, pnpm for vsix members, lanes-file validity as a resource). |
+| `test-bridge tests run --id` | exists; extension planned | Accepts file-lane ids. Run semantics in §7. |
+| `file-backed lane discovery` | planned (NEW) | Effective lane definitions as JSON: per lane — id, label, order, direct members, **expanded** member set, inherited prerequisites, validation findings, last measured duration. This is also the artifact a future CR-class→gate mapping consumes. |
+| `detect-lanes maintenance` | planned (NEW) | Scans the module (`WalkDir`, no compilation) and **writes** category lanes for top-level package families not yet covered by any lane into `.vscode/test-lanes.json` (creating the file if absent). A first-class write under the devtool-ownership model — not a config-policy exception, and not silent (runs only as explicit user action: verb or tree item a.1). Idempotent; append-only; never edits or removes existing entries, hand-authored or previously detected. Reports the delta as JSON `{added, unchanged, skipped}`; run through the tree, the delta is emitted as `output` events so the run shows what changed, and the file write itself triggers watcher-driven re-discovery — new lanes appear without a restart. |
 
-`lanes detect` is exposed in-tree as maintenance item **a.1 detect lanes**
+`detect-lanes` maintenance is exposed in-tree as maintenance item **a.1 detect lanes**
 (kind `maintenance`), alongside a.2 unlock, a.3 clear results, a.4 clear state.
 
-### 4.1 `lanes detect` — full contract
+### 4.1 `detect-lanes` maintenance — full contract
 
-**Invocation:** `keel-dev vscode lanes detect [--format json] [--dry-run]`
+**Invocation:** `keel-dev test-bridge detect-lanes maintenance [--format json] [--dry-run]`
 
 - `--format json` — only supported format (consistency with sibling verbs).
 - `--dry-run` — compute and report the delta WITHOUT writing the file.
@@ -221,9 +221,9 @@ are emitted as run `output` events (one line per added/unchanged/skipped
 entry), terminal `passed` on exit 0, `failed` with the error text on exit 1;
 the file write (when any) triggers watcher-driven re-discovery.
 
-### 4.2 `lanes list` — result document
+### 4.2 file-backed lane inventory — result document
 
-**Invocation:** `keel-dev vscode lanes list [--format json]`. Read-only.
+**Invocation:** `keel-dev test-bridge file-backed lane inventory [--format json]`. Read-only.
 
 ```json
 {
@@ -324,7 +324,7 @@ the file write (when any) triggers watcher-driven re-discovery.
    VS Code's own right-aligned run duration is session-ephemeral; this hint
    persists across restarts. Lanes with no attributable stream show no hint.
 4. Per-member attribution (which glob costs what) comes free for Go members
-   from `go test -json` elapsed, and is recorded in the `lanes list` output —
+   from `go test -json` elapsed, and is recorded in the file-backed lane inventory output —
    this, not the tree hint, is the gate-sizing dataset.
 5. Staleness is acceptable by design: the hint says "last", not "typical".
 
@@ -374,7 +374,7 @@ added per consumer as needed.
 - Lanes file `version` is independent of the bridge config version and the
   discovery document version. v1 as specified; additive fields = minor
   (warnings), breaking member-form changes = major.
-- `vscode config upgrade` does NOT touch the lanes file (it belongs to the
+- `test-bridge config upgrade` does NOT touch the lanes file (it belongs to the
   lanes verbs).
 - Wire schema impact: **one additive change** — the optional `requested`
   array on `run_started` (§6). Discovery/plan schemas need no changes beyond
@@ -404,7 +404,7 @@ whole-file errors suppress all file lanes; system lanes always render.
 Resolved 2026-07-12:
 
 1. **Exclusions in v1** — NO; union only (revisit on first real need).
-2. **`lanes detect` write behavior** — WRITES the file (owner decision): the
+2. **`detect-lanes` maintenance write behavior** — WRITES the file (owner decision): the
    file is 100% devtool-owned, go.mod model; append-only idempotence protects
    hand edits. Overrides the reviewer recommendation of propose-only.
 3. **Cost attribution** — `requested: [{id, label}]` on `run_started`
@@ -425,7 +425,7 @@ Resolved 2026-07-12:
    capabilities fix + the two new system lanes (requirements 46–48);
    **keel/change_request-54** Go discovery upgrade (requirements 49–50 —
    the fast-loop dependency named in §2.1); **keel/change_request-55**
-   lanes file + composition + `lanes list/detect` + cost hints + per-file
+   lanes file + composition + `detect-lanes maintenance` + cost hints + per-file
    vsix members (requirements 51–54; `depends_on` 53 + 54; the `requested`
    field lands here with its first writer). All queued in keel/iteration-10.
 

@@ -93,7 +93,7 @@ no client code), vela/openbrain internals, and any CI service.
 | keel/exec/claude, keel/exec/codex | module pkg | Go | CLI-agent adapters over keel/exec; hermetic via stub binaries | claude/codex CLIs (runtime); keel/exec |
 | keel/cli | module pkg | Go | Command-spec framework (verbs, flags, usage errors) used by keel-dev | cmd/keel-dev |
 | keel/vscode | module pkg | Go | Bridge protocol library: wire types, embedded JSON Schemas, run-event projectors (go/vitest/playwright), stamper, engine, config init/upgrade | cmd/keel-dev; consumer devtools |
-| cmd/keel-dev | binary | Go | Dev/release CLI: THE gate (`ci`), vsix gate, release, and the bridge adapter verbs (`vscode tests discover/plan/run`, `vscode config`, `vscode demo`) | keel/{cli,log,exec,vscode}; go toolchain; pnpm (vsix verbs only) |
+| cmd/keel-dev | binary | Go | Dev/release CLI: THE gate (`ci`), vsix gate, release, and the bridge adapter verbs (`test-bridge tests discover/plan/run`, `test-bridge config`, `vscode demo`) | keel/{cli,log,exec,vscode}; go toolchain; pnpm (vsix verbs only) |
 | Keel Test Bridge VSIX | extension | TypeScript, VS Code API | Renders discovery as Test Explorer tree; runs selections through the adapter; mirrors external runs; Testing-menu commands | VS Code; adapter subprocess (`bin/keel-dev` per `.vscode/test-bridge.json`) |
 | Go toolchain | external | — | build/test/vet; discovery + test execution | cmd/keel-dev |
 | Node + pnpm | external | — | VSIX build/lint/headless tests | keel-dev vsix verbs |
@@ -103,7 +103,7 @@ no client code), vela/openbrain internals, and any CI service.
 
 **Happy path — run a test from the Test Explorer (over Remote-SSH).** User
 clicks run → VSIX resolves `.vscode/test-bridge.json` → spawns
-`bin/keel-dev vscode tests run --id go::test::log::TestX` on the workspace
+`bin/keel-dev test-bridge tests run --id go::test::log::TestX` on the workspace
 host → adapter acquires `run.lock`, checks lane readiness (`PrepareLane`),
 executes `go test -json`, projects events to canonical test ids, streams
 run-event JSONL on stdout and mirrors it to `.devtools/vscode-runs/<id>.jsonl`

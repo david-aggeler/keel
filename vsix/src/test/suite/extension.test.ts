@@ -176,7 +176,7 @@ suite('Keel Test Bridge config contract', () => {
       'test-bridge tests desired-state --format json --id keel::lane::ci',
       'test-bridge tests run --id keel::lane::ci'
     ]);
-    assert.ok(protocolCalls.every((call) => !/\bvscode tests\b/.test(call)));
+    assert.ok(protocolCalls.every((call) => !call.split(/\s+/).includes('vscode')));
     assert.ok(protocolCalls.every((call) => !/\bplan\b/.test(call)));
   });
 

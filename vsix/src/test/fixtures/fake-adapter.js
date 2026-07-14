@@ -35,7 +35,7 @@ function upgradeConfig() {
   fs.writeFileSync(file, `${JSON.stringify(cfg, null, 2)}\n`);
 }
 
-if (command === 'vscode tests discover --format' || command === 'test-bridge tests discover --format') {
+if (command === 'test-bridge tests discover --format') {
   const format = args[4];
   if (format !== 'json') {
     process.stderr.write(`unsupported format ${format}\n`);
@@ -54,7 +54,7 @@ if (command === 'vscode tests discover --format' || command === 'test-bridge tes
     },
     items: [
       { id: 'keel::maintenance', label: 'a. Maintenance', sort_text: 'a', kind: 'group', runnable: false, profiles: [] },
-      { id: 'keel::lanes', label: 'b. Lanes', sort_text: 'b', kind: 'group', runnable: false, profiles: [] },
+      { id: 'keel::lanes', label: 'C - Lanes', sort_text: 'c', kind: 'group', runnable: false, profiles: [] },
       { id: 'keel::frameworks', label: 'd. Frameworks', sort_text: 'd', kind: 'group', runnable: false, profiles: [] },
       { id: 'keel::agents', parent_id: 'keel::frameworks', label: 'Agents', kind: 'root', framework: 'keel', runner: 'go-test', runner_label: 'Go test', runnable: true, profiles: ['run'] },
       { id: 'keel::file::agents/test_memory.go', parent_id: 'keel::agents', label: 'test_memory.go', kind: 'file', framework: 'keel', runner: 'go-test', runner_label: 'Go test', uri: 'agents/test_memory.go', runnable: true, profiles: ['run'] },
@@ -67,8 +67,8 @@ if (command === 'vscode tests discover --format' || command === 'test-bridge tes
       { id: 'keel::lane::smoke', parent_id: 'keel::lanes', label: 'Smoke', kind: 'lane', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'] },
       { id: 'alias::keel::lane::smoke::keel::test::agents/test_memory.go::TestRecall', parent_id: 'keel::lane::smoke', label: 'TestRecall', kind: 'test', framework: 'keel', runner: 'go-test', runner_label: 'Go test', canonical_id: 'keel::test::agents/test_memory.go::TestRecall', runnable: true, profiles: ['run'] },
       { id: 'keel::lane::test-coverage', parent_id: 'keel::lanes', label: 'test-coverage', kind: 'lane', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['coverage'] },
-      { id: 'keel::lane::vsix-ci', parent_id: 'keel::lanes', label: 'b.10 vsix ci', sort_text: 'b.010', kind: 'lane', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'], required_resources: ['go-toolchain', 'keel-module-root', 'stub-binaries', 'pnpm'] },
-      { id: 'keel::lane::ci', parent_id: 'keel::lanes', label: 'b.30 ci', sort_text: 'b.030', kind: 'lane', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'], required_resources: ['go-toolchain', 'keel-module-root', 'stub-binaries'] },
+      { id: 'keel::lane::vsix-ci', parent_id: 'keel::lanes', label: 'c.10 vsix ci', sort_text: 'c.010', kind: 'lane', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'], required_resources: ['go-toolchain', 'keel-module-root', 'stub-binaries', 'pnpm'] },
+      { id: 'keel::lane::ci', parent_id: 'keel::lanes', label: 'c.30 ci', sort_text: 'c.030', kind: 'lane', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'], required_resources: ['go-toolchain', 'keel-module-root', 'stub-binaries'] },
       { id: 'keel::maintenance::unlock', parent_id: 'keel::maintenance', label: 'a.2 unlock test bridge', sort_text: 'a.002', kind: 'maintenance', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'] },
       { id: 'keel::maintenance::clear-results', parent_id: 'keel::maintenance', label: 'a.3 clear test results', sort_text: 'a.003', kind: 'maintenance', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'] },
       { id: 'keel::maintenance::clear-state', parent_id: 'keel::maintenance', label: 'a.4 clear local test state', sort_text: 'a.004', kind: 'maintenance', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'] }
@@ -78,7 +78,7 @@ if (command === 'vscode tests discover --format' || command === 'test-bridge tes
   process.exit(0);
 }
 
-if (args.slice(0, 4).join(' ') === 'vscode tests plan --format' || args.slice(0, 4).join(' ') === 'test-bridge tests desired-state --format') {
+if (args.slice(0, 4).join(' ') === 'test-bridge tests desired-state --format') {
   const ids = [];
   for (let i = 5; i < args.length; i += 1) {
     if (args[i] === '--id' && args[i + 1]) {
@@ -101,7 +101,7 @@ if (args.slice(0, 4).join(' ') === 'vscode tests plan --format' || args.slice(0,
   process.exit(0);
 }
 
-if (args.slice(0, 3).join(' ') === 'vscode tests run' || args.slice(0, 3).join(' ') === 'test-bridge tests run') {
+if (args.slice(0, 3).join(' ') === 'test-bridge tests run') {
   const ids = [];
   for (let i = 3; i < args.length; i += 1) {
     if (args[i] === '--id' && args[i + 1]) {

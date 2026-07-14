@@ -65,7 +65,7 @@ type RunLockFile struct {
 }
 
 // DiscoveryDocument is the JSON document emitted by a consumer devtool's
-// `vscode tests discover --format json` command.
+// `test-bridge tests discover --format json` command.
 //
 // DHF-REQ: keel/requirement-23, keel/requirement-34
 type DiscoveryDocument struct {
@@ -116,7 +116,8 @@ type Range struct {
 	EndColumn   int `json:"end_column"`
 }
 
-// SetupPlan is the JSON document emitted by `vscode tests plan --format json`.
+// SetupPlan is the JSON document emitted by
+// `test-bridge tests desired-state --format json`.
 //
 // DHF-REQ: keel/requirement-23, keel/requirement-34
 type SetupPlan struct {

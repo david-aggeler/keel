@@ -67,7 +67,7 @@ and drives the devtool by executing `command` as a subprocess. Ground rules:
 - The configured `args` are a **prefix**, not the whole command — the VSIX
   appends a verb and flags per interaction. Default config: `command =
   bin/keel-dev` (workspace-relative; `keel-dev.exe` on Windows), `args =
-  ["vscode","tests"]`, so invocations land as `bin/keel-dev vscode tests
+  []`, so invocations land as `bin/keel-dev test-bridge tests
   <verb> …` (`bridgeAdapter.ts:38-46`).
 - **stdout is protocol, stderr is logging.** The VSIX parses stdout only and
   never derives semantics from stderr. On the keel-dev side this is enforced
@@ -102,7 +102,7 @@ issue/CR filed yet — **file records before implementing**):
 
 - Config `args` becomes **launcher-only** — config schema **v3**, migrated by
   the existing `config upgrade` machinery (v2→v3 strips a trailing
-  `vscode tests` from `args`).
+  legacy protocol tokens from `args`).
 
   `<launcher-args>` = the config's `args` field: the extra tokens some
   devtools need just to **start the process**, before any protocol word. The
@@ -117,7 +117,7 @@ issue/CR filed yet — **file records before implementing**):
   | Node-based devtool | `node` | `["dist/devtool.js"]` | `node dist/devtool.js test-bridge tests run --id x` |
   | Version-manager wrapper | `mise` | `["exec", "--", "devtool"]` | `mise exec -- devtool test-bridge tests run --id x` |
 
-  The point of the split: today `args = ["vscode", "tests"]` mixes two
+  The point of the split: today `args = []` mixes two
   concerns — *how to launch* the tool and *where the protocol subtree lives*.
   Launching stays configurable (it genuinely varies per consumer); the
   protocol path becomes a hardcoded constant the VSIX owns. `args` keeps only
@@ -299,7 +299,7 @@ command <args> discover --format json          # execFile, cwd=workspace root
 **Devtool answer.** Exactly one discovery JSON document on stdout
 (`version: 1`, `items[]` — schema `keel/vscode/schemas/`), exit 0, within a
 **16 MiB** stdout ceiling. Read-only — discovery must never mutate workspace
-state. keel-dev verb: `vscode tests discover [--format json]`.
+state. keel-dev verb: `test-bridge tests discover [--format json]`.
 
 **On failure.** Non-zero exit or unparseable stdout ⇒ the VSIX clears/keeps
 the tree and reports to the output channel; the tree never renders a
@@ -357,7 +357,7 @@ command <args> plan --format json --id <id> [--id <id> …]    # execFile
 **Devtool answer.** Exactly one desired-state JSON document (wire name:
 setup plan; `version: 1`, `items[]`), exit 0, ≤ **16 MiB**. Read-only — this
 call *describes* reconciliation; it must never perform it. keel-dev verb:
-`vscode tests plan [--format json] [--id test-id]…`.
+`test-bridge tests desired-state [--format json] [--id test-id]…`.
 
 **On failure.** A failed desired-state call **aborts the run** — the VSIX
 reports the error into the run output and never spawns interaction 3
@@ -398,7 +398,7 @@ Windows falls back to `child.kill(signal)`.
 events arrive after its `test_started`; lane/rollup events are exempt. Runs
 serialize on the devtool's `run.lock`. No stdout ceiling (streaming), but
 there is currently no cap on captured output either — `keel/issue-40`.
-keel-dev verb: `vscode tests run --id test-id…`.
+keel-dev verb: `test-bridge tests run --id test-id…`.
 
 **On failure.** Adapter exit without `run_finished` ⇒ the VSIX closes the run
 as errored; protocol failures surface as `errored` events plus a non-zero
@@ -444,7 +444,7 @@ command <demo-args> block <lane-id>     # execFile, ≤ 1 MiB — persist a fake
 command <demo-args> unblock             # execFile, ≤ 1 MiB — clear it
 ```
 
-With the default config this lands as `bin/keel-dev vscode demo status` etc.
+With the default config this lands as `bin/keel-dev test-bridge demo status` etc.
 A devtool whose configured args do *not* end in a `tests`-style token still
 receives `demo` appended and must tolerate the shape.
 
@@ -485,7 +485,7 @@ counterpart for humans. Every write *after* bootstrap is devtool-performed:
 in the migration below, the VSIX only *detects* staleness and *triggers* the
 devtool's own rewrite — it never edits the file itself, because a migration
 can require devtool knowledge the VSIX lacks (the target v2→v3 step strips a
-trailing `vscode tests` from `args`, which means knowing what those tokens
+trailing legacy protocol tokens from `args`, which means knowing what those tokens
 meant to *that* devtool).
 
 The file has its own schema version (currently 2), and the wire interaction
@@ -525,7 +525,7 @@ verb path is **hardcoded**, ignoring the configured `args` entirely (they may
 be exactly what the migration needs to fix):
 
 ```
-command vscode config upgrade           # execFile, ≤ 1 MiB
+command test-bridge config upgrade           # execFile, ≤ 1 MiB
 ```
 
 *Target design: no longer an exception — `test-bridge config upgrade` follows
@@ -535,13 +535,13 @@ part of the protocol path and may be required to launch the devtool at all).*
 **Devtool answer.** Rewrite the config to the current schema; free-form
 stdout/stderr (both shown to the user). A devtool with a different verb layout
 must still answer this exact invocation — or ship a current-version config so
-it never fires. keel-dev verbs: `vscode config upgrade` (and `config init`,
+it never fires. keel-dev verbs: `test-bridge config upgrade` (and `config init`,
 which is human/CLI-only and never adapter-emitted).
 
 ### What is deliberately NOT on this wire
 
-- `vscode config init` — human/CLI bootstrap verb.
-- `vscode lanes list|detect` — devtool CLI verbs; "detect lanes" reaches the
+- `test-bridge config init` — human/CLI bootstrap verb.
+- `file-backed lane discovery|detect` — devtool CLI verbs; "detect lanes" reaches the
   tree as maintenance item `a.1` and executes through interaction 3
   (`run --id keel::maintenance::detect-lanes`), never as a direct `lanes`
   invocation.
