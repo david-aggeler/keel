@@ -426,12 +426,13 @@ func maintenanceItem(id, label, sortText string) vscode.TestItem {
 	}
 }
 
+// DHF-REQ: keel/requirement-60
 func buildVSCodePlan(root string, ids []string) (vscode.SetupPlan, error) {
 	profile := newKeelWorkspaceProfile(root)
 	_, goErr := exec.LookPath("go")
 	goReady := goErr == nil
 	return vscode.SetupPlan{
-		Version:     1,
+		Version:     2,
 		Devtool:     vscode.DevtoolMetadata{Name: "keel-dev", Version: versionString(), Commit: buildCommit(), BuiltAt: buildTime()},
 		Workspace:   profile.Node(),
 		GeneratedAt: time.Now().UTC(),
@@ -441,11 +442,15 @@ func buildVSCodePlan(root string, ids []string) (vscode.SetupPlan, error) {
 			"keel-module-root",
 			"stub-binaries",
 		},
-		DesiredState: []vscode.DesiredState{
-			{Resource: "go-toolchain", Kind: "tool", Desired: "available", Current: statusWord(goReady), Status: desiredStateStatus(goReady), Action: desiredStateAction(goReady), Message: "Go toolchain is required.", Reusable: true, Owned: false},
-			{Resource: "keel-module-root", Kind: "unknown", Desired: modulePath, Current: modulePath, Status: "satisfied", Action: "reuse", Message: "keel module root resolved.", Reusable: true, Owned: false},
-			{Resource: "stub-binaries", Kind: "binary", Desired: "buildable", Current: "checked-by-ci", Status: "satisfied", Action: "reuse", Message: "stub binaries are built by keel-dev ci.", Reusable: true, Owned: false},
-		},
+		Groups: []vscode.DesiredStateGroup{{
+			Label: "Test Preconditions",
+			Order: 10,
+			Rows: []vscode.DesiredState{
+				{Resource: "go-toolchain", Kind: "tool", Desired: "available", Current: statusWord(goReady), Status: desiredStateStatus(goReady), Action: desiredStateAction(goReady), Message: "Go toolchain is required.", Reusable: true, Owned: false},
+				{Resource: "keel-module-root", Kind: "unknown", Desired: modulePath, Current: modulePath, Status: "satisfied", Action: "reuse", Message: "keel module root resolved.", Reusable: true, Owned: false},
+				{Resource: "stub-binaries", Kind: "binary", Desired: "buildable", Current: "checked-by-ci", Status: "satisfied", Action: "reuse", Message: "stub binaries are built by keel-dev ci.", Reusable: true, Owned: false},
+			},
+		}},
 		Checks: []vscode.PrereqCheck{
 			{ID: "go-toolchain", OK: goReady, Message: "go is on PATH"},
 			{ID: "keel-module-root", OK: root != "", Message: "keel module root resolved", Detail: root},
