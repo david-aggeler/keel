@@ -327,6 +327,7 @@ async function refresh(controller: vscode.TestController): Promise<void> {
       return;
     }
     tree = publishDiscovery(controller, workspaceRoot, discovery, generation);
+    await publishDesiredStateRows(controller, workspaceRoot, generation, tree);
     output.appendLine(`Published ${discovery.items.length} Keel test items from ${workspaceRoot}.`);
     void externalRunMirror?.syncWorkspace();
   } catch (error) {
@@ -402,6 +403,7 @@ async function runSelected(
   };
 
   const selectedProtocolIds = selected.map(protocolIDForTestItem);
+  const refreshDesiredStateAfterRun = selectedProtocolIds.some(isDesiredStateProtocolID);
   try {
     const plan = await planTests(workspaceRoot, selectedProtocolIds);
     appendSetupPlan(run, plan);
@@ -473,6 +475,9 @@ async function runSelected(
       if (resetResultsAfterRun) {
         void resetKeelTestResults(controller);
       }
+      if (refreshDesiredStateAfterRun) {
+        void refresh(controller);
+      }
       resolve();
     });
   });
@@ -517,6 +522,102 @@ function appendSetupPlan(run: vscode.TestRun, plan: SetupPlan): void {
   for (const line of setupPlanOutputLines(plan)) {
     appendRunOutput(run, line);
   }
+}
+
+const desiredStateRootProtocolID = 'keel::desired-state';
+
+// DHF-REQ: keel/requirement-60
+export function desiredStateRowProtocolID(group: DesiredStateGroup, state: DesiredState): string {
+  return [
+    desiredStateRootProtocolID,
+    protocolIDSegment(group.label),
+    protocolIDSegment(state.resource),
+    protocolIDSegment(state.desired),
+    protocolIDSegment(state.action)
+  ].join('::');
+}
+
+function isDesiredStateProtocolID(id: string): boolean {
+  return id === desiredStateRootProtocolID || id.startsWith(`${desiredStateRootProtocolID}::`);
+}
+
+async function publishDesiredStateRows(
+  controller: vscode.TestController,
+  workspaceRoot: string,
+  generation: number,
+  published: PublishedTree
+): Promise<void> {
+  let plan: SetupPlan;
+  try {
+    plan = await planTests(workspaceRoot, []);
+  } catch (error) {
+    output.appendLine(`Desired-state tree unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
+  if (!plan.groups?.some((group) => group.rows.length > 0)) {
+    return;
+  }
+
+  const root = ensureDesiredStateItem(controller, published, desiredStateRootProtocolID, 'B - Desired State', generation);
+  root.sortText = 'b';
+  for (const group of [...plan.groups].sort((a, b) => a.order - b.order)) {
+    const groupProtocolID = `${desiredStateRootProtocolID}::group::${protocolIDSegment(group.label)}`;
+    const groupItem = ensureDesiredStateItem(controller, published, groupProtocolID, formatDesiredStateGroup(group), generation, root);
+    groupItem.sortText = `b.${String(group.order).padStart(3, '0')}`;
+    groupItem.description = group.mutually_exclusive ? 'mutually exclusive' : undefined;
+    for (const state of group.rows) {
+      const rowProtocolID = desiredStateRowProtocolID(group, state);
+      const rowItem = ensureDesiredStateItem(controller, published, rowProtocolID, desiredStateRowLabel(state), generation, groupItem);
+      rowItem.description = `${state.current} -> ${state.desired}; action=${state.action}`;
+      rowItem.sortText = `${groupItem.sortText ?? 'b.000'}.${protocolIDSegment(state.resource)}`;
+      rowItem.tags = state.owned ? [new vscode.TestTag('owned')] : [];
+    }
+  }
+}
+
+function ensureDesiredStateItem(
+  controller: vscode.TestController,
+  published: PublishedTree,
+  protocolID: string,
+  label: string,
+  generation: number,
+  parent?: vscode.TestItem
+): vscode.TestItem {
+  const existing = published.itemsById.get(protocolID);
+  if (existing) {
+    existing.label = label;
+    return existing;
+  }
+  const item = controller.createTestItem(vscodeItemID(protocolID, generation), label);
+  item.canResolveChildren = false;
+  published.itemsById.set(protocolID, item);
+  published.protocolIdByItemId.set(item.id, protocolID);
+  if (parent) {
+    parent.children.add(item);
+    published.parentByItemId.set(item.id, parent);
+  } else {
+    controller.items.add(item);
+  }
+  return item;
+}
+
+function desiredStateRowLabel(state: DesiredState): string {
+  return `${state.active ? '[active] ' : ''}${state.resource}`;
+}
+
+function protocolIDSegment(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'item';
+}
+
+function vscodeItemID(protocolID: string, generation: number): string {
+  if (generation <= 0) {
+    return protocolID;
+  }
+  return `keel-v${generation}::${protocolID}`;
 }
 
 type RunOutputLevel = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG';
