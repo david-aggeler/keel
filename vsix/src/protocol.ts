@@ -45,7 +45,7 @@ export interface DiscoveryRange {
 export type RunProfileKind = 'run' | 'debug' | 'coverage';
 
 export interface SetupPlan {
-  version: 1;
+  version: 2;
   devtool?: {
     name: string;
     version: string;
@@ -56,7 +56,7 @@ export interface SetupPlan {
   generated_at: string;
   items: SetupPlanItem[];
   required_resources: string[];
-  desired_state?: DesiredState[];
+  groups: DesiredStateGroup[];
   checks: SetupCheck[];
   actions: SetupAction[];
   teardown: {
@@ -65,6 +65,13 @@ export interface SetupPlan {
     policy: string;
   };
   limitations?: string[];
+}
+
+export interface DesiredStateGroup {
+  label: string;
+  order: number;
+  mutually_exclusive: boolean;
+  rows: DesiredState[];
 }
 
 export interface SetupPlanItem {
@@ -79,6 +86,11 @@ export interface SetupPlanItem {
 }
 
 export interface DesiredState {
+  /**
+   * Canonical devtool-served id that makes this row runnable through the
+   * ordinary run interaction. Absent = informational row, never submitted.
+   */
+  run_id?: string;
   resource: string;
   kind: string;
   desired: string;
@@ -89,6 +101,7 @@ export interface DesiredState {
   detail?: string;
   reusable: boolean;
   owned: boolean;
+  active?: boolean;
 }
 
 export interface SetupCheck {

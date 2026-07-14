@@ -87,12 +87,20 @@ if (args.slice(0, 4).join(' ') === 'test-bridge tests desired-state --format') {
     }
   }
   process.stdout.write(JSON.stringify({
-    version: 1,
+    version: 2,
     workspace: process.cwd(),
     generated_at: now(),
     items: ids.map((id) => ({ id, runnable: true, framework: 'openbrain', runner: 'python-test', runner_label: 'Python test' })),
     required_resources: ['python'],
-    desired_state: [{ resource: 'python', kind: 'tool', desired: 'available', current: 'available', status: 'satisfied', action: 'reuse', message: 'python available', reusable: true, owned: false }],
+    groups: [{
+      label: 'Test Preconditions',
+      order: 10,
+      mutually_exclusive: false,
+      rows: [
+        { resource: 'python', kind: 'tool', desired: 'available', current: 'available', status: 'satisfied', action: 'reuse', message: 'python available', reusable: true, owned: false },
+        { run_id: 'keel::action::provision-python-venv', resource: 'python-venv', kind: 'dependency', desired: 'provisioned', current: 'missing', status: 'reconcilable', action: 'reconcile', message: 'venv can be provisioned', reusable: true, owned: true }
+      ]
+    }],
     checks: [{ id: 'python', ok: true, message: 'python available' }],
     actions: [{ resource: 'python', status: 'reuse', message: 'python available', reusable: true, owned: false }],
     teardown: { owned_temporary_resources: [], shared_reusable_resources: ['python'], policy: 'reuse fake python' }
@@ -109,9 +117,27 @@ if (args.slice(0, 3).join(' ') === 'test-bridge tests run') {
       i += 1;
     }
   }
+  // Strict like the real keel-dev bridge (formal_review-80): ids the adapter
+  // never served — including the VSIX-private keel::desired-state:: display
+  // namespace — are rejected, not silently run.
+  const servedRunIds = ['keel::action::provision-python-venv'];
+  for (const id of ids) {
+    const known = id.startsWith('keel::') || id.startsWith('go::') || id.startsWith('alias::');
+    if (!known || id.startsWith('keel::desired-state::')) {
+      process.stderr.write(`unknown vscode lane id ${JSON.stringify(id)}\n`);
+      process.exit(2);
+    }
+  }
   const emit = (event) => process.stdout.write(`${JSON.stringify({ version: 1, time: now(), run_id: 'fake-run', ...event })}\n`);
   emit({ event: 'run_started', message: 'OpenBrain fake test run started' });
   const selected = ids[0] ?? 'keel::test::agents/test_memory.go::TestRecall';
+  if (servedRunIds.includes(selected)) {
+    emit({ event: 'test_started', test_id: selected });
+    emit({ event: 'output', test_id: selected, message: `reconciled ${selected}` });
+    emit({ event: 'passed', test_id: selected, duration_ms: 2 });
+    emit({ event: 'run_finished', exit_code: 0 });
+    process.exit(0);
+  }
   emit({ event: 'test_started', test_id: selected });
   if (selected === 'keel::maintenance::clear-state' || selected === 'keel::maintenance::clear-results' || selected === 'keel::maintenance::unlock') {
     emit({ event: 'output', test_id: selected, message: `completed ${selected}` });

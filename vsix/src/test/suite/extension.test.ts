@@ -8,6 +8,7 @@ import {
   applyRunEvent,
   coverageFileSnapshotsForTest,
   currentAdapterConfig,
+  desiredStateRowProtocolID,
   ExternalRunMirror,
   parseGoCoverageProfile,
   runProfileHandlerForTest,
@@ -18,7 +19,7 @@ import {
 } from '../../extension';
 import { configRelativePath, currentConfigVersion, defaultConfigTemplate, discoverTests, planTests, readAdapterConfig, runTests, upgradeConfig } from '../../bridgeAdapter';
 import { publishDiscovery } from '../../tree';
-import { RunEvent } from '../../protocol';
+import { DesiredStateGroup, RunEvent } from '../../protocol';
 
 suite('Keel Test Bridge config contract', () => {
   // DHF-TEST: keel/requirement-40
@@ -206,23 +207,29 @@ suite('Keel Test Bridge config contract', () => {
   });
 
   // DHF-TEST: keel/requirement-60
-  test('desired-state output renders desired/current resources and teardown split', () => {
+  test('desired-state output renders groups, active rows, resources, and teardown split', () => {
     const lines = setupPlanOutputLines({
-      version: 1,
+      version: 2,
       workspace: 'keel',
       generated_at: new Date().toISOString(),
       items: [],
       required_resources: ['db'],
-      desired_state: [{
-        resource: 'db',
-        kind: 'service',
-        desired: 'seeded',
-        current: 'empty',
-        status: 'missing',
-        action: 'reconcile_during_run',
-        message: 'seed during run',
-        reusable: false,
-        owned: true
+      groups: [{
+        label: 'Data Set',
+        order: 10,
+        mutually_exclusive: true,
+        rows: [{
+          resource: 'db',
+          kind: 'service',
+          desired: 'seeded',
+          current: 'empty',
+          status: 'reconcilable',
+          action: 'reconcile_during_run',
+          message: 'seed during run',
+          reusable: false,
+          owned: true,
+          active: true
+        }]
       }],
       checks: [],
       actions: [],
@@ -235,12 +242,80 @@ suite('Keel Test Bridge config contract', () => {
 
     assert.deepEqual(lines, [
       'desired state:',
-      '- db missing: empty -> seeded; action=reconcile_during_run; owned, not reusable; seed during run',
+      'Data Set (mutually exclusive)',
+      '- [active] db reconcilable: empty -> seeded; action=reconcile_during_run; owned, not reusable; seed during run',
       'teardown:',
       '- owned: db',
       '- reusable: go-toolchain',
       '- policy: owned resources are torn down after run'
     ]);
+  });
+
+  // DHF-TEST: keel/requirement-60
+  test('desired-state rows activate through the ordinary run argv path', async function () {
+    this.timeout(10_000);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-desired-state-row-run-'));
+    const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+    process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = root;
+    fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+    fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+      version: currentConfigVersion,
+      command: process.execPath,
+      args: [path.resolve(__dirname, '../../../src/test/fixtures/fake-adapter.js')],
+      displayName: 'Keel'
+    }, null, 2) + '\n');
+
+    // The fake adapter is strict like the real bridge: it rejects ids it did
+    // not serve. The runnable row is keyed by its served run_id; the
+    // informational row keeps the VSIX-private display id and never reaches
+    // the wire (formal_review-80).
+    const servedRunID = 'keel::action::provision-python-venv';
+    const rowGroup: DesiredStateGroup = {
+      label: 'Test Preconditions',
+      order: 10,
+      mutually_exclusive: false,
+      rows: []
+    };
+    const informationalRowID = desiredStateRowProtocolID(rowGroup, {
+      resource: 'python',
+      kind: 'tool',
+      desired: 'available',
+      current: 'available',
+      status: 'satisfied',
+      action: 'reuse',
+      message: 'python available',
+      reusable: true,
+      owned: false
+    });
+
+    try {
+      const extension = vscode.extensions.getExtension('aggeler.keel-test-bridge');
+      assert.ok(extension, 'extension should be discoverable');
+      await extension.activate();
+
+      await runProfileHandlerForTest(servedRunID);
+      const callsAfterRunnable = fs.readFileSync(path.join(root, '.devtools', 'fake-adapter-calls.log'), 'utf8')
+        .trim()
+        .split(/\r?\n/);
+      assert.ok(callsAfterRunnable.includes(`test-bridge tests desired-state --format json --id ${servedRunID}`));
+      assert.ok(callsAfterRunnable.includes(`test-bridge tests run --id ${servedRunID}`));
+
+      await runProfileHandlerForTest(informationalRowID);
+      const callsAfterInformational = fs.readFileSync(path.join(root, '.devtools', 'fake-adapter-calls.log'), 'utf8')
+        .trim()
+        .split(/\r?\n/);
+      const informationalRuns = callsAfterInformational.filter((call) => call.includes('tests run') && call.includes(informationalRowID));
+      assert.equal(informationalRuns.length, 0, 'informational rows must never be submitted on the wire');
+      const informationalPlans = callsAfterInformational.filter((call) => call.includes('desired-state') && call.includes(informationalRowID));
+      assert.equal(informationalPlans.length, 0, 'informational display ids must never be planned on the wire');
+    } finally {
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   // DHF-TEST: keel/requirement-40
@@ -370,7 +445,7 @@ suite('Keel Test Bridge config contract', () => {
     }
 
     const demoPlan = await planTests(root, ['keel-demo-dev::lane::fake-smoke']);
-    assert.ok((demoPlan.desired_state ?? []).some((state) => state.resource === 'database' && state.desired !== state.current));
+    assert.ok(demoPlan.groups.some((group) => group.rows.some((state) => state.resource === 'database' && state.desired !== state.current)));
 
     const demoBlock = await collectChild(runTests(root, ['keel-demo-dev::maintenance::block-bad-lane']));
     assert.equal(demoBlock.code, 0);

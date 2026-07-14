@@ -43,11 +43,11 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	}
 	var plan vscode.SetupPlan
 	decodeJSON(t, planOut, &plan)
-	assertDesiredState(t, plan.DesiredState, "environment", "ready", "absent", "provision_demo_environment")
-	assertDesiredState(t, plan.DesiredState, "database", "present+seeded", "missing", "create_and_seed_demo_database")
-	assertDesiredState(t, plan.DesiredState, "service-a", "running", "stopped", "start_demo_service")
-	assertDesiredState(t, plan.DesiredState, "service-b", "running", "stopped", "start_demo_service")
-	assertDesiredState(t, plan.DesiredState, "service-c", "running", "stopped", "start_demo_service")
+	assertDesiredState(t, plan.Groups, "environment", "ready", "absent", "provision_demo_environment")
+	assertDesiredState(t, plan.Groups, "database", "present+seeded", "missing", "create_and_seed_demo_database")
+	assertDesiredState(t, plan.Groups, "service-a", "running", "stopped", "start_demo_service")
+	assertDesiredState(t, plan.Groups, "service-b", "running", "stopped", "start_demo_service")
+	assertDesiredState(t, plan.Groups, "service-c", "running", "stopped", "start_demo_service")
 
 	failOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::lane::go-fail")
 	if code == 0 {
@@ -118,7 +118,7 @@ func TestDemoBridgeCommandSpecCoversProviderAndRunPaths(t *testing.T) {
 	}
 	var plan vscode.SetupPlan
 	decodeJSON(t, planOut, &plan)
-	assertDesiredState(t, plan.DesiredState, "database", "present+seeded", "missing", "create_and_seed_demo_database")
+	assertDesiredState(t, plan.Groups, "database", "present+seeded", "missing", "create_and_seed_demo_database")
 
 	defaultPlanOut, err := dispatchDemoBridge(t, root, "test-bridge", "tests", "desired-state", "--format", "json")
 	if err != nil {
@@ -315,17 +315,19 @@ func assertItem(t *testing.T, items []vscode.TestItem, id, kind string, runnable
 	t.Fatalf("missing discovery item %s in %+v", id, items)
 }
 
-func assertDesiredState(t *testing.T, rows []vscode.DesiredState, resource, desired, current, action string) {
+func assertDesiredState(t *testing.T, groups []vscode.DesiredStateGroup, resource, desired, current, action string) {
 	t.Helper()
-	for _, row := range rows {
-		if row.Resource == resource {
-			if row.Desired != desired || row.Current != current || row.Action != "reconcile_during_run" || row.Desired == row.Current || !strings.Contains(row.Message, action) {
-				t.Fatalf("desired row %s = %+v, want desired %q current %q reconcile_during_run message containing %q with desired != current", resource, row, desired, current, action)
+	for _, group := range groups {
+		for _, row := range group.Rows {
+			if row.Resource == resource {
+				if row.Desired != desired || row.Current != current || row.Action != "reconcile_during_run" || row.Desired == row.Current || !strings.Contains(row.Message, action) {
+					t.Fatalf("desired row %s = %+v, want desired %q current %q reconcile_during_run message containing %q with desired != current", resource, row, desired, current, action)
+				}
+				return
 			}
-			return
 		}
 	}
-	t.Fatalf("missing desired-state row %s in %+v", resource, rows)
+	t.Fatalf("missing desired-state row %s in %+v", resource, groups)
 }
 
 func decodeRunEvents(t *testing.T, raw string) []vscode.RunEvent {

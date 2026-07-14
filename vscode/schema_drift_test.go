@@ -34,6 +34,7 @@ func TestSchemasDriftAgainstGoTypes(t *testing.T) {
 		{"setup-plan", reflect.TypeOf(SetupPlan{}), ""},
 		{"setup-plan devtool", reflect.TypeOf(DevtoolMetadata{}), "#/properties/devtool"},
 		{"setup-plan item", reflect.TypeOf(SetupPlanItem{}), "#/$defs/item"},
+		{"setup-plan group", reflect.TypeOf(DesiredStateGroup{}), "#/$defs/group"},
 		{"setup-plan desired_state", reflect.TypeOf(DesiredState{}), "#/$defs/desired_state"},
 		{"setup-plan check", reflect.TypeOf(PrereqCheck{}), "#/$defs/check"},
 		{"setup-plan action", reflect.TypeOf(SetupPlanAction{}), "#/$defs/action"},
