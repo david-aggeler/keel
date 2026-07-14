@@ -54,6 +54,10 @@ const (
 	idDataSetEmpty     = "keel-demo-dev::desired-state::dataset::empty"
 	idDataSetSmall     = "keel-demo-dev::desired-state::dataset::small"
 	idDataSetFull      = "keel-demo-dev::desired-state::dataset::full"
+
+	demoDataSetEmpty = "empty"
+	demoDataSetSmall = "small"
+	demoDataSetFull  = "full"
 )
 
 func main() {
@@ -177,22 +181,29 @@ func (b demoBridge) Discover(ctx context.Context) (vscode.DiscoveryDocument, err
 	}, nil
 }
 
-// DHF-REQ: keel/requirement-62, keel/requirement-75
+// DHF-REQ: keel/requirement-62, keel/requirement-75, keel/requirement-76
 func (b demoBridge) DesiredState(ctx context.Context, ids []string) (testbridge.DesiredStateDeclaration, error) {
+	root := b.workspace(ctx).Root
+	if !hasDemoLanesFile(root) || selectedDataSetRowsOnly(ids) {
+		return testbridge.DesiredStateDeclaration{
+			TeardownPolicy: "demo-only fake resources; no teardown command mutates real infrastructure",
+		}, nil
+	}
+	activeDataSet := currentDemoDataSet(root)
 	return testbridge.DesiredStateDeclaration{
 		Groups: []testbridge.DesiredStateGroup{
 			{
 				Label: "Test Preconditions",
 				Order: 10,
 				Rows: []testbridge.DesiredStateRow{
-					desired(idDesiredDockerEnv, "docker-env", "dependency", "ready", "absent", "provision_demo_environment", false, false),
-					desired(idDesiredPostgres, "postgres", "fixture-data", "present+seeded", "missing", "create_and_seed_demo_database", false, false),
-					desired(idDesiredServiceA, "service-a", "service", "running", "stopped", "start_demo_service", true, false),
-					desired(idDesiredServiceB, "service-b", "service", "running", "stopped", "start_demo_service", true, false),
-					desired(idDesiredServiceC, "service-c", "service", "running", "stopped", "start_demo_service", true, false),
-					desired(idDesiredSDK, "sdk", "tool", "installed", "missing", "install_demo_sdk", true, false),
-					desired(idDesiredDNS, "dns", "host-port-set", "resolves", "missing", "seed_demo_dns", true, false),
-					desired(idDesiredPing, "ping", "dependency", "reachable", "timeout", "probe_demo_endpoint", true, false),
+					prereq(root, idDesiredDockerEnv, "docker-env", "dependency", "ready", "absent", "provision_demo_environment", false),
+					prereq(root, idDesiredPostgres, "postgres", "fixture-data", "present+seeded", "missing", "create_and_seed_demo_database", false),
+					prereq(root, idDesiredServiceA, "service-a", "service", "running", "stopped", "start_demo_service", true),
+					prereq(root, idDesiredServiceB, "service-b", "service", "running", "stopped", "start_demo_service", true),
+					prereq(root, idDesiredServiceC, "service-c", "service", "running", "stopped", "start_demo_service", true),
+					prereq(root, idDesiredSDK, "sdk", "tool", "installed", "missing", "install_demo_sdk", true),
+					prereq(root, idDesiredDNS, "dns", "host-port-set", "resolves", "missing", "seed_demo_dns", true),
+					prereq(root, idDesiredPing, "ping", "dependency", "reachable", "timeout", "probe_demo_endpoint", true),
 				},
 			},
 			{
@@ -200,9 +211,9 @@ func (b demoBridge) DesiredState(ctx context.Context, ids []string) (testbridge.
 				Order:             20,
 				MutuallyExclusive: true,
 				Rows: []testbridge.DesiredStateRow{
-					desired(idDataSetEmpty, "app-db-empty", "fixture-data", "empty", "small", "select_empty_data_set", false, false),
-					desired(idDataSetSmall, "app-db-small", "fixture-data", "small", "small", "reuse_small_data_set", false, true),
-					desired(idDataSetFull, "app-db-full", "fixture-data", "full", "small", "select_full_data_set", false, false),
+					dataSet(idDataSetEmpty, "app-db-empty", demoDataSetEmpty, activeDataSet, "select_empty_data_set"),
+					dataSet(idDataSetSmall, "app-db-small", demoDataSetSmall, activeDataSet, "reuse_small_data_set"),
+					dataSet(idDataSetFull, "app-db-full", demoDataSetFull, activeDataSet, "select_full_data_set"),
 				},
 			},
 		},
@@ -257,6 +268,12 @@ func (b demoBridge) runOne(ctx context.Context, root, id string, emit vscode.Run
 		}
 		emit(vscode.RunEvent{Event: "passed", TestID: id, Message: "unblocked demo lanes"})
 		return 0, nil
+	case idDataSetEmpty:
+		return selectDemoDataSet(root, id, demoDataSetEmpty, "select_empty_data_set selected empty data set", emit)
+	case idDataSetSmall:
+		return selectDemoDataSet(root, id, demoDataSetSmall, "reuse_small_data_set selected small data set", emit)
+	case idDataSetFull:
+		return selectDemoDataSet(root, id, demoDataSetFull, "select_full_data_set selected full data set", emit)
 	case idLaneFakeSmoke, "fake::test::provisioning::Preview":
 		emit(vscode.RunEvent{Event: "test_started", TestID: id})
 		emit(vscode.RunEvent{Event: "output", TestID: id, Message: "fake provisioning preview: environment/database/services need reconcile_during_run"})
@@ -345,7 +362,7 @@ func test(id, parent, label, laneID string) vscode.TestItem {
 	return vscode.TestItem{ID: id, ParentID: parent, Label: label, Kind: "test", Framework: "keel-demo-dev", Runner: "keel-demo-dev", RunnerLabel: "Keel Demo Dev", Runnable: true, Profiles: []string{"run"}, LaneID: laneID}
 }
 
-func desired(runID, resource, kind, want, current, actionName string, reusable, active bool) testbridge.DesiredStateRow {
+func prereq(root, runID, resource, kind, want, missing, actionName string, reusable bool) testbridge.DesiredStateRow {
 	return testbridge.DesiredStateRow{
 		RunID:    runID,
 		Resource: resource,
@@ -353,12 +370,36 @@ func desired(runID, resource, kind, want, current, actionName string, reusable, 
 		Desired:  want,
 		Reusable: reusable,
 		Owned:    !reusable,
-		Active:   active,
+		Probe: func(context.Context, testbridge.DesiredStateProbeRequest) testbridge.DesiredStateProbeResult {
+			if demoPrereqReady(root, resource) {
+				return testbridge.DesiredStateProbeResult{
+					Current:   want,
+					Satisfied: true,
+					Message:   "named action " + actionName + " verified this fake resource from workspace state",
+				}
+			}
+			return testbridge.DesiredStateProbeResult{
+				Current:   missing,
+				Satisfied: false,
+				Message:   "named action " + actionName + " would reconcile this fake resource during a demo run",
+			}
+		},
+	}
+}
+
+func dataSet(runID, resource, want, activeDataSet, actionName string) testbridge.DesiredStateRow {
+	return testbridge.DesiredStateRow{
+		RunID:    runID,
+		Resource: resource,
+		Kind:     "fixture-data",
+		Desired:  want,
+		Owned:    true,
+		Active:   activeDataSet == want,
 		Probe: func(context.Context, testbridge.DesiredStateProbeRequest) testbridge.DesiredStateProbeResult {
 			return testbridge.DesiredStateProbeResult{
-				Current:   current,
-				Satisfied: current == want,
-				Message:   "named action " + actionName + " would reconcile this fake resource during a demo run",
+				Current:   activeDataSet,
+				Satisfied: activeDataSet == want,
+				Message:   "named action " + actionName + " selected the active fake data set",
 			}
 		},
 	}
@@ -370,6 +411,14 @@ func blockStatePath(root string) string {
 
 func demoLanesPath(root string) string {
 	return filepath.Join(root, ".vscode", "test-lanes.json")
+}
+
+func demoReadyPath(root, resource string) string {
+	return filepath.Join(root, ".devtools", "keel-demo-dev", "ready", resource)
+}
+
+func demoDataSetPath(root string) string {
+	return filepath.Join(root, ".devtools", "keel-demo-dev", "active-data-set")
 }
 
 func hasDemoLanesFile(root string) bool {
@@ -394,7 +443,72 @@ func writeDemoLanesFile(root string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0o644)
+	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
+		return err
+	}
+	for _, resource := range []string{"docker-env", "postgres", "service-a", "service-b", "service-c", "sdk", "dns", "ping"} {
+		if err := writeDemoPrereqReady(root, resource); err != nil {
+			return err
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(demoDataSetPath(root)), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(demoDataSetPath(root), []byte(demoDataSetSmall+"\n"), 0o644)
+}
+
+func writeDemoPrereqReady(root, resource string) error {
+	path := demoReadyPath(root, resource)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte("ready\n"), 0o644)
+}
+
+func demoPrereqReady(root, resource string) bool {
+	_, err := os.Stat(demoReadyPath(root, resource))
+	return err == nil
+}
+
+func selectedDataSetRowsOnly(ids []string) bool {
+	if len(ids) == 0 {
+		return false
+	}
+	for _, id := range ids {
+		switch id {
+		case idDataSetEmpty, idDataSetSmall, idDataSetFull:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func currentDemoDataSet(root string) string {
+	data, err := os.ReadFile(demoDataSetPath(root))
+	if err != nil {
+		return demoDataSetSmall
+	}
+	switch strings.TrimSpace(string(data)) {
+	case demoDataSetEmpty:
+		return demoDataSetEmpty
+	case demoDataSetFull:
+		return demoDataSetFull
+	default:
+		return demoDataSetSmall
+	}
+}
+
+func selectDemoDataSet(root, id, value, message string, emit vscode.RunEventWriter) (int, error) {
+	if err := os.MkdirAll(filepath.Dir(demoDataSetPath(root)), 0o755); err != nil {
+		return 1, err
+	}
+	if err := os.WriteFile(demoDataSetPath(root), []byte(value+"\n"), 0o644); err != nil {
+		return 1, err
+	}
+	emit(vscode.RunEvent{Event: "test_started", TestID: id})
+	emit(vscode.RunEvent{Event: "passed", TestID: id, Message: message})
+	return 0, nil
 }
 
 func blockedLane(root string) (string, error) {
