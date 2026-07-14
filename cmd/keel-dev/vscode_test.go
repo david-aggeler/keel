@@ -552,7 +552,7 @@ func TestVSCodeDiscoveryEmitsStructuredOrderedTree(t *testing.T) {
 			break
 		}
 	}
-	if desiredRow.ID == "" || desiredRow.SortText != "b.010.001" || !strings.Contains(desiredRow.Label, " -> available") {
+	if desiredRow.ID == "" || desiredRow.SortText != "b.010.001" || desiredRow.Label != "go-toolchain: available" || !strings.Contains(strings.Join(desiredRow.Limitations, " "), "action=reuse") {
 		t.Fatalf("desired-state row = %+v", desiredRow)
 	}
 
@@ -613,6 +613,84 @@ func TestKeelDevDesiredStateRowsAreRunnableThroughCanonicalBridge(t *testing.T) 
 	}
 	if events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode == 0 {
 		t.Fatalf("blocked desired-state terminal event = %+v, want non-zero exit", events[len(events)-1])
+	}
+}
+
+// DHF-TEST: keel/requirement-75
+func TestKeelModuleRootDesiredStateProbeReadsGoMod(t *testing.T) {
+	root := t.TempDir()
+
+	var protocol bytes.Buffer
+	err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "tests", "run", "--id", vscodeDesiredStateModuleRoot})
+	if err == nil {
+		t.Fatal("module-root row without go.mod returned nil error; want failing run")
+	}
+	if got := protocol.String(); !runEventsContain(decodeRunEvents(t, got), "failed", vscodeDesiredStateModuleRoot) || !strings.Contains(got, "go.mod") {
+		t.Fatalf("missing go.mod protocol:\n%s", got)
+	}
+
+	writeFile(t, root, "go.mod", "module example.com/not-keel\n\ngo 1.25\n")
+	protocol.Reset()
+	err = commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "tests", "run", "--id", vscodeDesiredStateModuleRoot})
+	if err == nil {
+		t.Fatal("module-root row with wrong module path returned nil error; want failing run")
+	}
+	if got := protocol.String(); !runEventsContain(decodeRunEvents(t, got), "failed", vscodeDesiredStateModuleRoot) || !strings.Contains(got, "example.com/not-keel") {
+		t.Fatalf("mismatched go.mod protocol:\n%s", got)
+	}
+
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	protocol.Reset()
+	if err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "tests", "run", "--id", vscodeDesiredStateModuleRoot}); err != nil {
+		t.Fatalf("module-root row with matching go.mod: %v\n%s", err, protocol.String())
+	}
+	if got := protocol.String(); !runEventsContain(decodeRunEvents(t, got), "passed", vscodeDesiredStateModuleRoot) || !strings.Contains(got, modulePath) {
+		t.Fatalf("matching go.mod protocol:\n%s", got)
+	}
+}
+
+// DHF-TEST: keel/requirement-75
+func TestStubBinariesDesiredStateProbeBuildsStubPackages(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	if err := os.MkdirAll(filepath.Join(root, "exec", "codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "exec", "claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join("exec", "codex", "doc.go"), "package codex\n")
+	writeFile(t, root, filepath.Join("exec", "claude", "doc.go"), "package claude\n")
+
+	var protocol bytes.Buffer
+	if err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "tests", "run", "--id", vscodeDesiredStateStubBinaries}); err != nil {
+		t.Fatalf("stub-binaries row with buildable packages: %v\n%s", err, protocol.String())
+	}
+	if got := protocol.String(); !runEventsContain(decodeRunEvents(t, got), "passed", vscodeDesiredStateStubBinaries) {
+		t.Fatalf("buildable stub protocol:\n%s", got)
+	}
+
+	protocol.Reset()
+	if err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{
+		"test-bridge", "tests", "run",
+		"--id", vscodeDesiredStateModuleRoot,
+		"--id", vscodeDesiredStateStubBinaries,
+	}); err != nil {
+		t.Fatalf("multi-id desired-state run with buildable packages: %v\n%s", err, protocol.String())
+	}
+	events := decodeRunEvents(t, protocol.String())
+	if !runEventsContain(events, "passed", vscodeDesiredStateModuleRoot) || !runEventsContain(events, "passed", vscodeDesiredStateStubBinaries) {
+		t.Fatalf("multi-id desired-state events = %+v", events)
+	}
+
+	writeFile(t, root, filepath.Join("exec", "codex", "broken.go"), "package codex\n\nfunc broken(\n")
+	protocol.Reset()
+	err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "tests", "run", "--id", vscodeDesiredStateStubBinaries})
+	if err == nil {
+		t.Fatal("stub-binaries row with invalid package returned nil error; want failing run")
+	}
+	if got := protocol.String(); !runEventsContain(decodeRunEvents(t, got), "failed", vscodeDesiredStateStubBinaries) || !strings.Contains(got, "stub fixture packages") {
+		t.Fatalf("broken stub protocol:\n%s", got)
 	}
 }
 
