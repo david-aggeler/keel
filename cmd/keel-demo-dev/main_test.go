@@ -27,15 +27,13 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	var discovery vscode.DiscoveryDocument
 	decodeJSON(t, discoveryOut, &discovery)
 	assertItem(t, discovery.Items, "keel-demo-dev::maintenance", "group", false)
+	assertItem(t, discovery.Items, "keel::desired-state", "group", false)
 	assertItem(t, discovery.Items, "keel-demo-dev::lanes", "group", false)
 	assertItem(t, discovery.Items, "keel-demo-dev::frameworks", "group", false)
-	assertItem(t, discovery.Items, "keel-demo-dev::lane::go-pass", "lane", true)
-	assertItem(t, discovery.Items, "keel-demo-dev::lane::go-fail", "lane", true)
-	assertItem(t, discovery.Items, "keel-demo-dev::lane::fake-smoke", "lane", true)
+	assertItem(t, discovery.Items, "keel-demo-dev::maintenance::detect-lanes", "maintenance", true)
 	assertItem(t, discovery.Items, "keel-demo-dev::maintenance::block-bad-lane", "maintenance", true)
 	assertItem(t, discovery.Items, "keel-demo-dev::maintenance::unblock-bad-lane", "maintenance", true)
-	assertItem(t, discovery.Items, "go::test::passing::TestReferencePass", "test", true)
-	assertItem(t, discovery.Items, "go::test::failing::TestReferenceFailure", "test", true)
+	assertMissingItem(t, discovery.Items, "keel-demo-dev::lane::go-pass")
 
 	planOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "desired-state", "--format", "json", "--id", "keel-demo-dev::lane::fake-smoke")
 	if code != 0 {
@@ -43,11 +41,29 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	}
 	var plan vscode.SetupPlan
 	decodeJSON(t, planOut, &plan)
-	assertDesiredState(t, plan.Groups, "environment", "ready", "absent", "provision_demo_environment")
-	assertDesiredState(t, plan.Groups, "database", "present+seeded", "missing", "create_and_seed_demo_database")
+	assertDesiredState(t, plan.Groups, "docker-env", "ready", "absent", "provision_demo_environment")
+	assertDesiredState(t, plan.Groups, "postgres", "present+seeded", "missing", "create_and_seed_demo_database")
 	assertDesiredState(t, plan.Groups, "service-a", "running", "stopped", "start_demo_service")
 	assertDesiredState(t, plan.Groups, "service-b", "running", "stopped", "start_demo_service")
 	assertDesiredState(t, plan.Groups, "service-c", "running", "stopped", "start_demo_service")
+	assertExclusiveDataSetGroup(t, plan.Groups)
+
+	detectOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::maintenance::detect-lanes")
+	if code != 0 {
+		t.Fatalf("detect-lanes maintenance exit = %d, want 0\n%s", code, detectOut)
+	}
+	assertRunEvent(t, decodeRunEvents(t, detectOut), "passed", "keel-demo-dev::maintenance::detect-lanes", "wrote .vscode/test-lanes.json")
+	assertDemoLanesFile(t, root)
+	discoveryOut, code = runDemoDev(t, root, exe, "test-bridge", "tests", "discover", "--format", "json")
+	if code != 0 {
+		t.Fatalf("post-detect discover exit = %d, want 0\n%s", code, discoveryOut)
+	}
+	decodeJSON(t, discoveryOut, &discovery)
+	assertItem(t, discovery.Items, "keel-demo-dev::lane::go-pass", "lane", true)
+	assertItem(t, discovery.Items, "keel-demo-dev::lane::go-fail", "lane", true)
+	assertItem(t, discovery.Items, "keel-demo-dev::lane::fake-smoke", "lane", true)
+	assertItem(t, discovery.Items, "go::test::passing::TestReferencePass", "test", true)
+	assertItem(t, discovery.Items, "go::test::failing::TestReferenceFailure", "test", true)
 
 	failOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::lane::go-fail")
 	if code == 0 {
@@ -87,6 +103,23 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 }
 
 // DHF-TEST: keel/requirement-62
+func TestKeelDemoDevDesiredStateRowsAreRunnable(t *testing.T) {
+	exe := buildDemoDev(t)
+	root := t.TempDir()
+
+	for _, id := range []string{
+		"keel-demo-dev::desired-state::docker-env",
+		"keel-demo-dev::desired-state::dataset::full",
+	} {
+		out, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", id)
+		if code != 0 {
+			t.Fatalf("desired-state row %s exit = %d, want 0\n%s", id, code, out)
+		}
+		assertRunEvent(t, decodeRunEvents(t, out), "passed", id, "reconciled")
+	}
+}
+
+// DHF-TEST: keel/requirement-62
 func TestKeelDemoDevUnblockMaintenanceIsIdempotent(t *testing.T) {
 	exe := buildDemoDev(t)
 	root := t.TempDir()
@@ -110,6 +143,16 @@ func TestDemoBridgeCommandSpecCoversProviderAndRunPaths(t *testing.T) {
 	}
 	var discovery vscode.DiscoveryDocument
 	decodeJSON(t, discoveryOut, &discovery)
+	assertMissingItem(t, discovery.Items, idLaneFakeSmoke)
+
+	if _, err := dispatchDemoBridge(t, root, "test-bridge", "tests", "run", "--id", idDetectLanes); err != nil {
+		t.Fatalf("detect-lanes dispatch: %v", err)
+	}
+	discoveryOut, err = dispatchDemoBridge(t, root, "test-bridge", "tests", "discover", "--format", "json")
+	if err != nil {
+		t.Fatalf("post-detect discover dispatch: %v", err)
+	}
+	decodeJSON(t, discoveryOut, &discovery)
 	assertItem(t, discovery.Items, idLaneFakeSmoke, "lane", true)
 
 	planOut, err := dispatchDemoBridge(t, root, "test-bridge", "tests", "desired-state", "--format", "json", "--id", idLaneFakeSmoke)
@@ -118,7 +161,7 @@ func TestDemoBridgeCommandSpecCoversProviderAndRunPaths(t *testing.T) {
 	}
 	var plan vscode.SetupPlan
 	decodeJSON(t, planOut, &plan)
-	assertDesiredState(t, plan.Groups, "database", "present+seeded", "missing", "create_and_seed_demo_database")
+	assertDesiredState(t, plan.Groups, "postgres", "present+seeded", "missing", "create_and_seed_demo_database")
 
 	defaultPlanOut, err := dispatchDemoBridge(t, root, "test-bridge", "tests", "desired-state", "--format", "json")
 	if err != nil {
@@ -315,6 +358,15 @@ func assertItem(t *testing.T, items []vscode.TestItem, id, kind string, runnable
 	t.Fatalf("missing discovery item %s in %+v", id, items)
 }
 
+func assertMissingItem(t *testing.T, items []vscode.TestItem, id string) {
+	t.Helper()
+	for _, item := range items {
+		if item.ID == id {
+			t.Fatalf("discovery item %s present before detect-lanes: %+v", id, items)
+		}
+	}
+}
+
 func assertDesiredState(t *testing.T, groups []vscode.DesiredStateGroup, resource, desired, current, action string) {
 	t.Helper()
 	for _, group := range groups {
@@ -328,6 +380,55 @@ func assertDesiredState(t *testing.T, groups []vscode.DesiredStateGroup, resourc
 		}
 	}
 	t.Fatalf("missing desired-state row %s in %+v", resource, groups)
+}
+
+func assertExclusiveDataSetGroup(t *testing.T, groups []vscode.DesiredStateGroup) {
+	t.Helper()
+	for _, group := range groups {
+		if group.Label != "app-db data set" {
+			continue
+		}
+		if !group.MutuallyExclusive {
+			t.Fatalf("data-set group is not mutually exclusive: %+v", group)
+		}
+		active := 0
+		want := map[string]bool{"app-db-empty": false, "app-db-small": false, "app-db-full": false}
+		for _, row := range group.Rows {
+			if _, ok := want[row.Resource]; ok {
+				want[row.Resource] = true
+			}
+			if row.Active {
+				active++
+			}
+			if row.RunID == "" || row.Action != "reconcile_during_run" {
+				t.Fatalf("data-set row = %+v, want runnable reconcile_during_run row", row)
+			}
+		}
+		if active != 1 {
+			t.Fatalf("data-set group active rows = %d, want exactly 1: %+v", active, group.Rows)
+		}
+		for resource, seen := range want {
+			if !seen {
+				t.Fatalf("data-set group missing %s: %+v", resource, group.Rows)
+			}
+		}
+		return
+	}
+	t.Fatalf("missing app-db data set group in %+v", groups)
+}
+
+func assertDemoLanesFile(t *testing.T, root string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, ".vscode", "test-lanes.json"))
+	if err != nil {
+		t.Fatalf("read demo lanes file: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{"keel-demo-dev::lane::go-pass", "keel-demo-dev::lane::go-fail", "keel-demo-dev::lane::fake-smoke"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("test-lanes.json missing %s:\n%s", want, text)
+		}
+	}
 }
 
 func decodeRunEvents(t *testing.T, raw string) []vscode.RunEvent {
