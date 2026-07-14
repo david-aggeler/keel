@@ -85,15 +85,15 @@ today exactly three system lanes are compiled — lint, test-fast,
 test-coverage — and no `lanes` verbs exist)*.
 Target state: system lanes lint, test-fast, test-coverage, vsix-ci, ci stay
 compiled; file lanes come from `.vscode/test-lanes.json` — **100% owned by
-the consumer devtool** (go.mod model: keel-dev writes it via `lanes detect`,
+the consumer devtool** (go.mod model: keel-dev writes it via `detect-lanes` maintenance,
 the human hand-edits it, the VSIX only watches the path) — and are defined by
 member sets: Go package globs, framework roots, **per-file vsix selections**
 (owner decision, Option 2), or other lanes (DAG composition, union + dedup),
 never by opaque commands (vela's opaque-command registry forced a
 hand-maintained covers switch that drifts; member sets make covers, run
 fan-out, and cost attribution derive from one source). Planned verbs:
-`vscode lanes list` (effective definitions incl. expanded members and
-measured durations — the gate-sizing dataset) and `vscode lanes detect`
+`file-backed lane discovery` (effective definitions incl. expanded members and
+measured durations — the gate-sizing dataset) and `detect-lanes maintenance`
 (idempotent, append-only category writes, also maintenance item a.1). Full
 normative contract: the Test Lanes Interface Specification rev 2.3 (attached
 to keel/exploration-2; carried by requirements keel/requirement-51…54).

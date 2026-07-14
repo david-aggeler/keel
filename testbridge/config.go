@@ -77,6 +77,7 @@ func UpgradeConfig(root string, template vscode.TestBridgeConfig) (ConfigResult,
 	return ConfigResult{Path: target, Changed: true, FromVersion: from, ToVersion: cfg.Version}, nil
 }
 
+// DHF-REQ: keel/requirement-65
 func migrateConfig(cfg, template vscode.TestBridgeConfig) (vscode.TestBridgeConfig, error) {
 	switch cfg.Version {
 	case 0:
@@ -87,7 +88,7 @@ func migrateConfig(cfg, template vscode.TestBridgeConfig) (vscode.TestBridgeConf
 			cfg.Command = template.Command
 		}
 		if len(cfg.Args) == 0 {
-			cfg.Args = []string{"vscode", "tests"}
+			cfg.Args = append([]string(nil), template.Args...)
 		}
 		if cfg.DisplayName == "" {
 			cfg.DisplayName = template.DisplayName

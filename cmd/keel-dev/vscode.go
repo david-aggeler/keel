@@ -48,6 +48,14 @@ const (
 
 var vscodeLaneIDs = []string{vscodeLaneLint, vscodeLaneTestFast, vscodeLaneTestCoverage, vscodeLaneVSIXGate, vscodeLaneCI}
 
+var vscodeGateLaneDefs = []testFileLane{
+	{ID: "lint", Label: "lint", Order: "c.1", Description: "Run keel-dev lint checks.", Members: []laneMember{{Lane: "lint"}}},
+	{ID: "test-fast", Label: "test-fast", Order: "c.2", Description: "Run the fast Go test lane.", Members: []laneMember{{Lane: "test-fast"}}},
+	{ID: "test-coverage", Label: "test-coverage", Order: "c.3", Description: "Run the coverage test lane.", Members: []laneMember{{Lane: "test-coverage"}}},
+	{ID: "vsix-ci", Label: "vsix ci", Order: "c.10", Description: "Run the VSIX gate.", Members: []laneMember{{Lane: "vsix-ci"}}},
+	{ID: "ci", Label: "ci", Order: "c.30", Description: "Run the full keel-dev CI gate.", Members: []laneMember{{Lane: "ci"}}},
+}
+
 type testLanesFile struct {
 	Version int            `json:"version"`
 	Lanes   []testFileLane `json:"lanes"`
@@ -349,21 +357,16 @@ func dispatchTestBridgeAlias(ctx context.Context, args []string) error {
 	return testbridge.CommandSpec(keelTestBridge{}).Dispatch(ctx, args)
 }
 
-// DHF-REQ: keel/requirement-39, keel/requirement-43, keel/requirement-46, keel/requirement-48, keel/requirement-51
+// DHF-REQ: keel/requirement-39, keel/requirement-43, keel/requirement-46, keel/requirement-48, keel/requirement-51, keel/requirement-65
 func buildVSCodeDiscovery(root string) (vscode.DiscoveryDocument, error) {
 	items := []vscode.TestItem{
 		groupItem(vscodeGroupMaintenance, "", "a. Maintenance", "a"),
-		groupItem(vscodeGroupLanes, "", "b. Lanes", "b"),
+		groupItem(vscodeGroupLanes, "", "C - Lanes", "c"),
 		groupItem(vscodeGroupFrameworks, "", "d. Frameworks", "d"),
 		maintenanceItem(vscodeMaintenanceDetectLanes, "a.1 detect lanes", ordinalSortText("a.1")),
 		maintenanceItem(vscodeMaintenanceUnlock, "a.2 unlock test bridge", ordinalSortText("a.2")),
 		maintenanceItem(vscodeMaintenanceClearResults, "a.3 clear test results", ordinalSortText("a.3")),
 		maintenanceItem(vscodeMaintenanceClearState, "a.4 clear local test state", ordinalSortText("a.4")),
-		laneItem(vscodeLaneLint, "b.1 lint", ordinalSortText("b.1")),
-		laneItem(vscodeLaneTestFast, "b.2 test-fast", ordinalSortText("b.2")),
-		laneItem(vscodeLaneTestCoverage, "b.3 test-coverage", ordinalSortText("b.3")),
-		laneItem(vscodeLaneVSIXGate, "b.10 vsix ci", ordinalSortText("b.10")),
-		laneItem(vscodeLaneCI, "b.30 ci", ordinalSortText("b.30")),
 	}
 	goItems, err := discoverGoTestItems(context.Background(), root)
 	if err != nil {
@@ -455,7 +458,7 @@ func buildVSCodePlan(root string, ids []string) (vscode.SetupPlan, error) {
 	}, nil
 }
 
-// DHF-REQ: keel/requirement-52
+// DHF-REQ: keel/requirement-65
 func writeVSCodeLanesList(root string, out io.Writer) error {
 	lanes, err := loadLanesState(root)
 	if err != nil {
@@ -465,20 +468,6 @@ func writeVSCodeLanesList(root string, out io.Writer) error {
 		Version:     1,
 		Workspace:   workspaceNode(root),
 		GeneratedAt: time.Now().UTC(),
-	}
-	for _, id := range vscodeLaneIDs {
-		short := strings.TrimPrefix(id, "keel::lane::")
-		doc.Lanes = append(doc.Lanes, laneListRecord{
-			ID:            id,
-			Source:        "system",
-			Label:         short,
-			Order:         systemLaneOrder(id),
-			Members:       []laneMemberListEntry{},
-			Expanded:      laneExpandedMembers{},
-			Prerequisites: laneRequiredResources(id),
-			Findings:      []laneFinding{},
-			LastRun:       latestLaneRun(root, id),
-		})
 	}
 	ids := make([]string, 0, len(lanes.effective))
 	for id := range lanes.effective {
@@ -514,7 +503,7 @@ func writeVSCodeLanesList(root string, out io.Writer) error {
 	return testbridge.EncodeDocument(out, doc)
 }
 
-// DHF-REQ: keel/requirement-52
+// DHF-REQ: keel/requirement-65
 func writeVSCodeLanesDetect(root string, dryRun bool, out io.Writer) error {
 	lanes, err := loadLanesState(root)
 	if err != nil {
@@ -537,6 +526,18 @@ func writeVSCodeLanesDetect(root string, dryRun bool, out io.Writer) error {
 		}
 	}
 	doc := lanesDetectDocument{Version: 1, File: ".vscode/test-lanes.json"}
+	updated := lanes.file
+	if updated.Version == 0 {
+		updated.Version = 1
+	}
+	for _, gate := range vscodeGateLaneDefs {
+		if _, exists := lanes.byID[gate.ID]; exists {
+			doc.Unchanged = append(doc.Unchanged, lanesDetectEntry{ID: gate.ID, Reason: "gate lane already declared"})
+			continue
+		}
+		doc.Added = append(doc.Added, lanesDetectEntry{ID: gate.ID, Label: gate.Label, Order: gate.Order})
+		updated.Lanes = append(updated.Lanes, gate)
+	}
 	nextSlot := nextDetectionOrderSlot(lanes.file.Lanes)
 	for _, family := range sortedKeys(families) {
 		id := "go-" + family
@@ -548,24 +549,18 @@ func writeVSCodeLanesDetect(root string, dryRun bool, out io.Writer) error {
 			doc.Skipped = append(doc.Skipped, lanesDetectEntry{ID: id, Reason: "covered by existing lane"})
 			continue
 		}
-		order := fmt.Sprintf("b.%d", nextSlot)
+		order := fmt.Sprintf("c.%d", nextSlot)
 		nextSlot++
 		doc.Added = append(doc.Added, lanesDetectEntry{ID: id, Label: family, Order: order, Packages: familyPackageCount(root, family)})
+		updated.Lanes = append(updated.Lanes, testFileLane{
+			ID:          id,
+			Label:       family,
+			Order:       order,
+			Description: fmt.Sprintf("detected category - %d packages", familyPackageCount(root, family)),
+			Members:     []laneMember{{Go: "./" + family + "/..."}},
+		})
 	}
 	if len(doc.Added) > 0 && !dryRun {
-		updated := lanes.file
-		if updated.Version == 0 {
-			updated.Version = 1
-		}
-		for _, added := range doc.Added {
-			updated.Lanes = append(updated.Lanes, testFileLane{
-				ID:          added.ID,
-				Label:       added.Label,
-				Order:       added.Order,
-				Description: fmt.Sprintf("detected category - %d packages", added.Packages),
-				Members:     []laneMember{{Go: "./" + added.Label + "/...", rawKeys: []string{"go"}}},
-			})
-		}
 		data, err := json.MarshalIndent(updated, "", "  ")
 		if err != nil {
 			return err
@@ -610,7 +605,7 @@ func laneRequiredResources(id string) []string {
 	return resources
 }
 
-// DHF-REQ: keel/requirement-51, keel/requirement-52, keel/requirement-54
+// DHF-REQ: keel/requirement-51, keel/requirement-54, keel/requirement-65
 func loadLanesState(root string) (lanesState, error) {
 	state := lanesState{
 		root:      root,
@@ -643,7 +638,7 @@ func loadLanesState(root string) (lanesState, error) {
 			state.diagnostics = append(state.diagnostics, lanesDiagnosticItem("lane-missing-id", "lane id is required"))
 			continue
 		}
-		if seen[lane.ID] || knownSystemLaneShortID(lane.ID) {
+		if seen[lane.ID] {
 			state.diagnostics = append(state.diagnostics, lanesDiagnosticItem(lane.ID, "duplicate lane id "+lane.ID))
 			continue
 		}
@@ -947,11 +942,6 @@ func vsixTestFileExists(root, rel string) bool {
 	return err == nil
 }
 
-func knownSystemLaneShortID(id string) bool {
-	_, ok := systemLaneShortID(id)
-	return ok
-}
-
 func systemLaneShortID(id string) (string, bool) {
 	short := strings.TrimPrefix(id, "keel::lane::")
 	switch "keel::lane::" + short {
@@ -959,23 +949,6 @@ func systemLaneShortID(id string) (string, bool) {
 		return short, true
 	default:
 		return "", false
-	}
-}
-
-func systemLaneOrder(id string) string {
-	switch id {
-	case vscodeLaneLint:
-		return "b.1"
-	case vscodeLaneTestFast:
-		return "b.2"
-	case vscodeLaneTestCoverage:
-		return "b.3"
-	case vscodeLaneVSIXGate:
-		return "b.10"
-	case vscodeLaneCI:
-		return "b.30"
-	default:
-		return ""
 	}
 }
 
@@ -1093,8 +1066,8 @@ func familyPackageCount(root, family string) int {
 func nextDetectionOrderSlot(lanes []testFileLane) int {
 	used := map[int]bool{}
 	for _, lane := range lanes {
-		if strings.HasPrefix(lane.Order, "b.") {
-			if n, err := strconv.Atoi(strings.TrimPrefix(lane.Order, "b.")); err == nil {
+		if strings.HasPrefix(lane.Order, "c.") {
+			if n, err := strconv.Atoi(strings.TrimPrefix(lane.Order, "c.")); err == nil {
 				used[n] = true
 			}
 		}
@@ -1815,7 +1788,7 @@ func runVSCodeMaintenance(root, id string) (int, error) {
 	return 0, nil
 }
 
-// DHF-REQ: keel/requirement-52
+// DHF-REQ: keel/requirement-65
 func runVSCodeDetectLanesMaintenance(root string, writer vscode.RunEventWriter) error {
 	var out bytes.Buffer
 	if err := writeVSCodeLanesDetect(root, false, &out); err != nil {

@@ -84,7 +84,7 @@ Manual/operator work only. The run-queue tail creates and owns its own
   fail you.
 - Every subprocess goes through keel/exec (START/END lifecycle logging).
 - Verbs anchor at keel's module root. Refuse foreign modules.
-- `keel-dev vscode` verbs reserve stdout for protocol JSON/JSONL and route the
+- `keel-dev test-bridge` verbs reserve stdout for protocol JSON/JSONL and route the
   keel/log console sink to stderr; the `.logs/` file sinks remain enabled. The
   VS Code bridge uses the in-repo fixture set only — no peer fixture-sync path.
 
