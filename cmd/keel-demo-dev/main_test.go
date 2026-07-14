@@ -15,7 +15,7 @@ import (
 	"github.com/david-aggeler/keel/vscode"
 )
 
-// DHF-TEST: keel/requirement-62
+// DHF-TEST: keel/requirement-62, keel/requirement-74
 func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	exe := buildDemoDev(t)
 	root := t.TempDir()
@@ -33,6 +33,17 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	assertItem(t, discovery.Items, "keel-demo-dev::maintenance::detect-lanes", "maintenance", true)
 	assertItem(t, discovery.Items, "keel-demo-dev::maintenance::block-bad-lane", "maintenance", true)
 	assertItem(t, discovery.Items, "keel-demo-dev::maintenance::unblock-bad-lane", "maintenance", true)
+	assertItem(t, discovery.Items, "keel::desired-state::group::test-preconditions", "group", false)
+	dataSetGroup := assertItem(t, discovery.Items, "keel::desired-state::group::app-db-data-set", "group", false)
+	if dataSetGroup.SortText != "b.020" || !strings.Contains(strings.Join(dataSetGroup.Limitations, " "), "mutually_exclusive=true") {
+		t.Fatalf("data-set discovery group = %+v, want order and exclusivity surfaced", dataSetGroup)
+	}
+	for _, id := range []string{"keel-demo-dev::desired-state::docker-env", "keel-demo-dev::desired-state::dataset::small"} {
+		item := assertItem(t, discovery.Items, id, "group", true)
+		if item.ParentID != "keel::desired-state::group::test-preconditions" && item.ParentID != "keel::desired-state::group::app-db-data-set" {
+			t.Fatalf("desired-state row %s parent = %q, want derived desired-state group", id, item.ParentID)
+		}
+	}
 	assertMissingItem(t, discovery.Items, "keel-demo-dev::lane::go-pass")
 
 	planOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "desired-state", "--format", "json", "--id", "keel-demo-dev::lane::fake-smoke")
@@ -345,17 +356,18 @@ func decodeJSON(t *testing.T, raw string, out any) {
 	}
 }
 
-func assertItem(t *testing.T, items []vscode.TestItem, id, kind string, runnable bool) {
+func assertItem(t *testing.T, items []vscode.TestItem, id, kind string, runnable bool) vscode.TestItem {
 	t.Helper()
 	for _, item := range items {
 		if item.ID == id {
 			if item.Kind != kind || item.Runnable != runnable {
 				t.Fatalf("item %s = kind %q runnable %v, want %q %v", id, item.Kind, item.Runnable, kind, runnable)
 			}
-			return
+			return item
 		}
 	}
 	t.Fatalf("missing discovery item %s in %+v", id, items)
+	return vscode.TestItem{}
 }
 
 func assertMissingItem(t *testing.T, items []vscode.TestItem, id string) {
