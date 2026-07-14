@@ -797,7 +797,7 @@ export function applyRunEvent(
       break;
     case 'test_started':
       for (const item of resultItemsForRunEvent(items, event.test_id)) {
-        if (shouldApplyResultToItem(item, selectedItemIds, resultItemIds, event.test_id)) {
+        if (!resultItemIds.has(item.id) && shouldApplyResultToItem(item, selectedItemIds, resultItemIds, event.test_id)) {
           run.started(item);
         }
       }
@@ -893,6 +893,7 @@ export function runEventApplicationSnapshot(
   };
 }
 
+// DHF-REQ: keel/requirement-71
 export function shouldApplyResultToItem(
   item: vscode.TestItem,
   selectedItemIds: ReadonlySet<string>,

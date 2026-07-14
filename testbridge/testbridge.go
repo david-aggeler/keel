@@ -150,7 +150,7 @@ func CommandSpec(bridge Bridge) *cli.CommandSpec {
 						Subcommands: []*cli.CommandSpec{
 							{Name: "discover", Use: "test-bridge tests discover [--format json]", Short: "Emit the test discovery document.", Flags: []cli.FlagSpec{{Name: "format", Value: "json", Short: "Output format."}}, Handler: handleDiscover(bridge)},
 							{Name: "desired-state", Use: "test-bridge tests desired-state [--format json] [--id test-id]", Short: "Emit the read-only desired-state document.", Flags: []cli.FlagSpec{{Name: "format", Value: "json", Short: "Output format."}, {Name: "id", Value: "test-id", Short: "Selected test id."}}, Handler: handleDesiredState(bridge)},
-							{Name: "run", Use: "test-bridge tests run --id test-id", Short: "Run selected tests.", Flags: []cli.FlagSpec{{Name: "id", Value: "test-id", Short: "Selected test id."}}, Handler: handleRun(bridge)},
+							{Name: "run", Use: "test-bridge tests run [--dry-run] --id test-id", Short: "Run selected tests.", Flags: []cli.FlagSpec{{Name: "id", Value: "test-id", Short: "Selected test id."}, {Name: "dry-run", Short: "Resolve selected test ids without executing them."}}, Handler: handleRun(bridge)},
 						},
 					},
 				},
@@ -190,9 +190,16 @@ func handleDesiredState(bridge Bridge) cli.Handler {
 // DHF-REQ: keel/requirement-58
 func handleRun(bridge Bridge) cli.Handler {
 	return func(ctx context.Context, args []string) error {
-		ids, err := parseIDs(args, false, false)
+		ids, dryRun, err := parseRunArgs(args)
 		if err != nil {
 			return err
+		}
+		ids, err = resolveRunIDs(ctx, bridge, ids, dryRun)
+		if err != nil {
+			return err
+		}
+		if dryRun {
+			return nil
 		}
 		rt := runtimeOrDefault(ctx, bridge)
 		runID := newRunID(rt)
@@ -230,6 +237,67 @@ func handleRun(bridge Bridge) cli.Handler {
 		}
 		return nil
 	}
+}
+
+func parseRunArgs(args []string) ([]string, bool, error) {
+	ids := make([]string, 0)
+	dryRun := false
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--dry-run":
+			dryRun = true
+		case "--id":
+			if i+1 >= len(args) {
+				return nil, false, cli.NewUsageError("--id requires a test id")
+			}
+			i++
+			ids = append(ids, args[i])
+		case "--format":
+			return nil, false, cli.NewUsageError("unknown flag \"--format\"")
+		default:
+			return nil, false, cli.NewUsageError("unknown test-bridge tests argument %q", args[i])
+		}
+	}
+	if len(ids) == 0 {
+		return nil, false, cli.NewUsageError("--id is required")
+	}
+	return ids, dryRun, nil
+}
+
+// DHF-REQ: keel/requirement-72
+func resolveRunIDs(ctx context.Context, bridge Bridge, ids []string, strict bool) ([]string, error) {
+	doc, err := bridge.Discover(ctx)
+	if err != nil {
+		return nil, err
+	}
+	items := make(map[string]vscode.TestItem, len(doc.Items))
+	for _, item := range doc.Items {
+		items[item.ID] = item
+	}
+	resolved := make([]string, 0, len(ids))
+	for _, id := range ids {
+		item, ok := items[id]
+		if !ok {
+			if !strict {
+				resolved = append(resolved, id)
+				continue
+			}
+			return nil, cli.NewUsageError("unknown test id %q", id)
+		}
+		targetID := item.ID
+		if item.CanonicalID != "" {
+			targetID = item.CanonicalID
+		}
+		target, ok := items[targetID]
+		if !ok {
+			return nil, cli.NewUsageError("test id %q resolves to unknown canonical id %q", id, targetID)
+		}
+		if !target.Runnable && (strict || item.CanonicalID != "") {
+			return nil, cli.NewUsageError("test id %q resolves to non-runnable id %q", id, targetID)
+		}
+		resolved = append(resolved, targetID)
+	}
+	return resolved, nil
 }
 
 func handleConfigInit(bridge Bridge) cli.Handler {
