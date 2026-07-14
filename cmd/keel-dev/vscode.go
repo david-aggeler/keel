@@ -177,8 +177,9 @@ type lanesDetectDocument struct {
 	File      string             `json:"file"`
 	Written   bool               `json:"written"`
 	Added     []lanesDetectEntry `json:"added"`
+	Removed   []lanesDetectEntry `json:"removed"`
+	Changed   []lanesDetectEntry `json:"changed"`
 	Unchanged []lanesDetectEntry `json:"unchanged"`
-	Skipped   []lanesDetectEntry `json:"skipped"`
 }
 
 type lanesDetectEntry struct {
@@ -604,65 +605,27 @@ func writeVSCodeLanesList(root string, out io.Writer) error {
 	return testbridge.EncodeDocument(out, doc)
 }
 
-// DHF-REQ: keel/requirement-65
+// DHF-REQ: keel/requirement-65, keel/requirement-73
 func writeVSCodeLanesDetect(root string, dryRun bool, out io.Writer) error {
 	lanes, err := loadLanesState(root)
 	if err != nil {
 		return err
 	}
-	if lanes.wholeFileErr != nil {
-		return lanes.wholeFileErr
-	}
 	families, err := detectGoFamilies(root)
 	if err != nil {
 		return err
 	}
-	covered := map[string]bool{}
-	for _, eff := range lanes.effective {
-		for _, pkg := range eff.goPackages {
-			family := goPackageFamily(pkg)
-			if family != "" {
-				covered[family] = true
-			}
-		}
+	updated := generatedLanesFile(root, families)
+	doc := lanesDetectDocument{
+		Version:   1,
+		File:      ".vscode/test-lanes.json",
+		Added:     []lanesDetectEntry{},
+		Removed:   []lanesDetectEntry{},
+		Changed:   []lanesDetectEntry{},
+		Unchanged: []lanesDetectEntry{},
 	}
-	doc := lanesDetectDocument{Version: 1, File: ".vscode/test-lanes.json"}
-	updated := lanes.file
-	if updated.Version == 0 {
-		updated.Version = 1
-	}
-	for _, gate := range vscodeGateLaneDefs {
-		if _, exists := lanes.byID[gate.ID]; exists {
-			doc.Unchanged = append(doc.Unchanged, lanesDetectEntry{ID: gate.ID, Reason: "gate lane already declared"})
-			continue
-		}
-		doc.Added = append(doc.Added, lanesDetectEntry{ID: gate.ID, Label: gate.Label, Order: gate.Order})
-		updated.Lanes = append(updated.Lanes, gate)
-	}
-	nextSlot := nextDetectionOrderSlot(lanes.file.Lanes)
-	for _, family := range sortedKeys(families) {
-		id := detectedFamilyLaneID(family)
-		if _, exists := lanes.byID[id]; exists {
-			doc.Unchanged = append(doc.Unchanged, lanesDetectEntry{ID: id, Reason: "lane id already declared"})
-			continue
-		}
-		if covered[family] {
-			doc.Skipped = append(doc.Skipped, lanesDetectEntry{ID: id, Reason: "covered by existing lane"})
-			continue
-		}
-		order := fmt.Sprintf("c.%d", nextSlot)
-		nextSlot++
-		member := detectedFamilyLaneMember(family)
-		doc.Added = append(doc.Added, lanesDetectEntry{ID: id, Label: detectedFamilyLaneLabel(family), Order: order, Packages: familyPackageCount(root, family)})
-		updated.Lanes = append(updated.Lanes, testFileLane{
-			ID:          id,
-			Label:       detectedFamilyLaneLabel(family),
-			Order:       order,
-			Description: fmt.Sprintf("detected category - %d packages", familyPackageCount(root, family)),
-			Members:     []laneMember{member},
-		})
-	}
-	if len(doc.Added) > 0 && !dryRun {
+	recordLanesDetectDelta(&doc, lanes.file.Lanes, updated.Lanes)
+	if !dryRun {
 		data, err := json.MarshalIndent(updated, "", "  ")
 		if err != nil {
 			return err
@@ -676,6 +639,94 @@ func writeVSCodeLanesDetect(root string, dryRun bool, out io.Writer) error {
 		doc.Written = true
 	}
 	return testbridge.EncodeDocument(out, doc)
+}
+
+func generatedLanesFile(root string, families map[string]bool) testLanesFile {
+	updated := testLanesFile{Version: 1}
+	updated.Lanes = append(updated.Lanes, vscodeGateLaneDefs...)
+	nextSlot := 40
+	for _, family := range sortedKeys(families) {
+		id := detectedFamilyLaneID(family)
+		order := fmt.Sprintf("c.%d", nextSlot)
+		nextSlot++
+		member := detectedFamilyLaneMember(family)
+		updated.Lanes = append(updated.Lanes, testFileLane{
+			ID:          id,
+			Label:       detectedFamilyLaneLabel(family),
+			Order:       order,
+			Description: fmt.Sprintf("detected category - %d packages", familyPackageCount(root, family)),
+			Members:     []laneMember{member},
+		})
+	}
+	return updated
+}
+
+func recordLanesDetectDelta(doc *lanesDetectDocument, previous, next []testFileLane) {
+	previousByID := map[string]testFileLane{}
+	nextByID := map[string]testFileLane{}
+	for _, lane := range previous {
+		if lane.ID != "" {
+			previousByID[lane.ID] = lane
+		}
+	}
+	for _, lane := range next {
+		if lane.ID != "" {
+			nextByID[lane.ID] = lane
+		}
+	}
+	for _, id := range sortedLaneIDs(nextByID) {
+		nextLane := nextByID[id]
+		entry := lanesDetectEntry{ID: id, Label: nextLane.Label, Order: nextLane.Order}
+		if packages := generatedLanePackageCount(nextLane); packages > 0 {
+			entry.Packages = packages
+		}
+		previousLane, exists := previousByID[id]
+		if !exists {
+			doc.Added = append(doc.Added, entry)
+			continue
+		}
+		if sameLaneDefinition(previousLane, nextLane) {
+			doc.Unchanged = append(doc.Unchanged, lanesDetectEntry{ID: id, Reason: "unchanged"})
+			continue
+		}
+		entry.Reason = "definition changed"
+		doc.Changed = append(doc.Changed, entry)
+	}
+	for _, id := range sortedLaneIDs(previousByID) {
+		if _, exists := nextByID[id]; exists {
+			continue
+		}
+		lane := previousByID[id]
+		doc.Removed = append(doc.Removed, lanesDetectEntry{ID: id, Label: lane.Label, Order: lane.Order, Reason: "not detected"})
+	}
+}
+
+func sortedLaneIDs(lanes map[string]testFileLane) []string {
+	ids := make([]string, 0, len(lanes))
+	for id := range lanes {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func sameLaneDefinition(a, b testFileLane) bool {
+	aData, aErr := json.Marshal(a)
+	bData, bErr := json.Marshal(b)
+	return aErr == nil && bErr == nil && bytes.Equal(aData, bData)
+}
+
+func generatedLanePackageCount(lane testFileLane) int {
+	const prefix = "detected category - "
+	const suffix = " packages"
+	if !strings.HasPrefix(lane.Description, prefix) || !strings.HasSuffix(lane.Description, suffix) {
+		return 0
+	}
+	count, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(lane.Description, prefix), suffix))
+	if err != nil {
+		return 0
+	}
+	return count
 }
 
 func laneItem(id, label, sortText string) vscode.TestItem {
@@ -708,6 +759,7 @@ func laneRequiredResources(id string) []string {
 }
 
 // DHF-REQ: keel/requirement-51, keel/requirement-54, keel/requirement-65
+// DHF-REQ: keel/requirement-51, keel/requirement-73
 func loadLanesState(root string) (lanesState, error) {
 	state := lanesState{
 		root:      root,
@@ -749,9 +801,9 @@ func loadLanesState(root string) (lanesState, error) {
 	}
 	for id := range state.byID {
 		if _, err := state.expand(id, nil, 0); err != nil {
-			// Cycles and over-depth invalidate the whole file: record one
-			// file-level diagnostic (system lanes still render) and let the
-			// detect guard refuse. Other errors suppress only their own lane.
+			// Cycles and over-depth invalidate the discovery view of the file:
+			// record one file-level diagnostic. Detect-lanes can still replace
+			// the file from compiled/workspace knowledge.
 			if errors.Is(err, errLaneCycle) || errors.Is(err, errLaneDepth) {
 				if state.wholeFileErr == nil {
 					state.wholeFileErr = err
@@ -766,9 +818,8 @@ func loadLanesState(root string) (lanesState, error) {
 }
 
 // errLaneCycle and errLaneDepth are whole-file composition errors per the Test
-// Lanes spec §11: they invalidate the entire file (one non-runnable diagnostic,
-// system lanes still render) rather than suppressing a single lane, and they
-// make `lanes detect` refuse to write.
+// Lanes spec §11: they invalidate the discovery view of the file (one
+// non-runnable diagnostic) rather than suppressing a single lane.
 var (
 	errLaneCycle = errors.New("lane composition cycle")
 	errLaneDepth = errors.New("lane composition depth > 8")
@@ -1201,23 +1252,6 @@ func familyPackageCount(root, family string) int {
 		}
 	}
 	return count
-}
-
-func nextDetectionOrderSlot(lanes []testFileLane) int {
-	used := map[int]bool{}
-	for _, lane := range lanes {
-		if strings.HasPrefix(lane.Order, "c.") {
-			if n, err := strconv.Atoi(strings.TrimPrefix(lane.Order, "c.")); err == nil {
-				used[n] = true
-			}
-		}
-	}
-	for i := 40; i <= 99; i++ {
-		if !used[i] {
-			return i
-		}
-	}
-	return 100
 }
 
 func sortedKeys(values map[string]bool) []string {
@@ -1942,11 +1976,14 @@ func runVSCodeDetectLanesMaintenance(root string, writer vscode.RunEventWriter) 
 	for _, entry := range doc.Added {
 		writer(vscode.RunEvent{Event: "output", TestID: vscodeMaintenanceDetectLanes, Message: fmt.Sprintf("added %s %s", entry.ID, entry.Order)})
 	}
+	for _, entry := range doc.Removed {
+		writer(vscode.RunEvent{Event: "output", TestID: vscodeMaintenanceDetectLanes, Message: fmt.Sprintf("removed %s: %s", entry.ID, entry.Reason)})
+	}
+	for _, entry := range doc.Changed {
+		writer(vscode.RunEvent{Event: "output", TestID: vscodeMaintenanceDetectLanes, Message: fmt.Sprintf("changed %s %s", entry.ID, entry.Order)})
+	}
 	for _, entry := range doc.Unchanged {
 		writer(vscode.RunEvent{Event: "output", TestID: vscodeMaintenanceDetectLanes, Message: fmt.Sprintf("unchanged %s: %s", entry.ID, entry.Reason)})
-	}
-	for _, entry := range doc.Skipped {
-		writer(vscode.RunEvent{Event: "output", TestID: vscodeMaintenanceDetectLanes, Message: fmt.Sprintf("skipped %s: %s", entry.ID, entry.Reason)})
 	}
 	return nil
 }
