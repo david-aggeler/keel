@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -73,8 +75,16 @@ func validateExpectedRedManifest(manifest expectedRedManifest) ([]expectedRedEnt
 
 // logExpectedRed prints the expected-red debt through keel/log. Called by the
 // ci gate on every run (CR-74 visibility decision: count + entries, never silent).
+// A missing manifest is the debt-free state (count 0) — same as an empty one —
+// so hermetic test modules without a testdata/ tree still gate green; an
+// invalid manifest stays a hard failure.
 func logExpectedRed(logger *slog.Logger, dir string) error {
-	entries, err := loadExpectedRedManifest(filepath.Join(dir, "testdata", "red"+"list.json"))
+	path := filepath.Join(dir, "testdata", "red"+"list.json")
+	if _, statErr := os.Stat(path); errors.Is(statErr, fs.ErrNotExist) {
+		logger.Info("expected-red manifest", "count", 0, "manifest", "absent")
+		return nil
+	}
+	entries, err := loadExpectedRedManifest(path)
 	if err != nil {
 		return err
 	}
