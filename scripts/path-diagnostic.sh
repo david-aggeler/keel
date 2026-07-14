@@ -48,6 +48,7 @@ main() {
   printf 'when        : %s\n' "$(date 2>/dev/null)"
   printf 'user        : %s\n' "$(id -un 2>/dev/null)"
   printf 'interpreter : %s  (%s, flags=%s)\n' "$THIS" "$INTER" "$-"
+  # shellcheck disable=SC2016 # $0 is intentionally literal label text.
   printf 'argv0 ($0)  : %s\n' "$0"
 
   hr
@@ -97,6 +98,7 @@ main() {
   echo "-- FRESH reference shell (env -i zsh -c): what a RESTARTED session sees --"
   FRESH_OK=na
   if command -v zsh >/dev/null 2>&1; then
+    # shellcheck disable=SC2016 # Inner script expands inside the fresh zsh.
     env -i HOME="$HOME" zsh -c '
       printf "  PATH: %s\n" "$PATH"
       if command -v codex >/dev/null 2>&1; then
