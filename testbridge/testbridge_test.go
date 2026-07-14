@@ -353,7 +353,7 @@ func TestDesiredStateRowRunIDsAreUniqueAcrossThePlan(t *testing.T) {
 			Order: 10,
 			Rows: []vscode.DesiredState{
 				{Resource: "python", Kind: "tool", Desired: "available", Current: "available", Status: "satisfied", Action: "reuse", Message: "ok", Reusable: true},
-				{RunID: "demo::action::provision-venv", Resource: "python-venv", Kind: "dependency", Desired: "provisioned", Current: "missing", Status: "reconcilable", Action: "reconcile", Message: "provision", Owned: true},
+				{RunID: "demo::action::provision-python-env", Resource: "python-env", Kind: "dependency", Desired: "provisioned", Current: "missing", Status: "reconcilable", Action: "reconcile", Message: "provision", Owned: true},
 			},
 		}},
 		Teardown: vscode.SetupPlanTeardown{Policy: "none"},
@@ -364,7 +364,7 @@ func TestDesiredStateRowRunIDsAreUniqueAcrossThePlan(t *testing.T) {
 
 	dup := valid
 	dup.Groups = cloneDesiredStateGroups(valid.Groups)
-	dup.Groups[0].Rows[0].RunID = "demo::action::provision-venv"
+	dup.Groups[0].Rows[0].RunID = "demo::action::provision-python-env"
 	if err := testbridge.ValidateDocument(dup); err == nil || !strings.Contains(err.Error(), "run ids must be unique") {
 		t.Fatalf("duplicate run_id err = %v, want run ids must be unique", err)
 	}
