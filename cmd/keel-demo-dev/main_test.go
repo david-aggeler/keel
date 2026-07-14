@@ -15,7 +15,7 @@ import (
 	"github.com/david-aggeler/keel/vscode"
 )
 
-// DHF-TEST: keel/requirement-62, keel/requirement-74
+// DHF-TEST: keel/requirement-62, keel/requirement-74, keel/requirement-75
 func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	exe := buildDemoDev(t)
 	root := t.TempDir()
@@ -113,21 +113,39 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-62
+// DHF-TEST: keel/requirement-62, keel/requirement-75
 func TestKeelDemoDevDesiredStateRowsAreRunnable(t *testing.T) {
 	exe := buildDemoDev(t)
 	root := t.TempDir()
 
-	for _, id := range []string{
-		"keel-demo-dev::desired-state::docker-env",
-		"keel-demo-dev::desired-state::dataset::full",
-	} {
-		out, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", id)
-		if code != 0 {
-			t.Fatalf("desired-state row %s exit = %d, want 0\n%s", id, code, out)
-		}
-		assertRunEvent(t, decodeRunEvents(t, out), "passed", id, "reconciled")
+	cases := []struct {
+		id      string
+		code    int
+		event   string
+		message string
+	}{
+		{id: "keel-demo-dev::desired-state::docker-env", code: 1, event: "failed", message: "provision_demo_environment"},
+		{id: "keel-demo-dev::desired-state::dataset::small", code: 0, event: "passed", message: "reuse_small_data_set"},
 	}
+	for _, tc := range cases {
+		out, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", tc.id)
+		if code != tc.code {
+			t.Fatalf("desired-state row %s exit = %d, want %d\n%s", tc.id, code, tc.code, out)
+		}
+		assertRunEvent(t, decodeRunEvents(t, out), tc.event, tc.id, tc.message)
+	}
+
+	out, code := runDemoDev(t, root, exe,
+		"test-bridge", "tests", "run",
+		"--id", "keel-demo-dev::desired-state::docker-env",
+		"--id", "keel-demo-dev::desired-state::dataset::small",
+	)
+	if code != 1 {
+		t.Fatalf("multi desired-state row exit = %d, want 1\n%s", code, out)
+	}
+	events := decodeRunEvents(t, out)
+	assertRunEvent(t, events, "failed", "keel-demo-dev::desired-state::docker-env", "provision_demo_environment")
+	assertRunEvent(t, events, "passed", "keel-demo-dev::desired-state::dataset::small", "reuse_small_data_set")
 }
 
 // DHF-TEST: keel/requirement-62
@@ -375,8 +393,12 @@ func assertDesiredState(t *testing.T, groups []vscode.DesiredStateGroup, resourc
 	for _, group := range groups {
 		for _, row := range group.Rows {
 			if row.Resource == resource {
-				if row.Desired != desired || row.Current != current || row.Action != "reconcile_during_run" || row.Desired == row.Current || !strings.Contains(row.Message, action) {
-					t.Fatalf("desired row %s = %+v, want desired %q current %q reconcile_during_run message containing %q with desired != current", resource, row, desired, current, action)
+				wantAction := "reconcile_during_run"
+				if current == desired {
+					wantAction = "reuse"
+				}
+				if row.Desired != desired || row.Current != current || row.Action != wantAction || !strings.Contains(row.Message, action) {
+					t.Fatalf("desired row %s = %+v, want desired %q current %q action %q message containing %q", resource, row, desired, current, wantAction, action)
 				}
 				return
 			}
@@ -403,8 +425,12 @@ func assertExclusiveDataSetGroup(t *testing.T, groups []vscode.DesiredStateGroup
 			if row.Active {
 				active++
 			}
-			if row.RunID == "" || row.Action != "reconcile_during_run" {
-				t.Fatalf("data-set row = %+v, want runnable reconcile_during_run row", row)
+			wantAction := "reconcile_during_run"
+			if row.Resource == "app-db-small" {
+				wantAction = "reuse"
+			}
+			if row.RunID == "" || row.Action != wantAction {
+				t.Fatalf("data-set row = %+v, want runnable %s row", row, wantAction)
 			}
 		}
 		if active != 1 {

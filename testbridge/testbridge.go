@@ -59,10 +59,55 @@ type DiscoveryProvider interface {
 	Discover(context.Context) (vscode.DiscoveryDocument, error)
 }
 
-// DesiredStateProvider supplies the read-only desired-state report for a
-// selection. Reconciliation belongs to Run, not this provider.
+// DesiredStateProvider supplies declared desired-state rows for a selection.
+// The package executes row probes to derive the protocol state fields.
 type DesiredStateProvider interface {
-	DesiredState(context.Context, []string) (vscode.SetupPlan, error)
+	DesiredState(context.Context, []string) (DesiredStatePlan, error)
+}
+
+// DesiredStatePlan is the consumer-declared structure for desired state.
+// Current, Status, Action, and Message are derived by executing row probes.
+type DesiredStatePlan struct {
+	Groups         []DesiredStateGroup
+	TeardownPolicy string
+}
+
+// DesiredStateGroup is a consumer-declared desired-state row cluster.
+type DesiredStateGroup struct {
+	Label             string
+	Order             int
+	MutuallyExclusive bool
+	Rows              []DesiredStateRow
+}
+
+// DesiredStateRow is the consumer registration contract for one desired-state
+// row. It deliberately carries no Current, Status, or Action field.
+type DesiredStateRow struct {
+	RunID    string
+	Resource string
+	Kind     string
+	Desired  string
+	Detail   string
+	Reusable bool
+	Owned    bool
+	Active   bool
+	Probe    DesiredStateProbe
+}
+
+// DesiredStateProbe derives the live state for one desired-state row.
+type DesiredStateProbe func(context.Context, DesiredStateProbeRequest) DesiredStateProbeResult
+
+// DesiredStateProbeRequest describes the row probe invocation.
+type DesiredStateProbeRequest struct {
+	RunID string
+	Root  string
+}
+
+// DesiredStateProbeResult is the state observed by a desired-state row probe.
+type DesiredStateProbeResult struct {
+	Current   string
+	Satisfied bool
+	Message   string
 }
 
 // Runner executes a selected run and emits run events through the package-owned
@@ -196,10 +241,7 @@ func deriveDesiredStateDiscovery(ctx context.Context, bridge Bridge, doc vscode.
 		}
 		return doc, nil
 	}
-	if err := ValidateDocument(plan); err != nil {
-		return vscode.DiscoveryDocument{}, err
-	}
-	doc.Items = append(doc.Items, desiredStateDiscoveryItems(parent.ID, plan.Groups)...)
+	doc.Items = append(doc.Items, desiredStateDeclarationDiscoveryItems(parent.ID, plan.Groups)...)
 	if err := validateUniqueDiscoveryItemIDs(doc.Items); err != nil {
 		return vscode.DiscoveryDocument{}, err
 	}
@@ -262,8 +304,8 @@ func desiredStateDiagnosticItem(parentID string, err error) vscode.TestItem {
 	}
 }
 
-func desiredStateDiscoveryItems(parentID string, groups []vscode.DesiredStateGroup) []vscode.TestItem {
-	groups = append([]vscode.DesiredStateGroup(nil), groups...)
+func desiredStateDeclarationDiscoveryItems(parentID string, groups []DesiredStateGroup) []vscode.TestItem {
+	groups = append([]DesiredStateGroup(nil), groups...)
 	sort.SliceStable(groups, func(i, j int) bool { return groups[i].Order < groups[j].Order })
 	items := make([]vscode.TestItem, 0)
 	for _, group := range groups {
@@ -279,31 +321,35 @@ func desiredStateDiscoveryItems(parentID string, groups []vscode.DesiredStateGro
 			Limitations: []string{fmt.Sprintf("mutually_exclusive=%t", group.MutuallyExclusive)},
 		}
 		items = append(items, groupItem)
-		for rowIndex, state := range group.Rows {
-			items = append(items, desiredStateRowDiscoveryItem(groupID, groupItem.SortText, rowIndex+1, state))
+		for rowIndex, row := range group.Rows {
+			items = append(items, desiredStateDeclarationDiscoveryItem(groupID, groupItem.SortText, rowIndex+1, row))
 		}
 	}
 	return items
 }
 
-func desiredStateRowDiscoveryItem(parentID, parentSort string, rowIndex int, state vscode.DesiredState) vscode.TestItem {
-	id := state.RunID
+func desiredStateDeclarationDiscoveryItem(parentID, parentSort string, rowIndex int, row DesiredStateRow) vscode.TestItem {
+	action := "reconcile_during_run"
+	if row.Reusable {
+		action = "reuse"
+	}
+	id := row.RunID
 	if id == "" {
-		id = parentID + "::row::" + stableIDSegment(strings.Join([]string{state.Resource, state.Desired, state.Action}, "-"))
+		id = parentID + "::row::" + stableIDSegment(strings.Join([]string{row.Resource, row.Desired, action}, "-"))
 	}
 	profiles := []string{}
-	if state.RunID != "" {
+	if row.RunID != "" {
 		profiles = []string{"run"}
 	}
 	return vscode.TestItem{
 		ID:          id,
 		ParentID:    parentID,
-		Label:       fmt.Sprintf("%s %s: %s -> %s", state.Resource, state.Status, state.Current, state.Desired),
+		Label:       fmt.Sprintf("%s: %s", row.Resource, row.Desired),
 		SortText:    fmt.Sprintf("%s.%03d", parentSort, rowIndex),
 		Kind:        "group",
-		Runnable:    state.RunID != "",
+		Runnable:    row.RunID != "",
 		Profiles:    profiles,
-		Limitations: []string{"action=" + state.Action, fmt.Sprintf("active=%t", state.Active)},
+		Limitations: []string{"action=" + action, fmt.Sprintf("active=%t", row.Active)},
 	}
 }
 
@@ -331,12 +377,82 @@ func handleDesiredState(bridge Bridge) cli.Handler {
 		if err != nil {
 			return err
 		}
-		doc, err := bridge.DesiredState(ctx, ids)
+		doc, err := deriveDesiredStatePlan(ctx, bridge, ids)
 		if err != nil {
 			return err
 		}
 		return writeDocument(runtimeOrDefault(ctx, bridge), doc)
 	}
+}
+
+// DHF-REQ: keel/requirement-75
+func deriveDesiredStatePlan(ctx context.Context, bridge Bridge, ids []string) (vscode.SetupPlan, error) {
+	declared, err := bridge.DesiredState(ctx, ids)
+	if err != nil {
+		return vscode.SetupPlan{}, err
+	}
+	rt := runtimeOrDefault(ctx, bridge)
+	root := runtimeRoot(rt, bridge)
+	groups := make([]vscode.DesiredStateGroup, 0, len(declared.Groups))
+	for _, group := range declared.Groups {
+		rows := make([]vscode.DesiredState, 0, len(group.Rows))
+		for _, row := range group.Rows {
+			derived, err := deriveDesiredStateRow(ctx, root, row)
+			if err != nil {
+				return vscode.SetupPlan{}, err
+			}
+			rows = append(rows, derived)
+		}
+		groups = append(groups, vscode.DesiredStateGroup{
+			Label:             group.Label,
+			Order:             group.Order,
+			MutuallyExclusive: group.MutuallyExclusive,
+			Rows:              rows,
+		})
+	}
+	return vscode.SetupPlan{
+		Version:        3,
+		Devtool:        bridge.Metadata(),
+		Workspace:      workspaceNode(bridge.Workspace(), root),
+		GeneratedAt:    runtimeNow(rt),
+		Groups:         groups,
+		TeardownPolicy: declared.TeardownPolicy,
+	}, nil
+}
+
+func deriveDesiredStateRow(ctx context.Context, root string, row DesiredStateRow) (vscode.DesiredState, error) {
+	if row.Probe == nil {
+		return vscode.DesiredState{}, fmt.Errorf("keel/testbridge: desired-state row %q has no probe", row.Resource)
+	}
+	result := row.Probe(ctx, DesiredStateProbeRequest{RunID: row.RunID, Root: root})
+	current := result.Current
+	if current == "" {
+		current = "unknown"
+	}
+	status := "reconcilable"
+	action := "reconcile_during_run"
+	if result.Satisfied {
+		status = "satisfied"
+		action = "reuse"
+	}
+	message := result.Message
+	if message == "" {
+		message = fmt.Sprintf("%s is %s", row.Resource, status)
+	}
+	return vscode.DesiredState{
+		RunID:    row.RunID,
+		Resource: row.Resource,
+		Kind:     row.Kind,
+		Desired:  row.Desired,
+		Current:  current,
+		Status:   status,
+		Action:   action,
+		Message:  message,
+		Detail:   row.Detail,
+		Reusable: row.Reusable,
+		Owned:    row.Owned,
+		Active:   row.Active,
+	}, nil
 }
 
 // DHF-REQ: keel/requirement-58
@@ -377,7 +493,12 @@ func handleRun(bridge Bridge) cli.Handler {
 			}()
 		}
 
-		exitCode, runErr := bridge.Run(ctx, RunRequest{IDs: append([]string{}, ids...), RunID: runID, Root: runtimeRoot(rt, bridge)}, writer)
+		root := runtimeRoot(rt, bridge)
+		var remaining []string
+		exitCode, remaining, runErr := runDesiredStateSelections(ctx, bridge, ids, writer)
+		if runErr == nil && len(remaining) > 0 {
+			exitCode, runErr = bridge.Run(ctx, RunRequest{IDs: append([]string{}, remaining...), RunID: runID, Root: root}, writer)
+		}
 		if runErr != nil {
 			writer(vscode.RunEvent{Event: "errored", Message: runErr.Error()})
 		}
@@ -390,6 +511,52 @@ func handleRun(bridge Bridge) cli.Handler {
 		}
 		return nil
 	}
+}
+
+// DHF-REQ: keel/requirement-75
+func runDesiredStateSelections(ctx context.Context, bridge Bridge, ids []string, writer vscode.RunEventWriter) (int, []string, error) {
+	declared, err := bridge.DesiredState(ctx, ids)
+	if err != nil {
+		return 0, append([]string{}, ids...), nil
+	}
+	rt := runtimeOrDefault(ctx, bridge)
+	rows := desiredStateDeclarationsByRunID(declared)
+	remaining := make([]string, 0, len(ids))
+	exitCode := 0
+	for _, id := range ids {
+		row, ok := rows[id]
+		if !ok {
+			remaining = append(remaining, id)
+			continue
+		}
+		derived, err := deriveDesiredStateRow(ctx, runtimeRoot(rt, bridge), row)
+		if err != nil {
+			return 1, remaining, err
+		}
+		writer(vscode.RunEvent{Event: "test_started", TestID: id})
+		if derived.Status == "satisfied" {
+			writer(vscode.RunEvent{Event: "passed", TestID: id, Message: derived.Message})
+			continue
+		}
+		writer(vscode.RunEvent{Event: "failed", TestID: id, Message: derived.Message})
+		exitCode = 1
+	}
+	if exitCode != 0 {
+		return exitCode, remaining, fmt.Errorf("desired-state row failed")
+	}
+	return exitCode, remaining, nil
+}
+
+func desiredStateDeclarationsByRunID(plan DesiredStatePlan) map[string]DesiredStateRow {
+	rows := map[string]DesiredStateRow{}
+	for _, group := range plan.Groups {
+		for _, row := range group.Rows {
+			if row.RunID != "" {
+				rows[row.RunID] = row
+			}
+		}
+	}
+	return rows
 }
 
 func parseRunArgs(args []string) ([]string, bool, error) {
@@ -609,6 +776,13 @@ func workspaceNode(workspace Workspace, root string) string {
 		return filepath.Base(root)
 	}
 	return "unknown"
+}
+
+func runtimeNow(rt Runtime) time.Time {
+	if rt.Now != nil {
+		return rt.Now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 // DHF-REQ: keel/requirement-58, keel/requirement-67

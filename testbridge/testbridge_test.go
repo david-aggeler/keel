@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -94,13 +95,13 @@ func TestDiscoverDerivesDesiredStateGroupsFromProvider(t *testing.T) {
 		Kind:     "group",
 		Profiles: []string{},
 	}}
-	fake.desiredGroups = []vscode.DesiredStateGroup{{
+	fake.desiredGroups = []testbridge.DesiredStateGroup{{
 		Label:             "Provisioning",
 		Order:             20,
 		MutuallyExclusive: true,
-		Rows: []vscode.DesiredState{
-			{RunID: "demo::action::seed-small", Resource: "db-small", Kind: "fixture-data", Desired: "small", Current: "empty", Status: "reconcilable", Action: "reconcile_during_run", Message: "seed small", Owned: true, Active: true},
-			{Resource: "python", Kind: "tool", Desired: "available", Current: "available", Status: "satisfied", Action: "reuse", Message: "ok", Reusable: true},
+		Rows: []testbridge.DesiredStateRow{
+			probedRow("demo::action::seed-small", "db-small", "fixture-data", "small", "empty", false, "seed small", false, true),
+			probedRow("", "python", "tool", "available", "available", true, "ok", true, false),
 		},
 	}}
 	var protocol bytes.Buffer
@@ -145,20 +146,10 @@ func TestRunDryRunResolvesDerivedDesiredStateRunIDsReadOnly(t *testing.T) {
 		Kind:     "group",
 		Profiles: []string{},
 	}}
-	fake.desiredGroups = []vscode.DesiredStateGroup{{
+	fake.desiredGroups = []testbridge.DesiredStateGroup{{
 		Label: "Provisioning",
 		Order: 10,
-		Rows: []vscode.DesiredState{{
-			RunID:    "demo::action::seed-small",
-			Resource: "db-small",
-			Kind:     "fixture-data",
-			Desired:  "small",
-			Current:  "empty",
-			Status:   "reconcilable",
-			Action:   "reconcile_during_run",
-			Message:  "seed small",
-			Owned:    true,
-		}},
+		Rows:  []testbridge.DesiredStateRow{probedRow("demo::action::seed-small", "db-small", "fixture-data", "small", "empty", false, "seed small", false, false)},
 	}}
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: io.Discard})
 
@@ -183,30 +174,14 @@ func TestDiscoverRejectsDuplicateDerivedDesiredStateIDs(t *testing.T) {
 		Kind:     "group",
 		Profiles: []string{},
 	}}
-	fake.desiredGroups = []vscode.DesiredStateGroup{{
+	fake.desiredGroups = []testbridge.DesiredStateGroup{{
 		Label: "Provisioning",
 		Order: 10,
-		Rows: []vscode.DesiredState{{
-			Resource: "db-small",
-			Kind:     "fixture-data",
-			Desired:  "small",
-			Current:  "empty",
-			Status:   "reconcilable",
-			Action:   "reconcile_during_run",
-			Message:  "seed small",
-		}},
+		Rows:  []testbridge.DesiredStateRow{probedRow("", "db-small", "fixture-data", "small", "empty", false, "seed small", false, false)},
 	}, {
 		Label: "Provisioning",
 		Order: 20,
-		Rows: []vscode.DesiredState{{
-			Resource: "db-large",
-			Kind:     "fixture-data",
-			Desired:  "large",
-			Current:  "empty",
-			Status:   "reconcilable",
-			Action:   "reconcile_during_run",
-			Message:  "seed large",
-		}},
+		Rows:  []testbridge.DesiredStateRow{probedRow("", "db-large", "fixture-data", "large", "empty", false, "seed large", false, false)},
 	}}
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: io.Discard})
 
@@ -244,6 +219,135 @@ func TestDiscoverDegradesDesiredStateProviderFailure(t *testing.T) {
 		if item.ParentID == "demo::desired-state" && item.ID != diagnostic.ID {
 			t.Fatalf("provider failure emitted extra B child: %+v", item)
 		}
+	}
+}
+
+// DHF-TEST: keel/requirement-75
+func TestDesiredStateRowsExposeDeclaredStructurePlusProbeOnly(t *testing.T) {
+	rowType := reflect.TypeOf(testbridge.DesiredStateRow{})
+	for _, forbidden := range []string{"Current", "Status", "Action"} {
+		if _, ok := rowType.FieldByName(forbidden); ok {
+			t.Fatalf("DesiredStateRow exposes consumer-written state field %s", forbidden)
+		}
+	}
+	if _, ok := rowType.FieldByName("Probe"); !ok {
+		t.Fatal("DesiredStateRow has no probe field")
+	}
+}
+
+// DHF-TEST: keel/requirement-75
+func TestDesiredStateDerivationExecutesProbeAndMapsStateFields(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	probeCalls := 0
+	fake.desiredGroups = []testbridge.DesiredStateGroup{{
+		Label: "Provisioning",
+		Order: 10,
+		Rows: []testbridge.DesiredStateRow{{
+			RunID:    "demo::desired-state::db",
+			Resource: "db",
+			Kind:     "fixture-data",
+			Desired:  "seeded",
+			Owned:    true,
+			Probe: func(_ context.Context, req testbridge.DesiredStateProbeRequest) testbridge.DesiredStateProbeResult {
+				probeCalls++
+				if req.Root != root || req.RunID != "demo::desired-state::db" {
+					t.Fatalf("probe request = %+v, want root/run id", req)
+				}
+				return testbridge.DesiredStateProbeResult{Current: "empty", Satisfied: false, Message: "seed db"}
+			},
+		}},
+	}}
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol})
+
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "desired-state", "--format", "json"}); err != nil {
+		t.Fatalf("desired-state dispatch: %v", err)
+	}
+	var plan vscode.SetupPlan
+	decodeJSON(t, &protocol, &plan)
+	if probeCalls != 1 {
+		t.Fatalf("probe calls = %d, want 1", probeCalls)
+	}
+	row := plan.Groups[0].Rows[0]
+	if row.Current != "empty" || row.Status != "reconcilable" || row.Action != "reconcile_during_run" || row.Message != "seed db" {
+		t.Fatalf("derived row = %+v, want probe-derived Current/Status/Action/Message", row)
+	}
+}
+
+// DHF-TEST: keel/requirement-75
+func TestRunExecutesDesiredStateProbeInsideTestbridge(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	probeCalls := 0
+	fake.desiredGroups = []testbridge.DesiredStateGroup{{
+		Label: "Provisioning",
+		Order: 10,
+		Rows: []testbridge.DesiredStateRow{{
+			RunID:    "demo::desired-state::db",
+			Resource: "db",
+			Kind:     "fixture-data",
+			Desired:  "seeded",
+			Probe: func(context.Context, testbridge.DesiredStateProbeRequest) testbridge.DesiredStateProbeResult {
+				probeCalls++
+				return testbridge.DesiredStateProbeResult{Current: "seeded", Satisfied: true, Message: "db ready"}
+			},
+		}},
+	}}
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return "run-probe" }})
+
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", "demo::desired-state::db"}); err != nil {
+		t.Fatalf("desired-state run dispatch: %v\n%s", err, protocol.String())
+	}
+	if len(fake.runIDs) != 0 {
+		t.Fatalf("consumer runner received desired-state row ids: %v", fake.runIDs)
+	}
+	if probeCalls != 1 {
+		t.Fatalf("probe calls = %d, want row-run execution", probeCalls)
+	}
+	events := decodeEvents(t, protocol.String())
+	if !eventsContain(events, "passed", "demo::desired-state::db", "db ready") {
+		t.Fatalf("events = %+v, want package-owned passed event for desired-state row", events)
+	}
+}
+
+// DHF-TEST: keel/requirement-75
+func TestRunExecutesMultipleDesiredStateRows(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	calls := map[string]int{}
+	fake.desiredGroups = []testbridge.DesiredStateGroup{{
+		Label: "Provisioning",
+		Order: 10,
+		Rows: []testbridge.DesiredStateRow{
+			probedCountingRow(calls, "demo::desired-state::db", "db", "seeded", true, "db ready"),
+			probedCountingRow(calls, "demo::desired-state::cache", "cache", "warm", false, "warm cache"),
+		},
+	}}
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return "run-multi" }})
+
+	err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{
+		"test-bridge", "tests", "run",
+		"--id", "demo::desired-state::db",
+		"--id", "demo::desired-state::cache",
+	})
+	if err == nil {
+		t.Fatal("multi desired-state run returned nil error, want non-zero from failed cache row")
+	}
+	if len(fake.runIDs) != 0 {
+		t.Fatalf("consumer runner received desired-state row ids: %v", fake.runIDs)
+	}
+	events := decodeEvents(t, protocol.String())
+	if !eventsContain(events, "passed", "demo::desired-state::db", "db ready") || !eventsContain(events, "failed", "demo::desired-state::cache", "warm cache") {
+		t.Fatalf("events = %+v, want terminal event per desired-state row", events)
+	}
+	if got := calls["demo::desired-state::db"]; got != 1 {
+		t.Fatalf("db probe calls = %d, want row-run execution", got)
+	}
+	if got := calls["demo::desired-state::cache"]; got != 1 {
+		t.Fatalf("cache probe calls = %d, want row-run execution", got)
 	}
 }
 
@@ -894,7 +998,7 @@ type fakeBridge struct {
 	runErr                 error
 	discoverErr            error
 	desiredErr             error
-	desiredGroups          []vscode.DesiredStateGroup
+	desiredGroups          []testbridge.DesiredStateGroup
 }
 
 func newFakeBridge(root string) *fakeBridge {
@@ -951,35 +1055,54 @@ func (f *fakeBridge) Discover(_ context.Context) (vscode.DiscoveryDocument, erro
 	}, nil
 }
 
-func (f *fakeBridge) DesiredState(_ context.Context, ids []string) (vscode.SetupPlan, error) {
+func (f *fakeBridge) DesiredState(_ context.Context, ids []string) (testbridge.DesiredStatePlan, error) {
 	if f.desiredErr != nil {
-		return vscode.SetupPlan{}, f.desiredErr
+		return testbridge.DesiredStatePlan{}, f.desiredErr
 	}
 	f.appendCall("desiredState:" + strings.Join(ids, ","))
 	groups := f.desiredGroups
 	if groups == nil {
-		groups = []vscode.DesiredStateGroup{{
+		groups = []testbridge.DesiredStateGroup{{
 			Label: "Test Preconditions",
-			Rows: []vscode.DesiredState{{
-				Resource: "db",
-				Kind:     "service",
-				Desired:  "seeded",
-				Current:  "empty",
-				Status:   "reconcilable",
-				Action:   "reconcile_during_run",
-				Message:  "seed test database during run",
-				Reusable: false,
-				Owned:    true,
-			}},
+			Rows:  []testbridge.DesiredStateRow{probedRow("", "db", "service", "seeded", "empty", false, "seed test database during run", false, false)},
 		}}
 	}
-	return vscode.SetupPlan{
-		Version:     3,
-		Devtool:     f.Metadata(),
-		Workspace:   "consumer-node",
-		GeneratedAt: time.Unix(2, 0).UTC(),
-		Groups:      groups,
+	return testbridge.DesiredStatePlan{
+		Groups: groups,
 	}, nil
+}
+
+func probedRow(runID, resource, kind, desired, current string, satisfied bool, message string, reusable, active bool) testbridge.DesiredStateRow {
+	return testbridge.DesiredStateRow{
+		RunID:    runID,
+		Resource: resource,
+		Kind:     kind,
+		Desired:  desired,
+		Reusable: reusable,
+		Owned:    !reusable,
+		Active:   active,
+		Probe: func(context.Context, testbridge.DesiredStateProbeRequest) testbridge.DesiredStateProbeResult {
+			return testbridge.DesiredStateProbeResult{Current: current, Satisfied: satisfied, Message: message}
+		},
+	}
+}
+
+func probedCountingRow(calls map[string]int, runID, resource, desired string, satisfied bool, message string) testbridge.DesiredStateRow {
+	return testbridge.DesiredStateRow{
+		RunID:    runID,
+		Resource: resource,
+		Kind:     "fixture-data",
+		Desired:  desired,
+		Owned:    true,
+		Probe: func(context.Context, testbridge.DesiredStateProbeRequest) testbridge.DesiredStateProbeResult {
+			calls[runID]++
+			current := "missing"
+			if satisfied {
+				current = desired
+			}
+			return testbridge.DesiredStateProbeResult{Current: current, Satisfied: satisfied, Message: message}
+		},
+	}
 }
 
 func testItemByID(items []vscode.TestItem, id string) (vscode.TestItem, bool) {
@@ -1024,6 +1147,15 @@ func (f *fakeBridge) appendCall(call string) {
 		f.calls += ","
 	}
 	f.calls += call
+}
+
+func eventsContain(events []vscode.RunEvent, event, testID, message string) bool {
+	for _, got := range events {
+		if got.Event == event && got.TestID == testID && strings.Contains(got.Message, message) {
+			return true
+		}
+	}
+	return false
 }
 
 func protocolFromContext(t *testing.T, ctx context.Context) *bytes.Buffer {

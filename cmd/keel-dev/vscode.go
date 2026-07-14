@@ -25,6 +25,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/david-aggeler/keel/cli"
+	procexec "github.com/david-aggeler/keel/exec"
 	"github.com/david-aggeler/keel/testbridge"
 	"github.com/david-aggeler/keel/vscode"
 )
@@ -238,9 +239,9 @@ func (keelTestBridge) Discover(ctx context.Context) (vscode.DiscoveryDocument, e
 	return buildVSCodeDiscovery(stateFrom(ctx).root)
 }
 
-// DHF-REQ: keel/requirement-63
-func (keelTestBridge) DesiredState(ctx context.Context, ids []string) (vscode.SetupPlan, error) {
-	return buildVSCodePlan(stateFrom(ctx).root, ids)
+// DHF-REQ: keel/requirement-63, keel/requirement-75
+func (keelTestBridge) DesiredState(ctx context.Context, ids []string) (testbridge.DesiredStatePlan, error) {
+	return buildVSCodeDesiredStatePlan(stateFrom(ctx).root, ids)
 }
 
 // DHF-REQ: keel/requirement-63
@@ -257,11 +258,6 @@ func (keelTestBridge) Run(ctx context.Context, req testbridge.RunRequest, writer
 		}
 		writer(vscode.RunEvent{Event: "passed", TestID: req.IDs[0]})
 		return exitCode, nil
-	}
-	if len(req.IDs) == 1 {
-		if exitCode, handled, err := runVSCodeDesiredStateRow(root, req.IDs[0], writer); handled {
-			return exitCode, err
-		}
 	}
 	laneID := laneForIDs(req.IDs)
 	if ready := vscode.NewEngine(newKeelWorkspaceProfile(root)).Prepare(ctx, laneID, req.IDs, writer); !ready {
@@ -412,29 +408,6 @@ func buildVSCodeDiscovery(root string) (vscode.DiscoveryDocument, error) {
 	}, nil
 }
 
-// DHF-REQ: keel/requirement-60
-func runVSCodeDesiredStateRow(root, id string, writer vscode.RunEventWriter) (int, bool, error) {
-	plan, err := buildVSCodePlan(root, []string{id})
-	if err != nil {
-		writer(vscode.RunEvent{Event: "failed", TestID: id, Message: err.Error()})
-		return 1, true, nil
-	}
-	for _, group := range plan.Groups {
-		for _, row := range group.Rows {
-			if row.RunID != id {
-				continue
-			}
-			if row.Status == "satisfied" {
-				writer(vscode.RunEvent{Event: "passed", TestID: id, Message: row.Message})
-				return 0, true, nil
-			}
-			writer(vscode.RunEvent{Event: "failed", TestID: id, Message: row.Message})
-			return 1, true, nil
-		}
-	}
-	return 0, false, nil
-}
-
 func groupItem(id, parentID, label, sortText string) vscode.TestItem {
 	return vscode.TestItem{
 		ID:       id,
@@ -462,26 +435,121 @@ func maintenanceItem(id, label, sortText string) vscode.TestItem {
 	}
 }
 
-// DHF-REQ: keel/requirement-60
+// DHF-REQ: keel/requirement-60, keel/requirement-75
 func buildVSCodePlan(root string, ids []string) (vscode.SetupPlan, error) {
-	profile := newKeelWorkspaceProfile(root)
-	_, goErr := exec.LookPath("go")
-	goReady := goErr == nil
+	declared, err := buildVSCodeDesiredStatePlan(root, ids)
+	if err != nil {
+		return vscode.SetupPlan{}, err
+	}
+	groups := make([]vscode.DesiredStateGroup, 0, len(declared.Groups))
+	for _, group := range declared.Groups {
+		rows := make([]vscode.DesiredState, 0, len(group.Rows))
+		for _, row := range group.Rows {
+			result := row.Probe(context.Background(), testbridge.DesiredStateProbeRequest{RunID: row.RunID, Root: root})
+			status := "reconcilable"
+			action := "reconcile_during_run"
+			if result.Satisfied {
+				status = "satisfied"
+				action = "reuse"
+			}
+			rows = append(rows, vscode.DesiredState{
+				RunID:    row.RunID,
+				Resource: row.Resource,
+				Kind:     row.Kind,
+				Desired:  row.Desired,
+				Current:  result.Current,
+				Status:   status,
+				Action:   action,
+				Message:  result.Message,
+				Detail:   row.Detail,
+				Reusable: row.Reusable,
+				Owned:    row.Owned,
+				Active:   row.Active,
+			})
+		}
+		groups = append(groups, vscode.DesiredStateGroup{Label: group.Label, Order: group.Order, MutuallyExclusive: group.MutuallyExclusive, Rows: rows})
+	}
 	return vscode.SetupPlan{
 		Version:     3,
 		Devtool:     vscode.DevtoolMetadata{Name: "keel-dev", Version: versionString(), Commit: buildCommit(), BuiltAt: buildTime()},
-		Workspace:   profile.Node(),
+		Workspace:   newKeelWorkspaceProfile(root).Node(),
 		GeneratedAt: time.Now().UTC(),
-		Groups: []vscode.DesiredStateGroup{{
+		Groups:      groups,
+	}, nil
+}
+
+// DHF-REQ: keel/requirement-75
+func buildVSCodeDesiredStatePlan(root string, ids []string) (testbridge.DesiredStatePlan, error) {
+	return testbridge.DesiredStatePlan{
+		Groups: []testbridge.DesiredStateGroup{{
 			Label: "Test Preconditions",
 			Order: 10,
-			Rows: []vscode.DesiredState{
-				{RunID: vscodeDesiredStateGoToolchain, Resource: "go-toolchain", Kind: "tool", Desired: "available", Current: statusWord(goReady), Status: desiredStateStatus(goReady), Action: desiredStateAction(goReady), Message: "Install Go if this check is blocked.", Reusable: true, Owned: false},
-				{RunID: vscodeDesiredStateModuleRoot, Resource: "keel-module-root", Kind: "unknown", Desired: modulePath, Current: modulePath, Status: "satisfied", Action: "reuse", Message: "keel module root resolved.", Reusable: true, Owned: false},
-				{RunID: vscodeDesiredStateStubBinaries, Resource: "stub-binaries", Kind: "binary", Desired: "buildable", Current: "checked-by-ci", Status: "satisfied", Action: "reuse", Message: "stub binaries are built by keel-dev ci.", Reusable: true, Owned: false},
+			Rows: []testbridge.DesiredStateRow{
+				{RunID: vscodeDesiredStateGoToolchain, Resource: "go-toolchain", Kind: "tool", Desired: "available", Reusable: true, Probe: probeGoToolchain},
+				{RunID: vscodeDesiredStateModuleRoot, Resource: "keel-module-root", Kind: "unknown", Desired: modulePath, Reusable: true, Probe: probeKeelModuleRoot},
+				{RunID: vscodeDesiredStateStubBinaries, Resource: "stub-binaries", Kind: "binary", Desired: "buildable", Reusable: true, Probe: probeStubBinaries},
 			},
 		}},
 	}, nil
+}
+
+func probeGoToolchain(context.Context, testbridge.DesiredStateProbeRequest) testbridge.DesiredStateProbeResult {
+	_, goErr := exec.LookPath("go")
+	goReady := goErr == nil
+	return testbridge.DesiredStateProbeResult{
+		Current:   statusWord(goReady),
+		Satisfied: goReady,
+		Message:   "Install Go if this check is blocked.",
+	}
+}
+
+func probeKeelModuleRoot(_ context.Context, req testbridge.DesiredStateProbeRequest) testbridge.DesiredStateProbeResult {
+	path := filepath.Join(req.Root, "go.mod")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return testbridge.DesiredStateProbeResult{Current: "go.mod absent", Message: "Repair workspace root: go.mod is absent."}
+	}
+	current := modulePathFromGoMod(data)
+	if current == "" {
+		return testbridge.DesiredStateProbeResult{Current: "module path absent", Message: "Repair workspace root: go.mod has no module declaration."}
+	}
+	return testbridge.DesiredStateProbeResult{
+		Current:   current,
+		Satisfied: current == modulePath,
+		Message:   fmt.Sprintf("keel module root observed %s; want %s.", current, modulePath),
+	}
+}
+
+func modulePathFromGoMod(data []byte) string {
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, "module ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "module "))
+		}
+	}
+	return ""
+}
+
+func probeStubBinaries(ctx context.Context, req testbridge.DesiredStateProbeRequest) testbridge.DesiredStateProbeResult {
+	proc, err := procexec.ProcessStart(ctx, procexec.Request{
+		Program: "go",
+		Args:    []string{"test", "./exec/codex", "./exec/claude"},
+		Dir:     req.Root,
+		Logger:  vscodeDiscardLogger(),
+	})
+	if err != nil {
+		return testbridge.DesiredStateProbeResult{Current: "stub fixture packages not buildable", Message: "Repair stub fixture packages: " + err.Error()}
+	}
+	result, waitErr := proc.Wait()
+	if waitErr != nil || result.ExitCode != 0 {
+		msg := strings.TrimSpace(result.Stdout + result.Stderr)
+		if msg == "" && waitErr != nil {
+			msg = waitErr.Error()
+		}
+		return testbridge.DesiredStateProbeResult{Current: "stub fixture packages not buildable", Message: "Repair stub fixture packages: " + msg}
+	}
+	return testbridge.DesiredStateProbeResult{Current: "buildable", Satisfied: true, Message: "stub fixture packages build."}
 }
 
 // DHF-REQ: keel/requirement-65
@@ -2163,20 +2231,6 @@ func statusWord(ok bool) string {
 		return "ready"
 	}
 	return "blocked"
-}
-
-func desiredStateStatus(ok bool) string {
-	if ok {
-		return "satisfied"
-	}
-	return "blocked"
-}
-
-func desiredStateAction(ok bool) string {
-	if ok {
-		return "reuse"
-	}
-	return "manual_setup_required"
 }
 
 func workspaceNode(root string) string {
