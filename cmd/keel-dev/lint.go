@@ -97,8 +97,9 @@ var retiredDesiredStateVocabularyTerms = []string{
 }
 
 // scanNoRetiredDesiredStateVocabulary rejects the retired desired-state document
-// names in the protocol and devtool surfaces. Test files are skipped so the
-// policy can carry planted-occurrence tests without failing itself.
+// names in the protocol and devtool surfaces. Test files are scanned too: the
+// policy's own planted-occurrence tests build the terms from bytes, so the
+// guard never has a literal to trip on.
 //
 // DHF-REQ: keel/requirement-77
 func scanNoRetiredDesiredStateVocabulary(root string) ([]string, error) {
@@ -117,9 +118,6 @@ func scanNoRetiredDesiredStateVocabulary(root string) ([]string, error) {
 				if name != "." && (strings.HasPrefix(name, ".") || name == "vendor" || name == "testdata" || name == "bin" || name == "node_modules") {
 					return filepath.SkipDir
 				}
-				return nil
-			}
-			if strings.HasSuffix(path, "_test.go") || strings.HasSuffix(path, ".test.ts") {
 				return nil
 			}
 			if !retiredDesiredStateVocabularyFile(path) {
