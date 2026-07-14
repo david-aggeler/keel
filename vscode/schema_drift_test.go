@@ -31,10 +31,10 @@ func TestSchemasDriftAgainstGoTypes(t *testing.T) {
 		{"discovery capabilities", reflect.TypeOf(DiscoveryCapabilities{}), "#/$defs/capabilities"},
 		{"discovery test item", reflect.TypeOf(TestItem{}), "#/$defs/test_item"},
 		{"discovery range", reflect.TypeOf(Range{}), "#/$defs/test_item/properties/range"},
-		{"setup-plan", reflect.TypeOf(SetupPlan{}), ""},
-		{"setup-plan devtool", reflect.TypeOf(DevtoolMetadata{}), "#/properties/devtool"},
-		{"setup-plan group", reflect.TypeOf(DesiredStateGroup{}), "#/$defs/group"},
-		{"setup-plan desired_state", reflect.TypeOf(DesiredState{}), "#/$defs/desired_state"},
+		{"desired-state", reflect.TypeOf(DesiredStateDocument{}), ""},
+		{"desired-state devtool", reflect.TypeOf(DevtoolMetadata{}), "#/properties/devtool"},
+		{"desired-state group", reflect.TypeOf(DesiredStateGroup{}), "#/$defs/group"},
+		{"desired-state desired_state", reflect.TypeOf(DesiredState{}), "#/$defs/desired_state"},
 		{"run-event", reflect.TypeOf(RunEvent{}), ""},
 		{"run-event location", reflect.TypeOf(RunLocation{}), "#/properties/location"},
 		{"run-event artifact", reflect.TypeOf(RunArtifact{}), "#/properties/artifact"},
@@ -43,7 +43,7 @@ func TestSchemasDriftAgainstGoTypes(t *testing.T) {
 	}
 
 	loaded := map[string]jsonSchema{}
-	for _, name := range []SchemaName{SchemaDiscovery, SchemaSetupPlan, SchemaRunEvent, SchemaRunLock, SchemaTestBridgeConfig} {
+	for _, name := range []SchemaName{SchemaDiscovery, SchemaDesiredState, SchemaRunEvent, SchemaRunLock, SchemaTestBridgeConfig} {
 		body, err := SchemaBytes(name)
 		if err != nil {
 			t.Fatalf("read schema %s: %v", name, err)
@@ -117,8 +117,8 @@ func schemaNameForCheck(name string) string {
 	switch {
 	case strings.HasPrefix(name, "discovery"):
 		return "discovery"
-	case strings.HasPrefix(name, "setup-plan"):
-		return "setup-plan"
+	case strings.HasPrefix(name, "desired-state"):
+		return "desired-state"
 	case strings.HasPrefix(name, "run-event"):
 		return "run-event"
 	case strings.HasPrefix(name, "run-lock"):

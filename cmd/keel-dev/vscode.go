@@ -207,10 +207,10 @@ func vscodeCommandSpec() *cli.CommandSpec {
 			},
 			{
 				Name:  "tests",
-				Short: "VS Code test discovery, setup planning, and lane runs.",
+				Short: "VS Code test discovery, desired-state documents, and lane runs.",
 				Subcommands: []*cli.CommandSpec{
 					{Name: "discover", Use: "vscode tests discover [--format json]", Short: "Emit the VS Code discovery document.", Flags: []cli.FlagSpec{{Name: "format", Value: "json", Short: "Output format."}}, Handler: handleVSCodeTestsDiscover},
-					{Name: "plan", Use: "vscode tests plan [--format json] [--id test-id]", Short: "Emit the VS Code setup plan.", Flags: []cli.FlagSpec{{Name: "format", Value: "json", Short: "Output format."}, {Name: "id", Value: "test-id", Short: "Selected test id."}}, Handler: handleVSCodeTestsPlan},
+					{Name: "desired-state", Use: "vscode tests desired-state [--format json] [--id test-id]", Short: "Emit the VS Code desired-state document.", Flags: []cli.FlagSpec{{Name: "format", Value: "json", Short: "Output format."}, {Name: "id", Value: "test-id", Short: "Selected test id."}}, Handler: handleVSCodeTestsDesiredState},
 					{Name: "run", Use: "vscode tests run --id test-id", Short: "Run selected VS Code test lanes.", Flags: []cli.FlagSpec{{Name: "format", Value: "jsonl", Short: "Legacy VSIX wire compatibility trap."}, {Name: "id", Value: "test-id", Short: "Selected test id."}}, Handler: handleVSCodeTestsRun},
 				},
 			},
@@ -240,8 +240,8 @@ func (keelTestBridge) Discover(ctx context.Context) (vscode.DiscoveryDocument, e
 }
 
 // DHF-REQ: keel/requirement-63, keel/requirement-75
-func (keelTestBridge) DesiredState(ctx context.Context, ids []string) (testbridge.DesiredStatePlan, error) {
-	return buildVSCodeDesiredStatePlan(stateFrom(ctx).root, ids)
+func (keelTestBridge) DesiredState(ctx context.Context, ids []string) (testbridge.DesiredStateDeclaration, error) {
+	return buildVSCodeDesiredStateDeclaration(stateFrom(ctx).root, ids)
 }
 
 // DHF-REQ: keel/requirement-63
@@ -327,7 +327,7 @@ func handleVSCodeTestsDiscover(ctx context.Context, args []string) error {
 	return dispatchTestBridgeAlias(ctx, append([]string{"test-bridge", "tests", "discover"}, args...))
 }
 
-func handleVSCodeTestsPlan(ctx context.Context, args []string) error {
+func handleVSCodeTestsDesiredState(ctx context.Context, args []string) error {
 	return dispatchTestBridgeAlias(ctx, append([]string{"test-bridge", "tests", "desired-state"}, args...))
 }
 
@@ -436,10 +436,10 @@ func maintenanceItem(id, label, sortText string) vscode.TestItem {
 }
 
 // DHF-REQ: keel/requirement-60, keel/requirement-75
-func buildVSCodePlan(root string, ids []string) (vscode.SetupPlan, error) {
-	declared, err := buildVSCodeDesiredStatePlan(root, ids)
+func buildVSCodeDesiredStateDocument(root string, ids []string) (vscode.DesiredStateDocument, error) {
+	declared, err := buildVSCodeDesiredStateDeclaration(root, ids)
 	if err != nil {
-		return vscode.SetupPlan{}, err
+		return vscode.DesiredStateDocument{}, err
 	}
 	groups := make([]vscode.DesiredStateGroup, 0, len(declared.Groups))
 	for _, group := range declared.Groups {
@@ -469,7 +469,7 @@ func buildVSCodePlan(root string, ids []string) (vscode.SetupPlan, error) {
 		}
 		groups = append(groups, vscode.DesiredStateGroup{Label: group.Label, Order: group.Order, MutuallyExclusive: group.MutuallyExclusive, Rows: rows})
 	}
-	return vscode.SetupPlan{
+	return vscode.DesiredStateDocument{
 		Version:     3,
 		Devtool:     vscode.DevtoolMetadata{Name: "keel-dev", Version: versionString(), Commit: buildCommit(), BuiltAt: buildTime()},
 		Workspace:   newKeelWorkspaceProfile(root).Node(),
@@ -479,8 +479,8 @@ func buildVSCodePlan(root string, ids []string) (vscode.SetupPlan, error) {
 }
 
 // DHF-REQ: keel/requirement-75
-func buildVSCodeDesiredStatePlan(root string, ids []string) (testbridge.DesiredStatePlan, error) {
-	return testbridge.DesiredStatePlan{
+func buildVSCodeDesiredStateDeclaration(root string, ids []string) (testbridge.DesiredStateDeclaration, error) {
+	return testbridge.DesiredStateDeclaration{
 		Groups: []testbridge.DesiredStateGroup{{
 			Label: "Test Preconditions",
 			Order: 10,

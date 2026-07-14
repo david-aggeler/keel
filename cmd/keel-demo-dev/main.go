@@ -178,8 +178,8 @@ func (b demoBridge) Discover(ctx context.Context) (vscode.DiscoveryDocument, err
 }
 
 // DHF-REQ: keel/requirement-62, keel/requirement-75
-func (b demoBridge) DesiredState(ctx context.Context, ids []string) (testbridge.DesiredStatePlan, error) {
-	return testbridge.DesiredStatePlan{
+func (b demoBridge) DesiredState(ctx context.Context, ids []string) (testbridge.DesiredStateDeclaration, error) {
+	return testbridge.DesiredStateDeclaration{
 		Groups: []testbridge.DesiredStateGroup{
 			{
 				Label: "Test Preconditions",
