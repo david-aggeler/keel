@@ -136,6 +136,87 @@ func TestDiscoverDerivesDesiredStateGroupsFromProvider(t *testing.T) {
 }
 
 // DHF-TEST: keel/requirement-74
+func TestRunDryRunResolvesDerivedDesiredStateRunIDsReadOnly(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{{
+		ID:       "demo::desired-state",
+		Label:    "B - Desired State",
+		Kind:     "group",
+		Profiles: []string{},
+	}}
+	fake.desiredGroups = []vscode.DesiredStateGroup{{
+		Label: "Provisioning",
+		Order: 10,
+		Rows: []vscode.DesiredState{{
+			RunID:    "demo::action::seed-small",
+			Resource: "db-small",
+			Kind:     "fixture-data",
+			Desired:  "small",
+			Current:  "empty",
+			Status:   "reconcilable",
+			Action:   "reconcile_during_run",
+			Message:  "seed small",
+			Owned:    true,
+		}},
+	}}
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: io.Discard})
+
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--dry-run", "--id", "demo::action::seed-small"}); err != nil {
+		t.Fatalf("dry-run desired-state run_id dispatch: %v", err)
+	}
+	if len(fake.runIDs) != 0 || fake.sawRunLock {
+		t.Fatalf("dry-run executed runner path: runIDs=%v sawRunLock=%v", fake.runIDs, fake.sawRunLock)
+	}
+	if got := fake.calls; got != "discover,desiredState:" {
+		t.Fatalf("provider calls = %q, want discover plus unselected desired-state query", got)
+	}
+}
+
+// DHF-TEST: keel/requirement-74
+func TestDiscoverRejectsDuplicateDerivedDesiredStateIDs(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{{
+		ID:       "demo::desired-state",
+		Label:    "B - Desired State",
+		Kind:     "group",
+		Profiles: []string{},
+	}}
+	fake.desiredGroups = []vscode.DesiredStateGroup{{
+		Label: "Provisioning",
+		Order: 10,
+		Rows: []vscode.DesiredState{{
+			Resource: "db-small",
+			Kind:     "fixture-data",
+			Desired:  "small",
+			Current:  "empty",
+			Status:   "reconcilable",
+			Action:   "reconcile_during_run",
+			Message:  "seed small",
+		}},
+	}, {
+		Label: "Provisioning",
+		Order: 20,
+		Rows: []vscode.DesiredState{{
+			Resource: "db-large",
+			Kind:     "fixture-data",
+			Desired:  "large",
+			Current:  "empty",
+			Status:   "reconcilable",
+			Action:   "reconcile_during_run",
+			Message:  "seed large",
+		}},
+	}}
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: io.Discard})
+
+	err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "discover", "--format", "json"})
+	if err == nil || !strings.Contains(err.Error(), "duplicate discovery item id") {
+		t.Fatalf("duplicate derived ID err = %v, want duplicate discovery item id", err)
+	}
+}
+
+// DHF-TEST: keel/requirement-74
 func TestDiscoverDegradesDesiredStateProviderFailure(t *testing.T) {
 	root := t.TempDir()
 	fake := newFakeBridge(root)
