@@ -166,6 +166,70 @@ func TestRunResolvesAliasToCanonicalBeforeRunner(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-58
+func TestRunStartedRequestedLabelsUseDiscoveryLabelsOrRawIDs(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{{
+		ID:       "demo::lane::friendly",
+		Label:    "Friendly Fast",
+		Kind:     "lane",
+		Runnable: true,
+		Profiles: []string{"run"},
+	}}
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{
+		Root:     root,
+		Protocol: &protocol,
+		RunID:    func() string { return "run-labels" },
+	})
+
+	err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{
+		"test-bridge", "tests", "run",
+		"--id", "demo::lane::friendly",
+		"--id", "other::lane::raw",
+	})
+	if err != nil {
+		t.Fatalf("run dispatch: %v", err)
+	}
+	events := decodeEvents(t, protocol.String())
+	if len(events) == 0 || events[0].Event != "run_started" {
+		t.Fatalf("events = %+v, want first event run_started", events)
+	}
+	want := []vscode.RunRequest{
+		{ID: "demo::lane::friendly", Label: "Friendly Fast"},
+		{ID: "other::lane::raw", Label: "other::lane::raw"},
+	}
+	if len(events[0].Requested) != len(want) {
+		t.Fatalf("requested = %+v, want %+v", events[0].Requested, want)
+	}
+	for i := range want {
+		if events[0].Requested[i] != want[i] {
+			t.Fatalf("requested[%d] = %+v, want %+v", i, events[0].Requested[i], want[i])
+		}
+	}
+}
+
+// DHF-TEST: keel/requirement-58
+func TestPackageSourceDoesNotHardcodeKeelDomainIdentifiers(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		body, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(body), "keel::") {
+			t.Fatalf("%s contains hardcoded keel-domain identifier literal", file)
+		}
+	}
+}
+
 func TestConfigHelpersInitUpgradeAndRefuseNewer(t *testing.T) {
 	root := t.TempDir()
 	template := newFakeBridge(root).ConfigTemplate()
