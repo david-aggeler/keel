@@ -8,6 +8,7 @@ import {
   applyRunEvent,
   coverageFileSnapshotsForTest,
   currentAdapterConfig,
+  desiredStateRowProtocolID,
   ExternalRunMirror,
   parseGoCoverageProfile,
   runProfileHandlerForTest,
@@ -18,7 +19,7 @@ import {
 } from '../../extension';
 import { configRelativePath, currentConfigVersion, defaultConfigTemplate, discoverTests, planTests, readAdapterConfig, runTests, upgradeConfig } from '../../bridgeAdapter';
 import { publishDiscovery } from '../../tree';
-import { RunEvent } from '../../protocol';
+import { DesiredStateGroup, RunEvent } from '../../protocol';
 
 suite('Keel Test Bridge config contract', () => {
   // DHF-TEST: keel/requirement-40
@@ -248,6 +249,59 @@ suite('Keel Test Bridge config contract', () => {
       '- reusable: go-toolchain',
       '- policy: owned resources are torn down after run'
     ]);
+  });
+
+  // DHF-TEST: keel/requirement-60
+  test('desired-state rows activate through the ordinary run argv path', async function () {
+    this.timeout(10_000);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-desired-state-row-run-'));
+    const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+    process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = root;
+    fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+    fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+      version: currentConfigVersion,
+      command: process.execPath,
+      args: [path.resolve(__dirname, '../../../src/test/fixtures/fake-adapter.js')],
+      displayName: 'Keel'
+    }, null, 2) + '\n');
+
+    const rowGroup: DesiredStateGroup = {
+      label: 'Test Preconditions',
+      order: 10,
+      mutually_exclusive: false,
+      rows: []
+    };
+    const rowID = desiredStateRowProtocolID(rowGroup, {
+      resource: 'python',
+      kind: 'tool',
+      desired: 'available',
+      current: 'available',
+      status: 'satisfied',
+      action: 'reuse',
+      message: 'python available',
+      reusable: true,
+      owned: false
+    });
+
+    try {
+      const extension = vscode.extensions.getExtension('aggeler.keel-test-bridge');
+      assert.ok(extension, 'extension should be discoverable');
+      await extension.activate();
+      await runProfileHandlerForTest(rowID);
+
+      const calls = fs.readFileSync(path.join(root, '.devtools', 'fake-adapter-calls.log'), 'utf8')
+        .trim()
+        .split(/\r?\n/);
+      assert.ok(calls.includes(`test-bridge tests desired-state --format json --id ${rowID}`));
+      assert.ok(calls.includes(`test-bridge tests run --id ${rowID}`));
+    } finally {
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   // DHF-TEST: keel/requirement-40
