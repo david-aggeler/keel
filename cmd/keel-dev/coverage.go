@@ -57,7 +57,7 @@ func runTestWithCoverage(ctx context.Context, logger *slog.Logger, dir string) e
 // runTestWithCoverage keeps using a temp profile for the ci gate.
 //
 // DHF-REQ: keel/requirement-39
-func runVSCodeTestCoverage(ctx context.Context, logger *slog.Logger, root, runID string, writer vscode.RunEventWriter) error {
+func runVSCodeTestCoverage(ctx context.Context, logger *slog.Logger, root, runID string, maxOutputBytes int, writer vscode.RunEventWriter) error {
 	coverRoot := filepath.Join(root, ".logs", "vscode-cover")
 	if err := os.MkdirAll(coverRoot, 0o755); err != nil {
 		return err
@@ -70,13 +70,13 @@ func runVSCodeTestCoverage(ctx context.Context, logger *slog.Logger, root, runID
 	}
 	profile := filepath.Join(runDir, "cover.out")
 
-	stdout, stderr, err := capture(ctx, logger, root, "go", "test", "./...", "-coverprofile="+profile, "-covermode=atomic", "-coverpkg=./...")
+	stdout, stderr, err := captureWithMaxOutput(ctx, logger, root, maxOutputBytes, "go", "test", "./...", "-coverprofile="+profile, "-covermode=atomic", "-coverpkg=./...")
 	emitVSCodeCoveragePackages(stdout, writer)
 	if err != nil {
 		return fmt.Errorf("go test coverage: %w: %s", err, strings.TrimSpace(stderr))
 	}
 
-	funcOut, stderr, err := capture(ctx, logger, root, "go", "tool", "cover", "-func="+profile)
+	funcOut, stderr, err := captureWithMaxOutput(ctx, logger, root, maxOutputBytes, "go", "tool", "cover", "-func="+profile)
 	if err != nil {
 		return fmt.Errorf("go tool cover: %w: %s", err, strings.TrimSpace(stderr))
 	}

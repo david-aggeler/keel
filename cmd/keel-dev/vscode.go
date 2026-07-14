@@ -228,7 +228,8 @@ func (keelTestBridge) Run(ctx context.Context, req testbridge.RunRequest, writer
 	if ready := vscode.NewEngine(newKeelWorkspaceProfile(root)).Prepare(ctx, laneID, req.IDs, writer); !ready {
 		return 1, fmt.Errorf("vscode lane blocked")
 	}
-	exitCode, err := runVSCodeLane(ctx, state.logger, root, laneID, req.RunID, writer)
+	profile := newKeelWorkspaceProfile(root)
+	exitCode, err := runVSCodeLane(ctx, state.logger, root, laneID, req.RunID, profile.MaxOutputBytes(), writer)
 	if err != nil {
 		return exitCode, err
 	}
@@ -1645,7 +1646,7 @@ func max(a, b int) int {
 }
 
 // DHF-REQ: keel/requirement-48
-func runVSCodeLane(ctx context.Context, logger *slog.Logger, root, laneID, runID string, writer vscode.RunEventWriter) (int, error) {
+func runVSCodeLane(ctx context.Context, logger *slog.Logger, root, laneID, runID string, maxOutputBytes int, writer vscode.RunEventWriter) (int, error) {
 	if strings.HasPrefix(laneID, "keel::maintenance::") {
 		if laneID == vscodeMaintenanceDetectLanes {
 			if err := runVSCodeDetectLanesMaintenance(root, writer); err != nil {
@@ -1660,7 +1661,7 @@ func runVSCodeLane(ctx context.Context, logger *slog.Logger, root, laneID, runID
 		if logger == nil {
 			logger = vscodeDiscardLogger()
 		}
-		if err := runVSCodeGoSelection(ctx, logger, root, laneID, selection, writer); err != nil {
+		if err := runVSCodeGoSelection(ctx, logger, root, laneID, selection, maxOutputBytes, writer); err != nil {
 			return gateExitCode(err), err
 		}
 		return 0, nil
@@ -1669,7 +1670,7 @@ func runVSCodeLane(ctx context.Context, logger *slog.Logger, root, laneID, runID
 		if logger == nil {
 			logger = vscodeDiscardLogger()
 		}
-		if err := runVSCodeFileLane(ctx, logger, root, laneID, runID, writer); err != nil {
+		if err := runVSCodeFileLane(ctx, logger, root, laneID, runID, maxOutputBytes, writer); err != nil {
 			return gateExitCode(err), err
 		}
 		return 0, nil
@@ -1683,14 +1684,14 @@ func runVSCodeLane(ctx context.Context, logger *slog.Logger, root, laneID, runID
 		if logger == nil {
 			logger = vscodeDiscardLogger()
 		}
-		if err := runStep(ctx, logger, root, step{name: "vscode:test-fast", program: "go", args: []string{"test", "./..."}}); err != nil {
+		if err := runStep(ctx, logger, root, step{name: "vscode:test-fast", program: "go", args: []string{"test", "./..."}, maxOutputBytes: maxOutputBytes}); err != nil {
 			return gateExitCode(err), err
 		}
 	case vscodeLaneTestCoverage:
 		if logger == nil {
 			logger = vscodeDiscardLogger()
 		}
-		if err := runVSCodeTestCoverage(ctx, logger, root, runID, writer); err != nil {
+		if err := runVSCodeTestCoverage(ctx, logger, root, runID, maxOutputBytes, writer); err != nil {
 			return 1, err
 		}
 	case vscodeLaneVSIXGate:
@@ -1714,7 +1715,7 @@ func runVSCodeLane(ctx context.Context, logger *slog.Logger, root, laneID, runID
 }
 
 // DHF-REQ: keel/requirement-51
-func runVSCodeFileLane(ctx context.Context, logger *slog.Logger, root, laneID, runID string, writer vscode.RunEventWriter) error {
+func runVSCodeFileLane(ctx context.Context, logger *slog.Logger, root, laneID, runID string, maxOutputBytes int, writer vscode.RunEventWriter) error {
 	lanes, err := loadLanesState(root)
 	if err != nil {
 		return err
@@ -1730,7 +1731,7 @@ func runVSCodeFileLane(ctx context.Context, logger *slog.Logger, root, laneID, r
 		return cli.NewUsageError("unknown vscode lane id %q", laneID)
 	}
 	for _, systemLane := range eff.systemLanes {
-		exit, err := runVSCodeLane(ctx, logger, root, systemLane, runID, writer)
+		exit, err := runVSCodeLane(ctx, logger, root, systemLane, runID, maxOutputBytes, writer)
 		if err != nil {
 			return vscodeRunError{exitCode: exit, msg: err.Error()}
 		}
@@ -1740,14 +1741,14 @@ func runVSCodeFileLane(ctx context.Context, logger *slog.Logger, root, laneID, r
 		for _, pkg := range eff.goPackages {
 			args = append(args, vscode.GoPackageArg(pkg))
 		}
-		stdout, stderr, err := capture(ctx, logger, root, "go", args...)
+		stdout, stderr, err := captureWithMaxOutput(ctx, logger, root, maxOutputBytes, "go", args...)
 		emitLaneGoPackageEvents(stdout, modulePath, writer)
 		if err != nil {
 			return fmt.Errorf("go test %s: %w: %s", strings.Join(args[1:], " "), err, strings.TrimSpace(stderr))
 		}
 	}
 	if len(eff.vsixFiles) > 0 {
-		if err := runVSIXFileSelection(ctx, logger, root, eff.vsixFiles); err != nil {
+		if err := runVSIXFileSelection(ctx, logger, root, eff.vsixFiles, maxOutputBytes); err != nil {
 			return err
 		}
 	}
@@ -1755,13 +1756,13 @@ func runVSCodeFileLane(ctx context.Context, logger *slog.Logger, root, laneID, r
 }
 
 // DHF-REQ: keel/requirement-54
-func runVSIXFileSelection(ctx context.Context, logger *slog.Logger, root string, files []string) error {
+func runVSIXFileSelection(ctx context.Context, logger *slog.Logger, root string, files []string, maxOutputBytes int) error {
 	if _, err := exec.LookPath("pnpm"); err != nil {
 		return fmt.Errorf("vscode run vsix files: required tool %q not found on PATH", "pnpm")
 	}
 	args := []string{"--dir", filepath.Join(root, "vsix"), "run", "test:headless", "--"}
 	args = append(args, files...)
-	if err := runStep(ctx, logger, root, step{name: "vscode:vsix-files", program: "pnpm", args: args}); err != nil {
+	if err := runStep(ctx, logger, root, step{name: "vscode:vsix-files", program: "pnpm", args: args, maxOutputBytes: maxOutputBytes}); err != nil {
 		return err
 	}
 	return nil
@@ -1857,7 +1858,7 @@ func clearVSCodeDevtoolsState(root string) error {
 }
 
 // DHF-REQ: keel/requirement-50
-func runVSCodeGoSelection(ctx context.Context, logger *slog.Logger, root, selectedID string, selection vscode.GoSelection, writer vscode.RunEventWriter) error {
+func runVSCodeGoSelection(ctx context.Context, logger *slog.Logger, root, selectedID string, selection vscode.GoSelection, maxOutputBytes int, writer vscode.RunEventWriter) error {
 	if selection.Kind == "file" {
 		names, err := goTestNamesInFile(root, selection.File)
 		if err != nil {
@@ -1871,7 +1872,7 @@ func runVSCodeGoSelection(ctx context.Context, logger *slog.Logger, root, select
 	} else if len(selection.TestNames) > 0 {
 		args = append(args, "-run="+vscode.GoTestNamePattern(selection.TestNames))
 	}
-	stdout, stderr, err := capture(ctx, logger, root, "go", args...)
+	stdout, stderr, err := captureWithMaxOutput(ctx, logger, root, maxOutputBytes, "go", args...)
 	emitGoTestJSONEvents(stdout, selection, selectedID, modulePath, writer)
 	if err != nil {
 		return fmt.Errorf("go test %s: %w: %s", strings.Join(args[1:], " "), err, strings.TrimSpace(stderr))
@@ -2021,10 +2022,12 @@ func newKeelWorkspaceProfile(root string) keelWorkspaceProfile {
 	return keelWorkspaceProfile{root: root}
 }
 
-func (p keelWorkspaceProfile) Repo() string        { return p.root }
-func (p keelWorkspaceProfile) ModulePath() string  { return modulePath }
-func (p keelWorkspaceProfile) LogDir() string      { return filepath.Join(p.root, ".logs") }
-func (p keelWorkspaceProfile) MaxOutputBytes() int { return 4 * 1024 * 1024 }
+func (p keelWorkspaceProfile) Repo() string       { return p.root }
+func (p keelWorkspaceProfile) ModulePath() string { return modulePath }
+func (p keelWorkspaceProfile) LogDir() string     { return filepath.Join(p.root, ".logs") }
+
+// DHF-REQ: keel/requirement-81
+func (p keelWorkspaceProfile) MaxOutputBytes() int { return procexec.DefaultMaxOutputBytes }
 func (p keelWorkspaceProfile) RemediationHint() string {
 	return "Run `go run ./cmd/keel-dev ci` from the keel module root and fix the blocked prerequisite."
 }
