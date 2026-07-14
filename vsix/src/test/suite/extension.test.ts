@@ -102,10 +102,10 @@ suite('Keel Test Bridge config contract', () => {
     assert.equal(cfg.displayName, 'Future');
   });
 
-  // DHF-TEST: keel/requirement-64
+  // DHF-TEST: keel/requirement-64, keel/requirement-66
   test('adapter fails loud on released VSIX and devtool version skew before discovery', async function () {
     const manifest = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../../package.json'), 'utf8')) as { version: string };
-    for (const devtoolVersion of ['v0.4.2', 'v0.4.4']) {
+    for (const devtoolVersion of ['v0.0.0']) {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-version-skew-'));
       const fake = path.join(root, 'fake-devtool.js');
       fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
@@ -134,6 +134,31 @@ suite('Keel Test Bridge config contract', () => {
       } finally {
         fs.rmSync(root, { recursive: true, force: true });
       }
+    }
+  });
+
+  // DHF-TEST: keel/requirement-66
+  test('adapter permits discovery when released VSIX and devtool versions match', async function () {
+    const manifest = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../../package.json'), 'utf8')) as { version: string };
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-version-match-'));
+    const fake = path.join(root, 'fake-devtool.js');
+    fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+    fs.writeFileSync(fake, [
+      `if (process.argv.includes('--version')) { console.log('v${manifest.version}'); process.exit(0); }`,
+      "console.log(JSON.stringify({ version: 1, workspace: 'matched', generated_at: new Date().toISOString(), items: [] }));"
+    ].join('\n'));
+    fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+      version: currentConfigVersion,
+      command: process.execPath,
+      args: [fake],
+      displayName: 'Keel'
+    }, null, 2) + '\n');
+    try {
+      const discovery = await discoverTests(root);
+      assert.equal(discovery.workspace, 'matched');
+      assert.deepEqual(discovery.items, []);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
