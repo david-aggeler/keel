@@ -2,12 +2,6 @@
   "version": 1,
   "entries": [
     {
-      "id": "vsix:req-70:refresh-reconciles-testitems",
-      "requirement": "keel/requirement-70",
-      "fixing_cr": "keel/change_request-77",
-      "reason": "Current VSIX publishDiscovery replaces the TestController collection and creates new TestItem instances."
-    },
-    {
       "id": "vsix:req-71:terminal-state-never-reverts",
       "requirement": "keel/requirement-71",
       "fixing_cr": "keel/change_request-78",
