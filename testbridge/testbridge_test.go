@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/david-aggeler/keel/cli"
+	logging "github.com/david-aggeler/keel/log"
+	"github.com/david-aggeler/keel/log/logtest"
 	"github.com/david-aggeler/keel/testbridge"
 	"github.com/david-aggeler/keel/vscode"
 )
@@ -75,6 +77,154 @@ func TestCommandSpecOwnsCanonicalBridgeWire(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, ".vscode", "test-bridge.json")); err != nil {
 		t.Fatalf("config init did not write test-bridge.json: %v", err)
+	}
+}
+
+// DHF-TEST: keel/requirement-78
+func TestBridgeDispatchAndTerminalEventsReachLogSinksWithoutChangingProtocol(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.desiredGroups = []testbridge.DesiredStateGroup{{
+		Label: "Provisioning",
+		Rows: []testbridge.DesiredStateRow{
+			probedCountingRow(map[string]int{}, "demo::desired-state::db", "db", "seeded", true, "db ready"),
+			probedCountingRow(map[string]int{}, "demo::desired-state::cache", "cache", "warm", false, "warm cache"),
+		},
+	}}
+	capture := logtest.NewCapture()
+	logger, err := logging.New(logging.Config{
+		Service:  "testbridge-test",
+		Console:  logging.ConsoleNone,
+		Handlers: []slog.Handler{capture},
+	})
+	if err != nil {
+		t.Fatalf("new logger: %v", err)
+	}
+	defer logger.Close()
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{
+		Root:     root,
+		Protocol: &protocol,
+		Log:      logger.Slog(),
+		Now:      func() time.Time { return time.Unix(10, 0).UTC() },
+		RunID:    func() string { return "run-log" },
+	})
+
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "discover", "--format", "json"}); err != nil {
+		t.Fatalf("discover dispatch: %v", err)
+	}
+	discoverProtocol := protocol.String()
+	protocol.Reset()
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "desired-state", "--format", "json", "--id", "demo::desired-state::cache"}); err != nil {
+		t.Fatalf("desired-state dispatch: %v", err)
+	}
+	protocol.Reset()
+	err = testbridge.CommandSpec(fake).Dispatch(ctx, []string{
+		"test-bridge", "tests", "run",
+		"--id", "demo::desired-state::db",
+		"--id", "demo::desired-state::cache",
+	})
+	var runErr testbridge.RunError
+	if !errors.As(err, &runErr) || runErr.ExitCode != 1 {
+		t.Fatalf("run dispatch err = %#v, want non-zero RunError", err)
+	}
+	runProtocol := protocol.String()
+	records := capture.AllJSON()
+
+	capture.Reset()
+	protocol.Reset()
+	plainCtx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{
+		Root:     root,
+		Protocol: &protocol,
+		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Now:      func() time.Time { return time.Unix(10, 0).UTC() },
+		RunID:    func() string { return "run-log" },
+	})
+	if err := testbridge.CommandSpec(fake).Dispatch(plainCtx, []string{"test-bridge", "tests", "discover", "--format", "json"}); err != nil {
+		t.Fatalf("plain discover dispatch: %v", err)
+	}
+	if got := protocol.String(); got != discoverProtocol {
+		t.Fatalf("discover protocol changed with logging:\nwith logs: %q\nplain:     %q", discoverProtocol, got)
+	}
+
+	if !hasBridgeDispatchRecord(records, "discover", nil) {
+		t.Fatalf("records = %+v, want discover dispatch record with empty ids", records)
+	}
+	if !hasBridgeDispatchRecord(records, "desired-state", []string{"demo::desired-state::cache"}) {
+		t.Fatalf("records = %+v, want desired-state dispatch record with requested id", records)
+	}
+	if !hasBridgeDispatchRecord(records, "run", []string{"demo::desired-state::db", "demo::desired-state::cache"}) {
+		t.Fatalf("records = %+v, want run dispatch record with requested ids", records)
+	}
+	if !hasBridgeTerminalRecord(records, "demo::desired-state::db", "passed", 1) ||
+		!hasBridgeTerminalRecord(records, "demo::desired-state::cache", "failed", 1) {
+		t.Fatalf("records = %+v, want terminal pass/fail records carrying exit code", records)
+	}
+
+	capture.Reset()
+	protocol.Reset()
+	err = testbridge.CommandSpec(fake).Dispatch(plainCtx, []string{
+		"test-bridge", "tests", "run",
+		"--id", "demo::desired-state::db",
+		"--id", "demo::desired-state::cache",
+	})
+	if !errors.As(err, &runErr) || runErr.ExitCode != 1 {
+		t.Fatalf("plain run dispatch err = %#v, want non-zero RunError", err)
+	}
+	if got := protocol.String(); got != runProtocol {
+		t.Fatalf("run protocol changed with logging:\nwith logs: %q\nplain:     %q", runProtocol, got)
+	}
+}
+
+func hasBridgeDispatchRecord(records []map[string]any, verb string, ids []string) bool {
+	for _, record := range records {
+		if record["msg"] != "testbridge dispatch" || record["verb"] != verb {
+			continue
+		}
+		if equalJSONStrings(record["ids"], ids) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasBridgeTerminalRecord(records []map[string]any, testID, verdict string, exitCode int) bool {
+	for _, record := range records {
+		if record["msg"] != "testbridge terminal event" ||
+			record["test_id"] != testID ||
+			record["verdict"] != verdict ||
+			intFromJSONNumber(record["exit_code"]) != exitCode {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func equalJSONStrings(raw any, want []string) bool {
+	values, ok := raw.([]any)
+	if !ok {
+		return len(want) == 0 && raw == nil
+	}
+	if len(values) != len(want) {
+		return false
+	}
+	for i := range want {
+		if values[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func intFromJSONNumber(raw any) int {
+	switch v := raw.(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	default:
+		return 0
 	}
 }
 
