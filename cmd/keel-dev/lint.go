@@ -146,7 +146,7 @@ func scanNoRetiredDesiredStateVocabulary(root string) ([]string, error) {
 
 func retiredDesiredStateVocabularyFile(path string) bool {
 	switch filepath.Ext(path) {
-	case ".go", ".ts", ".json":
+	case ".go", ".js", ".ts", ".json":
 		return true
 	default:
 		return false
