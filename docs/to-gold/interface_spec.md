@@ -59,9 +59,9 @@ is the product's #1 quality goal.
   `test-bridge.json` migrates via the `config upgrade` verb — invoked by hand
   OR automatically by the VSIX at activation when the file's version is below
   current (that auto-migration is part of the contract, §4). The planned
-  `test-lanes.json` is devtool-owned: keel-dev writes it (`detect-lanes` maintenance) and
-  humans hand-edit it; both are first-class writers (go.mod model), and
-  neither is a "silent rewrite" — every write is an explicit user action.
+  `test-lanes.json` is devtool-owned: keel-dev rewrites it (`detect-lanes`
+  maintenance) from compiled gate knowledge and workspace-detected categories
+  as an explicit user action; manual edits are transient between detects.
 - **Consumed-side policy.** Go toolchain and pnpm lockfile are pinned in-repo;
   bumps are ordinary CRs gated by the same commands. The claude/codex CLIs are
   deliberately NOT pinned (user-installed); the adapters' contract tests
@@ -74,13 +74,14 @@ is the product's #1 quality goal.
 
 ### `.vscode/test-lanes.json`
 
-The one non-generated contract — **owned 100% by the consumer devtool**
-(go.mod model: keel-dev writes it via `detect-lanes` maintenance, humans hand-edit it,
-the VSIX only watches the path). Normative contract: **Test Lanes Interface
+The generated lanes contract -- **owned 100% by the consumer devtool**
+(go.mod model: keel-dev rewrites it via `detect-lanes` maintenance; manual edits
+are transient between detects; the VSIX only watches the path). Normative contract: **Test Lanes Interface
 Specification rev 3** (attached to `keel/exploration-2` as
 `test-lanes-spec.md`; carried by keel/requirement-51…54 and amended by
-keel/requirement-65; implemented by keel/change_request-55 and revised by
-keel/change_request-76). Contract essentials: lanes declare *member sets*
+keel/requirement-65 and keel/requirement-73; implemented by
+keel/change_request-55 and revised by keel/change_request-76 and
+keel/change_request-84). Contract essentials: lanes declare *member sets*
 (Go package globs, framework roots, per-file vsix selections, lane refs) —
 never commands; composition is a DAG with union+dedup semantics,
 depth ≤ 8; validation errors suppress the offending lane (or file) with a
@@ -92,7 +93,8 @@ re-discovery is bounded by the discovery implementation — seconds today,
 `depends_on` keel/change_request-54 for exactly this). Lane runs serialize
 on `run.lock`. Failure scenario: absent file ⇒ empty `C - Lanes` group until
 `detect-lanes`; malformed file ⇒ one non-runnable diagnostic item carrying the
-parse error, with no fallback lane set.
+parse error, with no fallback lane set; running `detect-lanes` replaces the
+invalid file with regenerated gate and category lanes.
 
 ### Adapter invocation contract
 
