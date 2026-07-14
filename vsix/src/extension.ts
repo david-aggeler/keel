@@ -309,11 +309,12 @@ export function rejectConcurrentRun(
   run.end();
 }
 
+// DHF-REQ: keel/requirement-70
 async function refresh(controller: vscode.TestController): Promise<void> {
   const workspaceRoot = getWorkspaceRoot();
   output.appendLine(`[${new Date().toISOString()}] refresh requested`);
-  controller.invalidateTestResults();
   if (!workspaceRoot) {
+    controller.invalidateTestResults();
     testTreeGeneration++;
     output.appendLine('No workspace root is open; clearing Keel test tree.');
     controller.items.replace([]);
@@ -746,6 +747,10 @@ export function currentTree(): PublishedTree | undefined {
 
 export function setCurrentTreeForTest(next: PublishedTree | undefined): void {
   tree = next;
+}
+
+export function testControllerForTest(): vscode.TestController | undefined {
+  return testControllerForRunProfile;
 }
 
 async function openDevWorkspaceWhenLaunchedEmpty(): Promise<void> {
