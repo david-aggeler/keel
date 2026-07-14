@@ -94,16 +94,11 @@ func validateDiscovery(doc vscode.DiscoveryDocument) error {
 
 // DHF-REQ: keel/requirement-60
 func validateSetupPlan(plan vscode.SetupPlan) error {
-	if plan.Version != 2 {
-		return fmt.Errorf("keel/testbridge: setup-plan version = %d, want 2", plan.Version)
+	if plan.Version != 3 {
+		return fmt.Errorf("keel/testbridge: setup-plan version = %d, want 3", plan.Version)
 	}
 	if plan.Devtool.Name == "" || plan.Devtool.Version == "" || plan.Workspace == "" || plan.GeneratedAt.IsZero() {
 		return fmt.Errorf("keel/testbridge: setup-plan missing devtool, workspace, or generated_at")
-	}
-	for _, item := range plan.Items {
-		if item.ID == "" {
-			return fmt.Errorf("keel/testbridge: setup-plan item missing id")
-		}
 	}
 	runIDs := map[string]string{}
 	for _, group := range plan.Groups {
@@ -131,22 +126,6 @@ func validateSetupPlan(plan vscode.SetupPlan) error {
 		if group.MutuallyExclusive && active != 1 {
 			return fmt.Errorf("keel/testbridge: desired-state exclusive group %q has %d active rows, want exactly one active row", group.Label, active)
 		}
-	}
-	for _, check := range plan.Checks {
-		if check.ID == "" {
-			return fmt.Errorf("keel/testbridge: setup-plan check missing id")
-		}
-	}
-	for _, action := range plan.Actions {
-		if action.Resource == "" || action.Status == "" {
-			return fmt.Errorf("keel/testbridge: setup-plan action missing resource or status")
-		}
-		if !in(action.Status, "reuse", "setup_required", "reconcile", "reconcile_during_run", "manual_setup_required") {
-			return fmt.Errorf("keel/testbridge: setup-plan action %q has invalid status %q", action.Resource, action.Status)
-		}
-	}
-	if plan.Teardown.Policy == "" {
-		return fmt.Errorf("keel/testbridge: setup-plan teardown policy is required")
 	}
 	return nil
 }

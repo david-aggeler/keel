@@ -10,6 +10,8 @@ package vscode
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -121,17 +123,12 @@ type Range struct {
 //
 // DHF-REQ: keel/requirement-23, keel/requirement-34, keel/requirement-60
 type SetupPlan struct {
-	Version           int                 `json:"version"`
-	Devtool           DevtoolMetadata     `json:"devtool"`
-	Workspace         string              `json:"workspace"`
-	GeneratedAt       time.Time           `json:"generated_at"`
-	Items             []SetupPlanItem     `json:"items"`
-	RequiredResources []string            `json:"required_resources"`
-	Groups            []DesiredStateGroup `json:"groups"`
-	Checks            []PrereqCheck       `json:"checks"`
-	Actions           []SetupPlanAction   `json:"actions"`
-	Teardown          SetupPlanTeardown   `json:"teardown"`
-	Limitations       []string            `json:"limitations,omitempty"`
+	Version        int                 `json:"version"`
+	Devtool        DevtoolMetadata     `json:"devtool"`
+	Workspace      string              `json:"workspace"`
+	GeneratedAt    time.Time           `json:"generated_at"`
+	Groups         []DesiredStateGroup `json:"groups"`
+	TeardownPolicy string              `json:"teardown_policy,omitempty"`
 }
 
 // DevtoolMetadata identifies the producer that generated a setup plan.
@@ -142,29 +139,25 @@ type DevtoolMetadata struct {
 	BuiltAt string `json:"built_at"`
 }
 
-// SetupPlanItem is a selected item plus the resources it requires.
-type SetupPlanItem struct {
-	ID                string   `json:"id"`
-	Label             string   `json:"label,omitempty"`
-	Kind              string   `json:"kind,omitempty"`
-	Framework         string   `json:"framework,omitempty"`
-	Runner            string   `json:"runner,omitempty"`
-	RunnerLabel       string   `json:"runner_label,omitempty"`
-	LaneID            string   `json:"lane_id,omitempty"`
-	PlaywrightProject string   `json:"playwright_project,omitempty"`
-	CanonicalID       string   `json:"canonical_id,omitempty"`
-	RequiredResources []string `json:"required_resources,omitempty"`
-	Runnable          bool     `json:"runnable"`
-}
-
-// SetupPlanAction describes what a consumer should do with a required resource.
-type SetupPlanAction struct {
-	Resource string `json:"resource"`
-	Status   string `json:"status"`
-	Message  string `json:"message"`
-	Detail   string `json:"detail,omitempty"`
-	Reusable bool   `json:"reusable"`
-	Owned    bool   `json:"owned"`
+// UnmarshalJSON accepts the v3 setup-plan shape and rejects removed v2 fields
+// before a caller can accidentally treat a legacy document as v3.
+func (p *SetupPlan) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	for _, field := range []string{"items", "required_resources", "checks", "actions", "teardown", "limitations"} {
+		if _, ok := raw[field]; ok {
+			return fmt.Errorf("removed field %q in setup-plan v3", field)
+		}
+	}
+	type setupPlan SetupPlan
+	var decoded setupPlan
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*p = SetupPlan(decoded)
+	return nil
 }
 
 // DesiredState describes the target and current state for a required resource.
@@ -195,21 +188,6 @@ type DesiredStateGroup struct {
 	Order             int            `json:"order"`
 	MutuallyExclusive bool           `json:"mutually_exclusive"`
 	Rows              []DesiredState `json:"rows"`
-}
-
-// PrereqCheck is a consumer-specific readiness check included in a setup plan.
-type PrereqCheck struct {
-	ID      string `json:"id"`
-	OK      bool   `json:"ok"`
-	Message string `json:"message"`
-	Detail  string `json:"detail,omitempty"`
-}
-
-// SetupPlanTeardown describes which resources can be cleaned up after a run.
-type SetupPlanTeardown struct {
-	OwnedTemporaryResources []string `json:"owned_temporary_resources"`
-	SharedReusableResources []string `json:"shared_reusable_resources"`
-	Policy                  string   `json:"policy"`
 }
 
 // RunEventWriter is the sink a projector emits run events to.

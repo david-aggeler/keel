@@ -468,16 +468,10 @@ func buildVSCodePlan(root string, ids []string) (vscode.SetupPlan, error) {
 	_, goErr := exec.LookPath("go")
 	goReady := goErr == nil
 	return vscode.SetupPlan{
-		Version:     2,
+		Version:     3,
 		Devtool:     vscode.DevtoolMetadata{Name: "keel-dev", Version: versionString(), Commit: buildCommit(), BuiltAt: buildTime()},
 		Workspace:   profile.Node(),
 		GeneratedAt: time.Now().UTC(),
-		Items:       selectedPlanItems(ids),
-		RequiredResources: []string{
-			"go-toolchain",
-			"keel-module-root",
-			"stub-binaries",
-		},
 		Groups: []vscode.DesiredStateGroup{{
 			Label: "Test Preconditions",
 			Order: 10,
@@ -487,15 +481,6 @@ func buildVSCodePlan(root string, ids []string) (vscode.SetupPlan, error) {
 				{RunID: vscodeDesiredStateStubBinaries, Resource: "stub-binaries", Kind: "binary", Desired: "buildable", Current: "checked-by-ci", Status: "satisfied", Action: "reuse", Message: "stub binaries are built by keel-dev ci.", Reusable: true, Owned: false},
 			},
 		}},
-		Checks: []vscode.PrereqCheck{
-			{ID: "go-toolchain", OK: goReady, Message: "go is on PATH"},
-			{ID: "keel-module-root", OK: root != "", Message: "keel module root resolved", Detail: root},
-			{ID: "stub-binaries", OK: true, Message: "stub binaries build in the gate"},
-		},
-		Actions: []vscode.SetupPlanAction{
-			{Resource: "go-toolchain", Status: desiredStateAction(goReady), Message: "Install Go if this check is blocked.", Reusable: true, Owned: false},
-		},
-		Teardown: vscode.SetupPlanTeardown{Policy: "none"},
 	}, nil
 }
 
@@ -1698,41 +1683,6 @@ func max(a, b int) int {
 		return a
 	}
 	return b
-}
-
-func selectedPlanItems(ids []string) []vscode.SetupPlanItem {
-	if len(ids) == 0 {
-		ids = vscodeLaneIDs
-	}
-	items := make([]vscode.SetupPlanItem, 0, len(ids))
-	for _, id := range ids {
-		if selection, ok := vscode.ParseGoItemID(id); ok {
-			items = append(items, vscode.SetupPlanItem{
-				ID:                id,
-				Label:             goSelectionLabel(selection, id),
-				Kind:              selection.Kind,
-				Framework:         "go",
-				Runner:            "go-test",
-				RunnerLabel:       "Go test",
-				Runnable:          true,
-				RequiredResources: []string{"go-toolchain", "keel-module-root"},
-			})
-			continue
-		}
-		items = append(items, vscode.SetupPlanItem{ID: id, Label: strings.TrimPrefix(id, "keel::lane::"), Kind: "lane", LaneID: id, Runnable: true, RequiredResources: []string{"go-toolchain", "keel-module-root", "stub-binaries"}})
-	}
-	return items
-}
-
-func goSelectionLabel(selection vscode.GoSelection, id string) string {
-	switch {
-	case selection.TestName != "":
-		return selection.TestName
-	case selection.Pkg != "":
-		return selection.Pkg
-	default:
-		return id
-	}
 }
 
 // DHF-REQ: keel/requirement-48
