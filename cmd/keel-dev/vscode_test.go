@@ -237,6 +237,57 @@ func TestDetectLanesProducesFileBackedLaneTree(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-65, keel/requirement-51
+func TestDetectedGateLanesExposeCoversFromFileMembers(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	if err := os.MkdirAll(filepath.Join(root, "vsix", "src", "test", "suite"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join("vsix", "src", "test", "suite", "extension.test.ts"), "suite('x', () => {});\n")
+	seedDetectedLanes(t, root)
+
+	discovery, err := buildVSCodeDiscovery(root)
+	if err != nil {
+		t.Fatalf("buildVSCodeDiscovery: %v", err)
+	}
+	for parent, canonical := range map[string]string{
+		"keel::lane::test-fast::covers":     "go::root",
+		"keel::lane::test-coverage::covers": "go::root",
+		"keel::lane::vsix-ci::covers":       "vsix::root",
+		"keel::lane::ci::covers":            "keel::lane::lint",
+	} {
+		if !discoveryHasAlias(discovery, parent, canonical) {
+			t.Fatalf("discovery missing covers alias parent=%q canonical=%q: %+v", parent, canonical, discovery.Items)
+		}
+	}
+	if !discoveryHasAlias(discovery, "keel::lane::ci::covers", "keel::lane::test-coverage") {
+		t.Fatalf("ci covers should include test-coverage lane: %+v", discovery.Items)
+	}
+}
+
+// DHF-TEST: keel/requirement-65
+func TestDetectLanesNormalizesModuleRootPackageFamily(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	writeFile(t, root, "root_test.go", "package keel\n\nimport \"testing\"\n\nfunc TestRoot(t *testing.T) {}\n")
+
+	seedDetectedLanes(t, root)
+	data, err := os.ReadFile(filepath.Join(root, ".vscode", "test-lanes.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if strings.Contains(text, `"id": "go-."`) || strings.Contains(text, `"go": "././..."`) {
+		t.Fatalf("detect emitted degenerate module-root lane:\n%s", text)
+	}
+	if !strings.Contains(text, `"id": "go-root"`) || !strings.Contains(text, `"go": "./"`) {
+		t.Fatalf("detect missing normalized module-root lane:\n%s", text)
+	}
+}
+
 // DHF-TEST: keel/requirement-64
 func TestVSCodePlanCarriesComparableDevtoolIdentity(t *testing.T) {
 	root := t.TempDir()
@@ -1025,7 +1076,7 @@ func TestVSCodeLaneEdgeCases(t *testing.T) {
 	if got := goPackageMatchesPattern(".", "./"); !got {
 		t.Fatal("root go pattern should match root package")
 	}
-	if got := goPackageFamily("."); got != "." {
+	if got := goPackageFamily("."); got != "root" {
 		t.Fatalf("root package family = %q", got)
 	}
 	if items, err := discoverVSIXTestItems(filepath.Join(root, "missing")); err != nil || len(items) != 0 {
