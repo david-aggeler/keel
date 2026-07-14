@@ -472,7 +472,7 @@ func TestVSCodeDiscoveryAndPlanExposeKeelLaneSet(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-46, keel/requirement-69
+// DHF-TEST: keel/requirement-46, keel/requirement-69, keel/requirement-74
 func TestVSCodeDiscoveryEmitsStructuredOrderedTree(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
@@ -482,13 +482,9 @@ func TestVSCodeDiscoveryEmitsStructuredOrderedTree(t *testing.T) {
 	}
 	writeFile(t, root, filepath.Join("log", "logging_test.go"), "package log\n\nimport \"testing\"\n\nfunc TestLog(t *testing.T) {}\n")
 
-	built2, buildErr2 := buildVSCodeDiscovery(root)
-	if buildErr2 != nil {
-		t.Fatalf("buildVSCodeDiscovery: %v", buildErr2)
-	}
 	var discover bytes.Buffer
-	if err := testbridge.EncodeDocument(&discover, built2); err != nil {
-		t.Fatalf("encode protocol document: %v", err)
+	if err := commandTree().Dispatch(contextWithVSCodeTestState(root, &discover), []string{"test-bridge", "tests", "discover", "--format", "json"}); err != nil {
+		t.Fatalf("canonical discover: %v", err)
 	}
 	var doc vscode.DiscoveryDocument
 	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
@@ -569,7 +565,7 @@ func TestVSCodeDiscoveryEmitsStructuredOrderedTree(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-60
+// DHF-TEST: keel/requirement-60, keel/requirement-74
 func TestKeelDevDesiredStateRowsAreRunnableThroughCanonicalBridge(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")

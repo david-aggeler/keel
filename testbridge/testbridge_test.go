@@ -77,6 +77,176 @@ func TestCommandSpecOwnsCanonicalBridgeWire(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-74
+func TestDiscoverDerivesDesiredStateGroupsFromProvider(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{{
+		ID:       "demo::desired-state",
+		Label:    "B - Desired State",
+		Kind:     "group",
+		Runnable: false,
+		Profiles: []string{},
+	}, {
+		ID:       "demo::desired-state::legacy-child",
+		ParentID: "demo::desired-state",
+		Label:    "legacy consumer-authored B child",
+		Kind:     "group",
+		Profiles: []string{},
+	}}
+	fake.desiredGroups = []vscode.DesiredStateGroup{{
+		Label:             "Provisioning",
+		Order:             20,
+		MutuallyExclusive: true,
+		Rows: []vscode.DesiredState{
+			{RunID: "demo::action::seed-small", Resource: "db-small", Kind: "fixture-data", Desired: "small", Current: "empty", Status: "reconcilable", Action: "reconcile_during_run", Message: "seed small", Owned: true, Active: true},
+			{Resource: "python", Kind: "tool", Desired: "available", Current: "available", Status: "satisfied", Action: "reuse", Message: "ok", Reusable: true},
+		},
+	}}
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol})
+
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "discover", "--format", "json"}); err != nil {
+		t.Fatalf("discover dispatch: %v", err)
+	}
+	var doc vscode.DiscoveryDocument
+	decodeJSON(t, &protocol, &doc)
+
+	group, ok := testItemByID(doc.Items, "demo::desired-state::group::provisioning")
+	if !ok {
+		t.Fatalf("derived desired-state group missing: %+v", doc.Items)
+	}
+	if group.ParentID != "demo::desired-state" || group.Label != "Provisioning" || group.SortText != "b.020" || strings.Join(group.Limitations, " ") != "mutually_exclusive=true" {
+		t.Fatalf("derived group = %+v, want provider label/order/exclusivity under B", group)
+	}
+	runnable, ok := testItemByID(doc.Items, "demo::action::seed-small")
+	if !ok || runnable.ParentID != group.ID || !runnable.Runnable || !equalStrings(runnable.Profiles, []string{"run"}) {
+		t.Fatalf("run_id row = %+v ok=%v, want runnable run-profile child", runnable, ok)
+	}
+	informational, ok := testItemByID(doc.Items, "demo::desired-state::group::provisioning::row::python-available-reuse")
+	if !ok || informational.ParentID != group.ID || informational.Runnable || len(informational.Profiles) != 0 {
+		t.Fatalf("informational row = %+v ok=%v, want non-runnable child", informational, ok)
+	}
+	if got := fake.calls; got != "discover,desiredState:" {
+		t.Fatalf("provider calls = %q, want discover plus unselected desired-state query", got)
+	}
+	if legacy, ok := testItemByID(doc.Items, "demo::desired-state::legacy-child"); ok {
+		t.Fatalf("consumer-authored B child was not replaced by bridge derivation: %+v", legacy)
+	}
+}
+
+// DHF-TEST: keel/requirement-74
+func TestRunDryRunResolvesDerivedDesiredStateRunIDsReadOnly(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{{
+		ID:       "demo::desired-state",
+		Label:    "B - Desired State",
+		Kind:     "group",
+		Profiles: []string{},
+	}}
+	fake.desiredGroups = []vscode.DesiredStateGroup{{
+		Label: "Provisioning",
+		Order: 10,
+		Rows: []vscode.DesiredState{{
+			RunID:    "demo::action::seed-small",
+			Resource: "db-small",
+			Kind:     "fixture-data",
+			Desired:  "small",
+			Current:  "empty",
+			Status:   "reconcilable",
+			Action:   "reconcile_during_run",
+			Message:  "seed small",
+			Owned:    true,
+		}},
+	}}
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: io.Discard})
+
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--dry-run", "--id", "demo::action::seed-small"}); err != nil {
+		t.Fatalf("dry-run desired-state run_id dispatch: %v", err)
+	}
+	if len(fake.runIDs) != 0 || fake.sawRunLock {
+		t.Fatalf("dry-run executed runner path: runIDs=%v sawRunLock=%v", fake.runIDs, fake.sawRunLock)
+	}
+	if got := fake.calls; got != "discover,desiredState:" {
+		t.Fatalf("provider calls = %q, want discover plus unselected desired-state query", got)
+	}
+}
+
+// DHF-TEST: keel/requirement-74
+func TestDiscoverRejectsDuplicateDerivedDesiredStateIDs(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{{
+		ID:       "demo::desired-state",
+		Label:    "B - Desired State",
+		Kind:     "group",
+		Profiles: []string{},
+	}}
+	fake.desiredGroups = []vscode.DesiredStateGroup{{
+		Label: "Provisioning",
+		Order: 10,
+		Rows: []vscode.DesiredState{{
+			Resource: "db-small",
+			Kind:     "fixture-data",
+			Desired:  "small",
+			Current:  "empty",
+			Status:   "reconcilable",
+			Action:   "reconcile_during_run",
+			Message:  "seed small",
+		}},
+	}, {
+		Label: "Provisioning",
+		Order: 20,
+		Rows: []vscode.DesiredState{{
+			Resource: "db-large",
+			Kind:     "fixture-data",
+			Desired:  "large",
+			Current:  "empty",
+			Status:   "reconcilable",
+			Action:   "reconcile_during_run",
+			Message:  "seed large",
+		}},
+	}}
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: io.Discard})
+
+	err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "discover", "--format", "json"})
+	if err == nil || !strings.Contains(err.Error(), "duplicate discovery item id") {
+		t.Fatalf("duplicate derived ID err = %v, want duplicate discovery item id", err)
+	}
+}
+
+// DHF-TEST: keel/requirement-74
+func TestDiscoverDegradesDesiredStateProviderFailure(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{{
+		ID:       "demo::desired-state",
+		Label:    "B - Desired State",
+		Kind:     "group",
+		Profiles: []string{},
+	}}
+	fake.desiredErr = errors.New("desired provider exploded")
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol})
+
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "discover", "--format", "json"}); err != nil {
+		t.Fatalf("discover should degrade desired-state failure, got: %v", err)
+	}
+	var doc vscode.DiscoveryDocument
+	decodeJSON(t, &protocol, &doc)
+
+	diagnostic, ok := testItemByID(doc.Items, "demo::desired-state::diagnostic::plan")
+	if !ok || diagnostic.ParentID != "demo::desired-state" || diagnostic.Runnable || !strings.Contains(strings.Join(diagnostic.Limitations, " "), "desired provider exploded") {
+		t.Fatalf("diagnostic item = %+v ok=%v, want one non-runnable B child with provider error", diagnostic, ok)
+	}
+	for _, item := range doc.Items {
+		if item.ParentID == "demo::desired-state" && item.ID != diagnostic.ID {
+			t.Fatalf("provider failure emitted extra B child: %+v", item)
+		}
+	}
+}
+
 // DHF-TEST: keel/requirement-60
 func TestArgvContractForDesiredStateAndRun(t *testing.T) {
 	spec := testbridge.CommandSpec(newFakeBridge(t.TempDir()))
@@ -659,6 +829,7 @@ type fakeBridge struct {
 	runErr                 error
 	discoverErr            error
 	desiredErr             error
+	desiredGroups          []vscode.DesiredStateGroup
 }
 
 func newFakeBridge(root string) *fakeBridge {
@@ -720,14 +891,9 @@ func (f *fakeBridge) DesiredState(_ context.Context, ids []string) (vscode.Setup
 		return vscode.SetupPlan{}, f.desiredErr
 	}
 	f.appendCall("desiredState:" + strings.Join(ids, ","))
-	return vscode.SetupPlan{
-		Version:           2,
-		Devtool:           f.Metadata(),
-		Workspace:         "consumer-node",
-		GeneratedAt:       time.Unix(2, 0).UTC(),
-		Items:             []vscode.SetupPlanItem{{ID: "demo::lane::fast", Runnable: true, RequiredResources: []string{"db"}}},
-		RequiredResources: []string{"db"},
-		Groups: []vscode.DesiredStateGroup{{
+	groups := f.desiredGroups
+	if groups == nil {
+		groups = []vscode.DesiredStateGroup{{
 			Label: "Test Preconditions",
 			Rows: []vscode.DesiredState{{
 				Resource: "db",
@@ -740,11 +906,29 @@ func (f *fakeBridge) DesiredState(_ context.Context, ids []string) (vscode.Setup
 				Reusable: false,
 				Owned:    true,
 			}},
-		}},
-		Checks:   []vscode.PrereqCheck{{ID: "db", OK: true, Message: "probe only"}},
-		Actions:  []vscode.SetupPlanAction{{Resource: "db", Status: "reconcile_during_run", Message: "seed during run", Reusable: false, Owned: true}},
-		Teardown: vscode.SetupPlanTeardown{OwnedTemporaryResources: []string{"db"}, SharedReusableResources: []string{}, Policy: "owned-after-run"},
+		}}
+	}
+	return vscode.SetupPlan{
+		Version:           2,
+		Devtool:           f.Metadata(),
+		Workspace:         "consumer-node",
+		GeneratedAt:       time.Unix(2, 0).UTC(),
+		Items:             []vscode.SetupPlanItem{{ID: "demo::lane::fast", Runnable: true, RequiredResources: []string{"db"}}},
+		RequiredResources: []string{"db"},
+		Groups:            groups,
+		Checks:            []vscode.PrereqCheck{{ID: "db", OK: true, Message: "probe only"}},
+		Actions:           []vscode.SetupPlanAction{{Resource: "db", Status: "reconcile_during_run", Message: "seed during run", Reusable: false, Owned: true}},
+		Teardown:          vscode.SetupPlanTeardown{OwnedTemporaryResources: []string{"db"}, SharedReusableResources: []string{}, Policy: "owned-after-run"},
 	}, nil
+}
+
+func testItemByID(items []vscode.TestItem, id string) (vscode.TestItem, bool) {
+	for _, item := range items {
+		if item.ID == id {
+			return item, true
+		}
+	}
+	return vscode.TestItem{}, false
 }
 
 func (f *fakeBridge) Run(_ context.Context, req testbridge.RunRequest, emit vscode.RunEventWriter) (int, error) {
