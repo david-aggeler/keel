@@ -66,8 +66,8 @@ keel/prototype-1 variant c):
 ```
 a. Maintenance    a.1 detect lanes · a.2 unlock test bridge
                   a.3 clear test results · a.4 clear local test state
-b. Lanes          b.1 lint · b.2 test-fast · b.3 test-coverage
-                  b.10 vsix ci · b.30 ci   (+ file lanes from test-lanes.json)
+C - Lanes        c.1 lint · c.2 test-fast · c.3 test-coverage
+                  c.10 vsix ci · c.30 ci   (+ detected category lanes)
                   each: measured last-run duration + covers subtree
 d. Frameworks     parent for language-specific test trees
    d.1 Go         package → file → test (go/parser; uri + range)
@@ -79,31 +79,35 @@ Letters order top-level groups, numeric children carry family gaps; ordinals
 live only in labels + `sort_text`, never in item ids, so renumbering is free
 and results survive scheme changes.
 
-**Mechanics — lanes** *(planned — approved units keel/change_request-53
-(tree + vsix-ci/ci lanes) and keel/change_request-55 (lanes file + verbs);
-today exactly three system lanes are compiled — lint, test-fast,
-test-coverage — and no `lanes` verbs exist)*.
-Target state: system lanes lint, test-fast, test-coverage, vsix-ci, ci stay
-compiled; file lanes come from `.vscode/test-lanes.json` — **100% owned by
-the consumer devtool** (go.mod model: keel-dev writes it via `detect-lanes` maintenance,
-the human hand-edits it, the VSIX only watches the path) — and are defined by
-member sets: Go package globs, framework roots, **per-file vsix selections**
+**Mechanics — lanes** *(implemented across keel/change_request-53,
+keel/change_request-55, and keel/change_request-76)*.
+All discovery-served lanes come from `.vscode/test-lanes.json` — **100% owned
+by the consumer devtool** (go.mod model: keel-dev writes it via
+`detect-lanes` maintenance, the human hand-edits it, the VSIX only watches the
+path). `detect-lanes` seeds the gate lanes (`lint`, `test-fast`,
+`test-coverage`, `vsix-ci`, `ci`) from keel-dev's gate knowledge and appends
+workspace-derived category lanes. Gate lane execution remains compiled and
+authoritative; the file supplies the visible lane tree, member graph, and
+covers. Lanes are defined by member sets: Go package globs, framework roots,
+**per-file vsix selections**
 (owner decision, Option 2), or other lanes (DAG composition, union + dedup),
 never by opaque commands (vela's opaque-command registry forced a
 hand-maintained covers switch that drifts; member sets make covers, run
-fan-out, and cost attribution derive from one source). Planned verbs:
-`file-backed lane discovery` (effective definitions incl. expanded members and
-measured durations — the gate-sizing dataset) and `detect-lanes maintenance`
-(idempotent, append-only category writes, also maintenance item a.1). Full
-normative contract: the Test Lanes Interface Specification rev 2.3 (attached
-to keel/exploration-2; carried by requirements keel/requirement-51…54).
+fan-out, and cost attribution derive from one source). Lane inventory reports
+effective definitions including expanded members and measured durations — the
+gate-sizing dataset — and `detect-lanes maintenance` is idempotent and
+append-only. Full normative contract: the Test Lanes Interface Specification
+rev 3 (attached to keel/exploration-2; carried by requirements
+keel/requirement-51…54 and amended by keel/requirement-65).
 
 **Enforcement.** Protocol stdout discipline via the `no-raw-stdout-stream`
 lint and the vscode-verb sink arrangement; wire stability via
 `wire_stability_test.go` + `schema_drift_test.go`; the run lock serializes
 runs today (its stranding gets a maintenance recovery item, planned).
-Planned: a malformed lanes file can never take down discovery — system lanes
-always render, file errors become a diagnostic item.
+A malformed lanes file can never take down discovery: file errors become a
+single diagnostic item under `C - Lanes`; there is no compiled fallback lane
+set. An absent lanes file renders an empty `C - Lanes` group until
+`detect-lanes` runs.
 
 **Exceptions.** `vscode demo block/unblock` exists purely for demoing blocked
 lanes (keel/requirement-41). The VSIX headless suite uses the in-repo fixture
