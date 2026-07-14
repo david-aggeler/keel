@@ -39,8 +39,8 @@ that *consumes* this interface).
   the go.mod model: keel-dev owns the file and writes it (`detect-lanes` maintenance);
   the human edits it by hand; both are first-class writers. The VSIX never
   reads the file — it only watches the path to trigger re-discovery.
-- The VSIX adds the path to its existing file-watch glob; any write (hand
-  edit or detect) triggers automatic re-discovery — new lanes appear with no
+- The VSIX adds the path to its existing file-watch glob; any file write
+  triggers automatic re-discovery — new lanes appear with no
   VS Code restart. *Latency note: with today's `go list`-based discovery a
   refresh takes seconds; the ~1 s fast loop arrives with the go/parser
   discovery upgrade (CR-B). This spec depends on CR-B for the speed promise,
@@ -158,7 +158,7 @@ validation warnings); non-zero = verb itself failed.
 | `test-bridge tests desired-state [--id]` | exists; extension planned | The **desired-state detection** verb. `desired_state` rows gain real per-resource checks (go toolchain, module root, pnpm for vsix members, lanes-file validity as a resource). |
 | `test-bridge tests run --id` | exists | Accepts lane ids. Gate lane ids execute the compiled gate behavior; category/composed lanes execute their member sets. Run semantics in §7. |
 | `file-backed lane discovery` | implemented as lane inventory | Effective lane definitions as JSON: per lane — id, label, order, direct members, **expanded** member set, inherited prerequisites, validation findings, last measured duration. This is also the artifact a future CR-class→gate mapping consumes. |
-| `detect-lanes maintenance` | exists | Scans the module (`WalkDir`, no compilation) and **writes** gate lanes plus category lanes for top-level package families not yet covered by any lane into `.vscode/test-lanes.json` (creating the file if absent). A first-class write under the devtool-ownership model — not a config-policy exception, and not silent (runs only as explicit user action: verb or tree item a.1). Idempotent; append-only; never edits or removes existing entries, hand-authored or previously detected. Reports the delta as JSON `{added, unchanged, skipped}`; run through the tree, the delta is emitted as `output` events so the run shows what changed, and the file write itself triggers watcher-driven re-discovery — new lanes appear without a restart. |
+| `detect-lanes maintenance` | exists | Scans the module (`WalkDir`, no compilation) and **rewrites** `.vscode/test-lanes.json` as the canonical detect-owned file: gate lanes plus one category lane per top-level test package family (creating or replacing the file even when absent, stale, hand-edited, or invalid). A first-class write under the devtool-ownership model -- not a config-policy exception, and not silent (runs only as explicit user action: verb or tree item a.1). Idempotent full regeneration; manual edits are transient and do not survive a detect run. Reports the delta versus the previously persisted content as JSON `{added, removed, changed, unchanged}`; run through the tree, the delta is emitted as `output` events so the run shows what changed, and the file write itself triggers watcher-driven re-discovery -- new lanes appear without a restart. |
 
 `detect-lanes` maintenance is exposed in-tree as maintenance item **a.1 detect lanes**
 (kind `maintenance`), alongside a.2 unlock, a.3 clear results, a.4 clear state.
@@ -177,7 +177,7 @@ validation warnings); non-zero = verb itself failed.
    compilation); skip hidden dirs, `vendor`, `node_modules`, `testdata`,
    `bin`, `worktrees`; a package counts iff its directory contains ≥ 1
    `*_test.go` file.
-2. **Seed gate lanes**: ensure the file contains `lint`, `test-fast`,
+2. **Seed gate lanes**: generate `lint`, `test-fast`,
    `test-coverage`, `vsix-ci`, and `ci` with the conventional `c.*` orders
    and member sets that drive covers (`go` root, `vsix` root, or lane refs).
 3. **Group into families**: family key = first path segment under the module
@@ -187,14 +187,17 @@ validation warnings); non-zero = verb itself failed.
 4. **Candidate lane per family**: id `go-<segment>`, label `<segment>`,
    members `[{"go": "./<segment>/..."}]`, description
    `"detected category — N packages"`, order = next free slot in the
-   **detection range `c.40`–`c.99`** (ascending; hand-assigned collisions are
-   skipped over).
-5. **Coverage check**: a family is *skipped* when an existing lane already
-   covers every test-bearing package of the family in its effective member
-   set, or a lane with the candidate id already exists (*unchanged*).
-6. **Write** (unless `--dry-run`): append the added lanes to
-   `.vscode/test-lanes.json`, creating it with `{"version": 1}` when absent.
-   Existing entries are never modified, reordered, or removed.
+   category range starting at `c.40` (ascending, rebuilt from the sorted
+   detected family list).
+5. **Delta check**: compare the freshly generated lane set against the
+   previously persisted content by lane id and definition. Prior lanes absent
+   from the generated set are `removed`; same-id lanes with different
+   definitions are `changed`; byte-equivalent definitions are `unchanged`; new
+   ids are `added`.
+6. **Write** (unless `--dry-run`): write the freshly generated document to
+   `.vscode/test-lanes.json`, creating or replacing it with `{"version": 1}`.
+   Existing entries are not preserved unless they exactly match the generated
+   lane definition.
 
 **Result document (stdout, exactly one JSON object):**
 
@@ -207,21 +210,25 @@ validation warnings); non-zero = verb itself failed.
     { "id": "go-log", "label": "log", "order": "c.40",
       "members": [ { "go": "./log/..." } ], "packages": 3 }
   ],
-  "unchanged": [ { "id": "go-exec", "reason": "lane id already declared" } ],
-  "skipped":   [ { "id": "go-cmd",  "reason": "covered by lane \"ci\"" } ]
+  "removed": [ { "id": "legacy-log", "reason": "not detected" } ],
+  "changed": [ { "id": "go-exec", "reason": "definition changed" } ],
+  "unchanged": [ { "id": "ci", "reason": "unchanged" } ]
 }
 ```
 
-`written` is false under `--dry-run` or when `added` is empty (no write, no
-watcher churn). **Exit codes:** 0 = document produced (even with empty
-`added`); 1 = lanes file unreadable/invalid (nothing written; the error text
-matches the discovery diagnostic item); 2 = usage.
+`written` is false under `--dry-run`; otherwise detect writes the canonical
+file even when the delta is empty. **Exit codes:** 0 = document produced and
+the file regenerated or dry-run delta reported; 1 = filesystem or detection
+failure that prevents regeneration; 2 = usage. A previously absent, unreadable,
+unsupported, malformed, cyclic, or otherwise invalid lanes file is not a detect
+failure; it is replaced by the generated file.
 
 **Idempotence guarantee:** running detect twice in a row yields
-`added: []` on the second run, byte-identical file, `written: false`.
+empty `added`, `removed`, and `changed` arrays on the second run and a
+byte-identical file.
 
 **As maintenance item a.1:** same algorithm; the result document's contents
-are emitted as run `output` events (one line per added/unchanged/skipped
+are emitted as run `output` events (one line per added/removed/changed/unchanged
 entry), terminal `passed` on exit 0, `failed` with the error text on exit 1;
 the file write (when any) triggers watcher-driven re-discovery.
 
@@ -409,9 +416,11 @@ diagnostic item under `C - Lanes`.
 Resolved 2026-07-12:
 
 1. **Exclusions in v1** — NO; union only (revisit on first real need).
-2. **`detect-lanes` maintenance write behavior** — WRITES the file (owner decision): the
-   file is 100% devtool-owned, go.mod model; append-only idempotence protects
-   hand edits. Overrides the reviewer recommendation of propose-only.
+2. **`detect-lanes` maintenance write behavior** — WRITES the file (owner decision):
+   the file is 100% devtool-owned, go.mod model. Updated 2026-07-14:
+   detect-lanes full-rewrites the file; manual edits are transient and
+   idempotence is byte-identical regeneration, not append-only preservation.
+   Overrides the reviewer recommendation of propose-only.
 3. **Cost attribution** — `requested: [{id, label}]` on `run_started`
    (reviewer/assistant recommendation; owner delegated the mechanism and set
    the id/description minimum).
