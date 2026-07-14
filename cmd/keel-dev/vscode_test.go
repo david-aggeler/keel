@@ -29,7 +29,7 @@ func TestVSCodeRunBlockedLaneUsesEngineProtocol(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
 	var protocol bytes.Buffer
-	err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "keel::lane::test-fast"})
+	err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), "keel::lane::test-fast")
 	if err == nil {
 		t.Fatal("blocked lane returned nil error; want non-zero terminal failure")
 	}
@@ -64,7 +64,7 @@ func TestVSCodeHandlersDispatchDiscoveryDesiredStateAndLintRun(t *testing.T) {
 	seedDetectedLanes(t, root)
 
 	var discover bytes.Buffer
-	if err := handleVSCodeTestsDiscover(contextWithVSCodeTestState(root, &discover), []string{"--format", "json"}); err != nil {
+	if err := dispatchTestBridgeDiscover(contextWithVSCodeTestState(root, &discover), []string{"--format", "json"}...); err != nil {
 		t.Fatalf("discover handler: %v", err)
 	}
 	var doc vscode.DiscoveryDocument
@@ -76,7 +76,7 @@ func TestVSCodeHandlersDispatchDiscoveryDesiredStateAndLintRun(t *testing.T) {
 	}
 
 	var desiredStateOut bytes.Buffer
-	if err := handleVSCodeTestsDesiredState(contextWithVSCodeTestState(root, &desiredStateOut), []string{"--format", "json", "--id", vscodeLaneLint}); err != nil {
+	if err := dispatchTestBridgeDesiredState(contextWithVSCodeTestState(root, &desiredStateOut), []string{"--format", "json", "--id", vscodeLaneLint}...); err != nil {
 		t.Fatalf("desiredState handler: %v", err)
 	}
 	var desiredState vscode.DesiredStateDocument
@@ -88,7 +88,7 @@ func TestVSCodeHandlersDispatchDiscoveryDesiredStateAndLintRun(t *testing.T) {
 	}
 
 	var protocol bytes.Buffer
-	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", vscodeLaneLint}); err != nil {
+	if err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), vscodeLaneLint); err != nil {
 		t.Fatalf("lint run handler: %v\n%s", err, protocol.String())
 	}
 	events := decodeRunEvents(t, protocol.String())
@@ -296,7 +296,7 @@ func TestVSCodeDesiredStateCarriesComparableDevtoolIdentity(t *testing.T) {
 	writeFile(t, root, "go.sum", "")
 
 	var desiredStateOut bytes.Buffer
-	if err := handleVSCodeTestsDesiredState(contextWithVSCodeTestState(root, &desiredStateOut), []string{"--format", "json", "--id", vscodeLaneLint}); err != nil {
+	if err := dispatchTestBridgeDesiredState(contextWithVSCodeTestState(root, &desiredStateOut), []string{"--format", "json", "--id", vscodeLaneLint}...); err != nil {
 		t.Fatalf("desiredState handler: %v", err)
 	}
 	var desiredState vscode.DesiredStateDocument
@@ -324,12 +324,28 @@ func TestLegacyVSCodeCommandIsUnknown(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-61
-func TestVSCodeCommandSpecOmitsDemoSubtree(t *testing.T) {
-	spec := vscodeCommandSpec()
-	for _, sub := range spec.Subcommands {
-		if sub.Name == "demo" {
-			t.Fatalf("vscode command spec still exposes demo subtree: %+v", sub)
+// DHF-TEST: keel/requirement-65
+func TestVSCodeSourceHasNoLegacyAliasLayer(t *testing.T) {
+	body, err := os.ReadFile("vscode.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(body)
+	for _, forbidden := range []string{
+		"func vscodeCommandSpec(",
+		"func dispatchTestBridgeAlias(",
+		"func handleVSCodeTestsDiscover(",
+		"func handleVSCodeTestsDesiredState(",
+		"func handleVSCodeTestsRun(",
+		"func handleVSCodeLanesList(",
+		"func handleVSCodeLanesDetect(",
+		"func parseVSCodeLanesDetectArgs(",
+		`Use: "vscode `,
+		`"vscode", "tests"`,
+		`"vscode", "lanes"`,
+	} {
+		if strings.Contains(source, forbidden) {
+			t.Fatalf("legacy vscode alias layer still contains %q", forbidden)
 		}
 	}
 }
@@ -339,7 +355,7 @@ func TestVSCodeConfigHandlersInitAndUpgrade(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 
-	if err := handleVSCodeConfigInit(contextWithVSCodeTestState(root, io.Discard), nil); err != nil {
+	if err := dispatchTestBridgeConfigInit(contextWithVSCodeTestState(root, io.Discard)); err != nil {
 		t.Fatalf("config init: %v", err)
 	}
 	body, err := os.ReadFile(filepath.Join(root, ".vscode", "test-bridge.json"))
@@ -351,7 +367,7 @@ func TestVSCodeConfigHandlersInitAndUpgrade(t *testing.T) {
 	}
 
 	writeFile(t, root, filepath.Join(".vscode", "test-bridge.json"), `{"version":1,"command":"bin/custom","args":["vscode","tests"],"displayName":"Custom"}`+"\n")
-	if err := handleVSCodeConfigUpgrade(contextWithVSCodeTestState(root, io.Discard), nil); err != nil {
+	if err := dispatchTestBridgeConfigUpgrade(contextWithVSCodeTestState(root, io.Discard)); err != nil {
 		t.Fatalf("config upgrade: %v", err)
 	}
 	body, err = os.ReadFile(filepath.Join(root, ".vscode", "test-bridge.json"))
@@ -409,6 +425,32 @@ func TestVSIXChangelogSignalsDemoWireRemoval(t *testing.T) {
 
 func contextWithVSCodeTestState(root string, protocol io.Writer) context.Context {
 	return withRunStateProtocol(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, root, protocol)
+}
+
+func dispatchTestBridgeConfigInit(ctx context.Context) error {
+	return commandTree().Dispatch(ctx, []string{"test-bridge", "config", "init"})
+}
+
+func dispatchTestBridgeConfigUpgrade(ctx context.Context) error {
+	return commandTree().Dispatch(ctx, []string{"test-bridge", "config", "upgrade"})
+}
+
+func dispatchTestBridgeDiscover(ctx context.Context, args ...string) error {
+	canonical := append([]string{"test-bridge", "tests", "discover"}, args...)
+	return commandTree().Dispatch(ctx, canonical)
+}
+
+func dispatchTestBridgeDesiredState(ctx context.Context, args ...string) error {
+	canonical := append([]string{"test-bridge", "tests", "desired-state"}, args...)
+	return commandTree().Dispatch(ctx, canonical)
+}
+
+func dispatchTestBridgeRun(ctx context.Context, ids ...string) error {
+	canonical := []string{"test-bridge", "tests", "run"}
+	for _, id := range ids {
+		canonical = append(canonical, "--id", id)
+	}
+	return commandTree().Dispatch(ctx, canonical)
 }
 
 func decodeRunEvents(t *testing.T, raw string) []vscode.RunEvent {
@@ -813,7 +855,7 @@ exit 0`)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	var protocol bytes.Buffer
-	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "keel::lane::core"}); err != nil {
+	if err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), "keel::lane::core"); err != nil {
 		t.Fatalf("core lane run: %v\nprotocol:\n%s\ncalls:\n%s", err, protocol.String(), calls(t, callsFile))
 	}
 	gotCalls := calls(t, callsFile)
@@ -846,7 +888,7 @@ func TestVSCodeLanesListAndDetect(t *testing.T) {
 	}
 
 	var list bytes.Buffer
-	if err := handleVSCodeLanesList(contextWithVSCodeTestState(root, &list), []string{"--format", "json"}); err != nil {
+	if err := writeVSCodeLanesList(root, &list); err != nil {
 		t.Fatalf("lanes list: %v", err)
 	}
 	var listed struct {
@@ -866,7 +908,7 @@ func TestVSCodeLanesListAndDetect(t *testing.T) {
 	}
 
 	var dry bytes.Buffer
-	if err := handleVSCodeLanesDetect(contextWithVSCodeTestState(root, &dry), []string{"--format", "json", "--dry-run"}); err != nil {
+	if err := writeVSCodeLanesDetect(root, true, &dry); err != nil {
 		t.Fatalf("lanes detect --dry-run: %v", err)
 	}
 	if after, err := os.ReadFile(lanesPath); err != nil || !bytes.Equal(after, before) {
@@ -881,7 +923,7 @@ func TestVSCodeLanesListAndDetect(t *testing.T) {
 	}
 
 	var detect bytes.Buffer
-	if err := handleVSCodeLanesDetect(contextWithVSCodeTestState(root, &detect), []string{"--format", "json"}); err != nil {
+	if err := writeVSCodeLanesDetect(root, false, &detect); err != nil {
 		t.Fatalf("lanes detect: %v", err)
 	}
 	var detectDoc lanesDetectDocument
@@ -903,7 +945,7 @@ func TestVSCodeLanesListAndDetect(t *testing.T) {
 		t.Fatalf("detect wrote capitalized member keys:\n%s", afterWrite)
 	}
 	var relist bytes.Buffer
-	if err := handleVSCodeLanesList(contextWithVSCodeTestState(root, &relist), []string{"--format", "json"}); err != nil {
+	if err := writeVSCodeLanesList(root, &relist); err != nil {
 		t.Fatalf("lanes list after detect: %v", err)
 	}
 	var relisted struct {
@@ -923,7 +965,7 @@ func TestVSCodeLanesListAndDetect(t *testing.T) {
 	}
 
 	var second bytes.Buffer
-	if err := handleVSCodeLanesDetect(contextWithVSCodeTestState(root, &second), []string{"--format", "json"}); err != nil {
+	if err := writeVSCodeLanesDetect(root, false, &second); err != nil {
 		t.Fatalf("lanes detect second: %v", err)
 	}
 	var secondDoc lanesDetectDocument
@@ -990,7 +1032,7 @@ func TestVSCodeDetectLanesMaintenanceItemRunsDetect(t *testing.T) {
 	}
 
 	var protocol bytes.Buffer
-	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", vscodeMaintenanceDetectLanes}); err != nil {
+	if err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), vscodeMaintenanceDetectLanes); err != nil {
 		t.Fatalf("detect lanes maintenance run: %v\n%s", err, protocol.String())
 	}
 	if !strings.Contains(protocol.String(), "go-exec") || !runEventsContain(decodeRunEvents(t, protocol.String()), "passed", vscodeMaintenanceDetectLanes) {
@@ -1010,7 +1052,7 @@ func TestVSCodeRunStartedCarriesRequestedSelection(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
 	var protocol bytes.Buffer
-	err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", vscodeLaneTestFast})
+	err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), vscodeLaneTestFast)
 	if err == nil {
 		t.Fatal("blocked run returned nil; want non-zero")
 	}
@@ -1156,7 +1198,7 @@ esac`)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	var protocol bytes.Buffer
-	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "keel::lane::ui"}); err != nil {
+	if err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), "keel::lane::ui"); err != nil {
 		t.Fatalf("ui lane run: %v\nprotocol:\n%s\ncalls:\n%s", err, protocol.String(), calls(t, callsFile))
 	}
 	if got := calls(t, callsFile); !strings.Contains(got, "pnpm --dir "+filepath.Join(root, "vsix")+" run test:headless -- src/test/suite/extension.test.ts src/test/suite/tree.test.ts") {
@@ -1208,7 +1250,7 @@ func TestVSCodeLaneEdgeCases(t *testing.T) {
 	// Detect-lanes is the recovery path for whole-file lane errors: it rewrites
 	// from compiled/workspace knowledge instead of preserving the invalid file.
 	var cycleDetect bytes.Buffer
-	if err := handleVSCodeLanesDetect(contextWithVSCodeTestState(root, &cycleDetect), []string{"--format", "json"}); err != nil {
+	if err := writeVSCodeLanesDetect(root, false, &cycleDetect); err != nil {
 		t.Fatalf("lanes detect should heal a cyclic file: %v\n%s", err, cycleDetect.String())
 	}
 	if after, err := os.ReadFile(filepath.Join(root, ".vscode", "test-lanes.json")); err != nil || strings.Contains(string(after), `"id": "a"`) || !strings.Contains(string(after), `"id": "test-fast"`) {
@@ -1217,17 +1259,11 @@ func TestVSCodeLaneEdgeCases(t *testing.T) {
 
 	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{"version":1,"lanes":[{"id":"bad","label":"bad","order":"b.40","members":[{"unknown":"x"}]}]}`+"\n")
 	var protocol bytes.Buffer
-	err = handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "keel::lane::bad"})
+	err = dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), "keel::lane::bad")
 	if err == nil || !strings.Contains(err.Error(), "invalid") {
 		t.Fatalf("invalid lane run err = %v\n%s", err, protocol.String())
 	}
 
-	if _, err := parseVSCodeLanesDetectArgs([]string{"--format", "yaml"}); err == nil {
-		t.Fatal("non-json lanes detect format should fail")
-	}
-	if _, err := parseVSCodeLanesDetectArgs([]string{"--dry-run", "--bogus"}); err == nil {
-		t.Fatal("unknown lanes detect flag should fail")
-	}
 	if hint := laneDurationHint(&laneLastRun{DurationMS: 192000}); hint != "· last 3m 12s" {
 		t.Fatalf("long duration hint = %q", hint)
 	}
@@ -1383,7 +1419,7 @@ func TestVSCodeMaintenanceItemsAdvertiseCapabilitiesAndRunActions(t *testing.T) 
 	}
 
 	var protocol bytes.Buffer
-	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "keel::maintenance::unlock"}); err != nil {
+	if err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), "keel::maintenance::unlock"); err != nil {
 		t.Fatalf("unlock maintenance run: %v\nprotocol:\n%s", err, protocol.String())
 	}
 	if _, err := os.Stat(lockPath); !errors.Is(err, os.ErrNotExist) {
@@ -1394,7 +1430,7 @@ func TestVSCodeMaintenanceItemsAdvertiseCapabilitiesAndRunActions(t *testing.T) 
 	}
 
 	protocol.Reset()
-	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "keel::maintenance::clear-state"}); err != nil {
+	if err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), "keel::maintenance::clear-state"); err != nil {
 		t.Fatalf("clear-state maintenance run: %v\nprotocol:\n%s", err, protocol.String())
 	}
 	clearStateEvents := decodeRunEvents(t, protocol.String())
@@ -1460,7 +1496,7 @@ func TestVSCodeSystemGateLanesDiscoverPrepareAndRun(t *testing.T) {
 	stub(t, bin, callsFile, "go", "exit 0")
 	t.Setenv("PATH", bin)
 	var protocol bytes.Buffer
-	err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "keel::lane::vsix-ci"})
+	err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), "keel::lane::vsix-ci")
 	if err == nil {
 		t.Fatal("vsix-ci without pnpm returned nil error; want structured blocked result")
 	}
@@ -1475,7 +1511,7 @@ func TestVSCodeSystemGateLanesDiscoverPrepareAndRun(t *testing.T) {
 	callsFile = stubTools(t, false, false)
 	goodRoot := moduleFixture(t)
 	protocol.Reset()
-	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(goodRoot, &protocol), []string{"--id", "keel::lane::ci"}); err != nil {
+	if err := dispatchTestBridgeRun(contextWithVSCodeTestState(goodRoot, &protocol), "keel::lane::ci"); err != nil {
 		t.Fatalf("ci lane run: %v\nprotocol:\n%s\ncalls:\n%s", err, protocol.String(), calls(t, callsFile))
 	}
 	if events := decodeRunEvents(t, protocol.String()); !runEventsContain(events, "passed", "keel::lane::ci") || events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode != 0 {
@@ -1490,7 +1526,7 @@ func TestVSCodeSystemGateLanesDiscoverPrepareAndRun(t *testing.T) {
 	writeFile(t, badRoot, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, badRoot, "bad.go", "package p\n\nvar    Y = 2\n")
 	protocol.Reset()
-	err = handleVSCodeTestsRun(contextWithVSCodeTestState(badRoot, &protocol), []string{"--id", "keel::lane::ci"})
+	err = dispatchTestBridgeRun(contextWithVSCodeTestState(badRoot, &protocol), "keel::lane::ci")
 	if err == nil {
 		t.Fatal("failing ci lane returned nil error; want non-zero")
 	}
@@ -1700,7 +1736,7 @@ exit 0`)
 	}
 
 	var protocol bytes.Buffer
-	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "go::file::log/semantics_test.go"}); err != nil {
+	if err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), "go::file::log/semantics_test.go"); err != nil {
 		t.Fatalf("go file selection run: %v\nprotocol:\n%s\ncalls:\n%s", err, protocol.String(), calls(t, callsFile))
 	}
 	if !strings.Contains(calls(t, callsFile), "go test ./log -json -run=^(Test|TestAlias|TestUpper|Test_underscore|Test123)$") {
@@ -1873,7 +1909,7 @@ exit 0`)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	var protocol bytes.Buffer
-	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "go::test::log::TestLog"}); err != nil {
+	if err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), "go::test::log::TestLog"); err != nil {
 		t.Fatalf("go test selection run: %v\nprotocol:\n%s\ncalls:\n%s", err, protocol.String(), calls(t, callsFile))
 	}
 	if !strings.Contains(calls(t, callsFile), "go test ./log -json -run=^(TestLog)$") {
@@ -1954,7 +1990,7 @@ exit 0`)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	var protocol bytes.Buffer
-	err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "go::file::log/selected_test.go"})
+	err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), "go::file::log/selected_test.go")
 	if err != nil {
 		t.Fatalf("go file selection run: %v\nprotocol:\n%s\ncalls:\n%s", err, protocol.String(), calls(t, callsFile))
 	}
@@ -1992,7 +2028,7 @@ func TestVSCodeRunGoFileSelectionReportsParseFailure(t *testing.T) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	var protocol bytes.Buffer
-	err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "go::file::log/broken_test.go"})
+	err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), "go::file::log/broken_test.go")
 	if err == nil {
 		t.Fatalf("go file selection parse failure returned nil\nprotocol:\n%s\ncalls:\n%s", protocol.String(), calls(t, callsFile))
 	}
@@ -2080,7 +2116,7 @@ func TestVSCodeRunGoFileSelectionRejectsInactiveFile(t *testing.T) {
 			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 			var protocol bytes.Buffer
-			err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", tt.id})
+			err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), tt.id)
 			if err == nil {
 				t.Fatalf("inactive go file selection returned nil\nprotocol:\n%s\ncalls:\n%s", protocol.String(), calls(t, callsFile))
 			}
@@ -2125,7 +2161,7 @@ exit 0`)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	var protocol bytes.Buffer
-	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "go::pkg::log"}); err != nil {
+	if err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), "go::pkg::log"); err != nil {
 		t.Fatalf("go package run: %v\nprotocol:\n%s\ncalls:\n%s", err, protocol.String(), calls(t, callsFile))
 	}
 	if !strings.Contains(calls(t, callsFile), "go test ./log -json") || strings.Contains(calls(t, callsFile), "-run=") {
@@ -2251,7 +2287,7 @@ exit 0`)
 	}
 
 	var protocol bytes.Buffer
-	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", vscodeLaneTestCoverage}); err != nil {
+	if err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), vscodeLaneTestCoverage); err != nil {
 		t.Fatalf("coverage run handler: %v\n%s\ncalls:\n%s", err, protocol.String(), calls(t, callsFile))
 	}
 	events := decodeRunEvents(t, protocol.String())
@@ -2304,7 +2340,7 @@ exit 0`)
 	}
 
 	protocol.Reset()
-	if err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", vscodeLaneTestFast}); err != nil {
+	if err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), vscodeLaneTestFast); err != nil {
 		t.Fatalf("test-fast run handler: %v\n%s", err, protocol.String())
 	}
 	for _, event := range decodeRunEvents(t, protocol.String()) {
@@ -2322,7 +2358,7 @@ func TestVSCodeRunWritesStampedExternalRunStream(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
 	var protocol bytes.Buffer
-	err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "keel::lane::test-fast"})
+	err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), "keel::lane::test-fast")
 	if err == nil {
 		t.Fatal("blocked lane returned nil error; want non-zero")
 	}
@@ -2629,7 +2665,7 @@ func TestVSCodeRunRefusesExistingLockAndReleasesOwnLock(t *testing.T) {
 	}
 
 	var protocol bytes.Buffer
-	err := handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "keel::lane::test-fast"})
+	err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), "keel::lane::test-fast")
 	if err == nil {
 		t.Fatal("run with existing lock returned nil error; want refusal")
 	}
@@ -2653,7 +2689,7 @@ func TestVSCodeRunRefusesExistingLockAndReleasesOwnLock(t *testing.T) {
 	}
 	protocol.Reset()
 	t.Setenv("PATH", t.TempDir())
-	err = handleVSCodeTestsRun(contextWithVSCodeTestState(root, &protocol), []string{"--id", "keel::lane::test-fast"})
+	err = dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), "keel::lane::test-fast")
 	if err == nil {
 		t.Fatal("blocked lane returned nil error; want non-zero")
 	}
