@@ -405,11 +405,11 @@ async function runSelected(
   // Informational desired-state items (VSIX-private namespace) are display
   // only: mark them skipped and never submit their ids to the devtool —
   // the real bridge rejects ids it did not serve (formal_review-80).
-  const informational = selected.filter((item) => isDesiredStateProtocolID(protocolIDForTestItem(item)));
+  const informational = selected.filter(isInformationalDesiredStateItem);
   for (const item of informational) {
     run.skipped(item);
   }
-  const submittable = selected.filter((item) => !isDesiredStateProtocolID(protocolIDForTestItem(item)));
+  const submittable = selected.filter((item) => !isInformationalDesiredStateItem(item));
   const selectedProtocolIds = submittable.map(protocolIDForTestItem);
   if (selectedProtocolIds.length === 0) {
     appendRunOutput(run, 'Selection contains only informational desired-state rows; nothing to run.');
@@ -553,6 +553,15 @@ export function desiredStateRowProtocolID(group: DesiredStateGroup, state: Desir
 
 function isDesiredStateProtocolID(id: string): boolean {
   return id === desiredStateRootProtocolID || id.startsWith(`${desiredStateRootProtocolID}::`);
+}
+
+// DHF-REQ: keel/requirement-60
+function isInformationalDesiredStateItem(item: vscode.TestItem): boolean {
+  const protocolID = protocolIDForTestItem(item);
+  if (!isDesiredStateProtocolID(protocolID)) {
+    return false;
+  }
+  return tree?.discoveryItemsById.get(protocolID)?.runnable !== true;
 }
 
 function protocolIDSegment(value: string): string {

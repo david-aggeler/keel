@@ -7,6 +7,7 @@ import * as vscode from 'vscode';
 import {
   applyRunEvent,
   coverageFileSnapshotsForTest,
+  currentTree,
   currentAdapterConfig,
   desiredStateRowProtocolID,
   ExternalRunMirror,
@@ -541,9 +542,33 @@ suite('Keel Test Bridge config contract', () => {
       const extension = vscode.extensions.getExtension('aggeler.keel-test-bridge');
       assert.ok(extension, 'extension should be discoverable');
       await extension.activate();
+      // DHF-TEST: keel/requirement-60
+      await runProfileHandlerForTest('keel::desired-state::keel-module-root');
+      const desiredStateTree = currentTree();
+      assert.ok(desiredStateTree, 'TestController refresh should publish a tree');
+      for (const id of [
+        'keel::desired-state::go-toolchain',
+        'keel::desired-state::keel-module-root',
+        'keel::desired-state::stub-binaries'
+      ]) {
+        const item = desiredStateTree.discoveryItemsById.get(id);
+        assert.ok(item, `real keel-dev discovery should serve desired-state row ${id}`);
+        assert.equal(item.parent_id, 'keel::desired-state::group::test-preconditions');
+        assert.equal(item.runnable, true, `${id} must be runnable, not informational`);
+        assert.deepEqual(item.profiles, ['run']);
+      }
+
+      const afterDesiredStateStreams = listRunStreams(runsDir).filter((candidate) => !beforeRunStreams.has(candidate));
+      assert.equal(afterDesiredStateStreams.length, 1, `desired-state TestController run should create one external run stream under ${runStreamRoot}`);
+      const desiredStateEvents = parseRunEvents(fs.readFileSync(afterDesiredStateStreams[0], 'utf8'));
+      assert.ok(desiredStateEvents.some((event) => event.event === 'passed' && event.test_id === 'keel::desired-state::keel-module-root'));
+      assert.equal(desiredStateEvents.filter((event) => event.event === 'run_finished').length, 1);
+      assert.doesNotMatch(fs.readFileSync(afterDesiredStateStreams[0], 'utf8'), /Selection contains only informational desired-state rows/);
+
+      const beforeLintRunStreams = new Set(listRunStreams(runsDir));
       await runProfileHandlerForTest('keel::lane::lint');
 
-      const newStreams = listRunStreams(runsDir).filter((candidate) => !beforeRunStreams.has(candidate));
+      const newStreams = listRunStreams(runsDir).filter((candidate) => !beforeLintRunStreams.has(candidate));
       assert.equal(newStreams.length, 1, `TestController run should create one external run stream under ${runStreamRoot}`);
       const runEvents = parseRunEvents(fs.readFileSync(newStreams[0], 'utf8'));
       assert.ok(runEvents.some((event) => event.event === 'run_started'));
