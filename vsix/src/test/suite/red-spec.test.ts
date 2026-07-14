@@ -164,20 +164,21 @@ suite('Keel Test Bridge expected-red specs', () => {
         assert.ok(parent);
         assert.ok(itemA);
         assert.ok(itemB);
+        const terminalStates = new Map<string, string>();
+        run = controller.createTestRun(new vscode.TestRunRequest([itemA]));
+        recordTerminalStates(run, terminalStates);
+
+        applyRunEvent(
+          run,
+          JSON.stringify(runEvent({ event: 'passed', test_id: 'keel::lane::a' })),
+          new Set([itemA.id]),
+          new Set()
+        );
+        assert.equal(terminalStates.get(itemA.id), 'passed', 'the first single-item run should leave A green');
+
+        run.end();
         run = controller.createTestRun(new vscode.TestRunRequest([itemB]));
-        const calls: string[] = [];
-        run.passed = (target: vscode.TestItem) => {
-          calls.push(`passed:${target.id}`);
-        };
-        run.failed = (target: vscode.TestItem) => {
-          calls.push(`failed:${target.id}`);
-        };
-        run.errored = (target: vscode.TestItem) => {
-          calls.push(`errored:${target.id}`);
-        };
-        run.skipped = (target: vscode.TestItem) => {
-          calls.push(`skipped:${target.id}`);
-        };
+        recordTerminalStates(run, terminalStates);
 
         applyRunEvent(
           run,
@@ -186,11 +187,16 @@ suite('Keel Test Bridge expected-red specs', () => {
           new Set()
         );
 
-        assert.ok(calls.includes('passed:keel::lane::b'), 'the selected sibling should receive its terminal result');
+        const leafTerminalStates = [itemA, itemB]
+          .map((item) => [item.id, terminalStates.get(item.id)] as const)
+          .sort();
         assert.deepEqual(
-          calls.filter((call) => call.endsWith(':keel::lane::a')),
-          [],
-          'a sibling outside the current request footprint must not receive a result stamp'
+          leafTerminalStates,
+          [
+            [itemA.id, 'passed'],
+            [itemB.id, 'passed']
+          ],
+          'single-item runs should accumulate terminal icons without stamping siblings outside the request footprint'
         );
 
         run.end();
@@ -406,6 +412,29 @@ function runEvent(partial: Partial<RunEvent>): RunEvent {
     time: new Date().toISOString(),
     ...partial
   } as RunEvent;
+}
+
+function recordTerminalStates(run: vscode.TestRun, states: Map<string, string>): void {
+  const originalPassed = run.passed.bind(run);
+  const originalFailed = run.failed.bind(run);
+  const originalErrored = run.errored.bind(run);
+  const originalSkipped = run.skipped.bind(run);
+  run.passed = (target: vscode.TestItem, duration?: number) => {
+    states.set(target.id, 'passed');
+    originalPassed(target, duration);
+  };
+  run.failed = (target: vscode.TestItem, message: vscode.TestMessage | readonly vscode.TestMessage[], duration?: number) => {
+    states.set(target.id, 'failed');
+    originalFailed(target, message, duration);
+  };
+  run.errored = (target: vscode.TestItem, message: vscode.TestMessage | readonly vscode.TestMessage[], duration?: number) => {
+    states.set(target.id, 'errored');
+    originalErrored(target, message, duration);
+  };
+  run.skipped = (target: vscode.TestItem) => {
+    states.set(target.id, 'skipped');
+    originalSkipped(target);
+  };
 }
 
 async function collectChild(child: cp.ChildProcessWithoutNullStreams): Promise<{ code: number | null; stdout: string; stderr: string }> {
