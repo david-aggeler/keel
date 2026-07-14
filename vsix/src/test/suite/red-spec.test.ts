@@ -13,10 +13,22 @@ suite('Keel Test Bridge expected-red specs', () => {
   // DHF-TEST: keel/requirement-69, keel/requirement-70, keel/requirement-71, keel/requirement-72
   test('expected-red manifest is explicit and visible', () => {
     const entries = readRedlist();
-    assert.ok(entries.length > 0, 'expected-red manifest should list the current known-red specs');
+    console.warn(`EXPECTED RED manifest contains ${entries.length} entries`);
     for (const entry of entries) {
       console.warn(`EXPECTED RED ${entry.id}: ${entry.requirement} fixed by ${entry.fixing_cr} - ${entry.reason}`);
     }
+  });
+
+  // DHF-TEST: keel/requirement-69, keel/requirement-70, keel/requirement-71, keel/requirement-72
+  test('expected-red manifest is shrink-only', () => {
+    assertRedlistIsShrinkOnly(readRedlist());
+  });
+
+  // DHF-TEST: keel/requirement-69, keel/requirement-70, keel/requirement-71, keel/requirement-72
+  test('expected-red manifest allows the empty target state', async () => {
+    assert.deepEqual(validateRedlistManifest({ version: 1, entries: [] }), []);
+    assertRedlistIsShrinkOnly([]);
+    await expectKnownRed('vsix:absent:green-target-state', () => {});
   });
 
   // DHF-TEST: keel/requirement-69
@@ -175,8 +187,19 @@ interface RedlistEntry {
 }
 
 function readRedlist(): RedlistEntry[] {
-  const manifestPath = path.resolve(__dirname, '../../../../testdata/redlist.json');
+  const manifest = readRedlistManifest('redlist.json');
+  const entries = validateRedlistManifest(manifest);
+  assertRedlistIsShrinkOnly(entries);
+  return entries;
+}
+
+function readRedlistManifest(fileName: string): RedlistManifest {
+  const manifestPath = path.resolve(__dirname, '../../../../testdata', fileName);
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as RedlistManifest;
+  return manifest;
+}
+
+function validateRedlistManifest(manifest: RedlistManifest): RedlistEntry[] {
   assert.equal(manifest.version, 1);
   const seen = new Set<string>();
   for (const entry of manifest.entries) {
@@ -190,9 +213,25 @@ function readRedlist(): RedlistEntry[] {
   return manifest.entries;
 }
 
+function assertRedlistIsShrinkOnly(entries: RedlistEntry[]): void {
+  const baseline = new Map(validateRedlistManifest(readRedlistManifest('redlist.baseline.json')).map((entry) => [entry.id, entry]));
+  for (const entry of entries) {
+    const baselineEntry = baseline.get(entry.id);
+    assert.ok(
+      baselineEntry,
+      `expected-red entry ${entry.id} is not in the authorized baseline; new known-red entries need a new approved record`
+    );
+    assert.equal(entry.requirement, baselineEntry.requirement, `expected-red entry ${entry.id} requirement changed`);
+    assert.equal(entry.fixing_cr, baselineEntry.fixing_cr, `expected-red entry ${entry.id} fixing_cr changed`);
+  }
+}
+
 async function expectKnownRed(id: string, body: () => Promise<void> | void): Promise<void> {
   const entry = readRedlist().find((candidate) => candidate.id === id);
-  assert.ok(entry, `missing expected-red manifest entry for ${id}`);
+  if (!entry) {
+    await body();
+    return;
+  }
   try {
     await body();
   } catch (error) {
