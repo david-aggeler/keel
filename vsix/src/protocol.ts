@@ -45,7 +45,7 @@ export interface DiscoveryRange {
 export type RunProfileKind = 'run' | 'debug' | 'coverage';
 
 export interface SetupPlan {
-  version: 2;
+  version: 3;
   devtool?: {
     name: string;
     version: string;
@@ -54,17 +54,8 @@ export interface SetupPlan {
   };
   workspace: string;
   generated_at: string;
-  items: SetupPlanItem[];
-  required_resources: string[];
   groups: DesiredStateGroup[];
-  checks: SetupCheck[];
-  actions: SetupAction[];
-  teardown: {
-    owned_temporary_resources: string[];
-    shared_reusable_resources: string[];
-    policy: string;
-  };
-  limitations?: string[];
+  teardown_policy?: string;
 }
 
 export interface DesiredStateGroup {
@@ -72,17 +63,6 @@ export interface DesiredStateGroup {
   order: number;
   mutually_exclusive: boolean;
   rows: DesiredState[];
-}
-
-export interface SetupPlanItem {
-  id: string;
-  label?: string;
-  kind?: string;
-  framework?: string;
-  runner?: string;
-  runner_label?: string;
-  required_resources?: string[];
-  runnable: boolean;
 }
 
 export interface DesiredState {
@@ -102,22 +82,6 @@ export interface DesiredState {
   reusable: boolean;
   owned: boolean;
   active?: boolean;
-}
-
-export interface SetupCheck {
-  id: string;
-  ok: boolean;
-  message: string;
-  detail?: string;
-}
-
-export interface SetupAction {
-  resource: string;
-  status: string;
-  message: string;
-  detail?: string;
-  reusable: boolean;
-  owned: boolean;
 }
 
 export interface RunEvent {

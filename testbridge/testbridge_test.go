@@ -563,7 +563,7 @@ func TestValidationRejectsInvalidProtocolDocuments(t *testing.T) {
 		{name: "unsupported", doc: struct{}{}, want: "unsupported protocol document"},
 		{name: "discovery version", doc: vscode.DiscoveryDocument{Version: 2, Workspace: "w", ModulePath: "m", GeneratedAt: now}, want: "discovery version"},
 		{name: "discovery item id", doc: vscode.DiscoveryDocument{Version: 1, Workspace: "w", ModulePath: "m", GeneratedAt: now, Items: []vscode.TestItem{{ID: "bad", Label: "bad", Kind: "lane"}}}, want: "does not match schema pattern"},
-		{name: "setup status", doc: vscode.SetupPlan{Version: 2, Devtool: vscode.DevtoolMetadata{Name: "d", Version: "v"}, Workspace: "w", GeneratedAt: now, Groups: []vscode.DesiredStateGroup{{Label: "Test Preconditions", Rows: []vscode.DesiredState{{Resource: "db", Kind: "service", Desired: "up", Current: "down", Status: "bogus", Action: "reuse"}}}}, Teardown: vscode.SetupPlanTeardown{Policy: "none"}}, want: "invalid status"},
+		{name: "setup status", doc: vscode.SetupPlan{Version: 3, Devtool: vscode.DevtoolMetadata{Name: "d", Version: "v"}, Workspace: "w", GeneratedAt: now, Groups: []vscode.DesiredStateGroup{{Label: "Test Preconditions", Rows: []vscode.DesiredState{{Resource: "db", Kind: "service", Desired: "up", Current: "down", Status: "bogus", Action: "reuse"}}}}}, want: "invalid status"},
 		{name: "run event", doc: vscode.RunEvent{Version: 1, Event: "bogus", Time: now}, want: "invalid event"},
 		{name: "run lock", doc: vscode.RunLockFile{PID: 0, CreatedAt: now.Format(time.RFC3339Nano), IDs: []string{"x"}, Token: "t"}, want: "run-lock missing pid"},
 		{name: "config", doc: vscode.TestBridgeConfig{Version: 999, Command: "bin/demo", DisplayName: "Demo"}, want: "config version"},
@@ -582,11 +582,10 @@ func TestValidationRejectsInvalidProtocolDocuments(t *testing.T) {
 func TestDesiredStateGroupsRequireExactlyOneActiveRowInExclusiveGroups(t *testing.T) {
 	now := time.Unix(2, 0).UTC()
 	valid := vscode.SetupPlan{
-		Version:     2,
+		Version:     3,
 		Devtool:     vscode.DevtoolMetadata{Name: "d", Version: "v"},
 		Workspace:   "w",
 		GeneratedAt: now,
-		Items:       []vscode.SetupPlanItem{{ID: "demo::lane::fast", Runnable: true}},
 		Groups: []vscode.DesiredStateGroup{{
 			Label:             "Data set",
 			Order:             10,
@@ -596,9 +595,7 @@ func TestDesiredStateGroupsRequireExactlyOneActiveRowInExclusiveGroups(t *testin
 				{Resource: "db-small", Kind: "fixture-data", Desired: "small", Current: "empty", Status: "reconcilable", Action: "reconcile_during_run", Message: "seed small", Owned: true},
 			},
 		}},
-		Checks:   []vscode.PrereqCheck{{ID: "db", OK: true, Message: "probe only"}},
-		Actions:  []vscode.SetupPlanAction{{Resource: "db-small", Status: "reconcile_during_run", Message: "seed small", Owned: true}},
-		Teardown: vscode.SetupPlanTeardown{Policy: "owned-after-run"},
+		TeardownPolicy: "owned-after-run",
 	}
 	if err := testbridge.ValidateDocument(valid); err != nil {
 		t.Fatalf("exclusive group with one active row should validate: %v", err)
@@ -626,7 +623,7 @@ func TestDesiredStateGroupsRequireExactlyOneActiveRowInExclusiveGroups(t *testin
 func TestDesiredStateRowRunIDsAreUniqueAcrossThePlan(t *testing.T) {
 	now := time.Unix(3, 0).UTC()
 	valid := vscode.SetupPlan{
-		Version:     2,
+		Version:     3,
 		Devtool:     vscode.DevtoolMetadata{Name: "d", Version: "v"},
 		Workspace:   "w",
 		GeneratedAt: now,
@@ -638,7 +635,6 @@ func TestDesiredStateRowRunIDsAreUniqueAcrossThePlan(t *testing.T) {
 				{RunID: "demo::action::provision-python-env", Resource: "python-env", Kind: "dependency", Desired: "provisioned", Current: "missing", Status: "reconcilable", Action: "reconcile", Message: "provision", Owned: true},
 			},
 		}},
-		Teardown: vscode.SetupPlanTeardown{Policy: "none"},
 	}
 	if err := testbridge.ValidateDocument(valid); err != nil {
 		t.Fatalf("plan with a served run_id should validate: %v", err)
@@ -649,6 +645,91 @@ func TestDesiredStateRowRunIDsAreUniqueAcrossThePlan(t *testing.T) {
 	dup.Groups[0].Rows[0].RunID = "demo::action::provision-python-env"
 	if err := testbridge.ValidateDocument(dup); err == nil || !strings.Contains(err.Error(), "run ids must be unique") {
 		t.Fatalf("duplicate run_id err = %v, want run ids must be unique", err)
+	}
+}
+
+// DHF-TEST: keel/requirement-60
+func TestSetupPlanV3EnvelopeAndGroupsOnly(t *testing.T) {
+	now := time.Unix(4, 0).UTC()
+	valid := vscode.SetupPlan{
+		Version:     3,
+		Devtool:     vscode.DevtoolMetadata{Name: "d", Version: "v"},
+		Workspace:   "w",
+		GeneratedAt: now,
+		Groups: []vscode.DesiredStateGroup{{
+			Label: "Test Preconditions",
+			Order: 10,
+			Rows: []vscode.DesiredState{{
+				RunID:    "demo::desired-state::db",
+				Resource: "db",
+				Kind:     "service",
+				Desired:  "up",
+				Current:  "down",
+				Status:   "reconcilable",
+				Action:   "reconcile_during_run",
+				Message:  "start database during run",
+				Owned:    true,
+			}},
+		}},
+		TeardownPolicy: "owned resources are cleaned after the run",
+	}
+	if err := testbridge.ValidateDocument(valid); err != nil {
+		t.Fatalf("v3 envelope plus groups should validate: %v", err)
+	}
+
+	raw, err := json.Marshal(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &keys); err != nil {
+		t.Fatal(err)
+	}
+	wantKeys := map[string]bool{
+		"version":         true,
+		"devtool":         true,
+		"workspace":       true,
+		"generated_at":    true,
+		"groups":          true,
+		"teardown_policy": true,
+	}
+	for key := range keys {
+		if !wantKeys[key] {
+			t.Fatalf("SetupPlan encoded removed field %q in %s", key, raw)
+		}
+	}
+	for key := range wantKeys {
+		if _, ok := keys[key]; !ok {
+			t.Fatalf("SetupPlan encoded keys %v, missing %q", keys, key)
+		}
+	}
+
+	legacyJSON := []byte(`{
+		"version": 3,
+		"devtool": {"name": "d", "version": "v", "commit": "", "built_at": ""},
+		"workspace": "w",
+		"generated_at": "1970-01-01T00:00:04Z",
+		"items": [],
+		"groups": [{
+			"label": "Test Preconditions",
+			"order": 10,
+			"mutually_exclusive": false,
+			"rows": [{
+				"resource": "db",
+				"kind": "service",
+				"desired": "up",
+				"current": "down",
+				"status": "reconcilable",
+				"action": "reconcile_during_run",
+				"message": "start database during run",
+				"reusable": false,
+				"owned": true
+			}]
+		}]
+	}`)
+	var decoded vscode.SetupPlan
+	if err := json.Unmarshal(legacyJSON, &decoded); err == nil || !strings.Contains(err.Error(), "removed field") {
+		t.Fatalf("legacy setup-plan decode err = %v, want removed field rejection", err)
 	}
 }
 
@@ -725,11 +806,10 @@ func TestValidationCoversClosedEnumsAndRequiredFields(t *testing.T) {
 	}
 	validPlan := func() vscode.SetupPlan {
 		return vscode.SetupPlan{
-			Version:     2,
+			Version:     3,
 			Devtool:     vscode.DevtoolMetadata{Name: "d", Version: "v"},
 			Workspace:   "w",
 			GeneratedAt: now,
-			Items:       []vscode.SetupPlanItem{{ID: "i", Runnable: true}},
 			Groups: []vscode.DesiredStateGroup{{
 				Label: "Test Preconditions",
 				Rows: []vscode.DesiredState{{
@@ -742,9 +822,6 @@ func TestValidationCoversClosedEnumsAndRequiredFields(t *testing.T) {
 					Message:  "ok",
 				}},
 			}},
-			Checks:   []vscode.PrereqCheck{{ID: "db", OK: true, Message: "ok"}},
-			Actions:  []vscode.SetupPlanAction{{Resource: "db", Status: "reconcile_during_run", Message: "ok"}},
-			Teardown: vscode.SetupPlanTeardown{Policy: "none"},
 		}
 	}
 	assertValid := func(name string, doc any) {
@@ -782,18 +859,6 @@ func TestValidationCoversClosedEnumsAndRequiredFields(t *testing.T) {
 	plan = validPlan()
 	plan.Groups[0].Rows[0].Action = "setup_required"
 	assertInvalid("desired action", plan, "invalid action")
-	plan = validPlan()
-	plan.Actions[0].Status = "bogus"
-	assertInvalid("action status", plan, "invalid status")
-	plan = validPlan()
-	plan.Checks[0].ID = ""
-	assertInvalid("check id", plan, "check missing id")
-	plan = validPlan()
-	plan.Teardown.Policy = ""
-	assertInvalid("teardown", plan, "teardown policy")
-	plan = validPlan()
-	plan.Items[0].ID = ""
-	assertInvalid("item id", plan, "item missing id")
 
 	assertValid("run event", vscode.RunEvent{Version: 1, Event: "passed", Time: now, Source: "vscode"})
 	assertInvalid("run source", vscode.RunEvent{Version: 1, Event: "passed", Time: now, Source: "consumer"}, "invalid source")
@@ -909,16 +974,11 @@ func (f *fakeBridge) DesiredState(_ context.Context, ids []string) (vscode.Setup
 		}}
 	}
 	return vscode.SetupPlan{
-		Version:           2,
-		Devtool:           f.Metadata(),
-		Workspace:         "consumer-node",
-		GeneratedAt:       time.Unix(2, 0).UTC(),
-		Items:             []vscode.SetupPlanItem{{ID: "demo::lane::fast", Runnable: true, RequiredResources: []string{"db"}}},
-		RequiredResources: []string{"db"},
-		Groups:            groups,
-		Checks:            []vscode.PrereqCheck{{ID: "db", OK: true, Message: "probe only"}},
-		Actions:           []vscode.SetupPlanAction{{Resource: "db", Status: "reconcile_during_run", Message: "seed during run", Reusable: false, Owned: true}},
-		Teardown:          vscode.SetupPlanTeardown{OwnedTemporaryResources: []string{"db"}, SharedReusableResources: []string{}, Policy: "owned-after-run"},
+		Version:     3,
+		Devtool:     f.Metadata(),
+		Workspace:   "consumer-node",
+		GeneratedAt: time.Unix(2, 0).UTC(),
+		Groups:      groups,
 	}, nil
 }
 

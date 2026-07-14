@@ -180,11 +180,11 @@ func TestDemoBridgeCommandSpecCoversProviderAndRunPaths(t *testing.T) {
 	}
 	var defaultPlan vscode.SetupPlan
 	decodeJSON(t, defaultPlanOut, &defaultPlan)
-	for _, want := range []string{idLaneFakeSmoke, idLaneGoPass, idLaneGoFail} {
-		if !setupPlanHasItem(defaultPlan.Items, want) {
-			t.Fatalf("default desired-state items missing %s: %+v", want, defaultPlan.Items)
-		}
+	if defaultPlan.Version != 3 {
+		t.Fatalf("default desired-state version = %d, want 3", defaultPlan.Version)
 	}
+	assertDesiredState(t, defaultPlan.Groups, "docker-env", "ready", "absent", "provision_demo_environment")
+	assertExclusiveDataSetGroup(t, defaultPlan.Groups)
 
 	runOut, err := dispatchDemoBridge(t, root, "test-bridge", "tests", "run", "--id", idLaneFakeSmoke)
 	if err != nil {
@@ -257,15 +257,6 @@ func TestRunEntrypointRoutesProtocolHelpVersionAndErrors(t *testing.T) {
 	if cfg.Command != filepath.Join("bin", executableName()) || cfg.DisplayName != "Keel Demo Dev" {
 		t.Fatalf("config template = %+v", cfg)
 	}
-}
-
-func setupPlanHasItem(items []vscode.SetupPlanItem, id string) bool {
-	for _, item := range items {
-		if item.ID == id {
-			return true
-		}
-	}
-	return false
 }
 
 func buildDemoDev(t *testing.T) string {
