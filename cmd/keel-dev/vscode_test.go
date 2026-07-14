@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/david-aggeler/keel/cli"
+	procexec "github.com/david-aggeler/keel/exec"
 	"github.com/david-aggeler/keel/testbridge"
 	"github.com/david-aggeler/keel/vscode"
 )
@@ -1281,7 +1282,7 @@ func TestVSCodeLaneEdgeCases(t *testing.T) {
 	}
 
 	t.Setenv("PATH", t.TempDir())
-	if err := runVSIXFileSelection(context.Background(), discardLogger(), root, []string{"src/test/suite/x.test.ts"}); err == nil || !strings.Contains(err.Error(), "pnpm") {
+	if err := runVSIXFileSelection(context.Background(), discardLogger(), root, []string{"src/test/suite/x.test.ts"}, procexec.DefaultMaxOutputBytes); err == nil || !strings.Contains(err.Error(), "pnpm") {
 		t.Fatalf("missing pnpm err = %v", err)
 	}
 }
@@ -2583,6 +2584,7 @@ func TestVSCodeProtocolWriterIsOnlyStdoutAllowlistGrowth(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-81
 func TestVSCodeArgumentAndProfileEdges(t *testing.T) {
 	if _, err := parseVSCodeIDs([]string{"--format", "yaml"}, true); err == nil {
 		t.Fatal("non-json format should fail")
@@ -2608,6 +2610,9 @@ func TestVSCodeArgumentAndProfileEdges(t *testing.T) {
 	profile := newKeelWorkspaceProfile(root)
 	if profile.Repo() == "" || profile.ModulePath() != modulePath || profile.LogDir() == "" || profile.MaxOutputBytes() == 0 {
 		t.Fatalf("profile scalar methods returned empty values: %+v", profile)
+	}
+	if got := profile.MaxOutputBytes(); got != procexec.DefaultMaxOutputBytes {
+		t.Fatalf("profile MaxOutputBytes = %d, want shared default %d", got, procexec.DefaultMaxOutputBytes)
 	}
 	if readiness := profile.PrepareLane(context.Background(), vscodeLaneLint); !readiness.Ready() {
 		t.Fatalf("profile should be ready with go and module root: %+v", readiness)

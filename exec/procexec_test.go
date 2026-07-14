@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"reflect"
 	"strings"
@@ -58,6 +59,60 @@ func TestProcessStartPlainCommandStreamsCapturesAndReturnsExitCode(t *testing.T)
 	}
 	if got := streamedErr.String(); got != result.Stderr {
 		t.Fatalf("streamed stderr = %q, captured stderr = %q", got, result.Stderr)
+	}
+}
+
+// DHF-TEST: keel/requirement-81
+func TestProcessStartOutputCapKillsChildAndReturnsDistinctError(t *testing.T) {
+	proc, err := procexec.ProcessStart(context.Background(), procexec.Request{
+		Program:        "sh",
+		Args:           []string{"-c", "printf 'abc'; printf 'def' >&2; printf 'after-cap'; sleep 5"},
+		MaxOutputBytes: 5,
+	})
+	if err != nil {
+		t.Fatalf("ProcessStart returned error: %v", err)
+	}
+
+	result, err := proc.Wait()
+	if !errors.Is(err, procexec.ErrOutputLimitExceeded) {
+		t.Fatalf("Wait error = %v, want ErrOutputLimitExceeded", err)
+	}
+	if result.ExitCode == 0 {
+		t.Fatalf("ExitCode = 0, want killed/non-success result: %+v", result)
+	}
+	if got := len(result.Stdout) + len(result.Stderr); got > 5 {
+		t.Fatalf("captured bytes = %d, want at most cap 5; stdout=%q stderr=%q", got, result.Stdout, result.Stderr)
+	}
+}
+
+// DHF-TEST: keel/requirement-81
+func TestProcessStartOutputUnderCapCompletesNormally(t *testing.T) {
+	var streamedOut bytes.Buffer
+	var streamedErr bytes.Buffer
+
+	proc, err := procexec.ProcessStart(context.Background(), procexec.Request{
+		Program:        "sh",
+		Args:           []string{"-c", "printf 'abc'; printf 'de' >&2"},
+		MaxOutputBytes: 6,
+		Stdout:         &streamedOut,
+		Stderr:         &streamedErr,
+	})
+	if err != nil {
+		t.Fatalf("ProcessStart returned error: %v", err)
+	}
+
+	result, err := proc.Wait()
+	if err != nil {
+		t.Fatalf("Wait returned error: %v", err)
+	}
+	if errors.Is(err, procexec.ErrOutputLimitExceeded) {
+		t.Fatalf("Wait returned cap error for under-cap output: %v", err)
+	}
+	if result.Stdout != "abc" || result.Stderr != "de" {
+		t.Fatalf("captured stdout/stderr = %q/%q, want abc/de", result.Stdout, result.Stderr)
+	}
+	if streamedOut.String() != result.Stdout || streamedErr.String() != result.Stderr {
+		t.Fatalf("streamed stdout/stderr = %q/%q, captured = %q/%q", streamedOut.String(), streamedErr.String(), result.Stdout, result.Stderr)
 	}
 }
 
