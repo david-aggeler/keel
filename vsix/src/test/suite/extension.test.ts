@@ -297,6 +297,11 @@ suite('Keel Test Bridge config contract', () => {
       const callsAfterRunnable = fs.readFileSync(path.join(root, '.devtools', 'fake-adapter-calls.log'), 'utf8')
         .trim()
         .split(/\r?\n/);
+      assert.equal(
+        callsAfterRunnable.filter((call) => call === 'test-bridge tests desired-state --format json').length,
+        0,
+        'refresh must render Desired State from discovery without a live empty-selection probe'
+      );
       assert.ok(callsAfterRunnable.includes(`test-bridge tests desired-state --format json --id ${servedRunID}`));
       assert.ok(callsAfterRunnable.includes(`test-bridge tests run --id ${servedRunID}`));
 
