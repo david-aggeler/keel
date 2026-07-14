@@ -83,10 +83,10 @@ and results survive scheme changes.
 keel/change_request-55, and keel/change_request-76)*.
 All discovery-served lanes come from `.vscode/test-lanes.json` — **100% owned
 by the consumer devtool** (go.mod model: keel-dev writes it via
-`detect-lanes` maintenance, the human hand-edits it, the VSIX only watches the
+`detect-lanes` maintenance, manual edits are transient, the VSIX only watches the
 path). `detect-lanes` seeds the gate lanes (`lint`, `test-fast`,
-`test-coverage`, `vsix-ci`, `ci`) from keel-dev's gate knowledge and appends
-workspace-derived category lanes. Gate lane execution remains compiled and
+`test-coverage`, `vsix-ci`, `ci`) from keel-dev's gate knowledge and regenerates
+workspace-derived category lanes on every run. Gate lane execution remains compiled and
 authoritative; the file supplies the visible lane tree, member graph, and
 covers. Lanes are defined by member sets: Go package globs, framework roots,
 **per-file vsix selections**
@@ -96,9 +96,10 @@ hand-maintained covers switch that drifts; member sets make covers, run
 fan-out, and cost attribution derive from one source). Lane inventory reports
 effective definitions including expanded members and measured durations — the
 gate-sizing dataset — and `detect-lanes maintenance` is idempotent and
-append-only. Full normative contract: the Test Lanes Interface Specification
+full-rewrite/self-healing. Full normative contract: the Test Lanes Interface Specification
 rev 3 (attached to keel/exploration-2; carried by requirements
-keel/requirement-51…54 and amended by keel/requirement-65).
+keel/requirement-51…54 and amended by keel/requirement-65 and
+keel/requirement-73).
 
 **Enforcement.** Protocol stdout discipline via the `no-raw-stdout-stream`
 lint and the vscode-verb sink arrangement; wire stability via
