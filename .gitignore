@@ -14,3 +14,5 @@ consumer-claude/
 keel-dev
 keel-demo
 .vscode/test-lanes.json
+desired-state.json
+discover.json
