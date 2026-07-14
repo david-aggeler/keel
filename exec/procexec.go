@@ -24,6 +24,18 @@ type processLogger interface {
 	InfoContext(ctx context.Context, msg string, args ...any)
 }
 
+// DefaultMaxOutputBytes is the fail-closed child-output capture ceiling used
+// when a request supplies no positive MaxOutputBytes value.
+//
+// DHF-REQ: keel/requirement-81
+const DefaultMaxOutputBytes = 64 * 1024 * 1024
+
+// ErrOutputLimitExceeded identifies runs killed because their combined captured
+// stdout and stderr reached the configured output ceiling.
+//
+// DHF-REQ: keel/requirement-81
+var ErrOutputLimitExceeded = errors.New("keel/exec: output limit exceeded")
+
 // Request describes a plain external command launch. Only Program is required;
 // the zero value of every other field is a usable default.
 type Request struct {
@@ -45,6 +57,10 @@ type Request struct {
 	// Stderr, when non-nil, receives a verbatim copy of the child's stderr in
 	// addition to the captured [Result.Stderr] and the line-wise error log.
 	Stderr io.Writer
+	// MaxOutputBytes is the hard ceiling on combined captured stdout and
+	// stderr bytes for this run. A non-positive value uses
+	// [DefaultMaxOutputBytes]; no value disables the ceiling.
+	MaxOutputBytes int
 	// Logger receives the START/END lifecycle and per-line output records. Nil
 	// uses slog.Default.
 	Logger processLogger
@@ -92,7 +108,7 @@ type Process struct {
 // It returns an error ("keel/exec: …") when Program is empty or the child fails
 // to start; a non-zero exit is not an error here — it is reported by Wait.
 //
-// DHF-REQ: openbrain/requirement-565, keel/requirement-1
+// DHF-REQ: openbrain/requirement-565, keel/requirement-1, keel/requirement-81
 func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 	if req.Program == "" {
 		return nil, errors.New("keel/exec: program is required")
@@ -127,8 +143,13 @@ func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 		"working_dir", workingDir,
 	)
 
-	stdout := &captureWriter{stream: req.Stdout, logger: logger, streamName: "stdout"}
-	stderr := &captureWriter{stream: req.Stderr, logger: logger, streamName: "stderr"}
+	outputLimit := newOutputLimit(req.MaxOutputBytes, func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+	})
+	stdout := &captureWriter{stream: req.Stdout, logger: logger, streamName: "stdout", limit: outputLimit}
+	stderr := &captureWriter{stream: req.Stderr, logger: logger, streamName: "stderr", limit: outputLimit}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 
@@ -167,11 +188,18 @@ func (p *Process) Wait() (Result, error) {
 		p.stdout.flush()
 		p.stderr.flush()
 
+		exitCode := -1
+		if p.cmd.ProcessState != nil {
+			exitCode = p.cmd.ProcessState.ExitCode()
+		}
 		p.result = Result{
-			ExitCode: p.cmd.ProcessState.ExitCode(),
+			ExitCode: exitCode,
 			Duration: time.Since(p.started),
 			Stdout:   p.stdout.String(),
 			Stderr:   p.stderr.String(),
+		}
+		if limitErr := p.stdout.limit.Err(); limitErr != nil {
+			p.waitErr = limitErr
 		}
 		p.logger.Info("process end",
 			"event_type", "process_end",
@@ -190,10 +218,17 @@ type captureWriter struct {
 	stream     io.Writer
 	logger     processLogger
 	streamName string
+	limit      *outputLimit
 }
 
-// DHF-REQ: openbrain/requirement-602, keel/requirement-24
+// DHF-REQ: openbrain/requirement-602, keel/requirement-24, keel/requirement-81
 func (w *captureWriter) Write(p []byte) (int, error) {
+	allowed, limitErr := w.limit.Reserve(len(p))
+	if allowed == 0 {
+		return 0, limitErr
+	}
+	p = p[:allowed]
+
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -219,7 +254,7 @@ func (w *captureWriter) Write(p []byte) (int, error) {
 			return 0, err
 		}
 	}
-	return len(p), nil
+	return len(p), limitErr
 }
 
 // flush emits any final unterminated line still buffered after the process has
@@ -258,6 +293,61 @@ func (w *captureWriter) String() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.buf.String()
+}
+
+type outputLimit struct {
+	mu     sync.Mutex
+	max    int
+	used   int
+	err    error
+	kill   func()
+	killed sync.Once
+}
+
+func newOutputLimit(max int, kill func()) *outputLimit {
+	if max <= 0 {
+		max = DefaultMaxOutputBytes
+	}
+	return &outputLimit{max: max, kill: kill}
+}
+
+func (l *outputLimit) Reserve(n int) (int, error) {
+	if l == nil {
+		return n, nil
+	}
+	l.mu.Lock()
+	if l.err != nil {
+		l.mu.Unlock()
+		return 0, l.err
+	}
+	remaining := l.max - l.used
+	allowed := n
+	reached := n >= remaining
+	if reached {
+		allowed = remaining
+		l.err = fmt.Errorf("%w: captured child output reached %d bytes", ErrOutputLimitExceeded, l.max)
+	}
+	l.used += allowed
+	err := l.err
+	l.mu.Unlock()
+
+	if reached {
+		l.killed.Do(func() {
+			if l.kill != nil {
+				l.kill()
+			}
+		})
+	}
+	return allowed, err
+}
+
+func (l *outputLimit) Err() error {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.err
 }
 
 func renderCommandLine(program string, args []string, sensitiveArgs map[int]bool) string {
