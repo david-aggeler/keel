@@ -153,6 +153,10 @@ func runCIWithRunLog(ctx context.Context, logger *slog.Logger, runLog runLogLoca
 	} else {
 		logger.Info("ci", "banner", "section", "name", "ci")
 	}
+	// CR-74: the expected-red debt is printed on every gate run, never silent.
+	if err := logExpectedRed(logger, dir); err != nil {
+		return gateOperationalError("expected-red", "", 0, err)
+	}
 	for _, s := range ciSteps(dir) {
 		startLine := 0
 		logFile := ""
