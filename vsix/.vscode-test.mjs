@@ -9,12 +9,17 @@ const hostWorkspace = '/tmp/keel-vscode-extension-host';
 mkdirSync(hostWorkspace, { recursive: true });
 
 export default defineConfig({
-  files: 'out/test/**/*.test.js',
-  version: 'stable',
-  extensionDevelopmentPath: extensionRoot,
-  workspaceFolder: hostWorkspace,
-  launchArgs: ['--disable-extensions'],
-  env: {
-    KEEL_VSCODE_BRIDGE_DEV_WORKSPACE: repoRoot
-  }
+  coverage: {
+    exclude: ['**/src/test/**', '**/out/test/**']
+  },
+  tests: [{
+    files: 'out/test/**/*.test.js',
+    version: 'stable',
+    extensionDevelopmentPath: extensionRoot,
+    workspaceFolder: hostWorkspace,
+    launchArgs: ['--disable-extensions'],
+    env: {
+      KEEL_VSCODE_BRIDGE_DEV_WORKSPACE: repoRoot
+    }
+  }]
 });

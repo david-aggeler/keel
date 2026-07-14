@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,6 +71,13 @@ esac
 exit 0`)
 	stub(t, bin, callsFile, "pnpm", `
 case "$*" in
+  "--dir "*" run ci")
+    package_dir=$2
+    mkdir -p "$package_dir/.vscode-test/coverage"
+    cat > "$package_dir/.vscode-test/coverage/coverage-summary.json" <<'JSON'
+{"total":{"statements":{"total":100,"covered":91,"skipped":0,"pct":91.0}},"/tmp/keel/vsix/src/extension.ts":{"statements":{"total":100,"covered":91,"skipped":0,"pct":91.0}}}
+JSON
+    ;;
   "--dir "*" run package:vsix")
     package_dir=$2
     version=$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' "$package_dir/package.json" | head -1)
@@ -114,7 +122,7 @@ func moduleFixture(t *testing.T) string {
 		t.Fatal(err)
 	}
 	writeFile(t, dir, filepath.Join("vsix", "package.json"),
-		"{\n  \"name\": \"keel-test-bridge\",\n  \"version\": \"0.0.0\",\n  \"scripts\": {\n    \"package:vsix\": \"true\",\n    \"ci\": \"true\"\n  }\n}\n")
+		"{\n  \"name\": \"keel-test-bridge\",\n  \"version\": \"0.0.0\",\n  \"scripts\": {\n    \"package:vsix\": \"true\",\n    \"ci\": \"true\",\n    \"test:coverage\": \"true\"\n  }\n}\n")
 	return dir
 }
 
@@ -234,12 +242,88 @@ func TestRunVSIXGateIncludesPackagedE2ELane(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-79
+func TestVSIXGateScriptRunsCoverageWithExcludedFixtures(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", "vsix", "package.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pkg struct {
+		Scripts map[string]string `json:"scripts"`
+	}
+	if err := json.Unmarshal(body, &pkg); err != nil {
+		t.Fatal(err)
+	}
+
+	ci := pkg.Scripts["ci"]
+	if !strings.Contains(ci, "pnpm run test:coverage") {
+		t.Fatalf("vsix ci script = %q, want it to run coverage", ci)
+	}
+	coverage := pkg.Scripts["test:coverage"]
+	for _, want := range []string{
+		"vscode-test --coverage",
+		"--coverage-reporter text",
+		"--coverage-reporter json-summary",
+		"--coverage-output .vscode-test/coverage",
+	} {
+		if !strings.Contains(coverage, want) {
+			t.Fatalf("test:coverage script = %q, missing %q", coverage, want)
+		}
+	}
+	config, err := os.ReadFile(filepath.Join("..", "..", "vsix", ".vscode-test.mjs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"coverage:", "**/src/test/**", "**/out/test/**"} {
+		if !strings.Contains(string(config), want) {
+			t.Fatalf(".vscode-test.mjs does not exclude test fixtures from coverage, missing %q:\n%s", want, config)
+		}
+	}
+}
+
+// DHF-TEST: keel/requirement-79
+func TestRunVSIXGateRejectsBelowFloorCoverage(t *testing.T) {
+	callsFile := stubTools(t, false, false)
+	bin := filepath.Dir(callsFile)
+	stub(t, bin, callsFile, "pnpm", `
+case "$*" in
+  "--dir "*" run ci")
+    package_dir=$2
+    mkdir -p "$package_dir/.vscode-test/coverage"
+    cat > "$package_dir/.vscode-test/coverage/coverage-summary.json" <<'JSON'
+{"total":{"statements":{"total":100,"covered":40,"skipped":0,"pct":40.0}},"/tmp/keel/vsix/src/extension.ts":{"statements":{"total":100,"covered":40,"skipped":0,"pct":40.0}}}
+JSON
+    ;;
+esac
+exit 0`)
+	dir := moduleFixture(t)
+
+	err := runVSIXGate(context.Background(), discardLogger(), dir)
+	if err == nil {
+		t.Fatal("vsix gate succeeded below coverage floor; want red gate")
+	}
+	if !strings.Contains(err.Error(), "total statement coverage 40.0%") || !strings.Contains(err.Error(), "floor") {
+		t.Fatalf("coverage floor error = %v, want measured value and floor", err)
+	}
+	got := calls(t, callsFile)
+	if strings.Contains(got, "run test:e2e:packaged") {
+		t.Fatalf("vsix gate continued to packaged e2e after below-floor coverage:\n%s", got)
+	}
+}
+
 // DHF-TEST: keel/requirement-76
 func TestRunReleaseRefusesWhenPackagedE2ELaneFails(t *testing.T) {
 	callsFile := stubTools(t, false, false)
 	bin := filepath.Dir(callsFile)
 	stub(t, bin, callsFile, "pnpm", `
 case "$*" in
+  "--dir "*" run ci")
+    package_dir=$2
+    mkdir -p "$package_dir/.vscode-test/coverage"
+    cat > "$package_dir/.vscode-test/coverage/coverage-summary.json" <<'JSON'
+{"total":{"statements":{"total":100,"covered":91,"skipped":0,"pct":91.0}},"/tmp/keel/vsix/src/extension.ts":{"statements":{"total":100,"covered":91,"skipped":0,"pct":91.0}}}
+JSON
+    ;;
   "--dir "*" run test:e2e:packaged") exit 7 ;;
 esac
 exit 0`)
