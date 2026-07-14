@@ -2,7 +2,7 @@
 
 The versioned JSON contract between the **keel-dev adapter** and the **VS Code Test Bridge**, transcribed from `vscode/schemas/*.json` @ `082da75`. These diagrams are a rendered view — the schemas remain the source of truth (drift-gated by `schema_drift_test.go` + `wire_stability_test.go`).
 
-**Reading the class diagrams:** `+` marks a required field, `-` an optional one. `List~T~` is a JSON array of `T`. Relationship labels and multiplicities (`1`, `0..*`, `1..*`, `0..1`) show how documents nest. Enum domains are listed under each diagram. Fields tagged **removed_v3** leave SetupPlan in v3 (issue-57 · requirement-60 AC 9 · CR-86).
+**Reading the class diagrams:** `+` marks a required field, `-` an optional one. `List~T~` is a JSON array of `T`. Relationship labels and multiplicities (`1`, `0..*`, `1..*`, `0..1`) show how documents nest. Enum domains are listed under each diagram. The SetupPlan fields removed in v3 are listed under that diagram (issue-57 · requirement-60 AC 9 · CR-86).
 
 ---
 
@@ -79,7 +79,7 @@ classDiagram
 
 ## setup-plan.json — version 2 to v3
 
-Read-only desired-state report per selection. `groups` then `rows` is the live model; the classes tagged **removed_v3** are plan-verb residue that CR-86 deletes.
+Read-only desired-state report per selection. `groups` then `rows` is the live model. The diagram shows only that live model; the plan-verb residue CR-86 deletes is listed below it.
 
 ```mermaid
 classDiagram
@@ -116,26 +116,9 @@ classDiagram
         -string run_id
         -bool active
     }
-    class plan_item {
-        removed_v3
-    }
-    class checks {
-        removed_v3
-    }
-    class actions {
-        removed_v3
-    }
-    class teardown {
-        removed_v3
-    }
     setup_plan "1" --> "1" devtool : devtool
     setup_plan "1" --> "0..*" group : groups
     group "1" --> "1..*" desired_state : rows
-    setup_plan ..> plan_item : items (removed_v3)
-    setup_plan ..> checks : checks (removed_v3)
-    setup_plan ..> actions : actions (removed_v3)
-    setup_plan ..> teardown : teardown (removed_v3)
-    note for setup_plan "v3 removes items, required_resources, checks, actions, teardown; ownership moves onto each row"
 ```
 
 - `desired_state.kind` — tool, dependency, binary, host-port-set, fixture-data, credential, service, unknown
@@ -143,6 +126,7 @@ classDiagram
 - `desired_state.action` — reuse, manual_setup_required, reconcile, reconcile_during_run
 - Group invariant: if `mutually_exclusive` is true, exactly one row has `active = true`
 - Row invariant: a row is runnable when it carries a `run_id`
+- **Removed in v3 (CR-86):** the top-level `items`, `required_resources`, `checks`, `actions`, and `teardown` fields — plan-verb residue the `groups[].rows` already carry
 
 > **v3 target shape (CR-86):** envelope + `groups[]` only. The ownership split lives per-row in `reusable`/`owned`; at most one optional `teardown_policy` string survives at the top. The schema rejects the removed fields — a pre-1.0 clean break (dev_defaults **T13**).
 
