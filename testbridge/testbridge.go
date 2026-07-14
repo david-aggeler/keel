@@ -165,16 +165,20 @@ func handleDiscover(bridge Bridge) cli.Handler {
 		if _, err := parseIDs(args, true, true); err != nil {
 			return err
 		}
-		doc, err := bridge.Discover(ctx)
-		if err != nil {
-			return err
-		}
-		doc, err = deriveDesiredStateDiscovery(ctx, bridge, doc)
+		doc, err := discoverWithDerivedDesiredState(ctx, bridge)
 		if err != nil {
 			return err
 		}
 		return writeDocument(runtimeOrDefault(ctx, bridge), doc)
 	}
+}
+
+func discoverWithDerivedDesiredState(ctx context.Context, bridge Bridge) (vscode.DiscoveryDocument, error) {
+	doc, err := bridge.Discover(ctx)
+	if err != nil {
+		return vscode.DiscoveryDocument{}, err
+	}
+	return deriveDesiredStateDiscovery(ctx, bridge, doc)
 }
 
 // DHF-REQ: keel/requirement-74
@@ -187,13 +191,30 @@ func deriveDesiredStateDiscovery(ctx context.Context, bridge Bridge, doc vscode.
 	plan, err := bridge.DesiredState(ctx, nil)
 	if err != nil {
 		doc.Items = append(doc.Items, desiredStateDiagnosticItem(parent.ID, err))
+		if err := validateUniqueDiscoveryItemIDs(doc.Items); err != nil {
+			return vscode.DiscoveryDocument{}, err
+		}
 		return doc, nil
 	}
 	if err := ValidateDocument(plan); err != nil {
 		return vscode.DiscoveryDocument{}, err
 	}
 	doc.Items = append(doc.Items, desiredStateDiscoveryItems(parent.ID, plan.Groups)...)
+	if err := validateUniqueDiscoveryItemIDs(doc.Items); err != nil {
+		return vscode.DiscoveryDocument{}, err
+	}
 	return doc, nil
+}
+
+func validateUniqueDiscoveryItemIDs(items []vscode.TestItem) error {
+	seen := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		if _, ok := seen[item.ID]; ok {
+			return fmt.Errorf("keel/testbridge: duplicate discovery item id %q", item.ID)
+		}
+		seen[item.ID] = struct{}{}
+	}
+	return nil
 }
 
 func withoutDesiredStateChildren(items []vscode.TestItem, parentID string) []vscode.TestItem {
@@ -398,7 +419,7 @@ func parseRunArgs(args []string) ([]string, bool, error) {
 
 // DHF-REQ: keel/requirement-58, keel/requirement-72
 func resolveRunRequests(ctx context.Context, bridge Bridge, ids []string, strict bool) ([]vscode.RunRequest, error) {
-	doc, err := bridge.Discover(ctx)
+	doc, err := discoverWithDerivedDesiredState(ctx, bridge)
 	if err != nil {
 		return nil, err
 	}
