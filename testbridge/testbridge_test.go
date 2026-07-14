@@ -222,6 +222,55 @@ func TestRunLockExemptionLeavesExistingLockForConsumerMaintenance(t *testing.T) 
 	}
 }
 
+// DHF-TEST: keel/requirement-67
+func TestRunLockReleaseSymmetryDoesNotWarnWhenNoLockWasAcquiredOrLockIsAbsent(t *testing.T) {
+	root := t.TempDir()
+	var logs bytes.Buffer
+	fake := newFakeBridge(root)
+	fake.exemptRun = true
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{
+		Root:     root,
+		Protocol: io.Discard,
+		Log:      slog.New(slog.NewTextHandler(&logs, nil)),
+		RunID:    func() string { return "run-exempt" },
+	})
+
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", "demo::maintenance::unlock"}); err != nil {
+		t.Fatalf("lock-exempt run dispatch: %v", err)
+	}
+	if strings.Contains(logs.String(), "release testbridge run lock") || strings.Contains(logs.String(), "no such file or directory") {
+		t.Fatalf("lock-exempt logs = %q, want no release-lock warning", logs.String())
+	}
+
+	root = t.TempDir()
+	logs.Reset()
+	fake = newFakeBridge(root)
+	fake.removeRunLockDuringRun = true
+	ctx = testbridge.WithRuntime(context.Background(), testbridge.Runtime{
+		Root:     root,
+		Protocol: io.Discard,
+		Log:      slog.New(slog.NewTextHandler(&logs, nil)),
+		RunID:    func() string { return "run-missing-lock" },
+	})
+
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", "demo::lane::fast"}); err != nil {
+		t.Fatalf("run with absent lock at release dispatch: %v", err)
+	}
+	if strings.Contains(logs.String(), "release testbridge run lock") || strings.Contains(logs.String(), "no such file or directory") {
+		t.Fatalf("absent-lock release logs = %q, want missing lock treated as no-op", logs.String())
+	}
+
+	root = t.TempDir()
+	fake = newFakeBridge(root)
+	ctx = testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: io.Discard, RunID: func() string { return "run-locked" }})
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", "demo::lane::fast"}); err != nil {
+		t.Fatalf("locked run dispatch: %v", err)
+	}
+	if _, err := os.Stat(testbridge.RunLockPath(root)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("lock after acquired run stat err = %v, want removed lock", err)
+	}
+}
+
 func TestValidationRejectsInvalidProtocolDocuments(t *testing.T) {
 	now := time.Unix(1, 0).UTC()
 	cases := []struct {
@@ -402,14 +451,15 @@ func TestValidationCoversClosedEnumsAndRequiredFields(t *testing.T) {
 }
 
 type fakeBridge struct {
-	root            string
-	calls           string
-	mutateDuringRun string
-	sawRunLock      bool
-	exemptRun       bool
-	runErr          error
-	discoverErr     error
-	desiredErr      error
+	root                   string
+	calls                  string
+	mutateDuringRun        string
+	sawRunLock             bool
+	exemptRun              bool
+	removeRunLockDuringRun bool
+	runErr                 error
+	discoverErr            error
+	desiredErr             error
 }
 
 func newFakeBridge(root string) *fakeBridge {
@@ -498,6 +548,11 @@ func (f *fakeBridge) DesiredState(_ context.Context, ids []string) (vscode.Setup
 func (f *fakeBridge) Run(_ context.Context, req testbridge.RunRequest, emit vscode.RunEventWriter) (int, error) {
 	if _, err := os.Stat(filepath.Join(f.root, ".devtools", "vscode-runs", "run.lock")); err == nil {
 		f.sawRunLock = true
+	}
+	if f.removeRunLockDuringRun {
+		if err := os.Remove(filepath.Join(f.root, ".devtools", "vscode-runs", "run.lock")); err != nil {
+			return 1, err
+		}
 	}
 	if f.mutateDuringRun != "" {
 		if err := os.WriteFile(f.mutateDuringRun, []byte("run\n"), 0o644); err != nil {
