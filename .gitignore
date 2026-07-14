@@ -10,9 +10,10 @@ worktrees/
 # gitignored sandbox for `openbrain-client init --dev` (KD10, CR-0249)
 consumer-claude/
 
-# WHen it is built in the wrong location
-keel-dev
-keel-demo
+# DHF-REQ: keel/requirement-80
+# When built in the wrong location
+/keel-dev
+/keel-demo
 .vscode/test-lanes.json
 desired-state.json
 discover.json
