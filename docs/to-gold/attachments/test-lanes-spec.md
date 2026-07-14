@@ -1,10 +1,11 @@
 # Keel Test Lanes — Interface Specification
 
-**Status:** DRAFT rev 2 for owner review — nothing in here is implemented.
-Rev 2 incorporates the Cassandra/Winston review (2026-07-12) and the owner
-decision that lane definitions are 100% devtool-owned (`detect-lanes` maintenance writes;
-go.mod model). Lane-duration attribution follows the reviewers'/assistant's
-recommendation — the owner delegated that mechanism (see §6).
+**Status:** rev 3, implemented by `keel/change_request-76`.
+Rev 3 incorporates the owner decision from 2026-07-14: every discovery-served
+lane is defined in `.vscode/test-lanes.json`; `detect-lanes` seeds the gate
+lanes from keel-dev's gate knowledge plus workspace-derived category lanes.
+Lane-duration attribution follows the reviewers'/assistant's recommendation —
+the owner delegated that mechanism (see §6).
 **Deciding records:** `keel/exploration-2` (dialogue), `keel/prototype-1`
 (visual target).
 **Scope:** the contract between the Keel Test Bridge VSIX and a consumer
@@ -22,8 +23,8 @@ that *consumes* this interface).
 
 | Term | Meaning |
 |---|---|
-| **Lane** | A runnable aggregation of test work, shown under `b. Lanes`. |
-| **System lane** | Compiled into the devtool. Today: `lint`, `test-fast`, `test-coverage`; the target state adds `vsix-ci` and `ci` *(planned, CR-A)*. Command-wired, not member-defined. Always render. |
+| **Lane** | A runnable aggregation of test work, shown under `C - Lanes`. |
+| **Gate lane** | A lane with a conventional id (`lint`, `test-fast`, `test-coverage`, `vsix-ci`, `ci`) seeded into the lanes file by `detect-lanes`. The file supplies its tree shape and covers; the compiled gate verb remains authoritative for execution. |
 | **File lane** | Declared in the lanes file. Defined by a **member set**, never by an opaque command (the vela lesson: opaque commands forced a hardcoded covers-switch that drifts). |
 | **Member** | One selection a file lane aggregates: a Go package glob, a framework root, or **another lane**. |
 | **Effective member set** | The transitive, deduplicated expansion of a lane's members. |
@@ -44,9 +45,10 @@ that *consumes* this interface).
   refresh takes seconds; the ~1 s fast loop arrives with the go/parser
   discovery upgrade (CR-B). This spec depends on CR-B for the speed promise,
   not for correctness.*
-- Absent file = valid: only system lanes render. A malformed file must NOT
-  break discovery: the tree renders system lanes plus one non-runnable
-  diagnostic item (kind `group`, limitation = parse/validation error text).
+- Absent file = valid bootstrap state: `C - Lanes` renders empty until
+  `detect-lanes` writes `.vscode/test-lanes.json`. A malformed file must NOT
+  break discovery: `C - Lanes` renders one non-runnable diagnostic item (kind
+  `group`, limitation = parse/validation error text) and no fallback lanes.
 
 ### 2.2 Schema (version 1)
 
@@ -57,7 +59,7 @@ that *consumes* this interface).
     {
       "id": "go-log",
       "label": "log subsystem",
-      "order": "b.40",
+      "order": "c.40",
       "description": "keel/log package family",
       "members": [ { "go": "./log/..." } ],
       "prerequisites": ["go-toolchain", "keel-module-root"]
@@ -65,7 +67,7 @@ that *consumes* this interface).
     {
       "id": "go-exec",
       "label": "exec + adapters",
-      "order": "b.41",
+      "order": "c.41",
       "members": [
         { "go": "./exec/..." }
       ]
@@ -73,7 +75,7 @@ that *consumes* this interface).
     {
       "id": "core",
       "label": "core rollup",
-      "order": "b.50",
+      "order": "c.50",
       "description": "everything a log/exec-touching CR must pass",
       "members": [
         { "lane": "go-log" },
@@ -90,9 +92,9 @@ Field rules:
 | Field | Req | Rules |
 |---|---|---|
 | `version` | yes | Integer. Unknown major version → whole-file diagnostic (see 2.1). |
-| `id` | yes | `[a-z][a-z0-9-]*`, unique across file lanes AND system lane ids. Wire item id becomes `keel::lane::<id>`. IDs never carry ordinals. |
+| `id` | yes | `[a-z][a-z0-9-]*`, unique across lanes in the file. Wire item id becomes `keel::lane::<id>`. IDs never carry ordinals. |
 | `label` | yes | Human label, no ordinal prefix (the devtool prepends `order`). |
-| `order` | yes | Dotted ordinal, e.g. `b.40`. Shape-checked only (`letter.digits`) — the devtool owns group placement, so renumbering top-level groups never invalidates lanes files. **Ordinals `b.1`–`b.39` are reserved for system lanes** (normative: b.1 lint, b.2 test-fast, b.3 test-coverage, b.10 vsix-ci, b.30 ci); a file lane using a reserved or duplicate order still renders (V7 warning; `sort_text` breaks ties by id). |
+| `order` | yes | Dotted ordinal, e.g. `c.40`. Shape-checked only (`letter.digits`) — the devtool owns group placement, so renumbering top-level groups never invalidates lanes files. `detect-lanes` seeds gate lanes at `c.1` lint, `c.2` test-fast, `c.3` test-coverage, `c.10` vsix-ci, `c.30` ci; category detection starts at `c.40`. Duplicate orders still render (V7 warning; `sort_text` breaks ties by id). |
 | `description` | no | Free text; the devtool appends the measured duration hint (see §6). |
 | `members` | yes | Non-empty array. Member forms in 2.3. |
 | `prerequisites` | no | Resource ids surfaced as `required_resources`; checked by `PrepareLane`. Prerequisites of referenced lanes are inherited (union). |
@@ -107,7 +109,7 @@ than declared is the one unforgivable failure of a merge-gate candidate).
 { "go": "./log/..." }                          // Go package glob — native go-test semantics
 { "root": "go" }                               // a whole framework root: "go" | "vsix"
 { "vsix": "src/test/suite/tree.test.ts" }      // ONE extension test file (path under vsix/)
-{ "lane": "go-exec" }                          // another lane — file lane OR system lane by id
+{ "lane": "go-exec" }                          // another lane by id
 ```
 
 - `go` globs use `go list` pattern syntax verbatim. A glob matching zero
@@ -120,8 +122,8 @@ than declared is the one unforgivable failure of a merge-gate candidate).
   at discovery time) so covers aliases resolve to real `vsix::file::…` items.
   The headless VS Code boot cost is paid once per run regardless of how many
   files are selected.
-- `lane` refs may point at system lanes. System lanes cannot have members
-  (they are leaves in the composition graph by construction).
+- `lane` refs point at other lanes in the same file or at the conventional
+  gate lane ids seeded by `detect-lanes`.
 - **Normalization for dedup:** go members normalize to their matched package
   set at expansion time — `{ "root": "go" }` and `{ "go": "./..." }` denote
   the same effective set and dedup against each other; overlapping globs
@@ -152,11 +154,11 @@ validation warnings); non-zero = verb itself failed.
 
 | Verb | Status | Contract |
 |---|---|---|
-| `test-bridge tests discover` | exists; extension planned | Full tree document. Lanes = system lanes + file lanes, each with ordinal label, `sort_text`, covers aliases, duration hint, `required_resources`. Lanes-file diagnostics appear as the 2.1 diagnostic item. |
+| `test-bridge tests discover` | exists | Full tree document. Lanes come exclusively from `.vscode/test-lanes.json`; each has ordinal label, `sort_text`, covers aliases, duration hint, `required_resources`. Lanes-file diagnostics appear as the 2.1 diagnostic item. |
 | `test-bridge tests desired-state [--id]` | exists; extension planned | The **desired-state detection** verb. `desired_state` rows gain real per-resource checks (go toolchain, module root, pnpm for vsix members, lanes-file validity as a resource). |
-| `test-bridge tests run --id` | exists; extension planned | Accepts file-lane ids. Run semantics in §7. |
-| `file-backed lane discovery` | planned (NEW) | Effective lane definitions as JSON: per lane — id, label, order, direct members, **expanded** member set, inherited prerequisites, validation findings, last measured duration. This is also the artifact a future CR-class→gate mapping consumes. |
-| `detect-lanes maintenance` | planned (NEW) | Scans the module (`WalkDir`, no compilation) and **writes** category lanes for top-level package families not yet covered by any lane into `.vscode/test-lanes.json` (creating the file if absent). A first-class write under the devtool-ownership model — not a config-policy exception, and not silent (runs only as explicit user action: verb or tree item a.1). Idempotent; append-only; never edits or removes existing entries, hand-authored or previously detected. Reports the delta as JSON `{added, unchanged, skipped}`; run through the tree, the delta is emitted as `output` events so the run shows what changed, and the file write itself triggers watcher-driven re-discovery — new lanes appear without a restart. |
+| `test-bridge tests run --id` | exists | Accepts lane ids. Gate lane ids execute the compiled gate behavior; category/composed lanes execute their member sets. Run semantics in §7. |
+| `file-backed lane discovery` | implemented as lane inventory | Effective lane definitions as JSON: per lane — id, label, order, direct members, **expanded** member set, inherited prerequisites, validation findings, last measured duration. This is also the artifact a future CR-class→gate mapping consumes. |
+| `detect-lanes maintenance` | exists | Scans the module (`WalkDir`, no compilation) and **writes** gate lanes plus category lanes for top-level package families not yet covered by any lane into `.vscode/test-lanes.json` (creating the file if absent). A first-class write under the devtool-ownership model — not a config-policy exception, and not silent (runs only as explicit user action: verb or tree item a.1). Idempotent; append-only; never edits or removes existing entries, hand-authored or previously detected. Reports the delta as JSON `{added, unchanged, skipped}`; run through the tree, the delta is emitted as `output` events so the run shows what changed, and the file write itself triggers watcher-driven re-discovery — new lanes appear without a restart. |
 
 `detect-lanes` maintenance is exposed in-tree as maintenance item **a.1 detect lanes**
 (kind `maintenance`), alongside a.2 unlock, a.3 clear results, a.4 clear state.
@@ -175,20 +177,22 @@ validation warnings); non-zero = verb itself failed.
    compilation); skip hidden dirs, `vendor`, `node_modules`, `testdata`,
    `bin`, `worktrees`; a package counts iff its directory contains ≥ 1
    `*_test.go` file.
-2. **Group into families**: family key = first path segment under the module
+2. **Seed gate lanes**: ensure the file contains `lint`, `test-fast`,
+   `test-coverage`, `vsix-ci`, and `ci` with the conventional `c.*` orders
+   and member sets that drive covers (`go` root, `vsix` root, or lane refs).
+3. **Group into families**: family key = first path segment under the module
    root (`log`, `exec`, `cli`, `vscode`, `cmd`, …); a family's glob is
    `./<segment>/...` (root-level test-bearing packages, if any, form family
-   `.` with glob `./`).
-3. **Candidate lane per family**: id `go-<segment>`, label `<segment>`,
+   `root` with glob `./`).
+4. **Candidate lane per family**: id `go-<segment>`, label `<segment>`,
    members `[{"go": "./<segment>/..."}]`, description
    `"detected category — N packages"`, order = next free slot in the
-   **detection range `b.40`–`b.99`** (ascending; hand-assigned collisions are
+   **detection range `c.40`–`c.99`** (ascending; hand-assigned collisions are
    skipped over).
-4. **Coverage check**: a family is *skipped* when an existing lane (any
-   source) already covers every test-bearing package of the family in its
-   effective member set, or a lane with the candidate id already exists
-   (*unchanged*).
-5. **Write** (unless `--dry-run`): append the added lanes to
+5. **Coverage check**: a family is *skipped* when an existing lane already
+   covers every test-bearing package of the family in its effective member
+   set, or a lane with the candidate id already exists (*unchanged*).
+6. **Write** (unless `--dry-run`): append the added lanes to
    `.vscode/test-lanes.json`, creating it with `{"version": 1}` when absent.
    Existing entries are never modified, reordered, or removed.
 
@@ -200,7 +204,7 @@ validation warnings); non-zero = verb itself failed.
   "file": ".vscode/test-lanes.json",
   "written": true,
   "added": [
-    { "id": "go-log", "label": "log", "order": "b.40",
+    { "id": "go-log", "label": "log", "order": "c.40",
       "members": [ { "go": "./log/..." } ], "packages": 3 }
   ],
   "unchanged": [ { "id": "go-exec", "reason": "lane id already declared" } ],
@@ -235,7 +239,7 @@ the file write (when any) triggers watcher-driven re-discovery.
       "id": "keel::lane::core",
       "source": "file",
       "label": "core rollup",
-      "order": "b.50",
+      "order": "c.50",
       "description": "everything a log/exec-touching CR must pass",
       "members": [ { "lane": "go-log" }, { "lane": "go-exec" }, { "lane": "lint" } ],
       "expanded": {
@@ -252,8 +256,8 @@ the file write (when any) triggers watcher-driven re-discovery.
 }
 ```
 
-- `source`: `system` | `file` — system lanes appear with their compiled
-  definition and empty `members`.
+- `source`: currently `file`; gate lanes are file entries seeded by
+  `detect-lanes`, not discovery fallbacks.
 - `expanded` is the effective member set after DAG expansion + dedup (§3) —
   the machine-readable input for gate-sizing and the future CR-class→gate
   mapping.
@@ -266,10 +270,10 @@ the file write (when any) triggers watcher-driven re-discovery.
 ## 5. Discovery projection rules
 
 1. **Ordinals:** label = `<order> <label>`; `sort_text` = order with numeric
-   dotted segments zero-padded to 3 (`b.40` → `b.040`). Letters pass through.
+   dotted segments zero-padded to 3 (`c.40` → `c.040`). Letters pass through.
    IDs never contain ordinals (results and expanded state survive renumbering).
 2. **Groups** (owner decision 2026-07-12): top-level `a. Maintenance` (kind
-   `group`), `b. Lanes` (kind `group`), and `d. Frameworks` (kind `group`) —
+   `group`), `C - Lanes` (kind `group`), and `d. Frameworks` (kind `group`) —
    the single parent for language/framework-specific enumeration trees:
    `d.1 Go` (kind `root`), `d.2 Mocha (vsix)` reserved for when the vsix tree
    lands. Adding a framework is a new `d.N` child, never a new top-level
@@ -333,7 +337,7 @@ the file write (when any) triggers watcher-driven re-discovery.
 1. **Expansion:** resolve the effective member set (3.2) at run start; a
    validation error in the lanes file fails the run before any test executes
    (`errored` + `run_finished`, exit 1).
-2. **Execution order (deterministic, by member form):** referenced **system
+2. **Execution order (deterministic, by member form):** referenced **gate
    lanes** first, in declared member order; then all **Go members** merged
    into a single `go test -json <globs…>` invocation (one build, fastest);
    then **vsix members**. Cheap/fast steps fail first; no adjectives — the
@@ -385,19 +389,20 @@ added per consumer as needed.
 
 | # | Rule | Severity |
 |---|---|---|
-| V1 | unique lane ids (incl. vs system lanes) | error |
+| V1 | unique lane ids | error |
 | V2 | non-empty members, known member forms | error |
 | V3 | lane refs resolve | error |
 | V4 | composition is a DAG (cycle error names the cycle); depth ≤ 8 (depth error names the path) | error |
 | V5 | `order` matches the `letter.digits` shape | warning |
 | V6 | glob matches ≥ 1 package with tests | warning |
-| V7 | duplicate order values, or use of the reserved system range `b.1`–`b.39` | warning |
+| V7 | duplicate order values | warning |
 | V8 | unknown fields | warning |
 | V9 | unknown file major version | whole-file diagnostic |
 | V10 | `vsix` member path resolves to an existing test file | warning |
 
 Errors on a single lane suppress that lane (diagnostic item notes it);
-whole-file errors suppress all file lanes; system lanes always render.
+whole-file errors suppress all lanes from the file and render only the
+diagnostic item under `C - Lanes`.
 
 ## 12. Decision log & remaining questions
 
@@ -422,7 +427,7 @@ Resolved 2026-07-12:
 
 7. **CR split** — REALIZED 2026-07-12 as three approved units:
    **keel/change_request-53** tree restructure + Maintenance group +
-   capabilities fix + the two new system lanes (requirements 46–48);
+   capabilities fix + the two new gate lanes (requirements 46–48);
    **keel/change_request-54** Go discovery upgrade (requirements 49–50 —
    the fast-loop dependency named in §2.1); **keel/change_request-55**
    lanes file + composition + `detect-lanes maintenance` + cost hints + per-file
@@ -431,10 +436,18 @@ Resolved 2026-07-12:
 
 No questions remain open in this specification.
 
+Resolved 2026-07-14:
+
+8. **No discovery fallback lanes** — all lanes, including gate lanes, come
+   from `.vscode/test-lanes.json`. `detect-lanes` is the bootstrap path; an
+   absent file yields an empty `C - Lanes` group, and a whole-file error yields
+   one diagnostic item with no compiled fallback lane set.
+
 ## 13. Traceability
 
-Carried by keel/requirement-46…54 (approved, ac-131…148); implemented by
-keel/change_request-53/54/55 (approved, keel/iteration-10). Impacts existing
+Carried by keel/requirement-46…54 and amended by keel/requirement-65;
+implemented by keel/change_request-53/54/55 and revised by
+keel/change_request-76. Impacts existing
 keel/requirement-43 (Go tree), -35..37 (runs), -40 (config), -41 (demo
 block); adds one additive field to the run-event schema (§6); fixes
 keel/issue-38 (`clearLocalState`, via CR-53) and keel/issue-39 (file-run
