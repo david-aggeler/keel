@@ -947,7 +947,7 @@ function skippedSiblingItemsForRunEvent(
       continue;
     }
     const parent = tree?.parentByItemId.get(item.id);
-    if (!parent || selectedItemIds.has(parent.id)) {
+    if (!parent || !hasSelectedAncestorOrSelf(parent, selectedItemIds)) {
       continue;
     }
     parent.children.forEach((sibling) => {
@@ -957,6 +957,17 @@ function skippedSiblingItemsForRunEvent(
     });
   }
   return Array.from(skipped.values());
+}
+
+function hasSelectedAncestorOrSelf(item: vscode.TestItem, selectedItemIds: ReadonlySet<string>): boolean {
+  let current: vscode.TestItem | undefined = item;
+  while (current) {
+    if (selectedItemIds.has(current.id)) {
+      return true;
+    }
+    current = tree?.parentByItemId.get(current.id);
+  }
+  return false;
 }
 
 function neutralAncestorItemsForRunEvent(
