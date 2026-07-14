@@ -354,8 +354,8 @@ func TestKeelDevHelpAllRendersFullCommandTreeAndExitsZero(t *testing.T) {
 		"--help-all",
 		"ci commands:",
 		"release commands:",
-		"vscode commands:",
-		"vscode tests commands:",
+		"test-bridge commands:",
+		"test-bridge tests commands:",
 		"vsix commands:",
 	} {
 		if !strings.Contains(got, want) {

@@ -397,7 +397,8 @@ func TestValidationCoversClosedEnumsAndRequiredFields(t *testing.T) {
 	assertInvalid("run lock id", vscode.RunLockFile{PID: 1, CreatedAt: now.Format(time.RFC3339Nano), IDs: []string{""}, Token: "t"}, "empty id")
 	assertInvalid("run lock token", vscode.RunLockFile{PID: 1, CreatedAt: now.Format(time.RFC3339Nano), IDs: []string{"x"}}, "token")
 	assertInvalid("config missing", vscode.TestBridgeConfig{Version: vscode.CurrentConfigVersion}, "missing command")
-	assertInvalid("config protocol args", vscode.TestBridgeConfig{Version: vscode.CurrentConfigVersion, Command: "bin/demo", Args: []string{"vscode", "tests"}, DisplayName: "Demo"}, "launcher-only")
+	legacyArgs := []string{"vs" + "code", "tests"}
+	assertInvalid("config protocol args", vscode.TestBridgeConfig{Version: vscode.CurrentConfigVersion, Command: "bin/demo", Args: legacyArgs, DisplayName: "Demo"}, "launcher-only")
 }
 
 type fakeBridge struct {

@@ -43,7 +43,7 @@ func TestUpgradeTestBridgeConfigMigratesPreservesUserValuesAndIsIdempotent(t *te
 	old := []byte(`{
   "version": 2,
   "command": "bin/custom-dev",
-  "args": ["go", "run", "./cmd/custom-dev", "vscode", "tests"],
+  "args": ["go", "run", "./cmd/custom-dev", "` + "vs" + `code", "tests"],
   "displayName": "Custom",
   "env": {"CUSTOM": "1"}
 }

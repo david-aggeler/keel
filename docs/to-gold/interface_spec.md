@@ -34,9 +34,9 @@ is the product's #1 quality goal.
 | Go API: `keel/log/otel` | exposed | keel → consumers opting into OTLP | partner-internal | n/a | godoc from source | preview — may split to its own module | additive-only; module split reserved | David |
 | Go APIs: `keel/cli`, `keel/vscode` | exposed | keel → keel-dev, future consumer devtools | tool-internal | n/a | godoc from source | preview | additive-intent, may still break with the tool | David |
 | Bridge protocol documents (discovery, setup plan, run events, run lock) | exposed | keel-dev adapter → Keel Test Bridge VSIX | tool-internal (cross-binary, same release) | none — local subprocess, workspace trust (threat_model §3) | embedded JSON Schemas `vscode/schemas/*.json`, drift-gated by `schema_drift_test.go` + `wire_stability_test.go` | stable | versioned documents (`version` int per doc); additive within a version | David |
-| `.vscode/test-bridge.json` | exposed (read) | user → VSIX + adapter | human developers | — | `vscode/schemas/test-bridge-config.json`; `vscode config init/upgrade` migrates | stable (v2) | versioned; upgrade verb owns migration | David |
+| `.vscode/test-bridge.json` | exposed (read) | user → VSIX + adapter | human developers | — | `vscode/schemas/test-bridge-config.json`; `test-bridge config init/upgrade` migrates | stable (v2) | versioned; upgrade verb owns migration | David |
 | `.vscode/test-lanes.json` *(planned)* | exposed (read/write) | keel-dev ↔ user (both write); VSIX watches the path only, never parses | human developers | — | none (devtool-owned contract — §4) | preview (spec rev 2.3; implementing unit keel/change_request-55, approved) | versioned file (`version` int); additive fields = warning-tolerated | David |
-| keel-dev CLI verbs | exposed | keel-dev → humans, VSIX, consumer Justfiles | tool-internal | — | `keel-dev help` (generated from `cli.CommandSpec`) | stable core (`ci`, `release`), preview (`vscode lanes *` planned) | verbs never repurposed; new verbs additive | David |
+| keel-dev CLI verbs | exposed | keel-dev → humans, VSIX, consumer Justfiles | tool-internal | — | `keel-dev help` (generated from `cli.CommandSpec`) | stable core (`ci`, `release`), preview (detect-lanes maintenance action) | verbs never repurposed; new verbs additive | David |
 | Go toolchain | consumed | golang.org → keel | — | — | pinned `go 1.25.1` in go.mod | pinned | tolerate patch releases; minor bumps via CR | David |
 | Node + pnpm (VSIX builds only) | consumed | npm registry → vsix/ | — | — | `vsix/pnpm-lock.yaml` (lockfile-pinned) | pinned | lockfile updates via CR; never touches core gate | David |
 | GitHub (module fetch, releases, tags) | consumed | GitHub → keel | — | release verb uses `gh` auth; module fetch anonymous | GitHub REST via `gh`; go module checksum DB on fetch | pinned by usage | release path changes via CR | David |
@@ -59,7 +59,7 @@ is the product's #1 quality goal.
   `test-bridge.json` migrates via the `config upgrade` verb — invoked by hand
   OR automatically by the VSIX at activation when the file's version is below
   current (that auto-migration is part of the contract, §4). The planned
-  `test-lanes.json` is devtool-owned: keel-dev writes it (`lanes detect`) and
+  `test-lanes.json` is devtool-owned: keel-dev writes it (`detect-lanes` maintenance) and
   humans hand-edit it; both are first-class writers (go.mod model), and
   neither is a "silent rewrite" — every write is an explicit user action.
 - **Consumed-side policy.** Go toolchain and pnpm lockfile are pinned in-repo;
@@ -75,7 +75,7 @@ is the product's #1 quality goal.
 ### `.vscode/test-lanes.json` (planned)
 
 The one non-generated contract — **owned 100% by the consumer devtool**
-(go.mod model: keel-dev writes it via `lanes detect`, humans hand-edit it,
+(go.mod model: keel-dev writes it via `detect-lanes` maintenance, humans hand-edit it,
 the VSIX only watches the path). Normative contract: **Test Lanes Interface
 Specification rev 2.3** (attached to `keel/exploration-2` as
 `test-lanes-spec.md`; carried by keel/requirement-51…54, implemented by

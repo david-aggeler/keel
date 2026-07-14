@@ -26,7 +26,7 @@ type ConfigUpgradeResult struct {
 }
 
 // DefaultTestBridgeConfig is the VSIX-embedded template and the Go-owned source
-// of truth used by `keel-dev vscode config init`.
+// of truth used by `keel-dev test-bridge config init`.
 //
 // DHF-REQ: keel/requirement-40
 func DefaultTestBridgeConfig() TestBridgeConfig {
@@ -121,6 +121,7 @@ func UpgradeTestBridgeConfig(root string) (ConfigUpgradeResult, error) {
 	return ConfigUpgradeResult{Path: target, Changed: true, FromVersion: from, ToVersion: cfg.Version}, nil
 }
 
+// DHF-REQ: keel/requirement-65
 func migrateTestBridgeConfig(cfg TestBridgeConfig) (TestBridgeConfig, error) {
 	switch cfg.Version {
 	case 0:
@@ -131,7 +132,7 @@ func migrateTestBridgeConfig(cfg TestBridgeConfig) (TestBridgeConfig, error) {
 			cfg.Command = DefaultTestBridgeConfig().Command
 		}
 		if len(cfg.Args) == 0 {
-			cfg.Args = []string{"vscode", "tests"}
+			cfg.Args = append([]string(nil), DefaultTestBridgeConfig().Args...)
 		}
 		if cfg.DisplayName == "" {
 			cfg.DisplayName = DefaultTestBridgeConfig().DisplayName

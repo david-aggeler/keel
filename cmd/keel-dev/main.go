@@ -84,10 +84,10 @@ func run(argv []string) int {
 	if cfg.Verbose {
 		level = slog.LevelDebug
 	}
-	// DHF-REQ: keel/requirement-38 — VS Code bridge verbs keep stdout pure protocol:
+	// DHF-REQ: keel/requirement-38 — test-bridge verbs keep stdout pure protocol:
 	// the console sink routes to stderr while both file sinks stay on.
 	consoleWriter := io.Writer(os.Stdout)
-	if len(words) > 0 && (words[0] == "vscode" || words[0] == "test-bridge") {
+	if len(words) > 0 && words[0] == "test-bridge" {
 		consoleWriter = os.Stderr
 	}
 	logger, closeSinks, err := buildLogger(mode, level, filepath.Join(root, ".logs"), consoleWriter)
