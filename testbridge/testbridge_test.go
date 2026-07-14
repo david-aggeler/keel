@@ -337,6 +337,39 @@ func TestDesiredStateGroupsRequireExactlyOneActiveRowInExclusiveGroups(t *testin
 	}
 }
 
+// Runnable rows carry a devtool-served run_id; run ids must be unique across
+// the whole document so activation is unambiguous (formal_review-80).
+//
+// DHF-TEST: keel/requirement-60
+func TestDesiredStateRowRunIDsAreUniqueAcrossThePlan(t *testing.T) {
+	now := time.Unix(3, 0).UTC()
+	valid := vscode.SetupPlan{
+		Version:     2,
+		Devtool:     vscode.DevtoolMetadata{Name: "d", Version: "v"},
+		Workspace:   "w",
+		GeneratedAt: now,
+		Groups: []vscode.DesiredStateGroup{{
+			Label: "Test Preconditions",
+			Order: 10,
+			Rows: []vscode.DesiredState{
+				{Resource: "python", Kind: "tool", Desired: "available", Current: "available", Status: "satisfied", Action: "reuse", Message: "ok", Reusable: true},
+				{RunID: "demo::action::provision-venv", Resource: "python-venv", Kind: "dependency", Desired: "provisioned", Current: "missing", Status: "reconcilable", Action: "reconcile", Message: "provision", Owned: true},
+			},
+		}},
+		Teardown: vscode.SetupPlanTeardown{Policy: "none"},
+	}
+	if err := testbridge.ValidateDocument(valid); err != nil {
+		t.Fatalf("plan with a served run_id should validate: %v", err)
+	}
+
+	dup := valid
+	dup.Groups = cloneDesiredStateGroups(valid.Groups)
+	dup.Groups[0].Rows[0].RunID = "demo::action::provision-venv"
+	if err := testbridge.ValidateDocument(dup); err == nil || !strings.Contains(err.Error(), "run ids must be unique") {
+		t.Fatalf("duplicate run_id err = %v, want run ids must be unique", err)
+	}
+}
+
 func TestCommandSpecErrorsAndRuntimeDefaults(t *testing.T) {
 	root := t.TempDir()
 	fake := newFakeBridge(root)

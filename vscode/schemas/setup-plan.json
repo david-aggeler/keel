@@ -198,6 +198,10 @@
       "additionalProperties": false,
       "required": ["resource", "kind", "desired", "current", "status", "action", "message", "reusable", "owned"],
       "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
         "resource": {
           "type": "string",
           "minLength": 1

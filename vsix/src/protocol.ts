@@ -86,6 +86,11 @@ export interface SetupPlanItem {
 }
 
 export interface DesiredState {
+  /**
+   * Canonical devtool-served id that makes this row runnable through the
+   * ordinary run interaction. Absent = informational row, never submitted.
+   */
+  run_id?: string;
   resource: string;
   kind: string;
   desired: string;

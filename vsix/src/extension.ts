@@ -402,8 +402,22 @@ async function runSelected(
     finishActiveRun();
   };
 
-  const selectedProtocolIds = selected.map(protocolIDForTestItem);
-  const refreshDesiredStateAfterRun = selectedProtocolIds.some(isDesiredStateProtocolID);
+  // Informational desired-state items (VSIX-private namespace) are display
+  // only: mark them skipped and never submit their ids to the devtool —
+  // the real bridge rejects ids it did not serve (formal_review-80).
+  const informational = selected.filter((item) => isDesiredStateProtocolID(protocolIDForTestItem(item)));
+  for (const item of informational) {
+    run.skipped(item);
+  }
+  const submittable = selected.filter((item) => !isDesiredStateProtocolID(protocolIDForTestItem(item)));
+  const selectedProtocolIds = submittable.map(protocolIDForTestItem);
+  const refreshDesiredStateAfterRun =
+    informational.length > 0 || selectedProtocolIds.some((id) => desiredStateRunnableRowIds.has(id));
+  if (selectedProtocolIds.length === 0) {
+    appendRunOutput(run, 'Selection contains only informational desired-state rows; nothing to run.');
+    finishRun();
+    return;
+  }
   try {
     const plan = await planTests(workspaceRoot, selectedProtocolIds);
     appendSetupPlan(run, plan);
@@ -526,6 +540,18 @@ function appendSetupPlan(run: vscode.TestRun, plan: SetupPlan): void {
 
 const desiredStateRootProtocolID = 'keel::desired-state';
 
+// Served run_ids of currently published runnable desired-state rows. Rows
+// without a served run_id are informational: their tree items live in the
+// VSIX-private keel::desired-state:: namespace and are never submitted.
+//
+// DHF-REQ: keel/requirement-60
+const desiredStateRunnableRowIds = new Set<string>();
+
+// desiredStateRowProtocolID builds the VSIX-private DISPLAY id for an
+// informational (non-runnable) desired-state row. It is a tree key only —
+// ids in this namespace are never sent to the devtool; runnable rows use the
+// devtool-served run_id verbatim instead.
+//
 // DHF-REQ: keel/requirement-60
 export function desiredStateRowProtocolID(group: DesiredStateGroup, state: DesiredState): string {
   return [
@@ -560,13 +586,20 @@ async function publishDesiredStateRows(
 
   const root = ensureDesiredStateItem(controller, published, desiredStateRootProtocolID, 'B - Desired State', generation);
   root.sortText = 'b';
+  desiredStateRunnableRowIds.clear();
   for (const group of [...plan.groups].sort((a, b) => a.order - b.order)) {
     const groupProtocolID = `${desiredStateRootProtocolID}::group::${protocolIDSegment(group.label)}`;
     const groupItem = ensureDesiredStateItem(controller, published, groupProtocolID, formatDesiredStateGroup(group), generation, root);
     groupItem.sortText = `b.${String(group.order).padStart(3, '0')}`;
     groupItem.description = group.mutually_exclusive ? 'mutually exclusive' : undefined;
     for (const state of group.rows) {
-      const rowProtocolID = desiredStateRowProtocolID(group, state);
+      // Runnable rows are keyed by the devtool-served run_id so activation
+      // submits exactly the id the devtool resolves; informational rows get
+      // a VSIX-private display id that the run path filters out.
+      const rowProtocolID = state.run_id ?? desiredStateRowProtocolID(group, state);
+      if (state.run_id) {
+        desiredStateRunnableRowIds.add(state.run_id);
+      }
       const rowItem = ensureDesiredStateItem(controller, published, rowProtocolID, desiredStateRowLabel(state), generation, groupItem);
       rowItem.description = `${state.current} -> ${state.desired}; action=${state.action}`;
       rowItem.sortText = `${groupItem.sortText ?? 'b.000'}.${protocolIDSegment(state.resource)}`;
