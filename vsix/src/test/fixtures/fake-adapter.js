@@ -53,9 +53,13 @@ if (command === 'test-bridge tests discover --format') {
       clear_state_test_ids: ['keel::maintenance::clear-state']
     },
     items: [
-      { id: 'keel::maintenance', label: 'a. Maintenance', sort_text: 'a', kind: 'group', runnable: false, profiles: [] },
+      { id: 'keel::maintenance', label: 'A - Test Bridge Maintenance', sort_text: 'a', kind: 'group', runnable: false, profiles: [] },
+      { id: 'keel::desired-state', label: 'B - Desired State', sort_text: 'b', kind: 'group', runnable: false, profiles: [] },
+      { id: 'keel::desired-state::group::test-preconditions', parent_id: 'keel::desired-state', label: 'Test Preconditions', sort_text: 'b.010', kind: 'group', runnable: false, profiles: [], limitations: ['mutually_exclusive=false'] },
+      { id: 'keel::desired-state::test-preconditions::python::available::reuse', parent_id: 'keel::desired-state::group::test-preconditions', label: 'python satisfied: available -> available', sort_text: 'b.010.001', kind: 'group', runnable: false, profiles: [], limitations: ['action=reuse', 'active=false'] },
+      { id: 'keel::action::provision-python-venv', parent_id: 'keel::desired-state::group::test-preconditions', label: 'python-venv reconcilable: missing -> provisioned', sort_text: 'b.010.002', kind: 'maintenance', runnable: true, profiles: ['run'], limitations: ['action=reconcile', 'active=false'] },
       { id: 'keel::lanes', label: 'C - Lanes', sort_text: 'c', kind: 'group', runnable: false, profiles: [] },
-      { id: 'keel::frameworks', label: 'd. Frameworks', sort_text: 'd', kind: 'group', runnable: false, profiles: [] },
+      { id: 'keel::frameworks', label: 'D - Frameworks', sort_text: 'd', kind: 'group', runnable: false, profiles: [] },
       { id: 'keel::agents', parent_id: 'keel::frameworks', label: 'Agents', kind: 'root', framework: 'keel', runner: 'go-test', runner_label: 'Go test', runnable: true, profiles: ['run'] },
       { id: 'keel::file::agents/test_memory.go', parent_id: 'keel::agents', label: 'test_memory.go', kind: 'file', framework: 'keel', runner: 'go-test', runner_label: 'Go test', uri: 'agents/test_memory.go', runnable: true, profiles: ['run'] },
       { id: 'keel::test::agents/test_memory.go::TestRecall', parent_id: 'keel::file::agents/test_memory.go', label: 'TestRecall', kind: 'test', framework: 'keel', runner: 'go-test', runner_label: 'Go test', uri: 'agents/test_memory.go', runnable: true, profiles: ['run'], required_resources: ['go'] },

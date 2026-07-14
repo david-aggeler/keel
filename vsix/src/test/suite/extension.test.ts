@@ -15,7 +15,8 @@ import {
   setExternalRunStaleMsForTest,
   setCurrentTreeForTest,
   setupPlanOutputLines,
-  shouldInvalidateResultsForEvent
+  shouldInvalidateResultsForEvent,
+  testControllerForTest
 } from '../../extension';
 import { configRelativePath, currentConfigVersion, defaultConfigTemplate, discoverTests, planTests, readAdapterConfig, runTests, upgradeConfig } from '../../bridgeAdapter';
 import { publishDiscovery } from '../../tree';
@@ -297,6 +298,11 @@ suite('Keel Test Bridge config contract', () => {
       const callsAfterRunnable = fs.readFileSync(path.join(root, '.devtools', 'fake-adapter-calls.log'), 'utf8')
         .trim()
         .split(/\r?\n/);
+      assert.equal(
+        callsAfterRunnable.filter((call) => call === 'test-bridge tests desired-state --format json').length,
+        0,
+        'refresh must render Desired State from discovery without a live empty-selection probe'
+      );
       assert.ok(callsAfterRunnable.includes(`test-bridge tests desired-state --format json --id ${servedRunID}`));
       assert.ok(callsAfterRunnable.includes(`test-bridge tests run --id ${servedRunID}`));
 
@@ -331,6 +337,47 @@ suite('Keel Test Bridge config contract', () => {
     assert.ok(commands.includes('keel.tests.clearTestResults'));
     assert.ok(!commands.includes('keel.tests.toggleDemoBlock'));
     assert.equal(currentAdapterConfig().displayName, 'Keel');
+  });
+
+  // DHF-TEST: keel/requirement-70
+  test('open-workspace refresh does not invalidate terminal results on surviving items', async function () {
+    this.timeout(10_000);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-refresh-preserve-results-'));
+    const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+    process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = root;
+    fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+    fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+      version: currentConfigVersion,
+      command: process.execPath,
+      args: [path.resolve(__dirname, '../../../src/test/fixtures/fake-adapter.js')],
+      displayName: 'Keel'
+    }, null, 2) + '\n');
+
+    const extension = vscode.extensions.getExtension('aggeler.keel-test-bridge');
+    assert.ok(extension, 'extension should be discoverable');
+    await extension.activate();
+    const controller = testControllerForTest();
+    assert.ok(controller, 'extension should expose its active TestController for tests');
+    const spyTarget = controller as vscode.TestController & { invalidateTestResults: () => void };
+    const originalInvalidate = spyTarget.invalidateTestResults.bind(controller);
+    let invalidations = 0;
+    spyTarget.invalidateTestResults = () => {
+      invalidations += 1;
+      originalInvalidate();
+    };
+
+    try {
+      await vscode.commands.executeCommand('keel.tests.refresh');
+      assert.equal(invalidations, 0, 'ordinary open-workspace refresh must not reset terminal result icons');
+    } finally {
+      spyTarget.invalidateTestResults = originalInvalidate;
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   // DHF-TEST: keel/requirement-61
