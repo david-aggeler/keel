@@ -44,7 +44,7 @@ export interface DiscoveryRange {
 
 export type RunProfileKind = 'run' | 'debug' | 'coverage';
 
-export interface SetupPlan {
+export interface DesiredStateDocument {
   version: 3;
   devtool?: {
     name: string;

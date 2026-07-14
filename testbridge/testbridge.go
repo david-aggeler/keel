@@ -62,12 +62,14 @@ type DiscoveryProvider interface {
 // DesiredStateProvider supplies declared desired-state rows for a selection.
 // The package executes row probes to derive the protocol state fields.
 type DesiredStateProvider interface {
-	DesiredState(context.Context, []string) (DesiredStatePlan, error)
+	DesiredState(context.Context, []string) (DesiredStateDeclaration, error)
 }
 
-// DesiredStatePlan is the consumer-declared structure for desired state.
+// DesiredStateDeclaration is the consumer-declared structure for desired state.
 // Current, Status, Action, and Message are derived by executing row probes.
-type DesiredStatePlan struct {
+//
+// DHF-REQ: keel/requirement-77
+type DesiredStateDeclaration struct {
 	Groups         []DesiredStateGroup
 	TeardownPolicy string
 }
@@ -233,7 +235,7 @@ func deriveDesiredStateDiscovery(ctx context.Context, bridge Bridge, doc vscode.
 		return doc, nil
 	}
 	doc.Items = withoutDesiredStateChildren(doc.Items, parent.ID)
-	plan, err := bridge.DesiredState(ctx, nil)
+	desiredState, err := bridge.DesiredState(ctx, nil)
 	if err != nil {
 		doc.Items = append(doc.Items, desiredStateDiagnosticItem(parent.ID, err))
 		if err := validateUniqueDiscoveryItemIDs(doc.Items); err != nil {
@@ -241,7 +243,7 @@ func deriveDesiredStateDiscovery(ctx context.Context, bridge Bridge, doc vscode.
 		}
 		return doc, nil
 	}
-	doc.Items = append(doc.Items, desiredStateDeclarationDiscoveryItems(parent.ID, plan.Groups)...)
+	doc.Items = append(doc.Items, desiredStateDeclarationDiscoveryItems(parent.ID, desiredState.Groups)...)
 	if err := validateUniqueDiscoveryItemIDs(doc.Items); err != nil {
 		return vscode.DiscoveryDocument{}, err
 	}
@@ -294,7 +296,7 @@ func desiredStateParent(items []vscode.TestItem) (vscode.TestItem, bool) {
 
 func desiredStateDiagnosticItem(parentID string, err error) vscode.TestItem {
 	return vscode.TestItem{
-		ID:          parentID + "::diagnostic::plan",
+		ID:          parentID + "::diagnostic::desired-state",
 		ParentID:    parentID,
 		Label:       "desired-state unavailable",
 		Kind:        "group",
@@ -377,7 +379,7 @@ func handleDesiredState(bridge Bridge) cli.Handler {
 		if err != nil {
 			return err
 		}
-		doc, err := deriveDesiredStatePlan(ctx, bridge, ids)
+		doc, err := deriveDesiredStateDeclaration(ctx, bridge, ids)
 		if err != nil {
 			return err
 		}
@@ -386,10 +388,10 @@ func handleDesiredState(bridge Bridge) cli.Handler {
 }
 
 // DHF-REQ: keel/requirement-75
-func deriveDesiredStatePlan(ctx context.Context, bridge Bridge, ids []string) (vscode.SetupPlan, error) {
+func deriveDesiredStateDeclaration(ctx context.Context, bridge Bridge, ids []string) (vscode.DesiredStateDocument, error) {
 	declared, err := bridge.DesiredState(ctx, ids)
 	if err != nil {
-		return vscode.SetupPlan{}, err
+		return vscode.DesiredStateDocument{}, err
 	}
 	rt := runtimeOrDefault(ctx, bridge)
 	root := runtimeRoot(rt, bridge)
@@ -399,7 +401,7 @@ func deriveDesiredStatePlan(ctx context.Context, bridge Bridge, ids []string) (v
 		for _, row := range group.Rows {
 			derived, err := deriveDesiredStateRow(ctx, root, row)
 			if err != nil {
-				return vscode.SetupPlan{}, err
+				return vscode.DesiredStateDocument{}, err
 			}
 			rows = append(rows, derived)
 		}
@@ -410,7 +412,7 @@ func deriveDesiredStatePlan(ctx context.Context, bridge Bridge, ids []string) (v
 			Rows:              rows,
 		})
 	}
-	return vscode.SetupPlan{
+	return vscode.DesiredStateDocument{
 		Version:        3,
 		Devtool:        bridge.Metadata(),
 		Workspace:      workspaceNode(bridge.Workspace(), root),
@@ -547,9 +549,9 @@ func runDesiredStateSelections(ctx context.Context, bridge Bridge, ids []string,
 	return exitCode, remaining, nil
 }
 
-func desiredStateDeclarationsByRunID(plan DesiredStatePlan) map[string]DesiredStateRow {
+func desiredStateDeclarationsByRunID(desiredState DesiredStateDeclaration) map[string]DesiredStateRow {
 	rows := map[string]DesiredStateRow{}
-	for _, group := range plan.Groups {
+	for _, group := range desiredState.Groups {
 		for _, row := range group.Rows {
 			if row.RunID != "" {
 				rows[row.RunID] = row

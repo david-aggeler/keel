@@ -119,6 +119,23 @@ func TestLintNoRawStdoutStream(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-77
+func TestLintRejectsRetiredDesiredStateVocabulary(t *testing.T) {
+	dir := t.TempDir()
+	keeldev := filepath.Join(dir, "cmd", "keel-dev")
+	if err := os.MkdirAll(keeldev, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	retiredType := string([]byte{83, 101, 116, 117, 112, 80, 108, 97, 110})
+	writeFile(t, keeldev, "desired_state.go", "package main\n\ntype "+retiredType+" struct{}\n")
+
+	err := runLint(dir)
+	if err == nil || !strings.Contains(err.Error(), "no-retired-desired-state-vocabulary") || !strings.Contains(err.Error(), filepath.Join("cmd", "keel-dev", "desired_state.go")) {
+		t.Fatalf("retired desired-state vocabulary should fail lint naming the file, got %v", err)
+	}
+}
+
 // TestCoverageFloorFails proves the ac-37 gate rejects a total below the floor.
 func TestCoverageFloorFails(t *testing.T) {
 	bin := t.TempDir()

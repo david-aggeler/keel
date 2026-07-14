@@ -15,11 +15,11 @@ import {
   runProfileHandlerForTest,
   setExternalRunStaleMsForTest,
   setCurrentTreeForTest,
-  setupPlanOutputLines,
+  desiredStateDocumentOutputLines,
   shouldInvalidateResultsForEvent,
   testControllerForTest
 } from '../../extension';
-import { configRelativePath, currentConfigVersion, defaultConfigTemplate, discoverTests, planTests, readAdapterConfig, runTests, upgradeConfig } from '../../bridgeAdapter';
+import { configRelativePath, currentConfigVersion, defaultConfigTemplate, discoverTests, readDesiredState, readAdapterConfig, runTests, upgradeConfig } from '../../bridgeAdapter';
 import { publishDiscovery } from '../../tree';
 import { DesiredStateGroup, RunEvent } from '../../protocol';
 
@@ -187,9 +187,9 @@ suite('Keel Test Bridge config contract', () => {
     const discovery = await discoverTests(root);
     assert.ok(discovery.items.some((item) => item.id === 'keel::lane::ci'));
 
-    const plan = await planTests(root, ['keel::lane::ci']);
-    assert.equal(plan.version, 3);
-    assert.ok(plan.groups.some((group) => group.rows.some((row) => row.resource === 'python')));
+    const desiredState = await readDesiredState(root, ['keel::lane::ci']);
+    assert.equal(desiredState.version, 3);
+    assert.ok(desiredState.groups.some((group) => group.rows.some((row) => row.resource === 'python')));
 
     const run = await collectChild(runTests(root, ['keel::lane::ci']));
     assert.equal(run.code, 0);
@@ -206,12 +206,13 @@ suite('Keel Test Bridge config contract', () => {
       'test-bridge tests run --id keel::lane::ci'
     ]);
     assert.ok(protocolCalls.every((call) => !call.split(/\s+/).includes('vscode')));
-    assert.ok(protocolCalls.every((call) => !/\bplan\b/.test(call)));
+    const retiredVerb = ['p', 'l', 'a', 'n'].join('');
+    assert.ok(protocolCalls.every((call) => !new RegExp(`\\b${retiredVerb}\\b`).test(call)));
   });
 
   // DHF-TEST: keel/requirement-60
   test('desired-state output renders groups, active rows, resources, and teardown split', () => {
-    const lines = setupPlanOutputLines({
+    const lines = desiredStateDocumentOutputLines({
       version: 3,
       workspace: 'keel',
       generated_at: new Date().toISOString(),
@@ -317,8 +318,8 @@ suite('Keel Test Bridge config contract', () => {
         .split(/\r?\n/);
       const informationalRuns = callsAfterInformational.filter((call) => call.includes('tests run') && call.includes(informationalRowID));
       assert.equal(informationalRuns.length, 0, 'informational rows must never be submitted on the wire');
-      const informationalPlans = callsAfterInformational.filter((call) => call.includes('desired-state') && call.includes(informationalRowID));
-      assert.equal(informationalPlans.length, 0, 'informational display ids must never be planned on the wire');
+      const informationalDesiredStateCalls = callsAfterInformational.filter((call) => call.includes('desired-state') && call.includes(informationalRowID));
+      assert.equal(informationalDesiredStateCalls.length, 0, 'informational display ids must never be sent on the desired-state wire path');
     } finally {
       if (previousDevWorkspace === undefined) {
         delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
@@ -406,7 +407,7 @@ suite('Keel Test Bridge config contract', () => {
     assert.ok(!commands.includes('keel.tests.toggleDemoBlock'));
 
     await discoverTests(root);
-    await planTests(root, ['keel::lane::ci']);
+    await readDesiredState(root, ['keel::lane::ci']);
     const nextRun = await collectChild(runTests(root, ['keel::lane::ci']));
     assert.equal(nextRun.code, 0);
     const calls = fs.readFileSync(callsPath, 'utf8');
@@ -465,9 +466,9 @@ suite('Keel Test Bridge config contract', () => {
     const discovery = await discoverTests(root);
     assert.ok(discovery.items.some((item) => item.id === 'keel::lane::lint'));
 
-    const plan = await planTests(root, ['keel::lane::lint']);
-    assert.equal(plan.version, 3);
-    assert.ok(plan.groups.some((group) => group.rows.some((row) => row.run_id === 'keel::desired-state::go-toolchain')));
+    const desiredState = await readDesiredState(root, ['keel::lane::lint']);
+    assert.equal(desiredState.version, 3);
+    assert.ok(desiredState.groups.some((group) => group.rows.some((row) => row.run_id === 'keel::desired-state::go-toolchain')));
 
     const run = await collectChild(runTests(root, ['keel::lane::lint']));
     assert.doesNotMatch(run.stderr + run.stdout, /unknown flag/);
@@ -497,10 +498,10 @@ suite('Keel Test Bridge config contract', () => {
       demoController.dispose();
     }
 
-    const demoPlan = await planTests(root, ['keel-demo-dev::lane::fake-smoke']);
+    const demoDesiredState = await readDesiredState(root, ['keel-demo-dev::lane::fake-smoke']);
     // cr-79 aligned demo model: the seeded-database row is 'postgres' and, as
     // a reconcilable row, carries a devtool-served run_id (cr-75 contract).
-    assert.ok(demoPlan.groups.some((group) => group.rows.some((state) => state.resource === 'postgres' && state.desired !== state.current && !!state.run_id)));
+    assert.ok(demoDesiredState.groups.some((group) => group.rows.some((state) => state.resource === 'postgres' && state.desired !== state.current && !!state.run_id)));
 
     const demoBlock = await collectChild(runTests(root, ['keel-demo-dev::maintenance::block-bad-lane']));
     assert.equal(demoBlock.code, 0);

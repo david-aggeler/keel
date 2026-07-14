@@ -154,8 +154,8 @@ func (b internalBridge) Discover(context.Context) (vscode.DiscoveryDocument, err
 	return vscode.DiscoveryDocument{}, nil
 }
 
-func (b internalBridge) DesiredState(context.Context, []string) (DesiredStatePlan, error) {
-	return DesiredStatePlan{}, nil
+func (b internalBridge) DesiredState(context.Context, []string) (DesiredStateDeclaration, error) {
+	return DesiredStateDeclaration{}, nil
 }
 
 func (b internalBridge) Run(context.Context, RunRequest, vscode.RunEventWriter) (int, error) {
