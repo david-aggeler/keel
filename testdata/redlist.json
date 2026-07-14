@@ -2,12 +2,6 @@
   "version": 1,
   "entries": [
     {
-      "id": "vsix:req-69:approved-four-group-tree",
-      "requirement": "keel/requirement-69",
-      "fixing_cr": "keel/change_request-77",
-      "reason": "Current discovery still emits the pre-approved a/C/d tree and has no B - Desired State group."
-    },
-    {
       "id": "vsix:req-70:refresh-reconciles-testitems",
       "requirement": "keel/requirement-70",
       "fixing_cr": "keel/change_request-77",
