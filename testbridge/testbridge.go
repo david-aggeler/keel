@@ -209,14 +209,18 @@ func CommandSpec(bridge Bridge) *cli.CommandSpec {
 
 func handleDiscover(bridge Bridge) cli.Handler {
 	return func(ctx context.Context, args []string) error {
-		if _, err := parseIDs(args, true, true); err != nil {
+		rt := runtimeOrDefault(ctx, bridge)
+		ids, err := parseIDs(args, true, true)
+		if err != nil {
+			logBridgeDispatch(rt, "discover", bridgeDispatchLog{Args: args, Err: err})
 			return err
 		}
+		logBridgeDispatch(rt, "discover", bridgeDispatchLog{Args: args, IDs: ids})
 		doc, err := discoverWithDerivedDesiredState(ctx, bridge)
 		if err != nil {
 			return err
 		}
-		return writeDocument(runtimeOrDefault(ctx, bridge), doc)
+		return writeDocument(rt, doc)
 	}
 }
 
@@ -375,15 +379,18 @@ func stableIDSegment(value string) string {
 // DHF-REQ: keel/requirement-60
 func handleDesiredState(bridge Bridge) cli.Handler {
 	return func(ctx context.Context, args []string) error {
+		rt := runtimeOrDefault(ctx, bridge)
 		ids, err := parseIDs(args, true, true)
 		if err != nil {
+			logBridgeDispatch(rt, "desired-state", bridgeDispatchLog{Args: args, Err: err})
 			return err
 		}
+		logBridgeDispatch(rt, "desired-state", bridgeDispatchLog{Args: args, IDs: ids})
 		doc, err := deriveDesiredStateDeclaration(ctx, bridge, ids)
 		if err != nil {
 			return err
 		}
-		return writeDocument(runtimeOrDefault(ctx, bridge), doc)
+		return writeDocument(rt, doc)
 	}
 }
 
@@ -460,19 +467,22 @@ func deriveDesiredStateRow(ctx context.Context, root string, row DesiredStateRow
 // DHF-REQ: keel/requirement-58
 func handleRun(bridge Bridge) cli.Handler {
 	return func(ctx context.Context, args []string) error {
+		rt := runtimeOrDefault(ctx, bridge)
 		ids, dryRun, err := parseRunArgs(args)
 		if err != nil {
+			logBridgeDispatch(rt, "run", bridgeDispatchLog{Args: args, Err: err})
 			return err
 		}
+		logBridgeDispatch(rt, "run", bridgeDispatchLog{Args: args, IDs: ids, DryRun: boolPtr(dryRun)})
 		requests, err := resolveRunRequests(ctx, bridge, ids, dryRun)
 		if err != nil {
+			logBridgeDispatch(rt, "run", bridgeDispatchLog{Args: args, IDs: ids, DryRun: boolPtr(dryRun), Err: err})
 			return err
 		}
 		if dryRun {
 			return nil
 		}
 		ids = runRequestIDs(requests)
-		rt := runtimeOrDefault(ctx, bridge)
 		runID := newRunID(rt)
 		writer, closeWriter, err := newRunWriter(rt, bridge.Workspace(), runID)
 		if err != nil {
@@ -628,10 +638,13 @@ func resolveRunRequests(ctx context.Context, bridge Bridge, ids []string, strict
 
 func handleConfigInit(bridge Bridge) cli.Handler {
 	return func(ctx context.Context, args []string) error {
-		if len(args) != 0 {
-			return cli.NewUsageError("test-bridge config init takes no arguments: got %q", args)
-		}
 		rt := runtimeOrDefault(ctx, bridge)
+		if len(args) != 0 {
+			err := cli.NewUsageError("test-bridge config init takes no arguments: got %q", args)
+			logBridgeDispatch(rt, "config init", bridgeDispatchLog{Args: args, Err: err})
+			return err
+		}
+		logBridgeDispatch(rt, "config init", bridgeDispatchLog{Args: args})
 		_, err := InitConfig(runtimeRoot(rt, bridge), bridge.ConfigTemplate())
 		return err
 	}
@@ -639,10 +652,13 @@ func handleConfigInit(bridge Bridge) cli.Handler {
 
 func handleConfigUpgrade(bridge Bridge) cli.Handler {
 	return func(ctx context.Context, args []string) error {
-		if len(args) != 0 {
-			return cli.NewUsageError("test-bridge config upgrade takes no arguments: got %q", args)
-		}
 		rt := runtimeOrDefault(ctx, bridge)
+		if len(args) != 0 {
+			err := cli.NewUsageError("test-bridge config upgrade takes no arguments: got %q", args)
+			logBridgeDispatch(rt, "config upgrade", bridgeDispatchLog{Args: args, Err: err})
+			return err
+		}
+		logBridgeDispatch(rt, "config upgrade", bridgeDispatchLog{Args: args})
 		_, err := UpgradeConfig(runtimeRoot(rt, bridge), bridge.ConfigTemplate())
 		return err
 	}
@@ -714,6 +730,34 @@ func runtimeOrDefault(ctx context.Context, bridge Bridge) Runtime {
 	return rt
 }
 
+// DHF-REQ: keel/requirement-78
+func logBridgeDispatch(rt Runtime, verb string, record bridgeDispatchLog) {
+	if rt.Log == nil {
+		return
+	}
+	attrs := []any{
+		"verb", verb,
+		"args", append([]string{}, record.Args...),
+	}
+	if record.IDs != nil {
+		attrs = append(attrs, "ids", append([]string{}, record.IDs...))
+	}
+	if record.DryRun != nil {
+		attrs = append(attrs, "dry_run", *record.DryRun)
+	}
+	if record.Err != nil {
+		attrs = append(attrs, "error", record.Err.Error())
+	}
+	rt.Log.Info("testbridge dispatch", attrs...)
+}
+
+type bridgeDispatchLog struct {
+	Args   []string
+	IDs    []string
+	DryRun *bool
+	Err    error
+}
+
 func runtimeRoot(rt Runtime, bridge Bridge) string {
 	if rt.Root != "" {
 		return rt.Root
@@ -750,6 +794,7 @@ func newRunWriter(rt Runtime, workspace Workspace, runID string) (vscode.RunEven
 	if out == nil {
 		out = io.Discard
 	}
+	runLog := bridgeRunLog{logger: rt.Log}
 	return func(event vscode.RunEvent) {
 		stamped := stamper.Stamp(event)
 		if err := ValidateDocument(stamped); err != nil {
@@ -767,7 +812,50 @@ func newRunWriter(rt Runtime, workspace Workspace, runID string) (vscode.RunEven
 		}
 		_, _ = out.Write(line)
 		_, _ = external.Write(line)
+		runLog.observe(stamped)
 	}, closeFn, nil
+}
+
+type bridgeRunLog struct {
+	logger   *slog.Logger
+	terminal []vscode.RunEvent
+}
+
+// DHF-REQ: keel/requirement-78
+func (l *bridgeRunLog) observe(event vscode.RunEvent) {
+	if l.logger == nil {
+		return
+	}
+	if isTerminalRunEvent(event) {
+		l.terminal = append(l.terminal, event)
+		return
+	}
+	if event.Event != "run_finished" || event.ExitCode == nil {
+		return
+	}
+	exitCode := *event.ExitCode
+	for _, terminal := range l.terminal {
+		attrs := []any{
+			"test_id", terminal.TestID,
+			"verdict", terminal.Event,
+			"exit_code", exitCode,
+		}
+		if terminal.Message != "" {
+			attrs = append(attrs, "message", terminal.Message)
+		}
+		l.logger.Info("testbridge terminal event", attrs...)
+	}
+}
+
+func isTerminalRunEvent(event vscode.RunEvent) bool {
+	switch event.Event {
+	case "errored":
+		return true
+	case "passed", "failed", "skipped", "cancelled":
+		return event.TestID != ""
+	default:
+		return false
+	}
 }
 
 func workspaceNode(workspace Workspace, root string) string {
