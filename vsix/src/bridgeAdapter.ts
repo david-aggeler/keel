@@ -2,7 +2,7 @@ import * as cp from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
-import { DiscoveryDocument, SetupPlan } from './protocol';
+import { DiscoveryDocument, DesiredStateDocument } from './protocol';
 
 const execFile = promisify(cp.execFile);
 export const currentConfigVersion = 3;
@@ -88,7 +88,7 @@ export async function discoverTests(workspaceRoot: string): Promise<DiscoveryDoc
   return parsed;
 }
 
-export async function planTests(workspaceRoot: string, ids: string[]): Promise<SetupPlan> {
+export async function readDesiredState(workspaceRoot: string, ids: string[]): Promise<DesiredStateDocument> {
   const adapter = adapterConfig(workspaceRoot);
   await assertCompatibleBridgeVersion(adapter, workspaceRoot);
   const args = canonicalTestsArgs(adapter, 'desired-state', ['--format', 'json']);
@@ -100,9 +100,9 @@ export async function planTests(workspaceRoot: string, ids: string[]): Promise<S
     env: adapterEnv(adapter),
     maxBuffer: 16 * 1024 * 1024
   });
-  const parsed = JSON.parse(stdout) as SetupPlan;
+  const parsed = JSON.parse(stdout) as DesiredStateDocument;
   if (parsed.version !== 3 || !Array.isArray(parsed.groups)) {
-    throw new Error(`${adapter.displayName} adapter returned an unsupported VS Code setup plan`);
+    throw new Error(`${adapter.displayName} adapter returned an unsupported VS Code desired-state document`);
   }
   return parsed;
 }

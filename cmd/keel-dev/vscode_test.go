@@ -57,7 +57,7 @@ func TestVSCodeRunBlockedLaneUsesEngineProtocol(t *testing.T) {
 	}
 }
 
-func TestVSCodeHandlersDispatchDiscoveryPlanAndLintRun(t *testing.T) {
+func TestVSCodeHandlersDispatchDiscoveryDesiredStateAndLintRun(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, root, "go.sum", "")
@@ -75,16 +75,16 @@ func TestVSCodeHandlersDispatchDiscoveryPlanAndLintRun(t *testing.T) {
 		t.Fatalf("discover missing lint lane: %+v", doc.Items)
 	}
 
-	var plan bytes.Buffer
-	if err := handleVSCodeTestsPlan(contextWithVSCodeTestState(root, &plan), []string{"--format", "json", "--id", vscodeLaneLint}); err != nil {
-		t.Fatalf("plan handler: %v", err)
+	var desiredStateOut bytes.Buffer
+	if err := handleVSCodeTestsDesiredState(contextWithVSCodeTestState(root, &desiredStateOut), []string{"--format", "json", "--id", vscodeLaneLint}); err != nil {
+		t.Fatalf("desiredState handler: %v", err)
 	}
-	var setup vscode.SetupPlan
-	if err := json.Unmarshal(plan.Bytes(), &setup); err != nil {
-		t.Fatalf("plan JSON: %v", err)
+	var desiredState vscode.DesiredStateDocument
+	if err := json.Unmarshal(desiredStateOut.Bytes(), &desiredState); err != nil {
+		t.Fatalf("desiredState JSON: %v", err)
 	}
-	if setup.Version != 3 || len(setup.Groups) != 1 || len(setup.Groups[0].Rows) == 0 {
-		t.Fatalf("setup plan = %+v, want v3 desired-state groups", setup)
+	if desiredState.Version != 3 || len(desiredState.Groups) != 1 || len(desiredState.Groups[0].Rows) == 0 {
+		t.Fatalf("desired-state document = %+v, want v3 desired-state groups", desiredState)
 	}
 
 	var protocol bytes.Buffer
@@ -132,13 +132,13 @@ func TestCanonicalTestBridgeRunEventsUseResolvedWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var plan bytes.Buffer
-	if err := commandTree().Dispatch(contextWithVSCodeTestState(root, &plan), []string{"test-bridge", "tests", "desired-state", "--format", "json", "--id", vscodeLaneLint}); err != nil {
+	var desiredStateOut bytes.Buffer
+	if err := commandTree().Dispatch(contextWithVSCodeTestState(root, &desiredStateOut), []string{"test-bridge", "tests", "desired-state", "--format", "json", "--id", vscodeLaneLint}); err != nil {
 		t.Fatalf("canonical desired-state: %v", err)
 	}
-	var setup vscode.SetupPlan
-	if err := json.Unmarshal(plan.Bytes(), &setup); err != nil {
-		t.Fatalf("desired-state JSON: %v\n%s", err, plan.String())
+	var desiredState vscode.DesiredStateDocument
+	if err := json.Unmarshal(desiredStateOut.Bytes(), &desiredState); err != nil {
+		t.Fatalf("desired-state JSON: %v\n%s", err, desiredStateOut.String())
 	}
 
 	var protocol bytes.Buffer
@@ -147,8 +147,8 @@ func TestCanonicalTestBridgeRunEventsUseResolvedWorkspace(t *testing.T) {
 		t.Fatalf("canonical run err = %v, want package-owned run lock refusal", err)
 	}
 	for _, event := range decodeRunEvents(t, protocol.String()) {
-		if event.Workspace != setup.Workspace {
-			t.Fatalf("run event workspace = %q, want desired-state workspace %q in %+v", event.Workspace, setup.Workspace, event)
+		if event.Workspace != desiredState.Workspace {
+			t.Fatalf("run event workspace = %q, want desired-state workspace %q in %+v", event.Workspace, desiredState.Workspace, event)
 		}
 	}
 }
@@ -290,21 +290,21 @@ func TestDetectLanesNormalizesModuleRootPackageFamily(t *testing.T) {
 }
 
 // DHF-TEST: keel/requirement-64
-func TestVSCodePlanCarriesComparableDevtoolIdentity(t *testing.T) {
+func TestVSCodeDesiredStateCarriesComparableDevtoolIdentity(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, root, "go.sum", "")
 
-	var plan bytes.Buffer
-	if err := handleVSCodeTestsPlan(contextWithVSCodeTestState(root, &plan), []string{"--format", "json", "--id", vscodeLaneLint}); err != nil {
-		t.Fatalf("plan handler: %v", err)
+	var desiredStateOut bytes.Buffer
+	if err := handleVSCodeTestsDesiredState(contextWithVSCodeTestState(root, &desiredStateOut), []string{"--format", "json", "--id", vscodeLaneLint}); err != nil {
+		t.Fatalf("desiredState handler: %v", err)
 	}
-	var setup vscode.SetupPlan
-	if err := json.Unmarshal(plan.Bytes(), &setup); err != nil {
-		t.Fatalf("plan JSON: %v\n%s", err, plan.String())
+	var desiredState vscode.DesiredStateDocument
+	if err := json.Unmarshal(desiredStateOut.Bytes(), &desiredState); err != nil {
+		t.Fatalf("desiredState JSON: %v\n%s", err, desiredStateOut.String())
 	}
-	if setup.Devtool.Name != "keel-dev" || setup.Devtool.Version == "" || setup.Devtool.Commit == "" || setup.Devtool.BuiltAt == "" {
-		t.Fatalf("devtool identity = %+v, want name plus version, commit, built_at", setup.Devtool)
+	if desiredState.Devtool.Name != "keel-dev" || desiredState.Devtool.Version == "" || desiredState.Devtool.Commit == "" || desiredState.Devtool.BuiltAt == "" {
+		t.Fatalf("devtool identity = %+v, want name plus version, commit, built_at", desiredState.Devtool)
 	}
 }
 
@@ -381,7 +381,7 @@ func TestVSCodeBridgeDocsPinCanonicalTestBridgeArgv(t *testing.T) {
 		}
 	}
 	for _, forbidden := range []string{
-		"vscode tests plan",
+		"vscode tests desired-state",
 		"vscode tests discover",
 		"vscode tests run",
 		"vscode config upgrade",
@@ -427,7 +427,7 @@ func decodeRunEvents(t *testing.T, raw string) []vscode.RunEvent {
 	return events
 }
 
-func TestVSCodeDiscoveryAndPlanExposeKeelLaneSet(t *testing.T) {
+func TestVSCodeDiscoveryAndDesiredStateExposeKeelLaneSet(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, root, "go.sum", "")
@@ -455,20 +455,20 @@ func TestVSCodeDiscoveryAndPlanExposeKeelLaneSet(t *testing.T) {
 		}
 	}
 
-	built1, buildErr1 := buildVSCodePlan(root, []string{"keel::lane::test-fast"})
+	built1, buildErr1 := buildVSCodeDesiredStateDocument(root, []string{"keel::lane::test-fast"})
 	if buildErr1 != nil {
-		t.Fatalf("buildVSCodePlan: %v", buildErr1)
+		t.Fatalf("buildVSCodeDesiredStateDocument: %v", buildErr1)
 	}
-	var plan bytes.Buffer
-	if err := testbridge.EncodeDocument(&plan, built1); err != nil {
+	var desiredStateOut bytes.Buffer
+	if err := testbridge.EncodeDocument(&desiredStateOut, built1); err != nil {
 		t.Fatalf("encode protocol document: %v", err)
 	}
-	var setup vscode.SetupPlan
-	if err := json.Unmarshal(plan.Bytes(), &setup); err != nil {
-		t.Fatalf("plan JSON: %v\n%s", err, plan.String())
+	var desiredState vscode.DesiredStateDocument
+	if err := json.Unmarshal(desiredStateOut.Bytes(), &desiredState); err != nil {
+		t.Fatalf("desiredState JSON: %v\n%s", err, desiredStateOut.String())
 	}
-	if setup.Version != 3 || !setupPlanHasRunID(setup.Groups, vscodeDesiredStateGoToolchain) {
-		t.Fatalf("setup plan = %+v, want v3 desired-state go-toolchain row", setup)
+	if desiredState.Version != 3 || !desiredStateHasRunID(desiredState.Groups, vscodeDesiredStateGoToolchain) {
+		t.Fatalf("desired-state document = %+v, want v3 desired-state go-toolchain row", desiredState)
 	}
 }
 
@@ -1887,20 +1887,20 @@ exit 0`)
 		t.Fatalf("terminal event = %+v, want run_finished exit 0", events[len(events)-1])
 	}
 
-	built13, buildErr13 := buildVSCodePlan(root, []string{"go::test::log::TestLog"})
+	built13, buildErr13 := buildVSCodeDesiredStateDocument(root, []string{"go::test::log::TestLog"})
 	if buildErr13 != nil {
-		t.Fatalf("buildVSCodePlan for go test: %v", buildErr13)
+		t.Fatalf("buildVSCodeDesiredStateDocument for go test: %v", buildErr13)
 	}
-	var plan bytes.Buffer
-	if err := testbridge.EncodeDocument(&plan, built13); err != nil {
+	var desiredStateOut bytes.Buffer
+	if err := testbridge.EncodeDocument(&desiredStateOut, built13); err != nil {
 		t.Fatalf("encode protocol document: %v", err)
 	}
-	var setup vscode.SetupPlan
-	if err := json.Unmarshal(plan.Bytes(), &setup); err != nil {
-		t.Fatalf("plan JSON: %v\n%s", err, plan.String())
+	var desiredState vscode.DesiredStateDocument
+	if err := json.Unmarshal(desiredStateOut.Bytes(), &desiredState); err != nil {
+		t.Fatalf("desiredState JSON: %v\n%s", err, desiredStateOut.String())
 	}
-	if setup.Version != 3 || !setupPlanHasRunID(setup.Groups, vscodeDesiredStateModuleRoot) {
-		t.Fatalf("go selection setup plan = %+v, want v3 desired-state groups", setup)
+	if desiredState.Version != 3 || !desiredStateHasRunID(desiredState.Groups, vscodeDesiredStateModuleRoot) {
+		t.Fatalf("go selection desired-state document = %+v, want v3 desired-state groups", desiredState)
 	}
 }
 
@@ -2011,16 +2011,16 @@ func TestVSCodeRunGoFileSelectionReportsParseFailure(t *testing.T) {
 // DHF-TEST: keel/requirement-50
 func TestVSCodeRunGoFileSelectionRejectsInactiveFile(t *testing.T) {
 	tests := []struct {
-		name  string
-		id    string
-		want  string
-		setup func(t *testing.T, root string)
+		name         string
+		id           string
+		want         string
+		desiredState func(t *testing.T, root string)
 	}{
 		{
 			name: "build constraints",
 			id:   "go::file::log/tagged_test.go",
 			want: "excluded by build constraints",
-			setup: func(t *testing.T, root string) {
+			desiredState: func(t *testing.T, root string) {
 				t.Helper()
 				if err := os.MkdirAll(filepath.Join(root, "log"), 0o755); err != nil {
 					t.Fatal(err)
@@ -2032,7 +2032,7 @@ func TestVSCodeRunGoFileSelectionRejectsInactiveFile(t *testing.T) {
 			name: "ignored directory",
 			id:   "go::file::_scratch/hidden_test.go",
 			want: "outside the active Go package set",
-			setup: func(t *testing.T, root string) {
+			desiredState: func(t *testing.T, root string) {
 				t.Helper()
 				if err := os.MkdirAll(filepath.Join(root, "_scratch"), 0o755); err != nil {
 					t.Fatal(err)
@@ -2044,7 +2044,7 @@ func TestVSCodeRunGoFileSelectionRejectsInactiveFile(t *testing.T) {
 			name: "nested module",
 			id:   "go::file::nested/nested_test.go",
 			want: "nested Go module",
-			setup: func(t *testing.T, root string) {
+			desiredState: func(t *testing.T, root string) {
 				t.Helper()
 				if err := os.MkdirAll(filepath.Join(root, "nested"), 0o755); err != nil {
 					t.Fatal(err)
@@ -2057,7 +2057,7 @@ func TestVSCodeRunGoFileSelectionRejectsInactiveFile(t *testing.T) {
 			name: "not test file",
 			id:   "go::file::log/helper.go",
 			want: "not a *_test.go file",
-			setup: func(t *testing.T, root string) {
+			desiredState: func(t *testing.T, root string) {
 				t.Helper()
 				if err := os.MkdirAll(filepath.Join(root, "log"), 0o755); err != nil {
 					t.Fatal(err)
@@ -2072,7 +2072,7 @@ func TestVSCodeRunGoFileSelectionRejectsInactiveFile(t *testing.T) {
 			root := t.TempDir()
 			writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 			writeFile(t, root, "go.sum", "")
-			tt.setup(t, root)
+			tt.desiredState(t, root)
 
 			bin := t.TempDir()
 			callsFile := filepath.Join(bin, "calls.log")
@@ -2136,20 +2136,20 @@ exit 0`)
 		t.Fatalf("run events missing package pass: %+v", events)
 	}
 
-	built14, buildErr14 := buildVSCodePlan(root, []string{"go::pkg::log", "go::root"})
+	built14, buildErr14 := buildVSCodeDesiredStateDocument(root, []string{"go::pkg::log", "go::root"})
 	if buildErr14 != nil {
-		t.Fatalf("buildVSCodePlan for go package/root: %v", buildErr14)
+		t.Fatalf("buildVSCodeDesiredStateDocument for go package/root: %v", buildErr14)
 	}
-	var plan bytes.Buffer
-	if err := testbridge.EncodeDocument(&plan, built14); err != nil {
+	var desiredStateOut bytes.Buffer
+	if err := testbridge.EncodeDocument(&desiredStateOut, built14); err != nil {
 		t.Fatalf("encode protocol document: %v", err)
 	}
-	var setup vscode.SetupPlan
-	if err := json.Unmarshal(plan.Bytes(), &setup); err != nil {
-		t.Fatalf("plan JSON: %v\n%s", err, plan.String())
+	var desiredState vscode.DesiredStateDocument
+	if err := json.Unmarshal(desiredStateOut.Bytes(), &desiredState); err != nil {
+		t.Fatalf("desiredState JSON: %v\n%s", err, desiredStateOut.String())
 	}
-	if setup.Version != 3 || !setupPlanHasRunID(setup.Groups, vscodeDesiredStateStubBinaries) {
-		t.Fatalf("go package/root setup plan = %+v, want v3 desired-state groups", setup)
+	if desiredState.Version != 3 || !desiredStateHasRunID(desiredState.Groups, vscodeDesiredStateStubBinaries) {
+		t.Fatalf("go package/root desired-state document = %+v, want v3 desired-state groups", desiredState)
 	}
 }
 
@@ -2357,7 +2357,7 @@ func discoveryHasLane(doc vscode.DiscoveryDocument, id string) bool {
 	return false
 }
 
-func setupPlanHasRunID(groups []vscode.DesiredStateGroup, runID string) bool {
+func desiredStateHasRunID(groups []vscode.DesiredStateGroup, runID string) bool {
 	for _, group := range groups {
 		for _, row := range group.Rows {
 			if row.RunID == runID {

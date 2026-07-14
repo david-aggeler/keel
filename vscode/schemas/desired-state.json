@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/david-aggeler/keel/vscode/schemas/setup-plan.json",
-  "title": "consumer VS Code selected-test setup plan",
+  "$id": "https://github.com/david-aggeler/keel/vscode/schemas/desired-state.json",
+  "title": "consumer VS Code selected-test desired-state document",
   "type": "object",
   "additionalProperties": false,
   "required": [

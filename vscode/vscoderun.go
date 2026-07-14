@@ -4,7 +4,7 @@
 // repo-specific behavior.
 //
 // This package imports no consumer-specific devtool code. It is the shared
-// discover/plan/run protocol and projection engine that downstream devtools
+// discover/desired-state/run protocol and projection engine that downstream devtools
 // wire to their own workspace adapters.
 package vscode
 
@@ -118,11 +118,11 @@ type Range struct {
 	EndColumn   int `json:"end_column"`
 }
 
-// SetupPlan is the JSON document emitted by
+// DesiredStateDocument is the JSON document emitted by
 // `test-bridge tests desired-state --format json`.
 //
-// DHF-REQ: keel/requirement-23, keel/requirement-34, keel/requirement-60
-type SetupPlan struct {
+// DHF-REQ: keel/requirement-23, keel/requirement-34, keel/requirement-60, keel/requirement-77
+type DesiredStateDocument struct {
 	Version        int                 `json:"version"`
 	Devtool        DevtoolMetadata     `json:"devtool"`
 	Workspace      string              `json:"workspace"`
@@ -131,7 +131,7 @@ type SetupPlan struct {
 	TeardownPolicy string              `json:"teardown_policy,omitempty"`
 }
 
-// DevtoolMetadata identifies the producer that generated a setup plan.
+// DevtoolMetadata identifies the producer that generated a desired-state document.
 type DevtoolMetadata struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`
@@ -139,24 +139,24 @@ type DevtoolMetadata struct {
 	BuiltAt string `json:"built_at"`
 }
 
-// UnmarshalJSON accepts the v3 setup-plan shape and rejects removed v2 fields
+// UnmarshalJSON accepts the v3 desired-state shape and rejects removed v2 fields
 // before a caller can accidentally treat a legacy document as v3.
-func (p *SetupPlan) UnmarshalJSON(data []byte) error {
+func (p *DesiredStateDocument) UnmarshalJSON(data []byte) error {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 	for _, field := range []string{"items", "required_resources", "checks", "actions", "teardown", "limitations"} {
 		if _, ok := raw[field]; ok {
-			return fmt.Errorf("removed field %q in setup-plan v3", field)
+			return fmt.Errorf("removed field %q in desired-state v3", field)
 		}
 	}
-	type setupPlan SetupPlan
-	var decoded setupPlan
+	type desiredStateDocument DesiredStateDocument
+	var decoded desiredStateDocument
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err
 	}
-	*p = SetupPlan(decoded)
+	*p = DesiredStateDocument(decoded)
 	return nil
 }
 
@@ -211,7 +211,7 @@ type WorkspaceProfile interface {
 	// MaxOutputBytes is the buffer cap applied to a child test process's
 	// captured output.
 	MaxOutputBytes() int
-	// RemediationHint is the consumer-specific guidance appended when setup
+	// RemediationHint is the consumer-specific guidance appended when desired-state
 	// reconciliation is blocked.
 	RemediationHint() string
 	// ConsumerID identifies the consumer dev tool that owns a run (e.g.
@@ -220,8 +220,8 @@ type WorkspaceProfile interface {
 	// Node identifies the worktree or node a run executes on, for cross-node
 	// run attribution.
 	Node() string
-	// PrepareLane reconciles the lane's required desired state (the setup
-	// plan) before a run. A non-empty LaneReadiness.Blocked means at least one
+	// PrepareLane reconciles the lane's required desired state (the desired-state
+	// document) before a run. A non-empty LaneReadiness.Blocked means at least one
 	// prerequisite could not be met and the run must not proceed. This is the
 	// preparation/desired-state hook the neutral engine drives ahead of every
 	// run so a missing prerequisite surfaces as a structured lane-blocked

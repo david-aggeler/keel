@@ -24,11 +24,11 @@ func ValidateDocument(doc any) error {
 			return err
 		}
 		return validateDiscovery(v)
-	case vscode.SetupPlan:
-		if err := requireSchema(vscode.SchemaSetupPlan); err != nil {
+	case vscode.DesiredStateDocument:
+		if err := requireSchema(vscode.SchemaDesiredState); err != nil {
 			return err
 		}
-		return validateSetupPlan(v)
+		return validateDesiredStateDocument(v)
 	case vscode.RunEvent:
 		if err := requireSchema(vscode.SchemaRunEvent); err != nil {
 			return err
@@ -93,15 +93,15 @@ func validateDiscovery(doc vscode.DiscoveryDocument) error {
 }
 
 // DHF-REQ: keel/requirement-60
-func validateSetupPlan(plan vscode.SetupPlan) error {
-	if plan.Version != 3 {
-		return fmt.Errorf("keel/testbridge: setup-plan version = %d, want 3", plan.Version)
+func validateDesiredStateDocument(desiredState vscode.DesiredStateDocument) error {
+	if desiredState.Version != 3 {
+		return fmt.Errorf("keel/testbridge: desired-state version = %d, want 3", desiredState.Version)
 	}
-	if plan.Devtool.Name == "" || plan.Devtool.Version == "" || plan.Workspace == "" || plan.GeneratedAt.IsZero() {
-		return fmt.Errorf("keel/testbridge: setup-plan missing devtool, workspace, or generated_at")
+	if desiredState.Devtool.Name == "" || desiredState.Devtool.Version == "" || desiredState.Workspace == "" || desiredState.GeneratedAt.IsZero() {
+		return fmt.Errorf("keel/testbridge: desired-state missing devtool, workspace, or generated_at")
 	}
 	runIDs := map[string]string{}
-	for _, group := range plan.Groups {
+	for _, group := range desiredState.Groups {
 		if group.Label == "" {
 			return fmt.Errorf("keel/testbridge: desired-state group missing label")
 		}

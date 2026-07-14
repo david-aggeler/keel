@@ -4,10 +4,10 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as vscode from 'vscode';
-import { adapterConfig, configRelativePath, currentConfigVersion, defaultAdapterConfig, defaultConfigTemplate, discoverTests, planTests, readAdapterConfig, runTests, upgradeConfig } from './bridgeAdapter';
+import { adapterConfig, configRelativePath, currentConfigVersion, defaultAdapterConfig, defaultConfigTemplate, discoverTests, readDesiredState, readAdapterConfig, runTests, upgradeConfig } from './bridgeAdapter';
 import { ExternalRunMirror, ExternalRunStateSnapshot, setExternalRunStaleMsForTest } from './externalRunMirror';
 import { publishDiscovery, PublishedTree } from './tree';
-import { DesiredState, DesiredStateGroup, RunEvent, SetupPlan } from './protocol';
+import { DesiredState, DesiredStateGroup, RunEvent, DesiredStateDocument } from './protocol';
 
 let tree: PublishedTree | undefined;
 let output: vscode.OutputChannel;
@@ -417,10 +417,10 @@ async function runSelected(
     return;
   }
   try {
-    const plan = await planTests(workspaceRoot, selectedProtocolIds);
-    appendSetupPlan(run, plan);
+    const desiredState = await readDesiredState(workspaceRoot, selectedProtocolIds);
+    appendDesiredStateDocument(run, desiredState);
   } catch (error) {
-    appendRunOutput(run, `Failed to plan ${currentAdapterConfig().displayName} test run: ${error instanceof Error ? error.message : String(error)}`, 'ERROR');
+    appendRunOutput(run, `Failed to read desired state for ${currentAdapterConfig().displayName} test run: ${error instanceof Error ? error.message : String(error)}`, 'ERROR');
     finishRun();
     return;
   }
@@ -493,34 +493,34 @@ async function runSelected(
 }
 
 // DHF-REQ: keel/requirement-60
-export function setupPlanOutputLines(plan: SetupPlan): string[] {
+export function desiredStateDocumentOutputLines(desiredState: DesiredStateDocument): string[] {
   const lines: string[] = [];
-  if (!plan.groups?.some((group) => group.rows.length > 0)) {
+  if (!desiredState.groups?.some((group) => group.rows.length > 0)) {
     return lines;
   }
-  if (plan.devtool) {
+  if (desiredState.devtool) {
     lines.push('======');
-    lines.push(`${plan.devtool.name} ${plan.devtool.version} (${plan.devtool.commit}, built ${plan.devtool.built_at})`);
+    lines.push(`${desiredState.devtool.name} ${desiredState.devtool.version} (${desiredState.devtool.commit}, built ${desiredState.devtool.built_at})`);
     lines.push('======');
     lines.push('desired state (computed by keel-dev):');
   } else {
     lines.push('desired state:');
   }
-  for (const group of [...plan.groups].sort((a, b) => a.order - b.order)) {
+  for (const group of [...desiredState.groups].sort((a, b) => a.order - b.order)) {
     lines.push(formatDesiredStateGroup(group));
     for (const state of group.rows) {
       lines.push(`- ${formatDesiredState(state)}`);
     }
   }
-  const rows = plan.groups.flatMap((group) => group.rows);
+  const rows = desiredState.groups.flatMap((group) => group.rows);
   const owned = uniqueSorted(rows.filter((state) => state.owned).map((state) => state.resource));
   const reusable = uniqueSorted(rows.filter((state) => state.reusable).map((state) => state.resource));
-  if (owned.length > 0 || reusable.length > 0 || plan.teardown_policy) {
+  if (owned.length > 0 || reusable.length > 0 || desiredState.teardown_policy) {
     lines.push('teardown:');
     lines.push(`- owned: ${formatList(owned)}`);
     lines.push(`- reusable: ${formatList(reusable)}`);
-    if (plan.teardown_policy) {
-      lines.push(`- policy: ${plan.teardown_policy}`);
+    if (desiredState.teardown_policy) {
+      lines.push(`- policy: ${desiredState.teardown_policy}`);
     }
   }
   return lines;
@@ -530,8 +530,8 @@ function formatDesiredStateGroup(group: DesiredStateGroup): string {
   return group.mutually_exclusive ? `${group.label} (mutually exclusive)` : group.label;
 }
 
-function appendSetupPlan(run: vscode.TestRun, plan: SetupPlan): void {
-  for (const line of setupPlanOutputLines(plan)) {
+function appendDesiredStateDocument(run: vscode.TestRun, desiredState: DesiredStateDocument): void {
+  for (const line of desiredStateDocumentOutputLines(desiredState)) {
     appendRunOutput(run, line);
   }
 }
