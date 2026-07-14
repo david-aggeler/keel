@@ -141,6 +141,90 @@ suite('Keel Test Bridge expected-red specs', () => {
     });
   });
 
+  // DHF-TEST: keel/requirement-71
+  test('req-71 single-item runs do not stamp siblings outside the request scope', async () => {
+    await expectKnownRed('vsix:req-71:sibling-results-accumulate', async () => {
+      const controller = vscode.tests.createTestController(`keelReq71SiblingScope-${Date.now()}`, 'Keel Req 71 sibling scope');
+      let run: vscode.TestRun | undefined;
+      try {
+        const tree = publishDiscovery(controller, os.tmpdir(), {
+          version: 1,
+          workspace: 'req-71-sibling-scope',
+          generated_at: new Date().toISOString(),
+          items: [
+            { id: 'keel::lanes', label: 'lanes', kind: 'group', runnable: false, profiles: [] },
+            { id: 'keel::lane::a', parent_id: 'keel::lanes', label: 'A', kind: 'lane', runnable: true, profiles: ['run'] },
+            { id: 'keel::lane::b', parent_id: 'keel::lanes', label: 'B', kind: 'lane', runnable: true, profiles: ['run'] }
+          ]
+        });
+        setCurrentTreeForTest(tree);
+        const parent = tree.itemsById.get('keel::lanes');
+        const itemA = tree.itemsById.get('keel::lane::a');
+        const itemB = tree.itemsById.get('keel::lane::b');
+        assert.ok(parent);
+        assert.ok(itemA);
+        assert.ok(itemB);
+        const terminalStates = new Map<string, string>();
+        run = controller.createTestRun(new vscode.TestRunRequest([itemA]));
+        recordTerminalStates(run, terminalStates);
+
+        applyRunEvent(
+          run,
+          JSON.stringify(runEvent({ event: 'passed', test_id: 'keel::lane::a' })),
+          new Set([itemA.id]),
+          new Set()
+        );
+        assert.equal(terminalStates.get(itemA.id), 'passed', 'the first single-item run should leave A green');
+
+        run.end();
+        run = controller.createTestRun(new vscode.TestRunRequest([itemB]));
+        recordTerminalStates(run, terminalStates);
+
+        applyRunEvent(
+          run,
+          JSON.stringify(runEvent({ event: 'passed', test_id: 'keel::lane::b' })),
+          new Set([itemB.id]),
+          new Set()
+        );
+
+        const leafTerminalStates = [itemA, itemB]
+          .map((item) => [item.id, terminalStates.get(item.id)] as const)
+          .sort();
+        assert.deepEqual(
+          leafTerminalStates,
+          [
+            [itemA.id, 'passed'],
+            [itemB.id, 'passed']
+          ],
+          'single-item runs should accumulate terminal icons without stamping siblings outside the request footprint'
+        );
+
+        run.end();
+        run = controller.createTestRun(new vscode.TestRunRequest([parent]));
+        const parentRunCalls: string[] = [];
+        run.passed = (target: vscode.TestItem) => {
+          parentRunCalls.push(`passed:${target.id}`);
+        };
+        run.skipped = (target: vscode.TestItem) => {
+          parentRunCalls.push(`skipped:${target.id}`);
+        };
+        applyRunEvent(
+          run,
+          JSON.stringify(runEvent({ event: 'passed', test_id: 'keel::lane::b' })),
+          new Set([parent.id]),
+          new Set()
+        );
+
+        assert.ok(parentRunCalls.includes('passed:keel::lane::b'), 'the executed child should receive its terminal result');
+        assert.ok(parentRunCalls.includes('skipped:keel::lane::a'), 'an unreported sibling inside a parent run should be skipped');
+      } finally {
+        run?.end();
+        setCurrentTreeForTest(undefined);
+        controller.dispose();
+      }
+    });
+  });
+
   // DHF-TEST: keel/requirement-72
   test('req-72 every discovery-served runnable id resolves through the real binary dry-run sweep', async function () {
     this.timeout(30_000);
@@ -328,6 +412,29 @@ function runEvent(partial: Partial<RunEvent>): RunEvent {
     time: new Date().toISOString(),
     ...partial
   } as RunEvent;
+}
+
+function recordTerminalStates(run: vscode.TestRun, states: Map<string, string>): void {
+  const originalPassed = run.passed.bind(run);
+  const originalFailed = run.failed.bind(run);
+  const originalErrored = run.errored.bind(run);
+  const originalSkipped = run.skipped.bind(run);
+  run.passed = (target: vscode.TestItem, duration?: number) => {
+    states.set(target.id, 'passed');
+    originalPassed(target, duration);
+  };
+  run.failed = (target: vscode.TestItem, message: vscode.TestMessage | readonly vscode.TestMessage[], duration?: number) => {
+    states.set(target.id, 'failed');
+    originalFailed(target, message, duration);
+  };
+  run.errored = (target: vscode.TestItem, message: vscode.TestMessage | readonly vscode.TestMessage[], duration?: number) => {
+    states.set(target.id, 'errored');
+    originalErrored(target, message, duration);
+  };
+  run.skipped = (target: vscode.TestItem) => {
+    states.set(target.id, 'skipped');
+    originalSkipped(target);
+  };
 }
 
 async function collectChild(child: cp.ChildProcessWithoutNullStreams): Promise<{ code: number | null; stdout: string; stderr: string }> {
