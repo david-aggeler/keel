@@ -141,6 +141,84 @@ suite('Keel Test Bridge expected-red specs', () => {
     });
   });
 
+  // DHF-TEST: keel/requirement-71
+  test('req-71 single-item runs do not stamp siblings outside the request scope', async () => {
+    await expectKnownRed('vsix:req-71:sibling-results-accumulate', async () => {
+      const controller = vscode.tests.createTestController(`keelReq71SiblingScope-${Date.now()}`, 'Keel Req 71 sibling scope');
+      let run: vscode.TestRun | undefined;
+      try {
+        const tree = publishDiscovery(controller, os.tmpdir(), {
+          version: 1,
+          workspace: 'req-71-sibling-scope',
+          generated_at: new Date().toISOString(),
+          items: [
+            { id: 'keel::lanes', label: 'lanes', kind: 'group', runnable: false, profiles: [] },
+            { id: 'keel::lane::a', parent_id: 'keel::lanes', label: 'A', kind: 'lane', runnable: true, profiles: ['run'] },
+            { id: 'keel::lane::b', parent_id: 'keel::lanes', label: 'B', kind: 'lane', runnable: true, profiles: ['run'] }
+          ]
+        });
+        setCurrentTreeForTest(tree);
+        const parent = tree.itemsById.get('keel::lanes');
+        const itemA = tree.itemsById.get('keel::lane::a');
+        const itemB = tree.itemsById.get('keel::lane::b');
+        assert.ok(parent);
+        assert.ok(itemA);
+        assert.ok(itemB);
+        run = controller.createTestRun(new vscode.TestRunRequest([itemB]));
+        const calls: string[] = [];
+        run.passed = (target: vscode.TestItem) => {
+          calls.push(`passed:${target.id}`);
+        };
+        run.failed = (target: vscode.TestItem) => {
+          calls.push(`failed:${target.id}`);
+        };
+        run.errored = (target: vscode.TestItem) => {
+          calls.push(`errored:${target.id}`);
+        };
+        run.skipped = (target: vscode.TestItem) => {
+          calls.push(`skipped:${target.id}`);
+        };
+
+        applyRunEvent(
+          run,
+          JSON.stringify(runEvent({ event: 'passed', test_id: 'keel::lane::b' })),
+          new Set([itemB.id]),
+          new Set()
+        );
+
+        assert.ok(calls.includes('passed:keel::lane::b'), 'the selected sibling should receive its terminal result');
+        assert.deepEqual(
+          calls.filter((call) => call.endsWith(':keel::lane::a')),
+          [],
+          'a sibling outside the current request footprint must not receive a result stamp'
+        );
+
+        run.end();
+        run = controller.createTestRun(new vscode.TestRunRequest([parent]));
+        const parentRunCalls: string[] = [];
+        run.passed = (target: vscode.TestItem) => {
+          parentRunCalls.push(`passed:${target.id}`);
+        };
+        run.skipped = (target: vscode.TestItem) => {
+          parentRunCalls.push(`skipped:${target.id}`);
+        };
+        applyRunEvent(
+          run,
+          JSON.stringify(runEvent({ event: 'passed', test_id: 'keel::lane::b' })),
+          new Set([parent.id]),
+          new Set()
+        );
+
+        assert.ok(parentRunCalls.includes('passed:keel::lane::b'), 'the executed child should receive its terminal result');
+        assert.ok(parentRunCalls.includes('skipped:keel::lane::a'), 'an unreported sibling inside a parent run should be skipped');
+      } finally {
+        run?.end();
+        setCurrentTreeForTest(undefined);
+        controller.dispose();
+      }
+    });
+  });
+
   // DHF-TEST: keel/requirement-72
   test('req-72 every discovery-served runnable id resolves through the real binary dry-run sweep', async function () {
     this.timeout(30_000);
