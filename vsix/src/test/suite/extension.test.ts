@@ -492,7 +492,9 @@ suite('Keel Test Bridge config contract', () => {
     }
 
     const demoPlan = await planTests(root, ['keel-demo-dev::lane::fake-smoke']);
-    assert.ok(demoPlan.groups.some((group) => group.rows.some((state) => state.resource === 'database' && state.desired !== state.current)));
+    // cr-79 aligned demo model: the seeded-database row is 'postgres' and, as
+    // a reconcilable row, carries a devtool-served run_id (cr-75 contract).
+    assert.ok(demoPlan.groups.some((group) => group.rows.some((state) => state.resource === 'postgres' && state.desired !== state.current && !!state.run_id)));
 
     const demoBlock = await collectChild(runTests(root, ['keel-demo-dev::maintenance::block-bad-lane']));
     assert.equal(demoBlock.code, 0);
