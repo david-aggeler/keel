@@ -2,12 +2,6 @@
   "version": 1,
   "entries": [
     {
-      "id": "vsix:req-71:terminal-state-never-reverts",
-      "requirement": "keel/requirement-71",
-      "fixing_cr": "keel/change_request-78",
-      "reason": "Current run-event application allows an explicit test_started event after the same item reached a terminal state."
-    },
-    {
       "id": "vsix:req-72:runnable-id-dry-run-sweep",
       "requirement": "keel/requirement-72",
       "fixing_cr": "keel/change_request-78",
