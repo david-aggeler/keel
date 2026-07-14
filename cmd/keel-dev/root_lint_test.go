@@ -153,6 +153,23 @@ func TestLintRejectsRetiredDesiredStateVocabularyInVSIXJavaScript(t *testing.T) 
 	}
 }
 
+// DHF-TEST: keel/requirement-77
+func TestLintRejectsRetiredDesiredStateVocabularyInVSIXTypeScriptTests(t *testing.T) {
+	dir := t.TempDir()
+	suite := filepath.Join(dir, "vsix", "src", "test", "suite")
+	if err := os.MkdirAll(suite, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	retiredType := string([]byte{83, 101, 116, 117, 112, 80, 108, 97, 110})
+	writeFile(t, suite, "extension.test.ts", "const doc = { kind: '"+retiredType+"' };\n")
+
+	err := runLint(dir)
+	if err == nil || !strings.Contains(err.Error(), "no-retired-desired-state-vocabulary") || !strings.Contains(err.Error(), filepath.Join("vsix", "src", "test", "suite", "extension.test.ts")) {
+		t.Fatalf("retired desired-state vocabulary in VSIX TypeScript test file should fail lint naming the file, got %v", err)
+	}
+}
+
 // TestCoverageFloorFails proves the ac-37 gate rejects a total below the floor.
 func TestCoverageFloorFails(t *testing.T) {
 	bin := t.TempDir()
