@@ -16,7 +16,8 @@ go run ./cmd/keel-dev test-bridge config upgrade
 go run ./cmd/keel-dev vsix ci
 ```
 
-The lane ids are:
+Run `keel::maintenance::detect-lanes` once from the Test Explorer to populate
+`.vscode/test-lanes.json`. The seeded gate lane ids are:
 
 - `keel::lane::lint`
 - `keel::lane::test-fast`
@@ -24,7 +25,7 @@ The lane ids are:
 
 ## Protocol Streams
 
-During `vscode` verbs, stdout is reserved for protocol JSON or JSONL only. The
+During `test-bridge` verbs, stdout is reserved for protocol JSON or JSONL only. The
 keel/log console sink routes to stderr for these verbs, while the `.logs/` human
 log and `.jsonl` file sinks stay enabled.
 
@@ -45,9 +46,9 @@ read or fall back to `testBridge.*` VS Code settings.
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "command": "bin/keel-dev",
-  "args": ["vscode", "tests"],
+  "args": [],
   "displayName": "Keel",
   "env": {
     "OPTIONAL_KEY": "optional value"

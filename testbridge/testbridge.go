@@ -137,20 +137,20 @@ func CommandSpec(bridge Bridge) *cli.CommandSpec {
 				Short: "Serve VS Code test-bridge protocol commands.",
 				Subcommands: []*cli.CommandSpec{
 					{
+						Name:  "config",
+						Short: "Initialize or upgrade test bridge config.",
+						Subcommands: []*cli.CommandSpec{
+							{Name: "init", Use: "test-bridge config init", Short: "Write .vscode/test-bridge.json if absent.", Handler: handleConfigInit(bridge)},
+							{Name: "upgrade", Use: "test-bridge config upgrade", Short: "Upgrade .vscode/test-bridge.json to the current schema.", Handler: handleConfigUpgrade(bridge)},
+						},
+					},
+					{
 						Name:  "tests",
 						Short: "Discover tests, report desired state, and run selections.",
 						Subcommands: []*cli.CommandSpec{
 							{Name: "discover", Use: "test-bridge tests discover [--format json]", Short: "Emit the test discovery document.", Flags: []cli.FlagSpec{{Name: "format", Value: "json", Short: "Output format."}}, Handler: handleDiscover(bridge)},
 							{Name: "desired-state", Use: "test-bridge tests desired-state [--format json] [--id test-id]", Short: "Emit the read-only desired-state document.", Flags: []cli.FlagSpec{{Name: "format", Value: "json", Short: "Output format."}, {Name: "id", Value: "test-id", Short: "Selected test id."}}, Handler: handleDesiredState(bridge)},
 							{Name: "run", Use: "test-bridge tests run --id test-id", Short: "Run selected tests.", Flags: []cli.FlagSpec{{Name: "id", Value: "test-id", Short: "Selected test id."}}, Handler: handleRun(bridge)},
-						},
-					},
-					{
-						Name:  "config",
-						Short: "Initialize or upgrade test bridge config.",
-						Subcommands: []*cli.CommandSpec{
-							{Name: "init", Use: "test-bridge config init", Short: "Write .vscode/test-bridge.json if absent.", Handler: handleConfigInit(bridge)},
-							{Name: "upgrade", Use: "test-bridge config upgrade", Short: "Upgrade .vscode/test-bridge.json to the current schema.", Handler: handleConfigUpgrade(bridge)},
 						},
 					},
 				},

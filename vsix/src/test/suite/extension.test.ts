@@ -176,7 +176,7 @@ suite('Keel Test Bridge config contract', () => {
       'test-bridge tests desired-state --format json --id keel::lane::ci',
       'test-bridge tests run --id keel::lane::ci'
     ]);
-    assert.ok(protocolCalls.every((call) => !/\bvscode tests\b/.test(call)));
+    assert.ok(protocolCalls.every((call) => !call.split(/\s+/).includes('vscode')));
     assert.ok(protocolCalls.every((call) => !/\bplan\b/.test(call)));
   });
 
@@ -288,7 +288,7 @@ suite('Keel Test Bridge config contract', () => {
     }
   });
 
-  // DHF-TEST: keel/requirement-42, keel/requirement-62
+  // DHF-TEST: keel/requirement-42, keel/requirement-62, keel/requirement-65
   test('production bridge argv is accepted by the real keel-dev and keel-demo-dev binaries per verb', async function () {
     this.timeout(30_000);
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-real-bridge-'));
@@ -301,6 +301,14 @@ suite('Keel Test Bridge config contract', () => {
       args: [],
       displayName: 'Keel'
     }, null, 2) + '\n');
+
+    // requirement-65 (amended): a bare root serves no lanes until detect-lanes
+    // runs; the maintenance item seeds .vscode/test-lanes.json with the gate lanes.
+    const bareDiscovery = await discoverTests(root);
+    assert.ok(bareDiscovery.items.some((item) => item.id === 'keel::maintenance::detect-lanes'));
+    assert.ok(!bareDiscovery.items.some((item) => item.id === 'keel::lane::lint'));
+    const detect = await collectChild(runTests(root, ['keel::maintenance::detect-lanes']));
+    assert.equal(detect.code, 0);
 
     const discovery = await discoverTests(root);
     assert.ok(discovery.items.some((item) => item.id === 'keel::lane::lint'));
@@ -370,6 +378,12 @@ suite('Keel Test Bridge config contract', () => {
       args: [],
       displayName: 'Keel'
     }, null, 2) + '\n');
+    // requirement-65 (amended): lanes are detect-produced; seed the dev root's
+    // lanes file through the real binary before driving the lint lane.
+    const devLanesPath = path.join(devRoot, '.vscode', 'test-lanes.json');
+    const previousLanes = fs.existsSync(devLanesPath) ? fs.readFileSync(devLanesPath, 'utf8') : undefined;
+    const devDetect = await collectChild(runTests(devRoot, ['keel::maintenance::detect-lanes']));
+    assert.equal(devDetect.code, 0);
     const runStreamRoot = devRoot;
     const runsDir = path.join(runStreamRoot, '.devtools', 'vscode-runs');
     fs.rmSync(path.join(runsDir, 'run.lock'), { force: true });
@@ -396,6 +410,11 @@ suite('Keel Test Bridge config contract', () => {
         fs.rmSync(devConfigPath, { force: true });
       } else {
         fs.writeFileSync(devConfigPath, previousConfig);
+      }
+      if (previousLanes === undefined) {
+        fs.rmSync(devLanesPath, { force: true });
+      } else {
+        fs.writeFileSync(devLanesPath, previousLanes);
       }
     }
   });
