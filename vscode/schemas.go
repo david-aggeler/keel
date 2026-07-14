@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// SchemasFS embeds the discover/plan/run schema source of truth.
+// SchemasFS embeds the discover/desired-state/run schema source of truth.
 //
 //go:embed schemas/*.json
 var SchemasFS embed.FS
@@ -15,7 +15,7 @@ type SchemaName string
 
 const (
 	SchemaDiscovery        SchemaName = "discovery"
-	SchemaSetupPlan        SchemaName = "setup-plan"
+	SchemaDesiredState     SchemaName = "desired-state"
 	SchemaRunEvent         SchemaName = "run-event"
 	SchemaRunLock          SchemaName = "run-lock"
 	SchemaTestBridgeConfig SchemaName = "test-bridge-config"
@@ -26,7 +26,7 @@ const (
 // DHF-REQ: keel/requirement-34
 func SchemaBytes(name SchemaName) ([]byte, error) {
 	switch name {
-	case SchemaDiscovery, SchemaSetupPlan, SchemaRunEvent, SchemaRunLock, SchemaTestBridgeConfig:
+	case SchemaDiscovery, SchemaDesiredState, SchemaRunEvent, SchemaRunLock, SchemaTestBridgeConfig:
 		return SchemasFS.ReadFile("schemas/" + string(name) + ".json")
 	default:
 		return nil, fmt.Errorf("keel/vscode: unknown schema %q", name)

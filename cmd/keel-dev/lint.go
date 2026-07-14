@@ -37,6 +37,10 @@ import (
 //     go doc is keel's sole consumer-facing behavioral contract, so an
 //     undocumented export is a hole in it (keel/ac-46, keel/ac-49).
 //
+//   - no-retired-desired-state-vocabulary: the desired-state protocol and
+//     devtool surfaces must not reintroduce the retired pre-rename vocabulary
+//     (keel/requirement-77).
+//
 // DHF-REQ: keel/requirement-10, keel/requirement-11
 func runLint(dir string) error {
 	var violations []string
@@ -65,11 +69,95 @@ func runLint(dir string) error {
 	}
 	violations = append(violations, v...)
 
+	v, err = scanNoRetiredDesiredStateVocabulary(dir)
+	if err != nil {
+		return err
+	}
+	violations = append(violations, v...)
+
 	if len(violations) > 0 {
 		sort.Strings(violations)
 		return fmt.Errorf("lint: %d violation(s):\n%s", len(violations), strings.Join(violations, "\n"))
 	}
 	return nil
+}
+
+var retiredDesiredStateVocabularyDirs = []string{
+	"vscode",
+	"testbridge",
+	filepath.Join("cmd", "keel-dev"),
+	filepath.Join("cmd", "keel-demo-dev"),
+	filepath.Join("vsix", "src"),
+}
+
+var retiredDesiredStateVocabularyTerms = []string{
+	string([]byte{83, 101, 116, 117, 112, 80, 108, 97, 110}),
+	string([]byte{98, 117, 105, 108, 100, 86, 83, 67, 111, 100, 101, 80, 108, 97, 110}),
+	string([]byte{115, 101, 116, 117, 112, 45, 112, 108, 97, 110}),
+}
+
+// scanNoRetiredDesiredStateVocabulary rejects the retired desired-state document
+// names in the protocol and devtool surfaces. Test files are scanned too: the
+// policy's own planted-occurrence tests build the terms from bytes, so the
+// guard never has a literal to trip on.
+//
+// DHF-REQ: keel/requirement-77
+func scanNoRetiredDesiredStateVocabulary(root string) ([]string, error) {
+	var violations []string
+	for _, sub := range retiredDesiredStateVocabularyDirs {
+		dir := filepath.Join(root, sub)
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			continue
+		}
+		err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				name := d.Name()
+				if name != "." && (strings.HasPrefix(name, ".") || name == "vendor" || name == "testdata" || name == "bin" || name == "node_modules") {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !retiredDesiredStateVocabularyFile(path) {
+				return nil
+			}
+			body, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			text := string(body)
+			for _, term := range retiredDesiredStateVocabularyTerms {
+				if line := firstLineContaining(text, term); line > 0 {
+					violations = append(violations, fmt.Sprintf("  no-retired-desired-state-vocabulary: %s:%d contains %q — use DesiredState-rooted naming only (keel/requirement-77)", relPath(root, path), line, term))
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return violations, nil
+}
+
+func retiredDesiredStateVocabularyFile(path string) bool {
+	switch filepath.Ext(path) {
+	case ".go", ".js", ".ts", ".json":
+		return true
+	default:
+		return false
+	}
+}
+
+func firstLineContaining(text, term string) int {
+	for i, line := range strings.Split(text, "\n") {
+		if strings.Contains(line, term) {
+			return i + 1
+		}
+	}
+	return 0
 }
 
 // scanNoStdlibLog reports every import of the stdlib "log" package in the

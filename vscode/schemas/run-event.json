@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/david-aggeler/keel/vscode/schemas/run-event.json",
   "title": "consumer VS Code test run JSONL event",
-  "description": "One JSONL event on the discover/plan/run protocol's run stream. Terminal run_finished guarantee: every run MUST end with a single terminal run_finished event carrying an exit_code. A producer crash or a mid-stream schema violation MUST still yield that terminal run_finished (with a non-zero exit_code), preceded by an errored or output event describing the fault — a stream that simply stops without a run_finished is a contract violation, not a UI quirk.",
+  "description": "One JSONL event on the discover/desired-state/run protocol's run stream. Terminal run_finished guarantee: every run MUST end with a single terminal run_finished event carrying an exit_code. A producer crash or a mid-stream schema violation MUST still yield that terminal run_finished (with a non-zero exit_code), preceded by an errored or output event describing the fault — a stream that simply stops without a run_finished is a contract violation, not a UI quirk.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "event", "time"],

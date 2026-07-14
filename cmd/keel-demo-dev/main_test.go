@@ -46,18 +46,18 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	}
 	assertMissingItem(t, discovery.Items, "keel-demo-dev::lane::go-pass")
 
-	planOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "desired-state", "--format", "json", "--id", "keel-demo-dev::lane::fake-smoke")
+	desiredStateOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "desired-state", "--format", "json", "--id", "keel-demo-dev::lane::fake-smoke")
 	if code != 0 {
-		t.Fatalf("desired-state exit = %d, want 0\n%s", code, planOut)
+		t.Fatalf("desired-state exit = %d, want 0\n%s", code, desiredStateOut)
 	}
-	var plan vscode.SetupPlan
-	decodeJSON(t, planOut, &plan)
-	assertDesiredState(t, plan.Groups, "docker-env", "ready", "absent", "provision_demo_environment")
-	assertDesiredState(t, plan.Groups, "postgres", "present+seeded", "missing", "create_and_seed_demo_database")
-	assertDesiredState(t, plan.Groups, "service-a", "running", "stopped", "start_demo_service")
-	assertDesiredState(t, plan.Groups, "service-b", "running", "stopped", "start_demo_service")
-	assertDesiredState(t, plan.Groups, "service-c", "running", "stopped", "start_demo_service")
-	assertExclusiveDataSetGroup(t, plan.Groups)
+	var desiredState vscode.DesiredStateDocument
+	decodeJSON(t, desiredStateOut, &desiredState)
+	assertDesiredState(t, desiredState.Groups, "docker-env", "ready", "absent", "provision_demo_environment")
+	assertDesiredState(t, desiredState.Groups, "postgres", "present+seeded", "missing", "create_and_seed_demo_database")
+	assertDesiredState(t, desiredState.Groups, "service-a", "running", "stopped", "start_demo_service")
+	assertDesiredState(t, desiredState.Groups, "service-b", "running", "stopped", "start_demo_service")
+	assertDesiredState(t, desiredState.Groups, "service-c", "running", "stopped", "start_demo_service")
+	assertExclusiveDataSetGroup(t, desiredState.Groups)
 
 	detectOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::maintenance::detect-lanes")
 	if code != 0 {
@@ -184,25 +184,25 @@ func TestDemoBridgeCommandSpecCoversProviderAndRunPaths(t *testing.T) {
 	decodeJSON(t, discoveryOut, &discovery)
 	assertItem(t, discovery.Items, idLaneFakeSmoke, "lane", true)
 
-	planOut, err := dispatchDemoBridge(t, root, "test-bridge", "tests", "desired-state", "--format", "json", "--id", idLaneFakeSmoke)
+	desiredStateOut, err := dispatchDemoBridge(t, root, "test-bridge", "tests", "desired-state", "--format", "json", "--id", idLaneFakeSmoke)
 	if err != nil {
 		t.Fatalf("desired-state dispatch: %v", err)
 	}
-	var plan vscode.SetupPlan
-	decodeJSON(t, planOut, &plan)
-	assertDesiredState(t, plan.Groups, "postgres", "present+seeded", "missing", "create_and_seed_demo_database")
+	var desiredState vscode.DesiredStateDocument
+	decodeJSON(t, desiredStateOut, &desiredState)
+	assertDesiredState(t, desiredState.Groups, "postgres", "present+seeded", "missing", "create_and_seed_demo_database")
 
-	defaultPlanOut, err := dispatchDemoBridge(t, root, "test-bridge", "tests", "desired-state", "--format", "json")
+	defaultDesiredStateOut, err := dispatchDemoBridge(t, root, "test-bridge", "tests", "desired-state", "--format", "json")
 	if err != nil {
 		t.Fatalf("default desired-state dispatch: %v", err)
 	}
-	var defaultPlan vscode.SetupPlan
-	decodeJSON(t, defaultPlanOut, &defaultPlan)
-	if defaultPlan.Version != 3 {
-		t.Fatalf("default desired-state version = %d, want 3", defaultPlan.Version)
+	var defaultDesiredState vscode.DesiredStateDocument
+	decodeJSON(t, defaultDesiredStateOut, &defaultDesiredState)
+	if defaultDesiredState.Version != 3 {
+		t.Fatalf("default desired-state version = %d, want 3", defaultDesiredState.Version)
 	}
-	assertDesiredState(t, defaultPlan.Groups, "docker-env", "ready", "absent", "provision_demo_environment")
-	assertExclusiveDataSetGroup(t, defaultPlan.Groups)
+	assertDesiredState(t, defaultDesiredState.Groups, "docker-env", "ready", "absent", "provision_demo_environment")
+	assertExclusiveDataSetGroup(t, defaultDesiredState.Groups)
 
 	runOut, err := dispatchDemoBridge(t, root, "test-bridge", "tests", "run", "--id", idLaneFakeSmoke)
 	if err != nil {

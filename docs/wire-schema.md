@@ -2,7 +2,7 @@
 
 The versioned JSON contract between the **keel-dev adapter** and the **VS Code Test Bridge**, transcribed from `vscode/schemas/*.json` @ `082da75`. These diagrams are a rendered view — the schemas remain the source of truth (drift-gated by `schema_drift_test.go` + `wire_stability_test.go`).
 
-**Reading the class diagrams:** `+` marks a required field, `-` an optional one. `List~T~` is a JSON array of `T`. Relationship labels and multiplicities (`1`, `0..*`, `1..*`, `0..1`) show how documents nest. Enum domains are listed under each diagram. The SetupPlan fields removed in v3 are listed under that diagram (issue-57 · requirement-60 AC 9 · CR-86).
+**Reading the class diagrams:** `+` marks a required field, `-` an optional one. `List~T~` is a JSON array of `T`. Relationship labels and multiplicities (`1`, `0..*`, `1..*`, `0..1`) show how documents nest. Enum domains are listed under each diagram. The DesiredStateDocument fields removed in v3 are listed under that diagram (issue-57 · requirement-60 AC 9 · CR-86).
 
 ---
 
@@ -13,11 +13,11 @@ flowchart LR
     dev([developer]) -->|edits| CFG["test-bridge-config.json / v3"]
     CFG -->|spawns| ADP[keel-dev adapter]
     ADP -->|discover| DISC["discovery.json / v1"]
-    ADP -->|desired-state| PLAN["setup-plan.json / v2 to v3"]
+    ADP -->|desired-state| STATE["desired-state.json / v3"]
     ADP -->|run, JSONL| RUN["run-event.json / v1"]
     ADP -.->|guards run| LOCK["run-lock.json / unversioned"]
     DISC --> VSIX[VS Code Test Bridge]
-    PLAN --> VSIX
+    STATE --> VSIX
     RUN --> VSIX
     VSIX -->|renders| tree([Test Explorer])
 ```
@@ -77,13 +77,13 @@ classDiagram
 
 ---
 
-## setup-plan.json — version 2 to v3
+## desired-state.json — version 3
 
-Read-only desired-state report per selection. `groups` then `rows` is the live model. The diagram shows only that live model; the plan-verb residue CR-86 deletes is listed below it.
+Read-only desired-state report per selection. `groups` then `rows` is the live model. The diagram shows only that live model; the pre-rename residue CR-86 deletes is listed below it.
 
 ```mermaid
 classDiagram
-    class setup_plan {
+    class desired_state_document {
         +int version
         +string workspace
         +string generated_at
@@ -116,8 +116,8 @@ classDiagram
         -string run_id
         -bool active
     }
-    setup_plan "1" --> "1" devtool : devtool
-    setup_plan "1" --> "0..*" group : groups
+    desired_state_document "1" --> "1" devtool : devtool
+    desired_state_document "1" --> "0..*" group : groups
     group "1" --> "1..*" desired_state : rows
 ```
 
@@ -126,7 +126,7 @@ classDiagram
 - `desired_state.action` — reuse, manual_setup_required, reconcile, reconcile_during_run
 - Group invariant: if `mutually_exclusive` is true, exactly one row has `active = true`
 - Row invariant: a row is runnable when it carries a `run_id`
-- **Removed in v3 (CR-86):** the top-level `items`, `required_resources`, `checks`, `actions`, and `teardown` fields — plan-verb residue the `groups[].rows` already carry
+- **Removed in v3 (CR-86):** the top-level `items`, `required_resources`, `checks`, `actions`, and `teardown` fields — pre-rename residue the `groups[].rows` already carry
 
 > **v3 target shape (CR-86):** envelope + `groups[]` only. The ownership split lives per-row in `reusable`/`owned`; at most one optional `teardown_policy` string survives at the top. The schema rejects the removed fields — a pre-1.0 clean break (dev_defaults **T13**).
 

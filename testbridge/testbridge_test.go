@@ -45,7 +45,7 @@ func TestCommandSpecOwnsCanonicalBridgeWire(t *testing.T) {
 	if err := spec.Dispatch(ctx, []string{"test-bridge", "tests", "desired-state", "--format", "json", "--id", "demo::lane::fast"}); err != nil {
 		t.Fatalf("desired-state dispatch: %v", err)
 	}
-	var desired vscode.SetupPlan
+	var desired vscode.DesiredStateDocument
 	decodeJSON(t, protocol, &desired)
 	if got := fake.calls; got != "discover,desiredState:demo::lane::fast" {
 		t.Fatalf("provider calls = %q, want discover,desiredState:demo::lane::fast", got)
@@ -211,7 +211,7 @@ func TestDiscoverDegradesDesiredStateProviderFailure(t *testing.T) {
 	var doc vscode.DiscoveryDocument
 	decodeJSON(t, &protocol, &doc)
 
-	diagnostic, ok := testItemByID(doc.Items, "demo::desired-state::diagnostic::plan")
+	diagnostic, ok := testItemByID(doc.Items, "demo::desired-state::diagnostic::desired-state")
 	if !ok || diagnostic.ParentID != "demo::desired-state" || diagnostic.Runnable || !strings.Contains(strings.Join(diagnostic.Limitations, " "), "desired provider exploded") {
 		t.Fatalf("diagnostic item = %+v ok=%v, want one non-runnable B child with provider error", diagnostic, ok)
 	}
@@ -264,12 +264,12 @@ func TestDesiredStateDerivationExecutesProbeAndMapsStateFields(t *testing.T) {
 	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "desired-state", "--format", "json"}); err != nil {
 		t.Fatalf("desired-state dispatch: %v", err)
 	}
-	var plan vscode.SetupPlan
-	decodeJSON(t, &protocol, &plan)
+	var desiredState vscode.DesiredStateDocument
+	decodeJSON(t, &protocol, &desiredState)
 	if probeCalls != 1 {
 		t.Fatalf("probe calls = %d, want 1", probeCalls)
 	}
-	row := plan.Groups[0].Rows[0]
+	row := desiredState.Groups[0].Rows[0]
 	if row.Current != "empty" || row.Status != "reconcilable" || row.Action != "reconcile_during_run" || row.Message != "seed db" {
 		t.Fatalf("derived row = %+v, want probe-derived Current/Status/Action/Message", row)
 	}
@@ -667,7 +667,7 @@ func TestValidationRejectsInvalidProtocolDocuments(t *testing.T) {
 		{name: "unsupported", doc: struct{}{}, want: "unsupported protocol document"},
 		{name: "discovery version", doc: vscode.DiscoveryDocument{Version: 2, Workspace: "w", ModulePath: "m", GeneratedAt: now}, want: "discovery version"},
 		{name: "discovery item id", doc: vscode.DiscoveryDocument{Version: 1, Workspace: "w", ModulePath: "m", GeneratedAt: now, Items: []vscode.TestItem{{ID: "bad", Label: "bad", Kind: "lane"}}}, want: "does not match schema pattern"},
-		{name: "setup status", doc: vscode.SetupPlan{Version: 3, Devtool: vscode.DevtoolMetadata{Name: "d", Version: "v"}, Workspace: "w", GeneratedAt: now, Groups: []vscode.DesiredStateGroup{{Label: "Test Preconditions", Rows: []vscode.DesiredState{{Resource: "db", Kind: "service", Desired: "up", Current: "down", Status: "bogus", Action: "reuse"}}}}}, want: "invalid status"},
+		{name: "desiredState status", doc: vscode.DesiredStateDocument{Version: 3, Devtool: vscode.DevtoolMetadata{Name: "d", Version: "v"}, Workspace: "w", GeneratedAt: now, Groups: []vscode.DesiredStateGroup{{Label: "Test Preconditions", Rows: []vscode.DesiredState{{Resource: "db", Kind: "service", Desired: "up", Current: "down", Status: "bogus", Action: "reuse"}}}}}, want: "invalid status"},
 		{name: "run event", doc: vscode.RunEvent{Version: 1, Event: "bogus", Time: now}, want: "invalid event"},
 		{name: "run lock", doc: vscode.RunLockFile{PID: 0, CreatedAt: now.Format(time.RFC3339Nano), IDs: []string{"x"}, Token: "t"}, want: "run-lock missing pid"},
 		{name: "config", doc: vscode.TestBridgeConfig{Version: 999, Command: "bin/demo", DisplayName: "Demo"}, want: "config version"},
@@ -685,7 +685,7 @@ func TestValidationRejectsInvalidProtocolDocuments(t *testing.T) {
 // DHF-TEST: keel/requirement-60
 func TestDesiredStateGroupsRequireExactlyOneActiveRowInExclusiveGroups(t *testing.T) {
 	now := time.Unix(2, 0).UTC()
-	valid := vscode.SetupPlan{
+	valid := vscode.DesiredStateDocument{
 		Version:     3,
 		Devtool:     vscode.DevtoolMetadata{Name: "d", Version: "v"},
 		Workspace:   "w",
@@ -724,9 +724,9 @@ func TestDesiredStateGroupsRequireExactlyOneActiveRowInExclusiveGroups(t *testin
 // the whole document so activation is unambiguous (formal_review-80).
 //
 // DHF-TEST: keel/requirement-60
-func TestDesiredStateRowRunIDsAreUniqueAcrossThePlan(t *testing.T) {
+func TestDesiredStateRowRunIDsAreUniqueAcrossDocument(t *testing.T) {
 	now := time.Unix(3, 0).UTC()
-	valid := vscode.SetupPlan{
+	valid := vscode.DesiredStateDocument{
 		Version:     3,
 		Devtool:     vscode.DevtoolMetadata{Name: "d", Version: "v"},
 		Workspace:   "w",
@@ -741,7 +741,7 @@ func TestDesiredStateRowRunIDsAreUniqueAcrossThePlan(t *testing.T) {
 		}},
 	}
 	if err := testbridge.ValidateDocument(valid); err != nil {
-		t.Fatalf("plan with a served run_id should validate: %v", err)
+		t.Fatalf("desiredState with a served run_id should validate: %v", err)
 	}
 
 	dup := valid
@@ -753,9 +753,9 @@ func TestDesiredStateRowRunIDsAreUniqueAcrossThePlan(t *testing.T) {
 }
 
 // DHF-TEST: keel/requirement-60
-func TestSetupPlanV3EnvelopeAndGroupsOnly(t *testing.T) {
+func TestDesiredStateDocumentV3EnvelopeAndGroupsOnly(t *testing.T) {
 	now := time.Unix(4, 0).UTC()
-	valid := vscode.SetupPlan{
+	valid := vscode.DesiredStateDocument{
 		Version:     3,
 		Devtool:     vscode.DevtoolMetadata{Name: "d", Version: "v"},
 		Workspace:   "w",
@@ -799,12 +799,12 @@ func TestSetupPlanV3EnvelopeAndGroupsOnly(t *testing.T) {
 	}
 	for key := range keys {
 		if !wantKeys[key] {
-			t.Fatalf("SetupPlan encoded removed field %q in %s", key, raw)
+			t.Fatalf("DesiredStateDocument encoded removed field %q in %s", key, raw)
 		}
 	}
 	for key := range wantKeys {
 		if _, ok := keys[key]; !ok {
-			t.Fatalf("SetupPlan encoded keys %v, missing %q", keys, key)
+			t.Fatalf("DesiredStateDocument encoded keys %v, missing %q", keys, key)
 		}
 	}
 
@@ -831,9 +831,9 @@ func TestSetupPlanV3EnvelopeAndGroupsOnly(t *testing.T) {
 			}]
 		}]
 	}`)
-	var decoded vscode.SetupPlan
+	var decoded vscode.DesiredStateDocument
 	if err := json.Unmarshal(legacyJSON, &decoded); err == nil || !strings.Contains(err.Error(), "removed field") {
-		t.Fatalf("legacy setup-plan decode err = %v, want removed field rejection", err)
+		t.Fatalf("legacy desired-state decode err = %v, want removed field rejection", err)
 	}
 }
 
@@ -908,8 +908,8 @@ func TestValidationCoversClosedEnumsAndRequiredFields(t *testing.T) {
 			Items: []vscode.TestItem{{ID: "demo::lane::fast", Label: "fast", Kind: "lane", Runnable: true, Profiles: []string{"run"}}},
 		}
 	}
-	validPlan := func() vscode.SetupPlan {
-		return vscode.SetupPlan{
+	validDesiredStateDocument := func() vscode.DesiredStateDocument {
+		return vscode.DesiredStateDocument{
 			Version:     3,
 			Devtool:     vscode.DevtoolMetadata{Name: "d", Version: "v"},
 			Workspace:   "w",
@@ -953,16 +953,16 @@ func TestValidationCoversClosedEnumsAndRequiredFields(t *testing.T) {
 	discovery.Items[0].Profiles = []string{"profile"}
 	assertInvalid("discovery profile", discovery, "invalid profile")
 
-	assertValid("setup plan", validPlan())
-	plan := validPlan()
-	plan.Groups[0].Rows[0].Resource = ""
-	assertInvalid("desired required", plan, "missing required fields")
-	plan = validPlan()
-	plan.Groups[0].Rows[0].Kind = "workspace"
-	assertInvalid("desired kind", plan, "invalid kind")
-	plan = validPlan()
-	plan.Groups[0].Rows[0].Action = "setup_required"
-	assertInvalid("desired action", plan, "invalid action")
+	assertValid("desired-state document", validDesiredStateDocument())
+	desiredState := validDesiredStateDocument()
+	desiredState.Groups[0].Rows[0].Resource = ""
+	assertInvalid("desired required", desiredState, "missing required fields")
+	desiredState = validDesiredStateDocument()
+	desiredState.Groups[0].Rows[0].Kind = "workspace"
+	assertInvalid("desired kind", desiredState, "invalid kind")
+	desiredState = validDesiredStateDocument()
+	desiredState.Groups[0].Rows[0].Action = "setup_required"
+	assertInvalid("desired action", desiredState, "invalid action")
 
 	assertValid("run event", vscode.RunEvent{Version: 1, Event: "passed", Time: now, Source: "vscode"})
 	assertInvalid("run source", vscode.RunEvent{Version: 1, Event: "passed", Time: now, Source: "consumer"}, "invalid source")
@@ -1055,9 +1055,9 @@ func (f *fakeBridge) Discover(_ context.Context) (vscode.DiscoveryDocument, erro
 	}, nil
 }
 
-func (f *fakeBridge) DesiredState(_ context.Context, ids []string) (testbridge.DesiredStatePlan, error) {
+func (f *fakeBridge) DesiredState(_ context.Context, ids []string) (testbridge.DesiredStateDeclaration, error) {
 	if f.desiredErr != nil {
-		return testbridge.DesiredStatePlan{}, f.desiredErr
+		return testbridge.DesiredStateDeclaration{}, f.desiredErr
 	}
 	f.appendCall("desiredState:" + strings.Join(ids, ","))
 	groups := f.desiredGroups
@@ -1067,7 +1067,7 @@ func (f *fakeBridge) DesiredState(_ context.Context, ids []string) (testbridge.D
 			Rows:  []testbridge.DesiredStateRow{probedRow("", "db", "service", "seeded", "empty", false, "seed test database during run", false, false)},
 		}}
 	}
-	return testbridge.DesiredStatePlan{
+	return testbridge.DesiredStateDeclaration{
 		Groups: groups,
 	}, nil
 }

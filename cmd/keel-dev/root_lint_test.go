@@ -119,6 +119,57 @@ func TestLintNoRawStdoutStream(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-77
+func TestLintRejectsRetiredDesiredStateVocabulary(t *testing.T) {
+	dir := t.TempDir()
+	keeldev := filepath.Join(dir, "cmd", "keel-dev")
+	if err := os.MkdirAll(keeldev, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	retiredType := string([]byte{83, 101, 116, 117, 112, 80, 108, 97, 110})
+	writeFile(t, keeldev, "desired_state.go", "package main\n\ntype "+retiredType+" struct{}\n")
+
+	err := runLint(dir)
+	if err == nil || !strings.Contains(err.Error(), "no-retired-desired-state-vocabulary") || !strings.Contains(err.Error(), filepath.Join("cmd", "keel-dev", "desired_state.go")) {
+		t.Fatalf("retired desired-state vocabulary should fail lint naming the file, got %v", err)
+	}
+}
+
+// DHF-TEST: keel/requirement-77
+func TestLintRejectsRetiredDesiredStateVocabularyInVSIXJavaScript(t *testing.T) {
+	dir := t.TempDir()
+	fixtures := filepath.Join(dir, "vsix", "src", "test", "fixtures")
+	if err := os.MkdirAll(fixtures, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	retiredWireLabel := string([]byte{115, 101, 116, 117, 112, 45, 112, 108, 97, 110})
+	writeFile(t, fixtures, "fake-adapter.js", "const documentType = '"+retiredWireLabel+"';\n")
+
+	err := runLint(dir)
+	if err == nil || !strings.Contains(err.Error(), "no-retired-desired-state-vocabulary") || !strings.Contains(err.Error(), filepath.Join("vsix", "src", "test", "fixtures", "fake-adapter.js")) {
+		t.Fatalf("retired desired-state vocabulary in VSIX JavaScript should fail lint naming the file, got %v", err)
+	}
+}
+
+// DHF-TEST: keel/requirement-77
+func TestLintRejectsRetiredDesiredStateVocabularyInVSIXTypeScriptTests(t *testing.T) {
+	dir := t.TempDir()
+	suite := filepath.Join(dir, "vsix", "src", "test", "suite")
+	if err := os.MkdirAll(suite, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	retiredType := string([]byte{83, 101, 116, 117, 112, 80, 108, 97, 110})
+	writeFile(t, suite, "extension.test.ts", "const doc = { kind: '"+retiredType+"' };\n")
+
+	err := runLint(dir)
+	if err == nil || !strings.Contains(err.Error(), "no-retired-desired-state-vocabulary") || !strings.Contains(err.Error(), filepath.Join("vsix", "src", "test", "suite", "extension.test.ts")) {
+		t.Fatalf("retired desired-state vocabulary in VSIX TypeScript test file should fail lint naming the file, got %v", err)
+	}
+}
+
 // TestCoverageFloorFails proves the ac-37 gate rejects a total below the floor.
 func TestCoverageFloorFails(t *testing.T) {
 	bin := t.TempDir()
