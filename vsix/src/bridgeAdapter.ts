@@ -101,7 +101,7 @@ export async function planTests(workspaceRoot: string, ids: string[]): Promise<S
     maxBuffer: 16 * 1024 * 1024
   });
   const parsed = JSON.parse(stdout) as SetupPlan;
-  if (parsed.version !== 2 || !Array.isArray(parsed.items) || !Array.isArray(parsed.groups)) {
+  if (parsed.version !== 3 || !Array.isArray(parsed.groups)) {
     throw new Error(`${adapter.displayName} adapter returned an unsupported VS Code setup plan`);
   }
   return parsed;

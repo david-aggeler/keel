@@ -179,14 +179,11 @@ func (b demoBridge) Discover(ctx context.Context) (vscode.DiscoveryDocument, err
 
 // DHF-REQ: keel/requirement-62
 func (b demoBridge) DesiredState(ctx context.Context, ids []string) (vscode.SetupPlan, error) {
-	selected := selectedItems(ids)
 	return vscode.SetupPlan{
-		Version:           2,
-		Devtool:           b.Metadata(),
-		Workspace:         b.workspace(ctx).Root,
-		GeneratedAt:       time.Now().UTC(),
-		Items:             selected,
-		RequiredResources: []string{"demo-environment", "demo-database", "demo-services"},
+		Version:     3,
+		Devtool:     b.Metadata(),
+		Workspace:   b.workspace(ctx).Root,
+		GeneratedAt: time.Now().UTC(),
 		Groups: []vscode.DesiredStateGroup{
 			{
 				Label: "Test Preconditions",
@@ -213,27 +210,7 @@ func (b demoBridge) DesiredState(ctx context.Context, ids []string) (vscode.Setu
 				},
 			},
 		},
-		Checks: []vscode.PrereqCheck{
-			{ID: "demo-env-preview", OK: true, Message: "fake infrastructure preview only; no real resources are mutated"},
-		},
-		Actions: []vscode.SetupPlanAction{
-			action("environment", "provision_demo_environment", false),
-			action("database", "create_and_seed_demo_database", false),
-			action("service-a", "start_demo_service", true),
-			action("service-b", "start_demo_service", true),
-			action("service-c", "start_demo_service", true),
-			action("sdk", "install_demo_sdk", true),
-			action("dns", "seed_demo_dns", true),
-			action("ping", "probe_demo_endpoint", true),
-			action("app-db-empty", "select_empty_data_set", false),
-			action("app-db-small", "reuse_small_data_set", false),
-			action("app-db-full", "select_full_data_set", false),
-		},
-		Teardown: vscode.SetupPlanTeardown{
-			OwnedTemporaryResources: []string{"environment", "database"},
-			SharedReusableResources: []string{"service-a", "service-b", "service-c"},
-			Policy:                  "demo-only fake resources; no teardown command mutates real infrastructure",
-		},
+		TeardownPolicy: "demo-only fake resources; no teardown command mutates real infrastructure",
 	}, nil
 }
 
@@ -361,35 +338,6 @@ func writeGoFixture(root string, pass bool) (string, error) {
 	return dir, nil
 }
 
-func selectedItems(ids []string) []vscode.SetupPlanItem {
-	if len(ids) == 0 {
-		ids = []string{idLaneFakeSmoke, idLaneGoPass, idLaneGoFail}
-	}
-	out := make([]vscode.SetupPlanItem, 0, len(ids))
-	for _, id := range ids {
-		out = append(out, setupItem(id))
-	}
-	return out
-}
-
-func setupItem(id string) vscode.SetupPlanItem {
-	item := vscode.SetupPlanItem{ID: id, Runnable: true}
-	switch id {
-	case idLaneFakeSmoke:
-		item.Label, item.Kind, item.Framework, item.Runner = "fake provisioning smoke", "lane", "fake", "keel-demo-dev"
-		item.RequiredResources = []string{"demo-environment", "demo-database", "demo-services"}
-	case idLaneGoPass:
-		item.Label, item.Kind, item.Framework, item.Runner = "real Go pass", "lane", "go", "go-test"
-		item.RequiredResources = []string{"go-toolchain"}
-	case idLaneGoFail:
-		item.Label, item.Kind, item.Framework, item.Runner = "real Go fail", "lane", "go", "go-test"
-		item.RequiredResources = []string{"go-toolchain"}
-	default:
-		item.Label = id
-	}
-	return item
-}
-
 func group(id, parent, label string) vscode.TestItem {
 	return vscode.TestItem{ID: id, ParentID: parent, Label: label, Kind: "group", Runnable: false, Profiles: []string{}}
 }
@@ -419,16 +367,6 @@ func desired(runID, resource, kind, want, current, actionName string, reusable, 
 		Reusable: reusable,
 		Owned:    !reusable,
 		Active:   active,
-	}
-}
-
-func action(resource, actionName string, reusable bool) vscode.SetupPlanAction {
-	return vscode.SetupPlanAction{
-		Resource: resource,
-		Status:   "reconcile_during_run",
-		Message:  actionName,
-		Reusable: reusable,
-		Owned:    !reusable,
 	}
 }
 

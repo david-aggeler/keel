@@ -91,11 +91,9 @@ if (args.slice(0, 4).join(' ') === 'test-bridge tests desired-state --format') {
     }
   }
   process.stdout.write(JSON.stringify({
-    version: 2,
+    version: 3,
     workspace: process.cwd(),
     generated_at: now(),
-    items: ids.map((id) => ({ id, runnable: true, framework: 'openbrain', runner: 'python-test', runner_label: 'Python test' })),
-    required_resources: ['python'],
     groups: [{
       label: 'Test Preconditions',
       order: 10,
@@ -105,9 +103,7 @@ if (args.slice(0, 4).join(' ') === 'test-bridge tests desired-state --format') {
         { run_id: 'keel::action::provision-python-venv', resource: 'python-venv', kind: 'dependency', desired: 'provisioned', current: 'missing', status: 'reconcilable', action: 'reconcile', message: 'venv can be provisioned', reusable: true, owned: true }
       ]
     }],
-    checks: [{ id: 'python', ok: true, message: 'python available' }],
-    actions: [{ resource: 'python', status: 'reuse', message: 'python available', reusable: true, owned: false }],
-    teardown: { owned_temporary_resources: [], shared_reusable_resources: ['python'], policy: 'reuse fake python' }
+    teardown_policy: 'reuse fake python'
   }, null, 2));
   process.stdout.write('\n');
   process.exit(0);

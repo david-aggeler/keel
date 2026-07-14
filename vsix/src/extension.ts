@@ -512,12 +512,15 @@ export function setupPlanOutputLines(plan: SetupPlan): string[] {
       lines.push(`- ${formatDesiredState(state)}`);
     }
   }
-  if (plan.teardown) {
+  const rows = plan.groups.flatMap((group) => group.rows);
+  const owned = uniqueSorted(rows.filter((state) => state.owned).map((state) => state.resource));
+  const reusable = uniqueSorted(rows.filter((state) => state.reusable).map((state) => state.resource));
+  if (owned.length > 0 || reusable.length > 0 || plan.teardown_policy) {
     lines.push('teardown:');
-    lines.push(`- owned: ${formatList(plan.teardown.owned_temporary_resources)}`);
-    lines.push(`- reusable: ${formatList(plan.teardown.shared_reusable_resources)}`);
-    if (plan.teardown.policy) {
-      lines.push(`- policy: ${plan.teardown.policy}`);
+    lines.push(`- owned: ${formatList(owned)}`);
+    lines.push(`- reusable: ${formatList(reusable)}`);
+    if (plan.teardown_policy) {
+      lines.push(`- policy: ${plan.teardown_policy}`);
     }
   }
   return lines;
@@ -653,6 +656,10 @@ function formatDesiredState(state: DesiredState): string {
 
 function formatList(values: readonly string[] | undefined): string {
   return values?.length ? values.join(', ') : '(none)';
+}
+
+function uniqueSorted(values: readonly string[]): string[] {
+  return [...new Set(values)].sort();
 }
 
 function protocolIDForTestItem(item: vscode.TestItem): string {

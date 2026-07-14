@@ -9,17 +9,12 @@
     "devtool",
     "workspace",
     "generated_at",
-    "items",
-    "required_resources",
-    "groups",
-    "checks",
-    "actions",
-    "teardown"
+    "groups"
   ],
   "properties": {
     "version": {
       "type": "integer",
-      "const": 2
+      "const": 3
     },
     "devtool": {
       "type": "object",
@@ -50,47 +45,15 @@
       "type": "string",
       "format": "date-time"
     },
-    "items": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/item"
-      }
-    },
-    "required_resources": {
-      "type": "array",
-      "items": {
-        "type": "string",
-        "minLength": 1
-      },
-      "uniqueItems": true
-    },
     "groups": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/group"
       }
     },
-    "checks": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/check"
-      }
-    },
-    "actions": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/action"
-      }
-    },
-    "teardown": {
-      "$ref": "#/$defs/teardown"
-    },
-    "limitations": {
-      "type": "array",
-      "items": {
-        "type": "string",
-        "minLength": 1
-      }
+    "teardown_policy": {
+      "type": "string",
+      "minLength": 1
     }
   },
   "$defs": {
@@ -147,52 +110,6 @@
         }
       }
     },
-    "item": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["id", "runnable"],
-      "properties": {
-        "id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "label": {
-          "type": "string"
-        },
-        "kind": {
-          "type": "string"
-        },
-        "framework": {
-          "type": "string"
-        },
-        "runner": {
-          "type": "string"
-        },
-        "runner_label": {
-          "type": "string"
-        },
-        "lane_id": {
-          "type": "string"
-        },
-        "playwright_project": {
-          "type": "string"
-        },
-        "canonical_id": {
-          "type": "string"
-        },
-        "required_resources": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          },
-          "uniqueItems": true
-        },
-        "runnable": {
-          "type": "boolean"
-        }
-      }
-    },
     "desired_state": {
       "type": "object",
       "additionalProperties": false,
@@ -240,76 +157,6 @@
         },
         "active": {
           "type": "boolean"
-        }
-      }
-    },
-    "check": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["id", "ok", "message"],
-      "properties": {
-        "id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "ok": {
-          "type": "boolean"
-        },
-        "message": {
-          "type": "string"
-        },
-        "detail": {
-          "type": "string"
-        }
-      }
-    },
-    "action": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["resource", "status", "message", "reusable", "owned"],
-      "properties": {
-        "resource": {
-          "type": "string",
-          "minLength": 1
-        },
-        "status": {
-          "type": "string",
-          "enum": ["reuse", "setup_required", "reconcile", "reconcile_during_run", "manual_setup_required"]
-        },
-        "message": {
-          "type": "string"
-        },
-        "detail": {
-          "type": "string"
-        },
-        "reusable": {
-          "type": "boolean"
-        },
-        "owned": {
-          "type": "boolean"
-        }
-      }
-    },
-    "teardown": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["owned_temporary_resources", "shared_reusable_resources", "policy"],
-      "properties": {
-        "owned_temporary_resources": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "shared_reusable_resources": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "policy": {
-          "type": "string",
-          "minLength": 1
         }
       }
     }

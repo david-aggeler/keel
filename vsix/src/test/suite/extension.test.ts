@@ -188,7 +188,8 @@ suite('Keel Test Bridge config contract', () => {
     assert.ok(discovery.items.some((item) => item.id === 'keel::lane::ci'));
 
     const plan = await planTests(root, ['keel::lane::ci']);
-    assert.ok(plan.items.some((item) => item.id === 'keel::lane::ci'));
+    assert.equal(plan.version, 3);
+    assert.ok(plan.groups.some((group) => group.rows.some((row) => row.resource === 'python')));
 
     const run = await collectChild(runTests(root, ['keel::lane::ci']));
     assert.equal(run.code, 0);
@@ -211,11 +212,9 @@ suite('Keel Test Bridge config contract', () => {
   // DHF-TEST: keel/requirement-60
   test('desired-state output renders groups, active rows, resources, and teardown split', () => {
     const lines = setupPlanOutputLines({
-      version: 2,
+      version: 3,
       workspace: 'keel',
       generated_at: new Date().toISOString(),
-      items: [],
-      required_resources: ['db'],
       groups: [{
         label: 'Data Set',
         order: 10,
@@ -231,21 +230,26 @@ suite('Keel Test Bridge config contract', () => {
           reusable: false,
           owned: true,
           active: true
+        }, {
+          resource: 'go-toolchain',
+          kind: 'tool',
+          desired: 'available',
+          current: 'available',
+          status: 'satisfied',
+          action: 'reuse',
+          message: 'go available',
+          reusable: true,
+          owned: false
         }]
       }],
-      checks: [],
-      actions: [],
-      teardown: {
-        owned_temporary_resources: ['db'],
-        shared_reusable_resources: ['go-toolchain'],
-        policy: 'owned resources are torn down after run'
-      }
+      teardown_policy: 'owned resources are torn down after run'
     });
 
     assert.deepEqual(lines, [
       'desired state:',
       'Data Set (mutually exclusive)',
       '- [active] db reconcilable: empty -> seeded; action=reconcile_during_run; owned, not reusable; seed during run',
+      '- go-toolchain satisfied: available -> available; action=reuse; shared, reusable; go available',
       'teardown:',
       '- owned: db',
       '- reusable: go-toolchain',
@@ -462,7 +466,8 @@ suite('Keel Test Bridge config contract', () => {
     assert.ok(discovery.items.some((item) => item.id === 'keel::lane::lint'));
 
     const plan = await planTests(root, ['keel::lane::lint']);
-    assert.ok(plan.items.some((item) => item.id === 'keel::lane::lint'));
+    assert.equal(plan.version, 3);
+    assert.ok(plan.groups.some((group) => group.rows.some((row) => row.run_id === 'keel::desired-state::go-toolchain')));
 
     const run = await collectChild(runTests(root, ['keel::lane::lint']));
     assert.doesNotMatch(run.stderr + run.stdout, /unknown flag/);
