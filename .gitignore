@@ -13,3 +13,4 @@ consumer-claude/
 # WHen it is built in the wrong location
 keel-dev
 keel-demo
+.vscode/test-lanes.json
