@@ -381,7 +381,6 @@ func buildVSCodeDiscovery(root string) (vscode.DiscoveryDocument, error) {
 		maintenanceItem(vscodeMaintenanceClearResults, "a.3 clear test results", ordinalSortText("a.3")),
 		maintenanceItem(vscodeMaintenanceClearState, "a.4 clear local test state", ordinalSortText("a.4")),
 	}
-	items = append(items, desiredStateDiscoveryItems(root)...)
 	goItems, err := discoverGoTestItems(context.Background(), root)
 	if err != nil {
 		return vscode.DiscoveryDocument{}, err
@@ -411,66 +410,6 @@ func buildVSCodeDiscovery(root string) (vscode.DiscoveryDocument, error) {
 		},
 		Items: items,
 	}, nil
-}
-
-func desiredStateDiscoveryItems(root string) []vscode.TestItem {
-	plan, err := buildVSCodePlan(root, nil)
-	if err != nil {
-		return []vscode.TestItem{{
-			ID:          vscodeGroupDesiredState + "::diagnostic::plan",
-			ParentID:    vscodeGroupDesiredState,
-			Label:       "desired-state unavailable",
-			Kind:        "group",
-			Runnable:    false,
-			Profiles:    []string{},
-			Limitations: []string{err.Error()},
-		}}
-	}
-	groups := append([]vscode.DesiredStateGroup(nil), plan.Groups...)
-	sort.SliceStable(groups, func(i, j int) bool { return groups[i].Order < groups[j].Order })
-	items := make([]vscode.TestItem, 0)
-	for _, group := range groups {
-		groupID := vscodeGroupDesiredState + "::group::" + StableIDSegment(group.Label)
-		groupItem := vscode.TestItem{
-			ID:          groupID,
-			ParentID:    vscodeGroupDesiredState,
-			Label:       group.Label,
-			SortText:    fmt.Sprintf("b.%03d", group.Order),
-			Kind:        "group",
-			Runnable:    false,
-			Profiles:    []string{},
-			Limitations: []string{fmt.Sprintf("mutually_exclusive=%t", group.MutuallyExclusive)},
-		}
-		items = append(items, groupItem)
-		for rowIndex, state := range group.Rows {
-			items = append(items, desiredStateRowDiscoveryItem(groupID, groupItem.SortText, rowIndex+1, state))
-		}
-	}
-	return items
-}
-
-func desiredStateRowDiscoveryItem(parentID, parentSort string, rowIndex int, state vscode.DesiredState) vscode.TestItem {
-	id := state.RunID
-	if id == "" {
-		id = parentID + "::row::" + StableIDSegment(strings.Join([]string{state.Resource, state.Desired, state.Action}, "-"))
-	}
-	return vscode.TestItem{
-		ID:          id,
-		ParentID:    parentID,
-		Label:       fmt.Sprintf("%s %s: %s -> %s", state.Resource, state.Status, state.Current, state.Desired),
-		SortText:    fmt.Sprintf("%s.%03d", parentSort, rowIndex),
-		Kind:        "group",
-		Runnable:    state.RunID != "",
-		Profiles:    profilesForDesiredStateRow(state),
-		Limitations: []string{"action=" + state.Action, fmt.Sprintf("active=%t", state.Active)},
-	}
-}
-
-func profilesForDesiredStateRow(state vscode.DesiredState) []string {
-	if state.RunID == "" {
-		return []string{}
-	}
-	return []string{"run"}
 }
 
 // DHF-REQ: keel/requirement-60

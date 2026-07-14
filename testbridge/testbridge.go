@@ -15,6 +15,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/david-aggeler/keel/cli"
@@ -163,12 +165,163 @@ func handleDiscover(bridge Bridge) cli.Handler {
 		if _, err := parseIDs(args, true, true); err != nil {
 			return err
 		}
-		doc, err := bridge.Discover(ctx)
+		doc, err := discoverWithDerivedDesiredState(ctx, bridge)
 		if err != nil {
 			return err
 		}
 		return writeDocument(runtimeOrDefault(ctx, bridge), doc)
 	}
+}
+
+func discoverWithDerivedDesiredState(ctx context.Context, bridge Bridge) (vscode.DiscoveryDocument, error) {
+	doc, err := bridge.Discover(ctx)
+	if err != nil {
+		return vscode.DiscoveryDocument{}, err
+	}
+	return deriveDesiredStateDiscovery(ctx, bridge, doc)
+}
+
+// DHF-REQ: keel/requirement-74
+func deriveDesiredStateDiscovery(ctx context.Context, bridge Bridge, doc vscode.DiscoveryDocument) (vscode.DiscoveryDocument, error) {
+	parent, ok := desiredStateParent(doc.Items)
+	if !ok {
+		return doc, nil
+	}
+	doc.Items = withoutDesiredStateChildren(doc.Items, parent.ID)
+	plan, err := bridge.DesiredState(ctx, nil)
+	if err != nil {
+		doc.Items = append(doc.Items, desiredStateDiagnosticItem(parent.ID, err))
+		if err := validateUniqueDiscoveryItemIDs(doc.Items); err != nil {
+			return vscode.DiscoveryDocument{}, err
+		}
+		return doc, nil
+	}
+	if err := ValidateDocument(plan); err != nil {
+		return vscode.DiscoveryDocument{}, err
+	}
+	doc.Items = append(doc.Items, desiredStateDiscoveryItems(parent.ID, plan.Groups)...)
+	if err := validateUniqueDiscoveryItemIDs(doc.Items); err != nil {
+		return vscode.DiscoveryDocument{}, err
+	}
+	return doc, nil
+}
+
+func validateUniqueDiscoveryItemIDs(items []vscode.TestItem) error {
+	seen := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		if _, ok := seen[item.ID]; ok {
+			return fmt.Errorf("keel/testbridge: duplicate discovery item id %q", item.ID)
+		}
+		seen[item.ID] = struct{}{}
+	}
+	return nil
+}
+
+func withoutDesiredStateChildren(items []vscode.TestItem, parentID string) []vscode.TestItem {
+	remove := map[string]bool{}
+	changed := true
+	for changed {
+		changed = false
+		for _, item := range items {
+			if item.ParentID == parentID || remove[item.ParentID] {
+				if !remove[item.ID] {
+					remove[item.ID] = true
+					changed = true
+				}
+			}
+		}
+	}
+	filtered := items[:0]
+	for _, item := range items {
+		if remove[item.ID] {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
+}
+
+func desiredStateParent(items []vscode.TestItem) (vscode.TestItem, bool) {
+	for _, item := range items {
+		if item.Label == "B - Desired State" && item.Kind == "group" {
+			return item, true
+		}
+	}
+	return vscode.TestItem{}, false
+}
+
+func desiredStateDiagnosticItem(parentID string, err error) vscode.TestItem {
+	return vscode.TestItem{
+		ID:          parentID + "::diagnostic::plan",
+		ParentID:    parentID,
+		Label:       "desired-state unavailable",
+		Kind:        "group",
+		Runnable:    false,
+		Profiles:    []string{},
+		Limitations: []string{err.Error()},
+	}
+}
+
+func desiredStateDiscoveryItems(parentID string, groups []vscode.DesiredStateGroup) []vscode.TestItem {
+	groups = append([]vscode.DesiredStateGroup(nil), groups...)
+	sort.SliceStable(groups, func(i, j int) bool { return groups[i].Order < groups[j].Order })
+	items := make([]vscode.TestItem, 0)
+	for _, group := range groups {
+		groupID := parentID + "::group::" + stableIDSegment(group.Label)
+		groupItem := vscode.TestItem{
+			ID:          groupID,
+			ParentID:    parentID,
+			Label:       group.Label,
+			SortText:    fmt.Sprintf("b.%03d", group.Order),
+			Kind:        "group",
+			Runnable:    false,
+			Profiles:    []string{},
+			Limitations: []string{fmt.Sprintf("mutually_exclusive=%t", group.MutuallyExclusive)},
+		}
+		items = append(items, groupItem)
+		for rowIndex, state := range group.Rows {
+			items = append(items, desiredStateRowDiscoveryItem(groupID, groupItem.SortText, rowIndex+1, state))
+		}
+	}
+	return items
+}
+
+func desiredStateRowDiscoveryItem(parentID, parentSort string, rowIndex int, state vscode.DesiredState) vscode.TestItem {
+	id := state.RunID
+	if id == "" {
+		id = parentID + "::row::" + stableIDSegment(strings.Join([]string{state.Resource, state.Desired, state.Action}, "-"))
+	}
+	profiles := []string{}
+	if state.RunID != "" {
+		profiles = []string{"run"}
+	}
+	return vscode.TestItem{
+		ID:          id,
+		ParentID:    parentID,
+		Label:       fmt.Sprintf("%s %s: %s -> %s", state.Resource, state.Status, state.Current, state.Desired),
+		SortText:    fmt.Sprintf("%s.%03d", parentSort, rowIndex),
+		Kind:        "group",
+		Runnable:    state.RunID != "",
+		Profiles:    profiles,
+		Limitations: []string{"action=" + state.Action, fmt.Sprintf("active=%t", state.Active)},
+	}
+}
+
+func stableIDSegment(value string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(value) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		return "diagnostic"
+	}
+	return out
 }
 
 // DHF-REQ: keel/requirement-60
@@ -266,7 +419,7 @@ func parseRunArgs(args []string) ([]string, bool, error) {
 
 // DHF-REQ: keel/requirement-58, keel/requirement-72
 func resolveRunRequests(ctx context.Context, bridge Bridge, ids []string, strict bool) ([]vscode.RunRequest, error) {
-	doc, err := bridge.Discover(ctx)
+	doc, err := discoverWithDerivedDesiredState(ctx, bridge)
 	if err != nil {
 		return nil, err
 	}
