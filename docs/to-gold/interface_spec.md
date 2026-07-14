@@ -35,7 +35,7 @@ is the product's #1 quality goal.
 | Go APIs: `keel/cli`, `keel/vscode` | exposed | keel → keel-dev, future consumer devtools | tool-internal | n/a | godoc from source | preview | additive-intent, may still break with the tool | David |
 | Bridge protocol documents (discovery, setup plan, run events, run lock) | exposed | keel-dev adapter → Keel Test Bridge VSIX | tool-internal (cross-binary, same release) | none — local subprocess, workspace trust (threat_model §3) | embedded JSON Schemas `vscode/schemas/*.json`, drift-gated by `schema_drift_test.go` + `wire_stability_test.go` | stable | versioned documents (`version` int per doc); additive within a version | David |
 | `.vscode/test-bridge.json` | exposed (read) | user → VSIX + adapter | human developers | — | `vscode/schemas/test-bridge-config.json`; `test-bridge config init/upgrade` migrates | stable (v2) | versioned; upgrade verb owns migration | David |
-| `.vscode/test-lanes.json` *(planned)* | exposed (read/write) | keel-dev ↔ user (both write); VSIX watches the path only, never parses | human developers | — | none (devtool-owned contract — §4) | preview (spec rev 2.3; implementing unit keel/change_request-55, approved) | versioned file (`version` int); additive fields = warning-tolerated | David |
+| `.vscode/test-lanes.json` | exposed (read/write) | keel-dev ↔ user (both write); VSIX watches the path only, never parses | human developers | — | none (devtool-owned contract — §4) | preview (spec rev 3; implementing units keel/change_request-55 and keel/change_request-76) | versioned file (`version` int); additive fields = warning-tolerated | David |
 | keel-dev CLI verbs | exposed | keel-dev → humans, VSIX, consumer Justfiles | tool-internal | — | `keel-dev help` (generated from `cli.CommandSpec`) | stable core (`ci`, `release`), preview (detect-lanes maintenance action) | verbs never repurposed; new verbs additive | David |
 | Go toolchain | consumed | golang.org → keel | — | — | pinned `go 1.25.1` in go.mod | pinned | tolerate patch releases; minor bumps via CR | David |
 | Node + pnpm (VSIX builds only) | consumed | npm registry → vsix/ | — | — | `vsix/pnpm-lock.yaml` (lockfile-pinned) | pinned | lockfile updates via CR; never touches core gate | David |
@@ -72,26 +72,27 @@ is the product's #1 quality goal.
 
 ## 4. Non-generated contracts
 
-### `.vscode/test-lanes.json` (planned)
+### `.vscode/test-lanes.json`
 
 The one non-generated contract — **owned 100% by the consumer devtool**
 (go.mod model: keel-dev writes it via `detect-lanes` maintenance, humans hand-edit it,
 the VSIX only watches the path). Normative contract: **Test Lanes Interface
-Specification rev 2.3** (attached to `keel/exploration-2` as
-`test-lanes-spec.md`; carried by keel/requirement-51…54, implemented by
-keel/change_request-55). Contract essentials: lanes declare *member sets*
+Specification rev 3** (attached to `keel/exploration-2` as
+`test-lanes-spec.md`; carried by keel/requirement-51…54 and amended by
+keel/requirement-65; implemented by keel/change_request-55 and revised by
+keel/change_request-76). Contract essentials: lanes declare *member sets*
 (Go package globs, framework roots, per-file vsix selections, lane refs) —
 never commands; composition is a DAG with union+dedup semantics,
 depth ≤ 8; validation errors suppress the offending lane (or file) with a
 visible diagnostic item and can never take down discovery; the file is
 watched — any write re-renders the tree without a refresh action or restart;
-system lanes always render regardless of file state. Timing: watcher-driven
+all lanes, including gate lanes, are served only from the file. Timing: watcher-driven
 re-discovery is bounded by the discovery implementation — seconds today,
 ~1 s only after the go/parser discovery upgrade (keel/change_request-55
 `depends_on` keel/change_request-54 for exactly this). Lane runs serialize
-on `run.lock`. Failure scenario: malformed
-file ⇒ system lanes + one non-runnable diagnostic item carrying the parse
-error.
+on `run.lock`. Failure scenario: absent file ⇒ empty `C - Lanes` group until
+`detect-lanes`; malformed file ⇒ one non-runnable diagnostic item carrying the
+parse error, with no fallback lane set.
 
 ### Adapter invocation contract
 
