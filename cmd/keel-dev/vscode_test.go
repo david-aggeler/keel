@@ -569,6 +569,57 @@ func TestVSCodeDiscoveryEmitsStructuredOrderedTree(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-60
+func TestKeelDevDesiredStateRowsAreRunnableThroughCanonicalBridge(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+
+	var discover bytes.Buffer
+	if err := commandTree().Dispatch(contextWithVSCodeTestState(root, &discover), []string{"test-bridge", "tests", "discover", "--format", "json"}); err != nil {
+		t.Fatalf("canonical discover: %v", err)
+	}
+	var doc vscode.DiscoveryDocument
+	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
+		t.Fatalf("discovery JSON: %v\n%s", err, discover.String())
+	}
+	for _, id := range []string{
+		"keel::desired-state::go-toolchain",
+		"keel::desired-state::keel-module-root",
+		"keel::desired-state::stub-binaries",
+	} {
+		item, ok := discoveryItemByID(doc, id)
+		if !ok {
+			t.Fatalf("discovery missing runnable desired-state row %q: %+v", id, doc.Items)
+		}
+		if item.ParentID != "keel::desired-state::group::test-preconditions" || !item.Runnable || !stringSlicesEqual(item.Profiles, []string{"run"}) {
+			t.Fatalf("desired-state row %q = %+v, want runnable run-profile child of Test Preconditions", id, item)
+		}
+	}
+
+	var protocol bytes.Buffer
+	if err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "tests", "run", "--id", "keel::desired-state::keel-module-root"}); err != nil {
+		t.Fatalf("satisfied desired-state row run: %v\nprotocol:\n%s", err, protocol.String())
+	}
+	if events := decodeRunEvents(t, protocol.String()); !runEventsContain(events, "passed", "keel::desired-state::keel-module-root") {
+		t.Fatalf("satisfied desired-state row events = %+v, want passed event for keel-module-root", events)
+	}
+
+	t.Setenv("PATH", t.TempDir())
+	protocol.Reset()
+	err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "tests", "run", "--id", "keel::desired-state::go-toolchain"})
+	if err == nil {
+		t.Fatal("blocked desired-state row returned nil error; want failing run")
+	}
+	events := decodeRunEvents(t, protocol.String())
+	if !runEventsContain(events, "failed", "keel::desired-state::go-toolchain") || !strings.Contains(protocol.String(), "Install Go if this check is blocked.") {
+		t.Fatalf("blocked desired-state row events = %+v\nprotocol:\n%s", events, protocol.String())
+	}
+	if events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode == 0 {
+		t.Fatalf("blocked desired-state terminal event = %+v, want non-zero exit", events[len(events)-1])
+	}
+}
+
 // DHF-TEST: keel/requirement-51
 func TestVSCodeDiscoveryRendersFileLanesAndDiagnostics(t *testing.T) {
 	root := t.TempDir()
