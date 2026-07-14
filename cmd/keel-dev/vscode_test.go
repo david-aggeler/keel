@@ -875,11 +875,15 @@ func TestVSCodeDetectLanesMaintenanceItemRunsDetect(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-53
+// DHF-TEST: keel/requirement-53, keel/requirement-58
 func TestVSCodeRunStartedCarriesRequestedSelection(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, root, "go.sum", "")
+	if err := os.MkdirAll(filepath.Join(root, ".vscode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{"version":1,"lanes":[{"id":"test-fast","label":"test-fast","order":"c.2","members":[{"root":"go"}]}]}`+"\n")
 	t.Setenv("PATH", t.TempDir())
 
 	var protocol bytes.Buffer
@@ -891,7 +895,7 @@ func TestVSCodeRunStartedCarriesRequestedSelection(t *testing.T) {
 	if len(events) == 0 || events[0].Event != "run_started" {
 		t.Fatalf("events = %+v, want run_started first", events)
 	}
-	if got := events[0].Requested; len(got) != 1 || got[0].ID != vscodeLaneTestFast || got[0].Label != "test-fast" {
+	if got := events[0].Requested; len(got) != 1 || got[0].ID != vscodeLaneTestFast || got[0].Label != "c.2 test-fast" {
 		t.Fatalf("run_started requested = %+v, want exact selected lane", got)
 	}
 }

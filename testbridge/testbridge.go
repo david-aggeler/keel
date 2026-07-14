@@ -15,7 +15,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/david-aggeler/keel/cli"
@@ -194,13 +193,14 @@ func handleRun(bridge Bridge) cli.Handler {
 		if err != nil {
 			return err
 		}
-		ids, err = resolveRunIDs(ctx, bridge, ids, dryRun)
+		requests, err := resolveRunRequests(ctx, bridge, ids, dryRun)
 		if err != nil {
 			return err
 		}
 		if dryRun {
 			return nil
 		}
+		ids = runRequestIDs(requests)
 		rt := runtimeOrDefault(ctx, bridge)
 		runID := newRunID(rt)
 		writer, closeWriter, err := newRunWriter(rt, bridge.Workspace(), runID)
@@ -209,7 +209,7 @@ func handleRun(bridge Bridge) cli.Handler {
 		}
 		defer closeWriter()
 		exitCode := 1
-		writer(vscode.RunEvent{Event: "run_started", Live: boolPtr(true), Requested: runRequests(ids)})
+		writer(vscode.RunEvent{Event: "run_started", Live: boolPtr(true), Requested: requests})
 		if locker, ok := bridge.(lockExemptRunner); !ok || !locker.LockExemptRun(ids) {
 			releaseLock, err := acquireRunLock(runtimeRoot(rt, bridge), ids, runID)
 			if err != nil {
@@ -264,8 +264,8 @@ func parseRunArgs(args []string) ([]string, bool, error) {
 	return ids, dryRun, nil
 }
 
-// DHF-REQ: keel/requirement-72
-func resolveRunIDs(ctx context.Context, bridge Bridge, ids []string, strict bool) ([]string, error) {
+// DHF-REQ: keel/requirement-58, keel/requirement-72
+func resolveRunRequests(ctx context.Context, bridge Bridge, ids []string, strict bool) ([]vscode.RunRequest, error) {
 	doc, err := bridge.Discover(ctx)
 	if err != nil {
 		return nil, err
@@ -274,12 +274,12 @@ func resolveRunIDs(ctx context.Context, bridge Bridge, ids []string, strict bool
 	for _, item := range doc.Items {
 		items[item.ID] = item
 	}
-	resolved := make([]string, 0, len(ids))
+	resolved := make([]vscode.RunRequest, 0, len(ids))
 	for _, id := range ids {
 		item, ok := items[id]
 		if !ok {
 			if !strict {
-				resolved = append(resolved, id)
+				resolved = append(resolved, vscode.RunRequest{ID: id, Label: id})
 				continue
 			}
 			return nil, cli.NewUsageError("unknown test id %q", id)
@@ -295,7 +295,11 @@ func resolveRunIDs(ctx context.Context, bridge Bridge, ids []string, strict bool
 		if !target.Runnable && (strict || item.CanonicalID != "") {
 			return nil, cli.NewUsageError("test id %q resolves to non-runnable id %q", id, targetID)
 		}
-		resolved = append(resolved, targetID)
+		label := target.Label
+		if label == "" {
+			label = targetID
+		}
+		resolved = append(resolved, vscode.RunRequest{ID: targetID, Label: label})
 	}
 	return resolved, nil
 }
@@ -525,10 +529,10 @@ func newRunID(rt Runtime) string {
 	return "run-" + now.UTC().Format("20060102T150405.000000000Z")
 }
 
-func runRequests(ids []string) []vscode.RunRequest {
-	out := make([]vscode.RunRequest, 0, len(ids))
-	for _, id := range ids {
-		out = append(out, vscode.RunRequest{ID: id, Label: strings.TrimPrefix(id, "keel::lane::")})
+func runRequestIDs(requests []vscode.RunRequest) []string {
+	out := make([]string, 0, len(requests))
+	for _, request := range requests {
+		out = append(out, request.ID)
 	}
 	return out
 }
