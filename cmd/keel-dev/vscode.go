@@ -191,41 +191,6 @@ type lanesDetectEntry struct {
 	Packages int    `json:"packages,omitempty"`
 }
 
-// DHF-REQ: keel/requirement-61
-func vscodeCommandSpec() *cli.CommandSpec {
-	return &cli.CommandSpec{
-		Name:  "vscode",
-		Short: "Emit VS Code test-runner protocol documents.",
-		Subcommands: []*cli.CommandSpec{
-			{
-				Name:  "config",
-				Short: "Initialize or upgrade VS Code test bridge config.",
-				Subcommands: []*cli.CommandSpec{
-					{Name: "init", Use: "vscode config init", Short: "Write .vscode/test-bridge.json if absent.", Handler: handleVSCodeConfigInit},
-					{Name: "upgrade", Use: "vscode config upgrade", Short: "Upgrade .vscode/test-bridge.json to the current schema.", Handler: handleVSCodeConfigUpgrade},
-				},
-			},
-			{
-				Name:  "tests",
-				Short: "VS Code test discovery, desired-state documents, and lane runs.",
-				Subcommands: []*cli.CommandSpec{
-					{Name: "discover", Use: "vscode tests discover [--format json]", Short: "Emit the VS Code discovery document.", Flags: []cli.FlagSpec{{Name: "format", Value: "json", Short: "Output format."}}, Handler: handleVSCodeTestsDiscover},
-					{Name: "desired-state", Use: "vscode tests desired-state [--format json] [--id test-id]", Short: "Emit the VS Code desired-state document.", Flags: []cli.FlagSpec{{Name: "format", Value: "json", Short: "Output format."}, {Name: "id", Value: "test-id", Short: "Selected test id."}}, Handler: handleVSCodeTestsDesiredState},
-					{Name: "run", Use: "vscode tests run --id test-id", Short: "Run selected VS Code test lanes.", Flags: []cli.FlagSpec{{Name: "format", Value: "jsonl", Short: "Legacy VSIX wire compatibility trap."}, {Name: "id", Value: "test-id", Short: "Selected test id."}}, Handler: handleVSCodeTestsRun},
-				},
-			},
-			{
-				Name:  "lanes",
-				Short: "List or detect data-driven test lanes.",
-				Subcommands: []*cli.CommandSpec{
-					{Name: "list", Use: "vscode lanes list [--format json]", Short: "Emit effective lane definitions.", Flags: []cli.FlagSpec{{Name: "format", Value: "json", Short: "Output format."}}, Handler: handleVSCodeLanesList},
-					{Name: "detect", Use: "vscode lanes detect [--format json] [--dry-run]", Short: "Append detected category lanes.", Flags: []cli.FlagSpec{{Name: "format", Value: "json", Short: "Output format."}, {Name: "dry-run", Short: "Report without writing."}}, Handler: handleVSCodeLanesDetect},
-				},
-			},
-		},
-	}
-}
-
 // DHF-REQ: keel/requirement-59, keel/requirement-60
 func testBridgeCommandSpec() *cli.CommandSpec {
 	spec := testbridge.CommandSpec(keelTestBridge{})
@@ -289,80 +254,6 @@ func (keelTestBridge) Workspace() testbridge.Workspace {
 // DHF-REQ: keel/requirement-63
 func (keelTestBridge) Metadata() vscode.DevtoolMetadata {
 	return vscode.DevtoolMetadata{Name: "keel-dev", Version: versionString(), Commit: buildCommit(), BuiltAt: buildTime()}
-}
-
-// DHF-REQ: keel/requirement-40
-func handleVSCodeConfigInit(ctx context.Context, args []string) error {
-	if len(args) != 0 {
-		return cli.NewUsageError("vscode config init takes no arguments: got %q", args)
-	}
-	state := stateFrom(ctx)
-	res, err := vscode.InitTestBridgeConfig(state.root)
-	if err != nil {
-		return err
-	}
-	if state.logger != nil {
-		state.logger.Info("vscode config init", "path", res.Path, "changed", res.Changed, "version", res.ToVersion)
-	}
-	return nil
-}
-
-// DHF-REQ: keel/requirement-40
-func handleVSCodeConfigUpgrade(ctx context.Context, args []string) error {
-	if len(args) != 0 {
-		return cli.NewUsageError("vscode config upgrade takes no arguments: got %q", args)
-	}
-	state := stateFrom(ctx)
-	res, err := vscode.UpgradeTestBridgeConfig(state.root)
-	if err != nil {
-		return err
-	}
-	if state.logger != nil {
-		state.logger.Info("vscode config upgrade", "path", res.Path, "changed", res.Changed, "from_version", res.FromVersion, "to_version", res.ToVersion)
-	}
-	return nil
-}
-
-func handleVSCodeTestsDiscover(ctx context.Context, args []string) error {
-	return dispatchTestBridgeAlias(ctx, append([]string{"test-bridge", "tests", "discover"}, args...))
-}
-
-func handleVSCodeTestsDesiredState(ctx context.Context, args []string) error {
-	return dispatchTestBridgeAlias(ctx, append([]string{"test-bridge", "tests", "desired-state"}, args...))
-}
-
-func handleVSCodeLanesList(ctx context.Context, args []string) error {
-	state := stateFrom(ctx)
-	if err := rejectUnsupportedFormat(args); err != nil {
-		return err
-	}
-	return writeVSCodeLanesList(state.root, state.protocol)
-}
-
-func handleVSCodeLanesDetect(ctx context.Context, args []string) error {
-	state := stateFrom(ctx)
-	dryRun, err := parseVSCodeLanesDetectArgs(args)
-	if err != nil {
-		return err
-	}
-	return writeVSCodeLanesDetect(state.root, dryRun, state.protocol)
-}
-
-// DHF-REQ: keel/requirement-35, keel/requirement-36, keel/requirement-37
-func handleVSCodeTestsRun(ctx context.Context, args []string) error {
-	ids, err := parseVSCodeRunIDs(args)
-	if err != nil {
-		return err
-	}
-	canonical := []string{"test-bridge", "tests", "run"}
-	for _, id := range ids {
-		canonical = append(canonical, "--id", id)
-	}
-	return dispatchTestBridgeAlias(ctx, canonical)
-}
-
-func dispatchTestBridgeAlias(ctx context.Context, args []string) error {
-	return testbridge.CommandSpec(keelTestBridge{}).Dispatch(ctx, args)
 }
 
 // DHF-REQ: keel/requirement-39, keel/requirement-43, keel/requirement-46, keel/requirement-48, keel/requirement-51, keel/requirement-65, keel/requirement-69
@@ -2107,61 +1998,9 @@ func parseVSCodeIDs(args []string, allowEmpty bool) ([]string, error) {
 	return ids, nil
 }
 
-// DHF-REQ: keel/requirement-64
-func parseVSCodeRunIDs(args []string) ([]string, error) {
-	ids := make([]string, 0)
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--format":
-			format := ""
-			if i+1 < len(args) {
-				format = args[i+1]
-			}
-			if format == "" || strings.HasPrefix(format, "-") {
-				return nil, cli.NewUsageError("--format requires a value")
-			}
-			return nil, legacyVSCodeRunFormatSkewError(format)
-		case "--id":
-			if i+1 >= len(args) {
-				return nil, cli.NewUsageError("--id requires a test id")
-			}
-			i++
-			ids = append(ids, args[i])
-		default:
-			return nil, cli.NewUsageError("unknown vscode tests argument %q", args[i])
-		}
-	}
-	if len(ids) == 0 {
-		return nil, cli.NewUsageError("--id is required")
-	}
-	return ids, nil
-}
-
-func legacyVSCodeRunFormatSkewError(format string) error {
-	return fmt.Errorf("keel test bridge version skew: VSIX legacy vscode tests run wire revision sent --format %s, but devtool keel-dev version %s commit %s built_at %s expects canonical test-bridge tests run --id; reinstall the VSIX or rebuild the workspace devtool from the same release tag", format, versionString(), buildCommit(), buildTime())
-}
-
 func rejectUnsupportedFormat(args []string) error {
 	_, err := parseVSCodeIDs(args, true)
 	return err
-}
-
-func parseVSCodeLanesDetectArgs(args []string) (bool, error) {
-	dryRun := false
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--format":
-			if i+1 >= len(args) || args[i+1] != "json" {
-				return false, cli.NewUsageError("--format supports only json")
-			}
-			i++
-		case "--dry-run":
-			dryRun = true
-		default:
-			return false, cli.NewUsageError("unknown vscode lanes detect argument %q", args[i])
-		}
-	}
-	return dryRun, nil
 }
 
 func laneForIDs(ids []string) string {
