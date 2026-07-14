@@ -309,11 +309,12 @@ export function rejectConcurrentRun(
   run.end();
 }
 
+// DHF-REQ: keel/requirement-70
 async function refresh(controller: vscode.TestController): Promise<void> {
   const workspaceRoot = getWorkspaceRoot();
   output.appendLine(`[${new Date().toISOString()}] refresh requested`);
-  controller.invalidateTestResults();
   if (!workspaceRoot) {
+    controller.invalidateTestResults();
     testTreeGeneration++;
     output.appendLine('No workspace root is open; clearing Keel test tree.');
     controller.items.replace([]);
@@ -327,7 +328,6 @@ async function refresh(controller: vscode.TestController): Promise<void> {
       return;
     }
     tree = publishDiscovery(controller, workspaceRoot, discovery, generation);
-    await publishDesiredStateRows(controller, workspaceRoot, generation, tree);
     output.appendLine(`Published ${discovery.items.length} Keel test items from ${workspaceRoot}.`);
     void externalRunMirror?.syncWorkspace();
   } catch (error) {
@@ -411,8 +411,6 @@ async function runSelected(
   }
   const submittable = selected.filter((item) => !isDesiredStateProtocolID(protocolIDForTestItem(item)));
   const selectedProtocolIds = submittable.map(protocolIDForTestItem);
-  const refreshDesiredStateAfterRun =
-    informational.length > 0 || selectedProtocolIds.some((id) => desiredStateRunnableRowIds.has(id));
   if (selectedProtocolIds.length === 0) {
     appendRunOutput(run, 'Selection contains only informational desired-state rows; nothing to run.');
     finishRun();
@@ -489,9 +487,6 @@ async function runSelected(
       if (resetResultsAfterRun) {
         void resetKeelTestResults(controller);
       }
-      if (refreshDesiredStateAfterRun) {
-        void refresh(controller);
-      }
       resolve();
     });
   });
@@ -540,13 +535,6 @@ function appendSetupPlan(run: vscode.TestRun, plan: SetupPlan): void {
 
 const desiredStateRootProtocolID = 'keel::desired-state';
 
-// Served run_ids of currently published runnable desired-state rows. Rows
-// without a served run_id are informational: their tree items live in the
-// VSIX-private keel::desired-state:: namespace and are never submitted.
-//
-// DHF-REQ: keel/requirement-60
-const desiredStateRunnableRowIds = new Set<string>();
-
 // desiredStateRowProtocolID builds the VSIX-private DISPLAY id for an
 // informational (non-runnable) desired-state row. It is a tree key only —
 // ids in this namespace are never sent to the devtool; runnable rows use the
@@ -567,90 +555,12 @@ function isDesiredStateProtocolID(id: string): boolean {
   return id === desiredStateRootProtocolID || id.startsWith(`${desiredStateRootProtocolID}::`);
 }
 
-async function publishDesiredStateRows(
-  controller: vscode.TestController,
-  workspaceRoot: string,
-  generation: number,
-  published: PublishedTree
-): Promise<void> {
-  let plan: SetupPlan;
-  try {
-    plan = await planTests(workspaceRoot, []);
-  } catch (error) {
-    output.appendLine(`Desired-state tree unavailable: ${error instanceof Error ? error.message : String(error)}`);
-    return;
-  }
-  if (!plan.groups?.some((group) => group.rows.length > 0)) {
-    return;
-  }
-
-  const root = ensureDesiredStateItem(controller, published, desiredStateRootProtocolID, 'B - Desired State', generation);
-  root.sortText = 'b';
-  desiredStateRunnableRowIds.clear();
-  for (const group of [...plan.groups].sort((a, b) => a.order - b.order)) {
-    const groupProtocolID = `${desiredStateRootProtocolID}::group::${protocolIDSegment(group.label)}`;
-    const groupItem = ensureDesiredStateItem(controller, published, groupProtocolID, formatDesiredStateGroup(group), generation, root);
-    groupItem.sortText = `b.${String(group.order).padStart(3, '0')}`;
-    groupItem.description = group.mutually_exclusive ? 'mutually exclusive' : undefined;
-    for (const state of group.rows) {
-      // Runnable rows are keyed by the devtool-served run_id so activation
-      // submits exactly the id the devtool resolves; informational rows get
-      // a VSIX-private display id that the run path filters out.
-      const rowProtocolID = state.run_id ?? desiredStateRowProtocolID(group, state);
-      if (state.run_id) {
-        desiredStateRunnableRowIds.add(state.run_id);
-      }
-      const rowItem = ensureDesiredStateItem(controller, published, rowProtocolID, desiredStateRowLabel(state), generation, groupItem);
-      rowItem.description = `${state.current} -> ${state.desired}; action=${state.action}`;
-      rowItem.sortText = `${groupItem.sortText ?? 'b.000'}.${protocolIDSegment(state.resource)}`;
-      rowItem.tags = state.owned ? [new vscode.TestTag('owned')] : [];
-    }
-  }
-}
-
-function ensureDesiredStateItem(
-  controller: vscode.TestController,
-  published: PublishedTree,
-  protocolID: string,
-  label: string,
-  generation: number,
-  parent?: vscode.TestItem
-): vscode.TestItem {
-  const existing = published.itemsById.get(protocolID);
-  if (existing) {
-    existing.label = label;
-    return existing;
-  }
-  const item = controller.createTestItem(vscodeItemID(protocolID, generation), label);
-  item.canResolveChildren = false;
-  published.itemsById.set(protocolID, item);
-  published.protocolIdByItemId.set(item.id, protocolID);
-  if (parent) {
-    parent.children.add(item);
-    published.parentByItemId.set(item.id, parent);
-  } else {
-    controller.items.add(item);
-  }
-  return item;
-}
-
-function desiredStateRowLabel(state: DesiredState): string {
-  return `${state.active ? '[active] ' : ''}${state.resource}`;
-}
-
 function protocolIDSegment(value: string): string {
   return value
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, '-')
     .replace(/^-+|-+$/g, '') || 'item';
-}
-
-function vscodeItemID(protocolID: string, generation: number): string {
-  if (generation <= 0) {
-    return protocolID;
-  }
-  return `keel-v${generation}::${protocolID}`;
 }
 
 type RunOutputLevel = 'INFO' | 'WARN' | 'ERROR' | 'DEBUG';
@@ -837,6 +747,10 @@ export function currentTree(): PublishedTree | undefined {
 
 export function setCurrentTreeForTest(next: PublishedTree | undefined): void {
   tree = next;
+}
+
+export function testControllerForTest(): vscode.TestController | undefined {
+  return testControllerForRunProfile;
 }
 
 async function openDevWorkspaceWhenLaunchedEmpty(): Promise<void> {

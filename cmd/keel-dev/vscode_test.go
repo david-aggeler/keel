@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -471,7 +472,7 @@ func TestVSCodeDiscoveryAndPlanExposeKeelLaneSet(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-46
+// DHF-TEST: keel/requirement-46, keel/requirement-69
 func TestVSCodeDiscoveryEmitsStructuredOrderedTree(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
@@ -508,7 +509,7 @@ func TestVSCodeDiscoveryEmitsStructuredOrderedTree(t *testing.T) {
 		if strings.HasPrefix(item.Label, "c.") {
 			t.Fatalf("discovery emitted reserved c.* label: %+v", item)
 		}
-		if strings.Contains(item.ID, "a.") || strings.Contains(item.ID, "b.") || strings.Contains(item.ID, "d.") {
+		if strings.Contains(item.ID, "a.") || strings.Contains(item.ID, "b.") || strings.Contains(item.ID, "c.") || strings.Contains(item.ID, "d.") {
 			t.Fatalf("item id encodes ordinal %q for label %q", item.ID, item.Label)
 		}
 		assertDiscoveryKindAllowedBySchema(t, item.Kind)
@@ -518,9 +519,13 @@ func TestVSCodeDiscoveryEmitsStructuredOrderedTree(t *testing.T) {
 		label string
 		sort  string
 	}{
-		"keel::maintenance": {label: "a. Maintenance", sort: "a"},
-		"keel::lanes":       {label: "C - Lanes", sort: "c"},
-		"keel::frameworks":  {label: "d. Frameworks", sort: "d"},
+		"keel::maintenance":   {label: "A - Test Bridge Maintenance", sort: "a"},
+		"keel::desired-state": {label: "B - Desired State", sort: "b"},
+		"keel::lanes":         {label: "C - Lanes", sort: "c"},
+		"keel::frameworks":    {label: "D - Frameworks", sort: "d"},
+	}
+	if len(top) != len(wantTop) {
+		t.Fatalf("top-level groups = %+v, want exactly %d groups", top, len(wantTop))
 	}
 	for id, want := range wantTop {
 		item, ok := top[id]
@@ -530,6 +535,29 @@ func TestVSCodeDiscoveryEmitsStructuredOrderedTree(t *testing.T) {
 		if item.Label != want.label || item.Kind != "group" || item.SortText != want.sort || item.Runnable {
 			t.Fatalf("top-level group %q = %+v, want label=%q kind=group sort_text=%q runnable=false", id, item, want.label, want.sort)
 		}
+	}
+	wantOrder := []string{"keel::maintenance", "keel::desired-state", "keel::lanes", "keel::frameworks"}
+	topIDs := make([]string, 0, len(top))
+	for id := range top {
+		topIDs = append(topIDs, id)
+	}
+	sort.Slice(topIDs, func(i, j int) bool { return top[topIDs[i]].SortText < top[topIDs[j]].SortText })
+	if !stringSlicesEqual(topIDs, wantOrder) {
+		t.Fatalf("top-level sorted ids = %v, want %v", topIDs, wantOrder)
+	}
+	desiredGroup, ok := discoveryItemByID(doc, "keel::desired-state::group::test-preconditions")
+	if !ok || desiredGroup.ParentID != "keel::desired-state" || desiredGroup.Label != "Test Preconditions" || desiredGroup.SortText != "b.010" || strings.Join(desiredGroup.Limitations, " ") != "mutually_exclusive=false" {
+		t.Fatalf("desired-state group = %+v, ok=%v", desiredGroup, ok)
+	}
+	var desiredRow vscode.TestItem
+	for _, item := range doc.Items {
+		if item.ParentID == desiredGroup.ID && strings.Contains(item.Label, "go-toolchain") {
+			desiredRow = item
+			break
+		}
+	}
+	if desiredRow.ID == "" || desiredRow.SortText != "b.010.001" || !strings.Contains(desiredRow.Label, " -> available") {
+		t.Fatalf("desired-state row = %+v", desiredRow)
 	}
 
 	goRoot, ok := discoveryItemByID(doc, "go::root")
