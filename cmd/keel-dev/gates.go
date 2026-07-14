@@ -22,6 +22,9 @@ type step struct {
 	name    string
 	program string
 	args    []string
+	// maxOutputBytes, when positive, overrides keel/exec's default captured
+	// stdout+stderr ceiling for this subprocess.
+	maxOutputBytes int
 	// stdoutFails, when set and returning a non-empty message for the captured
 	// stdout, turns a zero-exit run into a failure carrying that message.
 	stdoutFails func(stdout string) string
@@ -233,10 +236,11 @@ func runStep(ctx context.Context, logger *slog.Logger, dir string, s step) error
 	}
 
 	req := procexec.Request{
-		Program: s.program,
-		Args:    s.args,
-		Dir:     dir,
-		Logger:  logger,
+		Program:        s.program,
+		Args:           s.args,
+		Dir:            dir,
+		Logger:         logger,
+		MaxOutputBytes: s.maxOutputBytes,
 	}
 	if s.quietStderr {
 		req.Logger = quietStderrLogger{Logger: logger, step: s.name}

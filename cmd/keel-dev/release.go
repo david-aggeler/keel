@@ -328,14 +328,23 @@ func capture(ctx context.Context, logger *slog.Logger, dir, program string, args
 	return captureEnv(ctx, logger, dir, nil, program, args...)
 }
 
+func captureWithMaxOutput(ctx context.Context, logger *slog.Logger, dir string, maxOutputBytes int, program string, args ...string) (string, string, error) {
+	return captureEnvWithMaxOutput(ctx, logger, dir, nil, maxOutputBytes, program, args...)
+}
+
 // captureEnv is capture with an explicit environment (nil inherits the parent's).
 func captureEnv(ctx context.Context, logger *slog.Logger, dir string, env []string, program string, args ...string) (string, string, error) {
+	return captureEnvWithMaxOutput(ctx, logger, dir, env, 0, program, args...)
+}
+
+func captureEnvWithMaxOutput(ctx context.Context, logger *slog.Logger, dir string, env []string, maxOutputBytes int, program string, args ...string) (string, string, error) {
 	proc, err := procexec.ProcessStart(ctx, procexec.Request{
-		Program: program,
-		Args:    args,
-		Dir:     dir,
-		Env:     env,
-		Logger:  logger,
+		Program:        program,
+		Args:           args,
+		Dir:            dir,
+		Env:            env,
+		Logger:         logger,
+		MaxOutputBytes: maxOutputBytes,
 	})
 	if err != nil {
 		return "", "", err
