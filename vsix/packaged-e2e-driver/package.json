@@ -1,0 +1,12 @@
+{
+  "name": "keel-packaged-e2e-driver",
+  "displayName": "Keel Packaged E2E Driver",
+  "version": "0.0.0",
+  "publisher": "aggeler",
+  "private": true,
+  "engines": {
+    "vscode": "^1.102.0"
+  },
+  "activationEvents": [],
+  "main": "./extension.js"
+}
