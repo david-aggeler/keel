@@ -64,20 +64,34 @@ func ciSteps(dir string) []step {
 	// Shell scripts are enumerated up front so shellcheck/shfmt receive explicit
 	// paths (no shell is involved to expand a glob). Sorted for stable output.
 	scripts, _ := filepath.Glob(filepath.Join(dir, "scripts", "*.sh"))
+	gofmtFiles, gofmtListErr := trackedFilesWithExt(dir, ".go")
+	cspellFiles, cspellListErr := trackedFilesWithExt(dir, ".go", ".md")
+	gofmtStep := step{
+		name:    "gofmt",
+		program: "gofmt",
+		args:    append([]string{"-l"}, gofmtFiles...),
+		stdoutFails: func(out string) string {
+			files := strings.TrimSpace(out)
+			if files == "" {
+				return ""
+			}
+			return "unformatted files:\n" + files
+		},
+	}
+	if gofmtListErr != nil {
+		gofmtStep = step{name: "gofmt", fn: func(context.Context, *slog.Logger, string) error { return gofmtListErr }}
+	} else if len(gofmtFiles) == 0 {
+		gofmtStep = step{name: "gofmt", fn: func(context.Context, *slog.Logger, string) error { return nil }}
+	}
+	cspellStep := step{name: "cspell", tool: "cspell", program: "cspell", args: append([]string{"--no-progress"}, cspellFiles...), quietStderr: true}
+	if cspellListErr != nil {
+		cspellStep = step{name: "cspell", fn: func(context.Context, *slog.Logger, string) error { return cspellListErr }}
+	} else if len(cspellFiles) == 0 {
+		cspellStep = step{name: "cspell", fn: func(context.Context, *slog.Logger, string) error { return nil }}
+	}
 
 	steps := []step{
-		{
-			name:    "gofmt",
-			program: "gofmt",
-			args:    []string{"-l", "."},
-			stdoutFails: func(out string) string {
-				files := strings.TrimSpace(out)
-				if files == "" {
-					return ""
-				}
-				return "unformatted files:\n" + files
-			},
-		},
+		gofmtStep,
 		{name: "build", program: "go", args: []string{"build", "./..."}},
 		{name: "vet", program: "go", args: []string{"vet", "./..."}},
 		{name: "lint", fn: func(_ context.Context, _ *slog.Logger, dir string) error {
@@ -91,7 +105,7 @@ func ciSteps(dir string) []step {
 		// DHF-REQ: keel/requirement-12 (keel/ac-39)
 		{name: "govulncheck", tool: "govulncheck", program: "govulncheck", args: []string{"./..."}, quietStderr: true},
 		// DHF-REQ: keel/requirement-12 (keel/ac-40)
-		{name: "cspell", tool: "cspell", program: "cspell", args: []string{"--no-progress", "**/*.md", "**/*.go"}, quietStderr: true},
+		cspellStep,
 		// gitleaks scans the git history + working tree for committed secrets and
 		// exits non-zero on any finding (default --exit-code 1), so a leak fails
 		// the gate. --no-banner keeps the log quiet; --redact prevents any matched
@@ -134,6 +148,31 @@ func ciSteps(dir string) []step {
 	// and the fast static checks should fail before it does.
 	steps = append(steps, step{name: "test", fn: runTestWithCoverage})
 	return steps
+}
+
+// trackedFilesWithExt returns git-tracked repo-relative paths with the supplied
+// extensions. The file-selecting gate steps use this as their input of record so
+// untracked or gitignored scratch in the checkout cannot red the gate.
+//
+// DHF-REQ: keel/requirement-85
+func trackedFilesWithExt(dir string, exts ...string) ([]string, error) {
+	out, err := exec.Command("git", "-C", dir, "ls-files").Output()
+	if err != nil {
+		return nil, fmt.Errorf("keel-dev: list git-tracked files: %w", err)
+	}
+	want := make(map[string]bool, len(exts))
+	for _, ext := range exts {
+		want[ext] = true
+	}
+	var files []string
+	for _, file := range strings.Split(string(out), "\n") {
+		file = strings.TrimSpace(file)
+		if file == "" || !want[filepath.Ext(file)] {
+			continue
+		}
+		files = append(files, file)
+	}
+	return files, nil
 }
 
 // runCI runs the verification gate in dir, fail-fast: the first failing step

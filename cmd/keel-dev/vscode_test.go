@@ -1524,8 +1524,10 @@ func TestVSCodeSystemGateLanesDiscoverPrepareAndRun(t *testing.T) {
 
 	t.Setenv("PATH", originalPath)
 	badRoot := t.TempDir()
+	mustRun(t, badRoot, "git", "init")
 	writeFile(t, badRoot, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, badRoot, "bad.go", "package p\n\nvar    Y = 2\n")
+	mustRun(t, badRoot, "git", "add", "go.mod", "bad.go")
 	protocol.Reset()
 	err = dispatchTestBridgeRun(contextWithVSCodeTestState(badRoot, &protocol), "keel::lane::ci")
 	if err == nil {

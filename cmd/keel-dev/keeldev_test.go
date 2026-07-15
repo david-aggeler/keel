@@ -148,8 +148,10 @@ func TestEnsureCleanTree(t *testing.T) {
 func TestRunCIGofmtGate(t *testing.T) {
 	requireTool(t, "gofmt")
 	requireTool(t, "go")
+	requireTool(t, "git")
 
 	dir := t.TempDir()
+	mustRun(t, dir, "git", "init")
 	writeModule(t, dir)
 
 	// Formatted, compiling, fully covered source: whole gate should pass,
@@ -157,6 +159,7 @@ func TestRunCIGofmtGate(t *testing.T) {
 	writeFile(t, dir, "keel_test_pkg.go", "package p\n\nfunc One() int {\n\treturn 1\n}\n")
 	writeFile(t, dir, "keel_test_pkg_test.go", "package p\n\nimport \"testing\"\n\nfunc TestOne(t *testing.T) {\n\tif One() != 1 {\n\t\tt.Fatal(\"one\")\n\t}\n}\n")
 	writeFile(t, dir, "cspell.json", "{\"version\":\"0.2\",\"language\":\"en-US\",\"words\":[\"keel\"]}\n")
+	mustRun(t, dir, "git", "add", "go.mod", "keel_test_pkg.go", "keel_test_pkg_test.go", "cspell.json")
 	if err := runCI(context.Background(), discardLogger(), dir); err != nil {
 		t.Fatalf("clean module should pass ci, got %v", err)
 	}
@@ -171,10 +174,13 @@ func TestRunCIGofmtGate(t *testing.T) {
 // DHF-TEST: keel/requirement-18
 func TestRunCIFailureCarriesStructuredOperationalError(t *testing.T) {
 	requireTool(t, "gofmt")
+	requireTool(t, "git")
 
 	dir := t.TempDir()
+	mustRun(t, dir, "git", "init")
 	writeModule(t, dir)
 	writeFile(t, dir, "bad.go", "package p\n\nvar    Y = 2\n")
+	mustRun(t, dir, "git", "add", "go.mod", "bad.go")
 
 	logDir := t.TempDir()
 	logger, err := logging.New(logging.Config{
