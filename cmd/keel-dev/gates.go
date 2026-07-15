@@ -60,24 +60,38 @@ type runLogLocator interface {
 // it runs (keel/ac-42) so a missing or drifted tool fails loud.
 //
 // DHF-REQ: keel/requirement-10, keel/requirement-11, keel/requirement-12
-func ciSteps(dir string) []step {
+func ciSteps(ctx context.Context, logger *slog.Logger, dir string) []step {
 	// Shell scripts are enumerated up front so shellcheck/shfmt receive explicit
 	// paths (no shell is involved to expand a glob). Sorted for stable output.
 	scripts, _ := filepath.Glob(filepath.Join(dir, "scripts", "*.sh"))
+	gofmtFiles, gofmtListErr := trackedFilesWithExt(ctx, logger, dir, ".go")
+	cspellFiles, cspellListErr := trackedFilesWithExt(ctx, logger, dir, ".go", ".md")
+	gofmtStep := step{
+		name:    "gofmt",
+		program: "gofmt",
+		args:    append([]string{"-l"}, gofmtFiles...),
+		stdoutFails: func(out string) string {
+			files := strings.TrimSpace(out)
+			if files == "" {
+				return ""
+			}
+			return "unformatted files:\n" + files
+		},
+	}
+	if gofmtListErr != nil {
+		gofmtStep = step{name: "gofmt", fn: func(context.Context, *slog.Logger, string) error { return gofmtListErr }}
+	} else if len(gofmtFiles) == 0 {
+		gofmtStep = step{name: "gofmt", fn: func(context.Context, *slog.Logger, string) error { return nil }}
+	}
+	cspellStep := step{name: "cspell", tool: "cspell", program: "cspell", args: append([]string{"--no-progress"}, cspellFiles...), quietStderr: true}
+	if cspellListErr != nil {
+		cspellStep = step{name: "cspell", fn: func(context.Context, *slog.Logger, string) error { return cspellListErr }}
+	} else if len(cspellFiles) == 0 {
+		cspellStep = step{name: "cspell", fn: func(context.Context, *slog.Logger, string) error { return nil }}
+	}
 
 	steps := []step{
-		{
-			name:    "gofmt",
-			program: "gofmt",
-			args:    []string{"-l", "."},
-			stdoutFails: func(out string) string {
-				files := strings.TrimSpace(out)
-				if files == "" {
-					return ""
-				}
-				return "unformatted files:\n" + files
-			},
-		},
+		gofmtStep,
 		{name: "build", program: "go", args: []string{"build", "./..."}},
 		{name: "vet", program: "go", args: []string{"vet", "./..."}},
 		{name: "lint", fn: func(_ context.Context, _ *slog.Logger, dir string) error {
@@ -91,7 +105,7 @@ func ciSteps(dir string) []step {
 		// DHF-REQ: keel/requirement-12 (keel/ac-39)
 		{name: "govulncheck", tool: "govulncheck", program: "govulncheck", args: []string{"./..."}, quietStderr: true},
 		// DHF-REQ: keel/requirement-12 (keel/ac-40)
-		{name: "cspell", tool: "cspell", program: "cspell", args: []string{"--no-progress", "**/*.md", "**/*.go"}, quietStderr: true},
+		cspellStep,
 		// gitleaks scans the git history + working tree for committed secrets and
 		// exits non-zero on any finding (default --exit-code 1), so a leak fails
 		// the gate. --no-banner keeps the log quiet; --redact prevents any matched
@@ -136,6 +150,43 @@ func ciSteps(dir string) []step {
 	return steps
 }
 
+// trackedFilesWithExt returns git-tracked repo-relative paths with the supplied
+// extensions. The file-selecting gate steps use this as their input of record so
+// untracked or gitignored scratch in the checkout cannot red the gate.
+//
+// DHF-REQ: keel/requirement-85
+func trackedFilesWithExt(ctx context.Context, logger *slog.Logger, dir string, exts ...string) ([]string, error) {
+	proc, err := procexec.ProcessStart(ctx, procexec.Request{
+		Program: "git",
+		Args:    []string{"ls-files"},
+		Dir:     dir,
+		Logger:  logger,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("keel-dev: list git-tracked files: %w", err)
+	}
+	res, waitErr := proc.Wait()
+	if waitErr != nil {
+		return nil, fmt.Errorf("keel-dev: list git-tracked files: %w", waitErr)
+	}
+	if res.ExitCode != 0 {
+		return nil, fmt.Errorf("keel-dev: list git-tracked files: git ls-files exited %d", res.ExitCode)
+	}
+	want := make(map[string]bool, len(exts))
+	for _, ext := range exts {
+		want[ext] = true
+	}
+	var files []string
+	for _, file := range strings.Split(res.Stdout, "\n") {
+		file = strings.TrimSpace(file)
+		if file == "" || !want[filepath.Ext(file)] {
+			continue
+		}
+		files = append(files, file)
+	}
+	return files, nil
+}
+
 // runCI runs the verification gate in dir, fail-fast: the first failing step
 // aborts and its error is returned. Every subprocess step is launched through
 // keel/exec (START/END lifecycle logging) and every line of output flows
@@ -160,7 +211,7 @@ func runCIWithRunLog(ctx context.Context, logger *slog.Logger, runLog runLogLoca
 	if err := logExpectedRed(logger, dir); err != nil {
 		return gateOperationalError("expected-red", "", 0, err)
 	}
-	for _, s := range ciSteps(dir) {
+	for _, s := range ciSteps(ctx, logger, dir) {
 		startLine := 0
 		logFile := ""
 		if runLog != nil {
