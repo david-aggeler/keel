@@ -78,6 +78,7 @@ var knownRunEvents = map[string]struct{}{
 	"errored":      {},
 	"cancelled":    {},
 	"skipped":      {},
+	"cleared":      {},
 	"artifact":     {},
 	"run_finished": {},
 }

@@ -563,9 +563,12 @@ func TestExclusiveDesiredStateSingleSelectionClearsSiblingResults(t *testing.T) 
 	}
 	events := decodeEvents(t, protocol.String())
 	if !eventsContain(events, "passed", fullID, "full active") ||
-		!eventsContain(events, "skipped", "demo::desired-state::dataset::small", "deactivated by exclusive desired-state selection") ||
-		!eventsContain(events, "skipped", unknownID, "deactivated by exclusive desired-state selection") {
+		!eventsContain(events, "cleared", "demo::desired-state::dataset::small", "deactivated by exclusive desired-state selection") ||
+		!eventsContain(events, "cleared", unknownID, "deactivated by exclusive desired-state selection") {
 		t.Fatalf("concrete selection events = %+v, want selected pass and sibling clear events", events)
+	}
+	if eventsContain(events, "skipped", "demo::desired-state::dataset::small", "deactivated by exclusive desired-state selection") {
+		t.Fatalf("sibling deactivation must emit a cleared event, not a terminal skipped result: %+v", events)
 	}
 
 	protocol.Reset()
@@ -578,8 +581,8 @@ func TestExclusiveDesiredStateSingleSelectionClearsSiblingResults(t *testing.T) 
 	}
 	events = decodeEvents(t, protocol.String())
 	if !eventsContain(events, "passed", unknownID, "selected Unknown State") ||
-		!eventsContain(events, "skipped", "demo::desired-state::dataset::small", "deactivated by exclusive desired-state selection") ||
-		!eventsContain(events, "skipped", fullID, "deactivated by exclusive desired-state selection") {
+		!eventsContain(events, "cleared", "demo::desired-state::dataset::small", "deactivated by exclusive desired-state selection") ||
+		!eventsContain(events, "cleared", fullID, "deactivated by exclusive desired-state selection") {
 		t.Fatalf("Unknown selection events = %+v, want Unknown pass and concrete sibling clear events", events)
 	}
 }

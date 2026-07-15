@@ -343,6 +343,26 @@ async function resetKeelTestResults(controller: vscode.TestController): Promise<
   await refresh(controller);
 }
 
+// invalidateClearedResults drops the prior result of each bridge-cleared item
+// (exclusive-group sibling deactivation) to no-result. Unlike resetKeelTestResults
+// it is scoped to the named items, so a member left active by the run keeps its
+// result while its deactivated siblings show none (keel/requirement-88).
+export function invalidateClearedResults(controller: vscode.TestController, clearedResultIds: ReadonlySet<string>): void {
+  if (clearedResultIds.size === 0) {
+    return;
+  }
+  const items: vscode.TestItem[] = [];
+  for (const id of clearedResultIds) {
+    const item = tree?.itemsById.get(id);
+    if (item) {
+      items.push(item);
+    }
+  }
+  if (items.length > 0) {
+    controller.invalidateTestResults(items);
+  }
+}
+
 async function runAdapterMaintenance(controller: vscode.TestController, ids: readonly string[]): Promise<void> {
   const workspaceRoot = getWorkspaceRoot();
   const adapter = currentAdapterConfig();
@@ -435,6 +455,7 @@ async function runSelected(
   }
   let forceKill: NodeJS.Timeout | undefined;
   let resetResultsAfterRun = false;
+  const clearedResultIds = new Set<string>();
   const selectedItemIds = new Set(selected.map((item) => item.id));
   const resultItemIds = new Set<string>();
   const applyOptions = { coverage, workspaceRoot, modulePath: tree?.modulePath };
@@ -452,6 +473,7 @@ async function runSelected(
       if (line.trim()) {
         const applied = applyRunEvent(run, line, selectedItemIds, resultItemIds, applyOptions);
         resetResultsAfterRun = applied.resetResults || resetResultsAfterRun;
+        applied.clearedResultIds?.forEach((id) => clearedResultIds.add(id));
         if (applied.finished) {
           finishRun();
         }
@@ -475,6 +497,7 @@ async function runSelected(
       if (stdout.trim()) {
         const applied = applyRunEvent(run, stdout, selectedItemIds, resultItemIds, applyOptions);
         resetResultsAfterRun = applied.resetResults || resetResultsAfterRun;
+        applied.clearedResultIds?.forEach((id) => clearedResultIds.add(id));
         if (applied.finished) {
           finishRun();
         }
@@ -487,6 +510,7 @@ async function runSelected(
       if (resetResultsAfterRun) {
         void resetKeelTestResults(controller);
       }
+      invalidateClearedResults(controller, clearedResultIds);
       resolve();
     });
   });
@@ -784,6 +808,11 @@ async function openDevWorkspaceWhenLaunchedEmpty(): Promise<void> {
 interface AppliedRunEvent {
   resetResults: boolean;
   finished: boolean;
+  // Item ids the bridge asked to clear to no-result (exclusive-group sibling
+  // deactivation). The run loop invalidates these on the controller after the
+  // run so they show no result — not a terminal skipped icon. See the
+  // 'cleared' event handling (keel/requirement-88).
+  clearedResultIds?: string[];
 }
 
 export interface ApplyRunEventOptions {
@@ -873,6 +902,24 @@ export function applyRunEvent(
         appendRunOutput(run, event.message);
       }
       break;
+    case 'cleared': {
+      // Bridge-owned exclusive-group sibling deactivation. Unlike 'skipped',
+      // this leaves the item with NO result: it receives no terminal state and
+      // its prior result is invalidated on the controller after the run
+      // (keel/requirement-88, at-most-one-result). The VSIX applies this
+      // verbatim — no branching on the mutually_exclusive flag.
+      const cleared: string[] = [];
+      for (const item of resultItemsForRunEvent(items, event.test_id)) {
+        if (shouldApplyResultToItem(item, selectedItemIds, resultItemIds, event.test_id)) {
+          resultItemIds.delete(item.id);
+          cleared.push(item.id);
+        }
+      }
+      if (event.message) {
+        appendRunOutput(run, event.message);
+      }
+      return { resetResults: false, finished: false, clearedResultIds: cleared };
+    }
     case 'output':
       if (event.message) {
         appendRunOutput(run, event.message);

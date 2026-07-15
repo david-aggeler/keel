@@ -172,7 +172,7 @@ classDiagram
     run_event "1" --> "0..1" artifact : artifact
 ```
 
-- `run_event.event` — run_started, test_started, output, passed, failed, errored, cancelled, skipped, artifact, run_finished
+- `run_event.event` — run_started, test_started, output, passed, failed, errored, cancelled, skipped, cleared, artifact, run_finished (`cleared` drops the named item to no-result — bridge-owned exclusive-group sibling deactivation, requirement-88; the consumer invalidates the item rather than stamping a terminal state)
 - `run_event.source` — vscode, external
 - `artifact.kind` — log, trace, screenshot, video, coverage, report, other
 
