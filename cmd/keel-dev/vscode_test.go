@@ -1002,7 +1002,7 @@ func lanesListHasPackage(lanes []struct {
 	return false
 }
 
-// DHF-TEST: keel/requirement-52
+// DHF-TEST: keel/requirement-52, keel/requirement-87
 func TestVSCodeDetectLanesMaintenanceItemRunsDetect(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
@@ -1015,13 +1015,9 @@ func TestVSCodeDetectLanesMaintenanceItemRunsDetect(t *testing.T) {
 	writeFile(t, root, filepath.Join("exec", "exec_test.go"), "package exec\n\nimport \"testing\"\n\nfunc TestExec(t *testing.T) {}\n")
 	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{"version":1,"lanes":[]}`+"\n")
 
-	built4, buildErr4 := buildVSCodeDiscovery(root)
-	if buildErr4 != nil {
-		t.Fatalf("buildVSCodeDiscovery: %v", buildErr4)
-	}
 	var discover bytes.Buffer
-	if err := testbridge.EncodeDocument(&discover, built4); err != nil {
-		t.Fatalf("encode protocol document: %v", err)
+	if err := dispatchTestBridgeDiscover(contextWithVSCodeTestState(root, &discover), "--format", "json"); err != nil {
+		t.Fatalf("discover dispatch: %v", err)
 	}
 	var doc vscode.DiscoveryDocument
 	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
@@ -1359,10 +1355,10 @@ func discoveryItemsContain(items []vscode.TestItem, text string) bool {
 	return false
 }
 
-// DHF-TEST: keel/requirement-47
+// DHF-TEST: keel/requirement-47, keel/requirement-87
 func TestVSCodeMaintenanceItemsAdvertiseCapabilitiesAndRunActions(t *testing.T) {
 	root := t.TempDir()
-	if code, err := runVSCodeMaintenance(root, "keel::maintenance::clear-state"); err != nil || code != 0 {
+	if code, err := (keelTestBridge{}).ClearState(context.Background(), testbridge.RunRequest{Root: root}, func(vscode.RunEvent) {}); err != nil || code != 0 {
 		t.Fatalf("clear-state without existing devtools = code %d, err %v; want code 0", code, err)
 	}
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
@@ -1384,54 +1380,50 @@ func TestVSCodeMaintenanceItemsAdvertiseCapabilitiesAndRunActions(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	built7, buildErr7 := buildVSCodeDiscovery(root)
-	if buildErr7 != nil {
-		t.Fatalf("buildVSCodeDiscovery: %v", buildErr7)
-	}
 	var discover bytes.Buffer
-	if err := testbridge.EncodeDocument(&discover, built7); err != nil {
-		t.Fatalf("encode protocol document: %v", err)
+	if err := dispatchTestBridgeDiscover(contextWithVSCodeTestState(root, &discover), "--format", "json"); err != nil {
+		t.Fatalf("discover dispatch: %v", err)
 	}
 	var doc vscode.DiscoveryDocument
 	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
 		t.Fatalf("discovery JSON: %v\n%s", err, discover.String())
 	}
-	if got, want := doc.Capabilities.ClearResultsTestIDs, []string{"keel::maintenance::clear-results"}; !stringSlicesEqual(got, want) {
+	if got, want := doc.Capabilities.ClearResultsTestIDs, []string{testbridge.MaintenanceClearResultsID}; !stringSlicesEqual(got, want) {
 		t.Fatalf("clear_results_test_ids = %v, want %v", got, want)
 	}
-	if got, want := doc.Capabilities.ClearStateTestIDs, []string{"keel::maintenance::clear-state"}; !stringSlicesEqual(got, want) {
+	if got, want := doc.Capabilities.ClearStateTestIDs, []string{testbridge.MaintenanceClearStateID}; !stringSlicesEqual(got, want) {
 		t.Fatalf("clear_state_test_ids = %v, want %v", got, want)
 	}
 	for id, want := range map[string]struct {
 		label string
 		sort  string
 	}{
-		"keel::maintenance::unlock":        {label: "a.2 unlock test bridge", sort: "a.002"},
-		"keel::maintenance::clear-results": {label: "a.3 clear test results", sort: "a.003"},
-		"keel::maintenance::clear-state":   {label: "a.4 clear local test state", sort: "a.004"},
+		testbridge.MaintenanceUnlockID:       {label: "a.2 unlock test bridge", sort: "a.002"},
+		testbridge.MaintenanceClearResultsID: {label: "a.3 clear test results", sort: "a.003"},
+		testbridge.MaintenanceClearStateID:   {label: "a.4 clear local test state", sort: "a.004"},
 	} {
 		item, ok := discoveryItemByID(doc, id)
 		if !ok {
 			t.Fatalf("discovery missing maintenance item %q", id)
 		}
-		if item.ParentID != "keel::maintenance" || item.Kind != "maintenance" || item.Label != want.label || item.SortText != want.sort || !item.Runnable {
+		if item.ParentID != testbridge.MaintenanceGroupID || item.Kind != "maintenance" || item.Label != want.label || item.SortText != want.sort || !item.Runnable {
 			t.Fatalf("maintenance item %q = %+v, want parent maintenance label=%q sort=%q runnable", id, item, want.label, want.sort)
 		}
 	}
 
 	var protocol bytes.Buffer
-	if err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), "keel::maintenance::unlock"); err != nil {
+	if err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), testbridge.MaintenanceUnlockID); err != nil {
 		t.Fatalf("unlock maintenance run: %v\nprotocol:\n%s", err, protocol.String())
 	}
 	if _, err := os.Stat(lockPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("unlock should remove stranded run.lock, stat err=%v", err)
 	}
-	if events := decodeRunEvents(t, protocol.String()); !runEventsContain(events, "passed", "keel::maintenance::unlock") || events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode != 0 {
+	if events := decodeRunEvents(t, protocol.String()); !runEventsContain(events, "passed", testbridge.MaintenanceUnlockID) || events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode != 0 {
 		t.Fatalf("unlock events = %+v, want passed and run_finished exit 0", events)
 	}
 
 	protocol.Reset()
-	if err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), "keel::maintenance::clear-state"); err != nil {
+	if err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), testbridge.MaintenanceClearStateID); err != nil {
 		t.Fatalf("clear-state maintenance run: %v\nprotocol:\n%s", err, protocol.String())
 	}
 	clearStateEvents := decodeRunEvents(t, protocol.String())

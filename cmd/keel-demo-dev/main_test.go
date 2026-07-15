@@ -15,7 +15,7 @@ import (
 	"github.com/david-aggeler/keel/vscode"
 )
 
-// DHF-TEST: keel/requirement-62, keel/requirement-74, keel/requirement-75, keel/requirement-76, keel/requirement-83
+// DHF-TEST: keel/requirement-62, keel/requirement-74, keel/requirement-75, keel/requirement-76, keel/requirement-83, keel/requirement-87
 func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	exe := buildDemoDev(t)
 	root := t.TempDir()
@@ -26,13 +26,23 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	}
 	var discovery vscode.DiscoveryDocument
 	decodeJSON(t, discoveryOut, &discovery)
-	assertItem(t, discovery.Items, "keel-demo-dev::maintenance", "group", false)
+	assertItem(t, discovery.Items, testbridge.MaintenanceGroupID, "group", false)
 	assertItem(t, discovery.Items, "keel::desired-state", "group", false)
 	assertItem(t, discovery.Items, "keel-demo-dev::lanes", "group", false)
 	assertItem(t, discovery.Items, "keel-demo-dev::frameworks", "group", false)
-	assertItem(t, discovery.Items, "keel-demo-dev::maintenance::detect-lanes", "maintenance", true)
+	assertItem(t, discovery.Items, testbridge.MaintenanceDetectLanesID, "maintenance", true)
+	clearStateItem := assertItem(t, discovery.Items, testbridge.MaintenanceClearStateID, "maintenance", true)
+	if !strings.Contains(clearStateItem.Label, "clear local test state") {
+		t.Fatalf("clear-state item label = %q, want clear local test state", clearStateItem.Label)
+	}
 	assertItem(t, discovery.Items, "keel-demo-dev::maintenance::block-bad-lane", "maintenance", true)
 	assertItem(t, discovery.Items, "keel-demo-dev::maintenance::unblock-bad-lane", "maintenance", true)
+	if got, want := discovery.Capabilities.ClearStateTestIDs, []string{testbridge.MaintenanceClearStateID}; !stringSlicesEqual(got, want) {
+		t.Fatalf("clear_state_test_ids = %v, want %v", got, want)
+	}
+	if stringSlicesContain(discovery.Capabilities.ClearStateTestIDs, idUnblockBadLane) {
+		t.Fatalf("clear_state_test_ids aliases unblock-bad-lane: %v", discovery.Capabilities.ClearStateTestIDs)
+	}
 	assertMissingItem(t, discovery.Items, "keel::desired-state::group::test-preconditions")
 	assertMissingItem(t, discovery.Items, "keel::desired-state::group::app-db-data-set")
 	for _, id := range []string{"keel-demo-dev::desired-state::docker-env", "keel-demo-dev::desired-state::dataset::small"} {
@@ -40,11 +50,11 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	}
 	assertMissingItem(t, discovery.Items, "keel-demo-dev::lane::go-pass")
 
-	detectOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::maintenance::detect-lanes")
+	detectOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", idDetectLanes)
 	if code != 0 {
 		t.Fatalf("detect-lanes maintenance exit = %d, want 0\n%s", code, detectOut)
 	}
-	assertRunEvent(t, decodeRunEvents(t, detectOut), "passed", "keel-demo-dev::maintenance::detect-lanes", "wrote .vscode/test-lanes.json")
+	assertRunEvent(t, decodeRunEvents(t, detectOut), "passed", idDetectLanes, "wrote .vscode/test-lanes.json")
 	assertDemoLanesFile(t, root)
 	discoveryOut, code = runDemoDev(t, root, exe, "test-bridge", "tests", "discover", "--format", "json")
 	if code != 0 {
@@ -100,6 +110,22 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	events = decodeRunEvents(t, blockedOut)
 	assertRunEvent(t, events, "failed", "keel-demo-dev::lane::go-fail", "lane blocked")
 
+	clearStateOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", testbridge.MaintenanceClearStateID)
+	if code != 0 {
+		t.Fatalf("clear-state maintenance exit = %d, want 0\n%s", code, clearStateOut)
+	}
+	clearStateEvents := decodeRunEvents(t, clearStateOut)
+	assertRunEvent(t, clearStateEvents, "passed", testbridge.MaintenanceClearStateID, "")
+	assertRunFinished(t, clearStateEvents, 0)
+	if blocked, err := blockedLane(root); err != nil || blocked != "" {
+		t.Fatalf("clear-state blocked lane = %q err=%v, want empty", blocked, err)
+	}
+	unblockedFailOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::lane::go-fail")
+	if code == 0 {
+		t.Fatalf("post-clear go-fail lane exit = 0, want non-zero\n%s", unblockedFailOut)
+	}
+	assertRunEvent(t, decodeRunEvents(t, unblockedFailOut), "failed", "keel-demo-dev::lane::go-fail", "real Go test failed")
+
 	unblockOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::maintenance::unblock-bad-lane")
 	if code != 0 {
 		t.Fatalf("unblock maintenance exit = %d, want 0\n%s", code, unblockOut)
@@ -122,7 +148,7 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 func TestKeelDemoDevDesiredStateRowsAreRunnable(t *testing.T) {
 	exe := buildDemoDev(t)
 	root := t.TempDir()
-	detectOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::maintenance::detect-lanes")
+	detectOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", idDetectLanes)
 	if code != 0 {
 		t.Fatalf("detect-lanes maintenance exit = %d, want 0\n%s", code, detectOut)
 	}
@@ -172,7 +198,7 @@ func TestKeelDemoDevDesiredStateRowsAreRunnable(t *testing.T) {
 	}
 	assertRunEvent(t, decodeRunEvents(t, out), "failed", "keel-demo-dev::desired-state::docker-env", "provision_demo_environment")
 
-	detectOut, code = runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::maintenance::detect-lanes")
+	detectOut, code = runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", idDetectLanes)
 	if code != 0 {
 		t.Fatalf("repair detect-lanes exit = %d, want 0\n%s", code, detectOut)
 	}
@@ -421,6 +447,27 @@ func assertMissingItem(t *testing.T, items []vscode.TestItem, id string) {
 			t.Fatalf("discovery item %s present before detect-lanes: %+v", id, items)
 		}
 	}
+}
+
+func stringSlicesEqual(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func stringSlicesContain(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func assertDesiredState(t *testing.T, groups []vscode.DesiredStateGroup, resource, desired, current, action string) {
