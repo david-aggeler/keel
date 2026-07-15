@@ -55,7 +55,7 @@ const (
 	idDataSetSmall     = "keel-demo-dev::desired-state::dataset::small"
 	idDataSetFull      = "keel-demo-dev::desired-state::dataset::full"
 
-	demoDataSetEmpty = "empty"
+	demoDataSetEmpty = "empty/stopped"
 	demoDataSetSmall = "small"
 	demoDataSetFull  = "full"
 )
@@ -178,7 +178,7 @@ func (b demoBridge) Discover(ctx context.Context) (vscode.DiscoveryDocument, err
 	}, nil
 }
 
-// DHF-REQ: keel/requirement-62, keel/requirement-75, keel/requirement-76
+// DHF-REQ: keel/requirement-62, keel/requirement-75, keel/requirement-76, keel/requirement-88
 func (b demoBridge) DesiredState(ctx context.Context, ids []string) (testbridge.DesiredStateDeclaration, error) {
 	root := b.workspace(ctx).Root
 	if !hasDemoLanesFile(root) || selectedDataSetRowsOnly(ids) {
@@ -208,7 +208,7 @@ func (b demoBridge) DesiredState(ctx context.Context, ids []string) (testbridge.
 				Order:             20,
 				MutuallyExclusive: true,
 				Rows: []testbridge.DesiredStateRow{
-					dataSet(idDataSetEmpty, "app-db-empty", demoDataSetEmpty, activeDataSet, "select_empty_data_set"),
+					dataSet(idDataSetEmpty, "app-db-empty-stopped", demoDataSetEmpty, activeDataSet, "select_empty_stopped_data_set"),
 					dataSet(idDataSetSmall, "app-db-small", demoDataSetSmall, activeDataSet, "reuse_small_data_set"),
 					dataSet(idDataSetFull, "app-db-full", demoDataSetFull, activeDataSet, "select_full_data_set"),
 				},
@@ -274,7 +274,7 @@ func (b demoBridge) runOne(ctx context.Context, root, id string, emit vscode.Run
 		emit(vscode.RunEvent{Event: "passed", TestID: id, Message: "unblocked demo lanes"})
 		return 0, nil
 	case idDataSetEmpty:
-		return selectDemoDataSet(root, id, demoDataSetEmpty, "select_empty_data_set selected empty data set", emit)
+		return selectDemoDataSet(root, id, demoDataSetEmpty, "select_empty_stopped_data_set selected empty/stopped data set", emit)
 	case idDataSetSmall:
 		return selectDemoDataSet(root, id, demoDataSetSmall, "reuse_small_data_set selected small data set", emit)
 	case idDataSetFull:
@@ -459,7 +459,7 @@ func writeDemoLanesFile(root string) error {
 	if err := os.MkdirAll(filepath.Dir(demoDataSetPath(root)), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(demoDataSetPath(root), []byte(demoDataSetSmall+"\n"), 0o644)
+	return nil
 }
 
 func writeDemoPrereqReady(root, resource string) error {
@@ -492,15 +492,17 @@ func selectedDataSetRowsOnly(ids []string) bool {
 func currentDemoDataSet(root string) string {
 	data, err := os.ReadFile(demoDataSetPath(root))
 	if err != nil {
-		return demoDataSetSmall
+		return ""
 	}
 	switch strings.TrimSpace(string(data)) {
 	case demoDataSetEmpty:
 		return demoDataSetEmpty
+	case demoDataSetSmall:
+		return demoDataSetSmall
 	case demoDataSetFull:
 		return demoDataSetFull
 	default:
-		return demoDataSetSmall
+		return ""
 	}
 }
 

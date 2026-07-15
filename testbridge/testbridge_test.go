@@ -414,6 +414,179 @@ func TestDiscoverDerivesDesiredStateGroupsFromProvider(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-88
+func TestExclusiveDesiredStateGroupsDeriveUnknownAndSingleActiveMember(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{{
+		ID:       "demo::desired-state",
+		Label:    "B - Desired State",
+		Kind:     "group",
+		Runnable: false,
+		Profiles: []string{},
+	}}
+	calls := map[string]int{}
+	fake.desiredGroups = []testbridge.DesiredStateGroup{{
+		Label:             "Data Set",
+		Order:             20,
+		MutuallyExclusive: true,
+		Rows: []testbridge.DesiredStateRow{
+			probedCountingRow(calls, "demo::desired-state::dataset::small", "app-db-small", "small", false, "small not active"),
+			probedCountingRow(calls, "demo::desired-state::dataset::full", "app-db-full", "full", false, "full not active"),
+		},
+	}}
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol})
+
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "discover", "--format", "json"}); err != nil {
+		t.Fatalf("discover dispatch: %v", err)
+	}
+	var discovery vscode.DiscoveryDocument
+	decodeJSON(t, &protocol, &discovery)
+	groupID := "demo::desired-state::group::data-set"
+	unknownID := groupID + "::unknown"
+	unknownItem, ok := testItemByID(discovery.Items, unknownID)
+	if !ok {
+		t.Fatalf("discovery missing bridge-synthesized Unknown State item: %+v", discovery.Items)
+	}
+	if unknownItem.ParentID != groupID || !unknownItem.Runnable || !equalStrings(unknownItem.Profiles, []string{"run"}) {
+		t.Fatalf("Unknown State discovery item = %+v, want runnable bridge-owned reset child under exclusive group", unknownItem)
+	}
+	if got := limitationValue(unknownItem.Limitations, "action"); got != "reuse" {
+		t.Fatalf("Unknown State action limitation = %q, want reuse", got)
+	}
+
+	protocol.Reset()
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "desired-state", "--format", "json"}); err != nil {
+		t.Fatalf("desired-state dispatch with no concrete satisfied: %v", err)
+	}
+	var desired vscode.DesiredStateDocument
+	decodeJSON(t, &protocol, &desired)
+	group := desiredStateGroupByLabel(t, desired.Groups, "Data Set")
+	unknown := desiredStateRowByResource(t, group.Rows, "Unknown State")
+	if !strings.HasSuffix(unknown.RunID, "::desired-state::group::data-set::unknown") || unknown.Kind != "unknown" || unknown.Desired != "unknown" || unknown.Current != "unknown" || unknown.Action != "reuse" || !unknown.Active {
+		t.Fatalf("Unknown row = %+v, want active bridge-owned reset reuse row", unknown)
+	}
+	for _, resource := range []string{"app-db-small", "app-db-full"} {
+		row := desiredStateRowByResource(t, group.Rows, resource)
+		if row.Active {
+			t.Fatalf("concrete row %s active with Unknown active: %+v", resource, group.Rows)
+		}
+	}
+
+	fake.desiredGroups[0].Rows[1] = probedCountingRow(calls, "demo::desired-state::dataset::full", "app-db-full", "full", true, "full active")
+	protocol.Reset()
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "desired-state", "--format", "json"}); err != nil {
+		t.Fatalf("desired-state dispatch with one concrete satisfied: %v", err)
+	}
+	decodeJSON(t, &protocol, &desired)
+	group = desiredStateGroupByLabel(t, desired.Groups, "Data Set")
+	if row := desiredStateRowByResource(t, group.Rows, "app-db-full"); !row.Active {
+		t.Fatalf("satisfied concrete row inactive: %+v", group.Rows)
+	}
+	if unknown := desiredStateRowByResource(t, group.Rows, "Unknown State"); unknown.Active {
+		t.Fatalf("Unknown row active while concrete satisfied: %+v", group.Rows)
+	}
+}
+
+// DHF-TEST: keel/requirement-88
+func TestExclusiveUnknownRunIsBridgeOwnedAndDoesNotInvokeConsumer(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{{
+		ID:       "demo::desired-state",
+		Label:    "B - Desired State",
+		Kind:     "group",
+		Runnable: false,
+		Profiles: []string{},
+	}}
+	fake.desiredGroups = []testbridge.DesiredStateGroup{{
+		Label:             "Data Set",
+		Order:             20,
+		MutuallyExclusive: true,
+		Rows: []testbridge.DesiredStateRow{
+			probedRow("demo::desired-state::dataset::small", "app-db-small", "fixture-data", "small", "small", true, "small active", false, true),
+			probedRow("demo::desired-state::dataset::full", "app-db-full", "fixture-data", "full", "small", false, "full inactive", false, false),
+		},
+	}}
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{
+		Root:     root,
+		Protocol: &protocol,
+		RunID:    func() string { return "run-unknown" },
+	})
+
+	unknownID := "demo::desired-state::group::data-set::unknown"
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", unknownID}); err != nil {
+		t.Fatalf("run Unknown dispatch: %v\n%s", err, protocol.String())
+	}
+	if fake.runCalls != 0 {
+		t.Fatalf("consumer Run calls = %d, want 0 for bridge-owned Unknown reset", fake.runCalls)
+	}
+	events := decodeEvents(t, protocol.String())
+	if !eventsContain(events, "passed", unknownID, "selected Unknown State") {
+		t.Fatalf("events = %+v, want passed Unknown reset event", events)
+	}
+}
+
+// DHF-TEST: keel/requirement-88
+func TestExclusiveDesiredStateSingleSelectionClearsSiblingResults(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{{
+		ID:       "demo::desired-state",
+		Label:    "B - Desired State",
+		Kind:     "group",
+		Runnable: false,
+		Profiles: []string{},
+	}}
+	fake.desiredGroups = []testbridge.DesiredStateGroup{{
+		Label:             "Data Set",
+		Order:             20,
+		MutuallyExclusive: true,
+		Rows: []testbridge.DesiredStateRow{
+			probedRow("demo::desired-state::dataset::small", "app-db-small", "fixture-data", "small", "small", true, "small active", false, true),
+			probedRow("demo::desired-state::dataset::full", "app-db-full", "fixture-data", "full", "full", true, "full active", false, true),
+		},
+	}}
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{
+		Root:     root,
+		Protocol: &protocol,
+		RunID:    func() string { return "run-exclusive" },
+	})
+
+	fullID := "demo::desired-state::dataset::full"
+	unknownID := "demo::desired-state::group::data-set::unknown"
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", fullID}); err != nil {
+		t.Fatalf("run concrete dispatch: %v\n%s", err, protocol.String())
+	}
+	events := decodeEvents(t, protocol.String())
+	if !eventsContain(events, "passed", fullID, "full active") ||
+		!eventsContain(events, "cleared", "demo::desired-state::dataset::small", "deactivated by exclusive desired-state selection") ||
+		!eventsContain(events, "cleared", unknownID, "deactivated by exclusive desired-state selection") {
+		t.Fatalf("concrete selection events = %+v, want selected pass and sibling clear events", events)
+	}
+	if eventsContain(events, "skipped", "demo::desired-state::dataset::small", "deactivated by exclusive desired-state selection") {
+		t.Fatalf("sibling deactivation must emit a cleared event, not a terminal skipped result: %+v", events)
+	}
+
+	protocol.Reset()
+	fake.runCalls = 0
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", unknownID}); err != nil {
+		t.Fatalf("run Unknown dispatch: %v\n%s", err, protocol.String())
+	}
+	if fake.runCalls != 0 {
+		t.Fatalf("consumer Run calls = %d, want 0 for bridge-owned Unknown reset", fake.runCalls)
+	}
+	events = decodeEvents(t, protocol.String())
+	if !eventsContain(events, "passed", unknownID, "selected Unknown State") ||
+		!eventsContain(events, "cleared", "demo::desired-state::dataset::small", "deactivated by exclusive desired-state selection") ||
+		!eventsContain(events, "cleared", fullID, "deactivated by exclusive desired-state selection") {
+		t.Fatalf("Unknown selection events = %+v, want Unknown pass and concrete sibling clear events", events)
+	}
+}
+
 // DHF-TEST: keel/requirement-87
 func TestDiscoverInjectsBridgeOwnedMaintenanceVocabulary(t *testing.T) {
 	root := t.TempDir()
@@ -1893,6 +2066,28 @@ func cloneDesiredStateGroups(groups []vscode.DesiredStateGroup) []vscode.Desired
 		cloned[i].Rows = append([]vscode.DesiredState(nil), cloned[i].Rows...)
 	}
 	return cloned
+}
+
+func desiredStateGroupByLabel(t *testing.T, groups []vscode.DesiredStateGroup, label string) vscode.DesiredStateGroup {
+	t.Helper()
+	for _, group := range groups {
+		if group.Label == label {
+			return group
+		}
+	}
+	t.Fatalf("missing desired-state group %q in %+v", label, groups)
+	return vscode.DesiredStateGroup{}
+}
+
+func desiredStateRowByResource(t *testing.T, rows []vscode.DesiredState, resource string) vscode.DesiredState {
+	t.Helper()
+	for _, row := range rows {
+		if row.Resource == resource {
+			return row
+		}
+	}
+	t.Fatalf("missing desired-state row %q in %+v", resource, rows)
+	return vscode.DesiredState{}
 }
 
 type fakeBridge struct {
