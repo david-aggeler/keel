@@ -39,8 +39,14 @@ func TestCommandSpecOwnsCanonicalBridgeWire(t *testing.T) {
 	}
 	var discovery vscode.DiscoveryDocument
 	decodeJSON(t, protocol, &discovery)
-	if discovery.Workspace != "consumer-node" || discovery.ModulePath != "example.dev/tool" || len(discovery.Items) != 1 {
+	if discovery.Workspace != "consumer-node" || discovery.ModulePath != "example.dev/tool" {
 		t.Fatalf("discovery = %+v, want provider document through package envelope", discovery)
+	}
+	if _, ok := testItemByID(discovery.Items, "demo::lane::fast"); !ok {
+		t.Fatalf("discovery items = %+v, want provider item retained", discovery.Items)
+	}
+	if _, ok := testItemByID(discovery.Items, testbridge.MaintenanceClearStateID); !ok {
+		t.Fatalf("discovery items = %+v, want package-owned maintenance vocabulary", discovery.Items)
 	}
 
 	protocol.Reset()
@@ -405,6 +411,82 @@ func TestDiscoverDerivesDesiredStateGroupsFromProvider(t *testing.T) {
 	}
 	if legacy, ok := testItemByID(doc.Items, "demo::desired-state::legacy-child"); ok {
 		t.Fatalf("consumer-authored B child was not replaced by bridge derivation: %+v", legacy)
+	}
+}
+
+// DHF-TEST: keel/requirement-87
+func TestDiscoverInjectsBridgeOwnedMaintenanceVocabulary(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol})
+
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "discover", "--format", "json"}); err != nil {
+		t.Fatalf("discover dispatch: %v", err)
+	}
+
+	var doc vscode.DiscoveryDocument
+	decodeJSON(t, &protocol, &doc)
+	if got, want := doc.Capabilities.ClearResultsTestIDs, []string{testbridge.MaintenanceClearResultsID}; !equalStrings(got, want) {
+		t.Fatalf("clear_results_test_ids = %v, want %v", got, want)
+	}
+	if got, want := doc.Capabilities.ClearStateTestIDs, []string{testbridge.MaintenanceClearStateID}; !equalStrings(got, want) {
+		t.Fatalf("clear_state_test_ids = %v, want %v", got, want)
+	}
+	for id, want := range map[string]struct {
+		label string
+		sort  string
+	}{
+		testbridge.MaintenanceDetectLanesID:  {label: "a.1 detect lanes", sort: "a.001"},
+		testbridge.MaintenanceUnlockID:       {label: "a.2 unlock test bridge", sort: "a.002"},
+		testbridge.MaintenanceClearResultsID: {label: "a.3 clear test results", sort: "a.003"},
+		testbridge.MaintenanceClearStateID:   {label: "a.4 clear local test state", sort: "a.004"},
+	} {
+		item, ok := testItemByID(doc.Items, id)
+		if !ok {
+			t.Fatalf("missing bridge-owned maintenance item %q", id)
+		}
+		if item.ParentID != testbridge.MaintenanceGroupID || item.Kind != "maintenance" || item.Label != want.label || item.SortText != want.sort || !item.Runnable {
+			t.Fatalf("maintenance item %q = %+v, want canonical parent label=%q sort=%q runnable", id, item, want.label, want.sort)
+		}
+	}
+}
+
+// DHF-TEST: keel/requirement-87
+func TestRunBridgeOwnedClearStateInvokesConsumerCallback(t *testing.T) {
+	root := t.TempDir()
+	statePath := filepath.Join(root, ".devtools", "consumer-state")
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(statePath, []byte("dirty\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fake := newFakeBridge(root)
+	fake.clearStatePath = statePath
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{
+		Root:     root,
+		Protocol: &protocol,
+		RunID:    func() string { return "run-clear-state" },
+	})
+
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", testbridge.MaintenanceClearStateID}); err != nil {
+		t.Fatalf("clear-state run dispatch: %v\n%s", err, protocol.String())
+	}
+
+	if fake.clearStateCalls != 1 {
+		t.Fatalf("clear-state calls = %d, want 1", fake.clearStateCalls)
+	}
+	if len(fake.runIDs) != 0 {
+		t.Fatalf("clear-state was delegated to generic runner ids=%v, want callback only", fake.runIDs)
+	}
+	if _, err := os.Stat(statePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("clear-state should remove consumer state, stat err=%v", err)
+	}
+	events := decodeEvents(t, protocol.String())
+	if !eventsContain(events, "passed", testbridge.MaintenanceClearStateID, "") || events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode != 0 {
+		t.Fatalf("clear-state events = %+v, want passed and run_finished exit 0", events)
 	}
 }
 
@@ -1824,6 +1906,8 @@ type fakeBridge struct {
 	sawRunLock              bool
 	exemptRun               bool
 	removeRunLockDuringRun  bool
+	clearStatePath          string
+	clearStateCalls         int
 	runErr                  error
 	discoverErr             error
 	desiredErr              error
@@ -2009,6 +2093,17 @@ func (f *fakeBridge) Run(_ context.Context, req testbridge.RunRequest, emit vsco
 
 func (f *fakeBridge) LockExemptRun([]string) bool {
 	return f.exemptRun
+}
+
+func (f *fakeBridge) ClearState(_ context.Context, _ testbridge.RunRequest, _ vscode.RunEventWriter) (int, error) {
+	f.clearStateCalls++
+	if f.clearStatePath == "" {
+		return 0, nil
+	}
+	if err := os.Remove(f.clearStatePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return 1, err
+	}
+	return 0, nil
 }
 
 func (f *fakeBridge) appendCall(call string) {

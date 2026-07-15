@@ -31,15 +31,12 @@ import (
 )
 
 const (
-	vscodeGroupMaintenance  = "keel::maintenance"
+	vscodeGroupMaintenance  = testbridge.MaintenanceGroupID
 	vscodeGroupDesiredState = "keel::desired-state"
 	vscodeGroupLanes        = "keel::lanes"
 	vscodeGroupFrameworks   = "keel::frameworks"
 
-	vscodeMaintenanceUnlock       = "keel::maintenance::unlock"
-	vscodeMaintenanceDetectLanes  = "keel::maintenance::detect-lanes"
-	vscodeMaintenanceClearResults = "keel::maintenance::clear-results"
-	vscodeMaintenanceClearState   = "keel::maintenance::clear-state"
+	vscodeMaintenanceDetectLanes = testbridge.MaintenanceDetectLanesID
 
 	vscodeLaneLint         = "keel::lane::lint"
 	vscodeLaneTestFast     = "keel::lane::test-fast"
@@ -216,14 +213,6 @@ func (keelTestBridge) Run(ctx context.Context, req testbridge.RunRequest, writer
 	if root == "" {
 		root = state.root
 	}
-	if len(req.IDs) == 1 && req.IDs[0] == vscodeMaintenanceUnlock {
-		exitCode, err := runVSCodeMaintenance(root, req.IDs[0])
-		if err != nil {
-			return exitCode, err
-		}
-		writer(vscode.RunEvent{Event: "passed", TestID: req.IDs[0]})
-		return exitCode, nil
-	}
 	laneID := laneForIDs(req.IDs)
 	if ready := vscode.NewEngine(newKeelWorkspaceProfile(root)).Prepare(ctx, laneID, req.IDs, writer); !ready {
 		return 1, fmt.Errorf("vscode lane blocked")
@@ -239,7 +228,15 @@ func (keelTestBridge) Run(ctx context.Context, req testbridge.RunRequest, writer
 
 // DHF-REQ: keel/requirement-63
 func (keelTestBridge) LockExemptRun(ids []string) bool {
-	return len(ids) == 1 && ids[0] == vscodeMaintenanceUnlock
+	return len(ids) == 1 && ids[0] == testbridge.MaintenanceUnlockID
+}
+
+// DHF-REQ: keel/requirement-87
+func (keelTestBridge) ClearState(_ context.Context, req testbridge.RunRequest, _ vscode.RunEventWriter) (int, error) {
+	if err := clearVSCodeDevtoolsState(req.Root); err != nil {
+		return 1, err
+	}
+	return 0, nil
 }
 
 // DHF-REQ: keel/requirement-63
@@ -260,14 +257,9 @@ func (keelTestBridge) Metadata() vscode.DevtoolMetadata {
 // DHF-REQ: keel/requirement-39, keel/requirement-43, keel/requirement-46, keel/requirement-48, keel/requirement-51, keel/requirement-65, keel/requirement-69
 func buildVSCodeDiscovery(root string) (vscode.DiscoveryDocument, error) {
 	items := []vscode.TestItem{
-		groupItem(vscodeGroupMaintenance, "", "A - Test Bridge Maintenance", "a"),
 		groupItem(vscodeGroupDesiredState, "", "B - Desired State", "b"),
 		groupItem(vscodeGroupLanes, "", "C - Lanes", "c"),
 		groupItem(vscodeGroupFrameworks, "", "D - Frameworks", "d"),
-		maintenanceItem(vscodeMaintenanceDetectLanes, "a.1 detect lanes", ordinalSortText("a.1")),
-		maintenanceItem(vscodeMaintenanceUnlock, "a.2 unlock test bridge", ordinalSortText("a.2")),
-		maintenanceItem(vscodeMaintenanceClearResults, "a.3 clear test results", ordinalSortText("a.3")),
-		maintenanceItem(vscodeMaintenanceClearState, "a.4 clear local test state", ordinalSortText("a.4")),
 	}
 	goItems, err := discoverGoTestItems(context.Background(), root)
 	if err != nil {
@@ -293,8 +285,6 @@ func buildVSCodeDiscovery(root string) (vscode.DiscoveryDocument, error) {
 			ClearResults:              true,
 			RefreshInvalidatesResults: true,
 			NeutralParentRollups:      true,
-			ClearResultsTestIDs:       []string{vscodeMaintenanceClearResults},
-			ClearStateTestIDs:         []string{vscodeMaintenanceClearState},
 		},
 		Items: items,
 	}, nil
@@ -309,21 +299,6 @@ func groupItem(id, parentID, label, sortText string) vscode.TestItem {
 		Kind:     "group",
 		Runnable: false,
 		Profiles: []string{},
-	}
-}
-
-func maintenanceItem(id, label, sortText string) vscode.TestItem {
-	return vscode.TestItem{
-		ID:          id,
-		ParentID:    vscodeGroupMaintenance,
-		Label:       label,
-		SortText:    sortText,
-		Kind:        "maintenance",
-		Framework:   "keel",
-		Runner:      "keel-dev",
-		RunnerLabel: "keel-dev",
-		Runnable:    true,
-		Profiles:    []string{"run"},
 	}
 }
 
@@ -1790,25 +1765,14 @@ func emitLaneGoPackageEvents(raw, modulePath string, writer vscode.RunEventWrite
 	}
 }
 
-// DHF-REQ: keel/requirement-47
+// DHF-REQ: keel/requirement-65
 func runVSCodeMaintenance(root, id string) (int, error) {
 	switch id {
 	case vscodeMaintenanceDetectLanes:
 		return 2, cli.NewUsageError("detect lanes maintenance requires run-event writer")
-	case vscodeMaintenanceUnlock:
-		if err := os.Remove(testbridge.RunLockPath(root)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return 1, err
-		}
-	case vscodeMaintenanceClearResults:
-		return 0, nil
-	case vscodeMaintenanceClearState:
-		if err := clearVSCodeDevtoolsState(root); err != nil {
-			return 1, err
-		}
 	default:
 		return 2, cli.NewUsageError("unknown vscode maintenance id %q", id)
 	}
-	return 0, nil
 }
 
 // DHF-REQ: keel/requirement-65
