@@ -161,6 +161,7 @@ func TestKeelDemoDevDesiredStateRowsAreRunnable(t *testing.T) {
 	}{
 		{id: "keel-demo-dev::desired-state::docker-env", code: 0, event: "passed", message: "provision_demo_environment"},
 		{id: "keel-demo-dev::desired-state::dataset::small", code: 0, event: "passed", message: "reuse_small_data_set"},
+		{id: "keel-demo-dev::desired-state::dataset::empty", code: 0, event: "passed", message: "select_empty_stopped_data_set"},
 	}
 	for _, tc := range cases {
 		out, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", tc.id)
@@ -169,8 +170,12 @@ func TestKeelDemoDevDesiredStateRowsAreRunnable(t *testing.T) {
 		}
 		assertRunEvent(t, decodeRunEvents(t, out), tc.event, tc.id, tc.message)
 	}
+	out, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::desired-state::dataset::small")
+	if code != 0 {
+		t.Fatalf("reset data-set small exit = %d, want 0\n%s", code, out)
+	}
 
-	out, code := runDemoDev(t, root, exe,
+	out, code = runDemoDev(t, root, exe,
 		"test-bridge", "tests", "run",
 		"--id", "keel-demo-dev::desired-state::docker-env",
 		"--id", "keel-demo-dev::desired-state::dataset::small",
@@ -181,6 +186,24 @@ func TestKeelDemoDevDesiredStateRowsAreRunnable(t *testing.T) {
 	events := decodeRunEvents(t, out)
 	assertRunEvent(t, events, "passed", "keel-demo-dev::desired-state::docker-env", "provision_demo_environment")
 	assertRunEvent(t, events, "passed", "keel-demo-dev::desired-state::dataset::small", "reuse_small_data_set")
+
+	beforeReset, err := os.ReadFile(demoDataSetPath(root))
+	if err != nil {
+		t.Fatalf("read selected data set before Unknown reset: %v", err)
+	}
+	unknownID := exclusiveUnknownID(t, root)
+	out, code = runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", unknownID)
+	if code != 0 {
+		t.Fatalf("Unknown reset row exit = %d, want 0\n%s", code, out)
+	}
+	assertRunEvent(t, decodeRunEvents(t, out), "passed", unknownID, "selected Unknown State")
+	afterReset, err := os.ReadFile(demoDataSetPath(root))
+	if err != nil {
+		t.Fatalf("read selected data set after Unknown reset: %v", err)
+	}
+	if !bytes.Equal(afterReset, beforeReset) {
+		t.Fatalf("Unknown reset mutated data-set state: before %q after %q", beforeReset, afterReset)
+	}
 
 	out, code = runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel::desired-state::group::test-preconditions")
 	if code != 0 {
@@ -489,6 +512,17 @@ func assertDesiredState(t *testing.T, groups []vscode.DesiredStateGroup, resourc
 	t.Fatalf("missing desired-state row %s in %+v", resource, groups)
 }
 
+func desiredStateRowByResource(t *testing.T, rows []vscode.DesiredState, resource string) vscode.DesiredState {
+	t.Helper()
+	for _, row := range rows {
+		if row.Resource == resource {
+			return row
+		}
+	}
+	t.Fatalf("missing desired-state row %s in %+v", resource, rows)
+	return vscode.DesiredState{}
+}
+
 func assertExclusiveDataSetGroup(t *testing.T, groups []vscode.DesiredStateGroup) {
 	t.Helper()
 	for _, group := range groups {
@@ -499,7 +533,7 @@ func assertExclusiveDataSetGroup(t *testing.T, groups []vscode.DesiredStateGroup
 			t.Fatalf("data-set group is not mutually exclusive: %+v", group)
 		}
 		active := 0
-		want := map[string]bool{"app-db-empty": false, "app-db-small": false, "app-db-full": false}
+		want := map[string]bool{"app-db-empty-stopped": false, "app-db-small": false, "app-db-full": false, "Unknown State": false}
 		for _, row := range group.Rows {
 			if _, ok := want[row.Resource]; ok {
 				want[row.Resource] = true
@@ -508,7 +542,7 @@ func assertExclusiveDataSetGroup(t *testing.T, groups []vscode.DesiredStateGroup
 				active++
 			}
 			wantAction := "reconcile_during_run"
-			if row.Resource == "app-db-small" {
+			if row.Resource == "Unknown State" {
 				wantAction = "reuse"
 			}
 			if row.RunID == "" || row.Action != wantAction {
@@ -523,9 +557,29 @@ func assertExclusiveDataSetGroup(t *testing.T, groups []vscode.DesiredStateGroup
 				t.Fatalf("data-set group missing %s: %+v", resource, group.Rows)
 			}
 		}
+		if row := desiredStateRowByResource(t, group.Rows, "Unknown State"); !row.Active {
+			t.Fatalf("Unknown State row inactive in default demo data-set group: %+v", group.Rows)
+		}
 		return
 	}
 	t.Fatalf("missing app-db data set group in %+v", groups)
+}
+
+func exclusiveUnknownID(t *testing.T, root string) string {
+	t.Helper()
+	out, err := dispatchDemoBridge(t, root, "test-bridge", "tests", "discover", "--format", "json")
+	if err != nil {
+		t.Fatalf("discover for Unknown ID: %v", err)
+	}
+	var discovery vscode.DiscoveryDocument
+	decodeJSON(t, out, &discovery)
+	for _, item := range discovery.Items {
+		if item.Label == "Unknown State: unknown" {
+			return item.ID
+		}
+	}
+	t.Fatalf("missing Unknown State discovery item in %+v", discovery.Items)
+	return ""
 }
 
 func assertDemoLanesFile(t *testing.T, root string) {

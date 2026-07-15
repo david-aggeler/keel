@@ -112,6 +112,12 @@ type DesiredStateProbeResult struct {
 	Message   string
 }
 
+const (
+	exclusiveUnknownResource = "Unknown State"
+	exclusiveUnknownKind     = "unknown"
+	exclusiveUnknownValue    = "unknown"
+)
+
 // Runner executes a selected run and emits run events through the package-owned
 // writer.
 type Runner interface {
@@ -389,13 +395,17 @@ func desiredStateDiagnosticItem(parentID string, err error) vscode.TestItem {
 	}
 }
 
-// DHF-REQ: keel/requirement-75, keel/requirement-83
+// DHF-REQ: keel/requirement-75, keel/requirement-83, keel/requirement-88
 func desiredStateDeclarationDiscoveryItems(ctx context.Context, root, parentID string, groups []DesiredStateGroup) ([]vscode.TestItem, error) {
 	groups = append([]DesiredStateGroup(nil), groups...)
 	sort.SliceStable(groups, func(i, j int) bool { return groups[i].Order < groups[j].Order })
 	items := make([]vscode.TestItem, 0)
 	for _, group := range groups {
 		groupID := parentID + "::group::" + stableIDSegment(group.Label)
+		derivedRows, err := deriveDesiredStateGroupRows(ctx, root, parentID, group)
+		if err != nil {
+			return nil, err
+		}
 		runnable := !group.MutuallyExclusive && desiredStateGroupHasRunnableRows(group)
 		profiles := []string{}
 		if runnable {
@@ -412,12 +422,8 @@ func desiredStateDeclarationDiscoveryItems(ctx context.Context, root, parentID s
 			Limitations: []string{fmt.Sprintf("mutually_exclusive=%t", group.MutuallyExclusive)},
 		}
 		items = append(items, groupItem)
-		for rowIndex, row := range group.Rows {
-			derived, err := deriveDesiredStateRow(ctx, root, row)
-			if err != nil {
-				return nil, err
-			}
-			items = append(items, desiredStateDeclarationDiscoveryItem(groupID, groupItem.SortText, rowIndex+1, row, derived))
+		for rowIndex, row := range derivedRows {
+			items = append(items, desiredStateDeclarationDiscoveryItem(groupID, groupItem.SortText, rowIndex+1, row.Declaration, row.State))
 		}
 	}
 	return items, nil
@@ -450,7 +456,7 @@ func desiredStateDeclarationDiscoveryItem(parentID, parentSort string, rowIndex 
 		Kind:        "group",
 		Runnable:    row.RunID != "",
 		Profiles:    profiles,
-		Limitations: []string{"current=" + derived.Current, "action=" + action, fmt.Sprintf("active=%t", row.Active)},
+		Limitations: []string{"current=" + derived.Current, "action=" + action, fmt.Sprintf("active=%t", derived.Active)},
 	}
 }
 
@@ -489,7 +495,7 @@ func handleDesiredState(bridge Bridge) cli.Handler {
 	}
 }
 
-// DHF-REQ: keel/requirement-75
+// DHF-REQ: keel/requirement-75, keel/requirement-88
 // DHF-REQ: keel/requirement-84
 func deriveDesiredStateDeclaration(ctx context.Context, bridge Bridge, ids []string) (vscode.DesiredStateDocument, error) {
 	var err error
@@ -505,13 +511,13 @@ func deriveDesiredStateDeclaration(ctx context.Context, bridge Bridge, ids []str
 	root := runtimeRoot(rt, bridge)
 	groups := make([]vscode.DesiredStateGroup, 0, len(declared.Groups))
 	for _, group := range declared.Groups {
-		rows := make([]vscode.DesiredState, 0, len(group.Rows))
-		for _, row := range group.Rows {
-			derived, err := deriveDesiredStateRow(ctx, root, row)
-			if err != nil {
-				return vscode.DesiredStateDocument{}, err
-			}
-			rows = append(rows, derived)
+		derivedRows, err := deriveDesiredStateGroupRows(ctx, root, desiredStateRootID(bridge), group)
+		if err != nil {
+			return vscode.DesiredStateDocument{}, err
+		}
+		rows := make([]vscode.DesiredState, 0, len(derivedRows))
+		for _, row := range derivedRows {
+			rows = append(rows, row.State)
 		}
 		groups = append(groups, vscode.DesiredStateGroup{
 			Label:             group.Label,
@@ -587,6 +593,91 @@ func hasDesiredStateGroupSelection(ids []string) bool {
 		}
 	}
 	return false
+}
+
+type derivedDesiredStateRow struct {
+	Declaration DesiredStateRow
+	State       vscode.DesiredState
+}
+
+// DHF-REQ: keel/requirement-88
+func deriveDesiredStateGroupRows(ctx context.Context, root, parentID string, group DesiredStateGroup) ([]derivedDesiredStateRow, error) {
+	rows := make([]derivedDesiredStateRow, 0, len(group.Rows)+1)
+	satisfied := make([]int, 0, len(group.Rows))
+	for _, row := range group.Rows {
+		derived, err := deriveDesiredStateRow(ctx, root, row)
+		if err != nil {
+			return nil, err
+		}
+		if group.MutuallyExclusive && derived.Status == "satisfied" {
+			satisfied = append(satisfied, len(rows))
+		}
+		rows = append(rows, derivedDesiredStateRow{Declaration: row, State: derived})
+	}
+	if !group.MutuallyExclusive {
+		return rows, nil
+	}
+	for i := range rows {
+		rows[i].State.Active = false
+	}
+	unknownActive := len(satisfied) == 0
+	if len(satisfied) == 1 {
+		rows[satisfied[0]].State.Active = true
+	} else if len(satisfied) > 1 {
+		for _, index := range satisfied {
+			rows[index].State.Active = true
+		}
+	}
+	unknown := exclusiveUnknownState(parentID, group.Label, unknownActive)
+	rows = append(rows, derivedDesiredStateRow{
+		Declaration: DesiredStateRow{
+			RunID:    unknown.RunID,
+			Resource: unknown.Resource,
+			Kind:     unknown.Kind,
+			Desired:  unknown.Desired,
+			Reusable: unknown.Reusable,
+			Owned:    unknown.Owned,
+			Active:   unknown.Active,
+		},
+		State: unknown,
+	})
+	return rows, nil
+}
+
+func exclusiveUnknownState(parentID, groupLabel string, active bool) vscode.DesiredState {
+	message := "no concrete alternative is active"
+	if !active {
+		message = "a concrete alternative is active"
+	}
+	return vscode.DesiredState{
+		RunID:    exclusiveUnknownRunID(parentID, groupLabel),
+		Resource: exclusiveUnknownResource,
+		Kind:     exclusiveUnknownKind,
+		Desired:  exclusiveUnknownValue,
+		Current:  exclusiveUnknownValue,
+		Status:   "satisfied",
+		Action:   "reuse",
+		Message:  message,
+		Reusable: true,
+		Owned:    false,
+		Active:   active,
+	}
+}
+
+func exclusiveUnknownRunID(parentID, groupLabel string) string {
+	return parentID + "::group::" + stableIDSegment(groupLabel) + "::unknown"
+}
+
+func desiredStateRootID(bridge Bridge) string {
+	node := bridge.Workspace().Node
+	if node == "" {
+		node = "keel"
+	}
+	return node + "::desired-state"
+}
+
+func isExclusiveUnknownRunID(id string) bool {
+	return strings.Contains(id, "::desired-state::group::") && strings.HasSuffix(id, "::unknown")
 }
 
 func deriveDesiredStateRow(ctx context.Context, root string, row DesiredStateRow) (vscode.DesiredState, error) {
@@ -694,7 +785,7 @@ func bridgeLockExempt(bridge Bridge, ids []string) bool {
 	return ok && locker.LockExemptRun(ids)
 }
 
-// DHF-REQ: keel/requirement-75
+// DHF-REQ: keel/requirement-75, keel/requirement-88
 func runDesiredStateSelections(ctx context.Context, bridge Bridge, requests []runResolution, writer vscode.RunEventWriter) (int, []runResolution, error) {
 	ids := runResolutionIDs(requests)
 	declared, err := bridge.DesiredState(ctx, ids)
@@ -707,6 +798,11 @@ func runDesiredStateSelections(ctx context.Context, bridge Bridge, requests []ru
 	exitCode := 0
 	for _, request := range requests {
 		id := request.Request.ID
+		if isExclusiveUnknownRunID(id) {
+			writer(vscode.RunEvent{Event: "test_started", TestID: id})
+			writer(vscode.RunEvent{Event: "passed", TestID: id, Message: "selected Unknown State without running consumer reconcile"})
+			continue
+		}
 		row, ok := rows[id]
 		if !ok {
 			remaining = append(remaining, request)
