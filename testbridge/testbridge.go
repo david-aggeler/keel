@@ -362,7 +362,7 @@ func desiredStateDeclarationDiscoveryItem(parentID, parentSort string, rowIndex 
 	action := derived.Action
 	id := row.RunID
 	if id == "" {
-		id = parentID + "::row::" + stableIDSegment(strings.Join([]string{row.Resource, row.Desired, action}, "-"))
+		id = parentID + "::row::" + stableIDSegment(strings.Join([]string{row.Resource, row.Kind, row.Desired, row.Detail}, "-"))
 	}
 	profiles := []string{}
 	if row.RunID != "" {
