@@ -801,6 +801,7 @@ func runDesiredStateSelections(ctx context.Context, bridge Bridge, requests []ru
 		if isExclusiveUnknownRunID(id) {
 			writer(vscode.RunEvent{Event: "test_started", TestID: id})
 			writer(vscode.RunEvent{Event: "passed", TestID: id, Message: "selected Unknown State without running consumer reconcile"})
+			emitExclusiveDesiredStateSiblingClears(request.ExclusiveSiblingIDs, writer)
 			continue
 		}
 		row, ok := rows[id]
@@ -815,6 +816,7 @@ func runDesiredStateSelections(ctx context.Context, bridge Bridge, requests []ru
 		writer(vscode.RunEvent{Event: "test_started", TestID: id})
 		if derived.Status == "satisfied" {
 			writer(vscode.RunEvent{Event: "passed", TestID: id, Message: derived.Message})
+			emitExclusiveDesiredStateSiblingClears(request.ExclusiveSiblingIDs, writer)
 			continue
 		}
 		writer(vscode.RunEvent{Event: "failed", TestID: id, Message: derived.Message})
@@ -824,6 +826,16 @@ func runDesiredStateSelections(ctx context.Context, bridge Bridge, requests []ru
 		return exitCode, remaining, fmt.Errorf("desired-state row failed")
 	}
 	return exitCode, remaining, nil
+}
+
+func emitExclusiveDesiredStateSiblingClears(ids []string, writer vscode.RunEventWriter) {
+	for _, id := range ids {
+		writer(vscode.RunEvent{
+			Event:   "skipped",
+			TestID:  id,
+			Message: "deactivated by exclusive desired-state selection",
+		})
+	}
 }
 
 // DHF-REQ: keel/requirement-86
@@ -999,14 +1011,15 @@ func resolveRunRequests(ctx context.Context, bridge Bridge, ids []string, strict
 		if !target.Runnable && (strict || item.CanonicalID != "") {
 			return nil, cli.NewUsageError("test id %q resolves to non-runnable id %q", id, targetID)
 		}
-		appendResolved(runResolution{Request: runRequestForTestItem(target)})
+		appendResolved(runResolution{Request: runRequestForTestItem(target), ExclusiveSiblingIDs: exclusiveDesiredStateSiblingIDs(doc.Items, target)})
 	}
 	return resolved, nil
 }
 
 type runResolution struct {
-	Request            vscode.RunRequest
-	ExpandedGroupChild bool
+	Request             vscode.RunRequest
+	ExpandedGroupChild  bool
+	ExclusiveSiblingIDs []string
 }
 
 func desiredStateGroupItem(item vscode.TestItem) bool {
@@ -1041,6 +1054,42 @@ func runnableDesiredStateGroupChildren(items []vscode.TestItem, groupID string) 
 		}
 	}
 	return children
+}
+
+func exclusiveDesiredStateSiblingIDs(items []vscode.TestItem, selected vscode.TestItem) []string {
+	if selected.ParentID == "" {
+		return nil
+	}
+	parent, ok := testItemByID(items, selected.ParentID)
+	if !ok || !desiredStateGroupItem(parent) || !hasLimitation(parent.Limitations, "mutually_exclusive=true") {
+		return nil
+	}
+	siblings := make([]string, 0)
+	for _, item := range items {
+		if item.ParentID != selected.ParentID || item.ID == selected.ID || !item.Runnable {
+			continue
+		}
+		siblings = append(siblings, item.ID)
+	}
+	return siblings
+}
+
+func testItemByID(items []vscode.TestItem, id string) (vscode.TestItem, bool) {
+	for _, item := range items {
+		if item.ID == id {
+			return item, true
+		}
+	}
+	return vscode.TestItem{}, false
+}
+
+func hasLimitation(limitations []string, limitation string) bool {
+	for _, got := range limitations {
+		if got == limitation {
+			return true
+		}
+	}
+	return false
 }
 
 func runnableDescendantLeafItems(items []vscode.TestItem, groupID string) []vscode.TestItem {
