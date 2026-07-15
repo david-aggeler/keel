@@ -610,7 +610,7 @@ func parseRunArgs(args []string) ([]string, bool, error) {
 	return ids, dryRun, nil
 }
 
-// DHF-REQ: keel/requirement-58, keel/requirement-72
+// DHF-REQ: keel/requirement-58, keel/requirement-72, keel/requirement-84
 func resolveRunRequests(ctx context.Context, bridge Bridge, ids []string, strict bool) ([]vscode.RunRequest, error) {
 	doc, err := discoverWithDerivedDesiredState(ctx, bridge)
 	if err != nil {
@@ -621,11 +621,19 @@ func resolveRunRequests(ctx context.Context, bridge Bridge, ids []string, strict
 		items[item.ID] = item
 	}
 	resolved := make([]vscode.RunRequest, 0, len(ids))
+	resolvedIDs := map[string]struct{}{}
+	appendResolved := func(request vscode.RunRequest) {
+		if _, ok := resolvedIDs[request.ID]; ok {
+			return
+		}
+		resolvedIDs[request.ID] = struct{}{}
+		resolved = append(resolved, request)
+	}
 	for _, id := range ids {
 		item, ok := items[id]
 		if !ok {
 			if !strict {
-				resolved = append(resolved, vscode.RunRequest{ID: id, Label: id})
+				appendResolved(vscode.RunRequest{ID: id, Label: id})
 				continue
 			}
 			return nil, cli.NewUsageError("unknown test id %q", id)
@@ -638,16 +646,52 @@ func resolveRunRequests(ctx context.Context, bridge Bridge, ids []string, strict
 		if !ok {
 			return nil, cli.NewUsageError("test id %q resolves to unknown canonical id %q", id, targetID)
 		}
+		if desiredStateGroupItem(target) {
+			children := runnableDesiredStateGroupChildren(doc.Items, targetID)
+			if len(children) == 0 {
+				return nil, cli.NewUsageError("desired-state group %q has no runnable rows", targetID)
+			}
+			if !target.Runnable {
+				return nil, cli.NewUsageError("test id %q resolves to non-runnable desired-state group %q", id, targetID)
+			}
+			for _, child := range children {
+				appendResolved(runRequestForTestItem(child))
+			}
+			continue
+		}
 		if !target.Runnable && (strict || item.CanonicalID != "") {
 			return nil, cli.NewUsageError("test id %q resolves to non-runnable id %q", id, targetID)
 		}
-		label := target.Label
-		if label == "" {
-			label = targetID
-		}
-		resolved = append(resolved, vscode.RunRequest{ID: targetID, Label: label})
+		appendResolved(runRequestForTestItem(target))
 	}
 	return resolved, nil
+}
+
+func desiredStateGroupItem(item vscode.TestItem) bool {
+	for _, limitation := range item.Limitations {
+		if strings.HasPrefix(limitation, "mutually_exclusive=") {
+			return true
+		}
+	}
+	return false
+}
+
+func runnableDesiredStateGroupChildren(items []vscode.TestItem, groupID string) []vscode.TestItem {
+	children := make([]vscode.TestItem, 0)
+	for _, item := range items {
+		if item.ParentID == groupID && item.Runnable {
+			children = append(children, item)
+		}
+	}
+	return children
+}
+
+func runRequestForTestItem(item vscode.TestItem) vscode.RunRequest {
+	label := item.Label
+	if label == "" {
+		label = item.ID
+	}
+	return vscode.RunRequest{ID: item.ID, Label: label}
 }
 
 func handleConfigInit(bridge Bridge) cli.Handler {
