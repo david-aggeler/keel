@@ -232,7 +232,7 @@ func discoverWithDerivedDesiredState(ctx context.Context, bridge Bridge) (vscode
 	return deriveDesiredStateDiscovery(ctx, bridge, doc)
 }
 
-// DHF-REQ: keel/requirement-74
+// DHF-REQ: keel/requirement-74, keel/requirement-83
 func deriveDesiredStateDiscovery(ctx context.Context, bridge Bridge, doc vscode.DiscoveryDocument) (vscode.DiscoveryDocument, error) {
 	parent, ok := desiredStateParent(doc.Items)
 	if !ok {
@@ -310,20 +310,26 @@ func desiredStateDiagnosticItem(parentID string, err error) vscode.TestItem {
 	}
 }
 
+// DHF-REQ: keel/requirement-83
 func desiredStateDeclarationDiscoveryItems(parentID string, groups []DesiredStateGroup) []vscode.TestItem {
 	groups = append([]DesiredStateGroup(nil), groups...)
 	sort.SliceStable(groups, func(i, j int) bool { return groups[i].Order < groups[j].Order })
 	items := make([]vscode.TestItem, 0)
 	for _, group := range groups {
 		groupID := parentID + "::group::" + stableIDSegment(group.Label)
+		runnable := !group.MutuallyExclusive && desiredStateGroupHasRunnableRows(group)
+		profiles := []string{}
+		if runnable {
+			profiles = []string{"run"}
+		}
 		groupItem := vscode.TestItem{
 			ID:          groupID,
 			ParentID:    parentID,
 			Label:       group.Label,
 			SortText:    fmt.Sprintf("b.%03d", group.Order),
 			Kind:        "group",
-			Runnable:    false,
-			Profiles:    []string{},
+			Runnable:    runnable,
+			Profiles:    profiles,
 			Limitations: []string{fmt.Sprintf("mutually_exclusive=%t", group.MutuallyExclusive)},
 		}
 		items = append(items, groupItem)
@@ -332,6 +338,15 @@ func desiredStateDeclarationDiscoveryItems(parentID string, groups []DesiredStat
 		}
 	}
 	return items
+}
+
+func desiredStateGroupHasRunnableRows(group DesiredStateGroup) bool {
+	for _, row := range group.Rows {
+		if row.RunID != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func desiredStateDeclarationDiscoveryItem(parentID, parentSort string, rowIndex int, row DesiredStateRow) vscode.TestItem {
@@ -395,7 +410,13 @@ func handleDesiredState(bridge Bridge) cli.Handler {
 }
 
 // DHF-REQ: keel/requirement-75
+// DHF-REQ: keel/requirement-84
 func deriveDesiredStateDeclaration(ctx context.Context, bridge Bridge, ids []string) (vscode.DesiredStateDocument, error) {
+	var err error
+	ids, err = resolveDesiredStateSelectionIDs(ctx, bridge, ids)
+	if err != nil {
+		return vscode.DesiredStateDocument{}, err
+	}
 	declared, err := bridge.DesiredState(ctx, ids)
 	if err != nil {
 		return vscode.DesiredStateDocument{}, err
@@ -427,6 +448,65 @@ func deriveDesiredStateDeclaration(ctx context.Context, bridge Bridge, ids []str
 		Groups:         groups,
 		TeardownPolicy: declared.TeardownPolicy,
 	}, nil
+}
+
+func resolveDesiredStateSelectionIDs(ctx context.Context, bridge Bridge, ids []string) ([]string, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	if !hasDesiredStateGroupSelection(ids) {
+		return ids, nil
+	}
+	doc, err := discoverWithDerivedDesiredState(ctx, bridge)
+	if err != nil {
+		return nil, err
+	}
+	items := make(map[string]vscode.TestItem, len(doc.Items))
+	for _, item := range doc.Items {
+		items[item.ID] = item
+	}
+	resolved := make([]string, 0, len(ids))
+	seen := map[string]struct{}{}
+	appendID := func(id string) {
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		resolved = append(resolved, id)
+	}
+	for _, id := range ids {
+		item, ok := items[id]
+		if !ok {
+			appendID(id)
+			continue
+		}
+		targetID := item.ID
+		if item.CanonicalID != "" {
+			targetID = item.CanonicalID
+		}
+		target, ok := items[targetID]
+		if !ok {
+			appendID(targetID)
+			continue
+		}
+		if !desiredStateGroupItem(target) {
+			appendID(targetID)
+			continue
+		}
+		for _, child := range runnableDesiredStateGroupChildren(doc.Items, targetID) {
+			appendID(child.ID)
+		}
+	}
+	return resolved, nil
+}
+
+func hasDesiredStateGroupSelection(ids []string) bool {
+	for _, id := range ids {
+		if strings.Contains(id, "::group::") {
+			return true
+		}
+	}
+	return false
 }
 
 func deriveDesiredStateRow(ctx context.Context, root string, row DesiredStateRow) (vscode.DesiredState, error) {
@@ -597,6 +677,7 @@ func parseRunArgs(args []string) ([]string, bool, error) {
 }
 
 // DHF-REQ: keel/requirement-58, keel/requirement-72
+// DHF-REQ: keel/requirement-84
 func resolveRunRequests(ctx context.Context, bridge Bridge, ids []string, strict bool) ([]vscode.RunRequest, error) {
 	doc, err := discoverWithDerivedDesiredState(ctx, bridge)
 	if err != nil {
@@ -607,11 +688,19 @@ func resolveRunRequests(ctx context.Context, bridge Bridge, ids []string, strict
 		items[item.ID] = item
 	}
 	resolved := make([]vscode.RunRequest, 0, len(ids))
+	resolvedIDs := map[string]struct{}{}
+	appendResolved := func(request vscode.RunRequest) {
+		if _, ok := resolvedIDs[request.ID]; ok {
+			return
+		}
+		resolvedIDs[request.ID] = struct{}{}
+		resolved = append(resolved, request)
+	}
 	for _, id := range ids {
 		item, ok := items[id]
 		if !ok {
 			if !strict {
-				resolved = append(resolved, vscode.RunRequest{ID: id, Label: id})
+				appendResolved(vscode.RunRequest{ID: id, Label: id})
 				continue
 			}
 			return nil, cli.NewUsageError("unknown test id %q", id)
@@ -624,16 +713,55 @@ func resolveRunRequests(ctx context.Context, bridge Bridge, ids []string, strict
 		if !ok {
 			return nil, cli.NewUsageError("test id %q resolves to unknown canonical id %q", id, targetID)
 		}
+		if desiredStateGroupItem(target) {
+			children := runnableDesiredStateGroupChildren(doc.Items, targetID)
+			if len(children) == 0 {
+				return nil, cli.NewUsageError("desired-state group %q has no runnable rows", targetID)
+			}
+			if !target.Runnable {
+				return nil, cli.NewUsageError("test id %q resolves to non-runnable desired-state group %q", id, targetID)
+			}
+			for _, child := range children {
+				appendResolved(runRequestForTestItem(child))
+			}
+			continue
+		}
 		if !target.Runnable && (strict || item.CanonicalID != "") {
 			return nil, cli.NewUsageError("test id %q resolves to non-runnable id %q", id, targetID)
 		}
-		label := target.Label
-		if label == "" {
-			label = targetID
-		}
-		resolved = append(resolved, vscode.RunRequest{ID: targetID, Label: label})
+		appendResolved(runRequestForTestItem(target))
 	}
 	return resolved, nil
+}
+
+func desiredStateGroupItem(item vscode.TestItem) bool {
+	if item.Kind != "group" || item.ParentID == "" || !strings.HasPrefix(item.ID, item.ParentID+"::group::") {
+		return false
+	}
+	for _, limitation := range item.Limitations {
+		if limitation == "mutually_exclusive=true" || limitation == "mutually_exclusive=false" {
+			return true
+		}
+	}
+	return false
+}
+
+func runnableDesiredStateGroupChildren(items []vscode.TestItem, groupID string) []vscode.TestItem {
+	children := make([]vscode.TestItem, 0)
+	for _, item := range items {
+		if item.ParentID == groupID && item.Runnable {
+			children = append(children, item)
+		}
+	}
+	return children
+}
+
+func runRequestForTestItem(item vscode.TestItem) vscode.RunRequest {
+	label := item.Label
+	if label == "" {
+		label = item.ID
+	}
+	return vscode.RunRequest{ID: item.ID, Label: label}
 }
 
 func handleConfigInit(bridge Bridge) cli.Handler {

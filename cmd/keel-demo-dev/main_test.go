@@ -15,7 +15,7 @@ import (
 	"github.com/david-aggeler/keel/vscode"
 )
 
-// DHF-TEST: keel/requirement-62, keel/requirement-74, keel/requirement-75, keel/requirement-76
+// DHF-TEST: keel/requirement-62, keel/requirement-74, keel/requirement-75, keel/requirement-76, keel/requirement-83
 func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	exe := buildDemoDev(t)
 	root := t.TempDir()
@@ -56,7 +56,7 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	assertItem(t, discovery.Items, "keel-demo-dev::lane::fake-smoke", "lane", true)
 	assertItem(t, discovery.Items, "go::test::passing::TestReferencePass", "test", true)
 	assertItem(t, discovery.Items, "go::test::failing::TestReferenceFailure", "test", true)
-	assertItem(t, discovery.Items, "keel::desired-state::group::test-preconditions", "group", false)
+	assertItem(t, discovery.Items, "keel::desired-state::group::test-preconditions", "group", true)
 	dataSetGroup := assertItem(t, discovery.Items, "keel::desired-state::group::app-db-data-set", "group", false)
 	if dataSetGroup.SortText != "b.020" || !strings.Contains(strings.Join(dataSetGroup.Limitations, " "), "mutually_exclusive=true") {
 		t.Fatalf("data-set discovery group = %+v, want order and exclusivity surfaced", dataSetGroup)
@@ -118,7 +118,7 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-62, keel/requirement-75, keel/requirement-76
+// DHF-TEST: keel/requirement-62, keel/requirement-75, keel/requirement-76, keel/requirement-84
 func TestKeelDemoDevDesiredStateRowsAreRunnable(t *testing.T) {
 	exe := buildDemoDev(t)
 	root := t.TempDir()
@@ -155,6 +155,13 @@ func TestKeelDemoDevDesiredStateRowsAreRunnable(t *testing.T) {
 	events := decodeRunEvents(t, out)
 	assertRunEvent(t, events, "passed", "keel-demo-dev::desired-state::docker-env", "provision_demo_environment")
 	assertRunEvent(t, events, "passed", "keel-demo-dev::desired-state::dataset::small", "reuse_small_data_set")
+
+	out, code = runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel::desired-state::group::test-preconditions")
+	if code != 0 {
+		t.Fatalf("desired-state group exit = %d, want 0\n%s", code, out)
+	}
+	events = decodeRunEvents(t, out)
+	assertRunEvent(t, events, "passed", "keel-demo-dev::desired-state::docker-env", "provision_demo_environment")
 
 	if err := os.Remove(demoReadyPath(root, "docker-env")); err != nil {
 		t.Fatal(err)
