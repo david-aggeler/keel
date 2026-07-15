@@ -232,7 +232,7 @@ func discoverWithDerivedDesiredState(ctx context.Context, bridge Bridge) (vscode
 	return deriveDesiredStateDiscovery(ctx, bridge, doc)
 }
 
-// DHF-REQ: keel/requirement-74
+// DHF-REQ: keel/requirement-74, keel/requirement-83
 func deriveDesiredStateDiscovery(ctx context.Context, bridge Bridge, doc vscode.DiscoveryDocument) (vscode.DiscoveryDocument, error) {
 	parent, ok := desiredStateParent(doc.Items)
 	if !ok {
@@ -316,14 +316,19 @@ func desiredStateDeclarationDiscoveryItems(parentID string, groups []DesiredStat
 	items := make([]vscode.TestItem, 0)
 	for _, group := range groups {
 		groupID := parentID + "::group::" + stableIDSegment(group.Label)
+		runnable := !group.MutuallyExclusive && desiredStateGroupHasRunnableRows(group)
+		profiles := []string{}
+		if runnable {
+			profiles = []string{"run"}
+		}
 		groupItem := vscode.TestItem{
 			ID:          groupID,
 			ParentID:    parentID,
 			Label:       group.Label,
 			SortText:    fmt.Sprintf("b.%03d", group.Order),
 			Kind:        "group",
-			Runnable:    false,
-			Profiles:    []string{},
+			Runnable:    runnable,
+			Profiles:    profiles,
 			Limitations: []string{fmt.Sprintf("mutually_exclusive=%t", group.MutuallyExclusive)},
 		}
 		items = append(items, groupItem)
@@ -332,6 +337,15 @@ func desiredStateDeclarationDiscoveryItems(parentID string, groups []DesiredStat
 		}
 	}
 	return items
+}
+
+func desiredStateGroupHasRunnableRows(group DesiredStateGroup) bool {
+	for _, row := range group.Rows {
+		if row.RunID != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func desiredStateDeclarationDiscoveryItem(parentID, parentSort string, rowIndex int, row DesiredStateRow) vscode.TestItem {
