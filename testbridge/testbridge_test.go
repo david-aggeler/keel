@@ -464,7 +464,7 @@ func TestDiscoverServesRunnableNonExclusiveDesiredStateGroups(t *testing.T) {
 	}
 	runnableRow, ok := testItemByID(doc.Items, "demo::desired-state::db")
 	if !ok || !runnableRow.Runnable || !equalStrings(runnableRow.Profiles, []string{"run"}) {
-		t.Fatalf("runnable row = %+v ok=%v, want existing row runnability retained", runnableRow, ok)
+		t.Fatalf("runnable row = %+v ok=%v, want existing row run state retained", runnableRow, ok)
 	}
 	informationalRow, ok := testItemByID(doc.Items, "demo::desired-state::group::test-preconditions::row::python-available-reuse")
 	if !ok || informationalRow.Runnable || len(informationalRow.Profiles) != 0 {
