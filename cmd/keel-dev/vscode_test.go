@@ -1145,10 +1145,20 @@ func TestVSCodeDiscoveryEmitsLaneCoversAndVSIXFileItems(t *testing.T) {
 	if _, ok := discoveryItemByID(doc, "vsix::file::src/test/suite/extension.test.ts"); !ok {
 		t.Fatalf("discovery missing static vsix file item: %+v", doc.Items)
 	}
-	if !discoveryHasAlias(doc, "keel::lane::go-log::covers", "go::pkg::log") ||
-		!discoveryHasAlias(doc, "keel::lane::go-log::covers", "go::file::log/logging_test.go") ||
-		!discoveryHasAlias(doc, "keel::lane::go-log::covers", "go::test::log::TestLog") {
-		t.Fatalf("go-log covers aliases missing package/file/test descendants: %+v", doc.Items)
+	coversID := "keel::lane::go-log::covers"
+	pkgAliasID := coversID + "::" + StableIDSegment("go::pkg::log")
+	fileAliasID := coversID + "::" + StableIDSegment("go::file::log/logging_test.go")
+	for _, want := range []struct {
+		parentID    string
+		canonicalID string
+	}{
+		{parentID: coversID, canonicalID: "go::pkg::log"},
+		{parentID: pkgAliasID, canonicalID: "go::file::log/logging_test.go"},
+		{parentID: fileAliasID, canonicalID: "go::test::log::TestLog"},
+	} {
+		if !discoveryHasAlias(doc, want.parentID, want.canonicalID) {
+			t.Fatalf("go-log covers alias canonical=%q missing under parent %q: %+v", want.canonicalID, want.parentID, doc.Items)
+		}
 	}
 	if !discoveryHasAlias(doc, "keel::lane::combo::covers", "keel::lane::go-log") {
 		t.Fatalf("combo covers should alias referenced lane only: %+v", doc.Items)
