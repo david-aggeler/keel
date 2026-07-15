@@ -529,6 +529,61 @@ func TestExclusiveUnknownRunIsBridgeOwnedAndDoesNotInvokeConsumer(t *testing.T) 
 	}
 }
 
+// DHF-TEST: keel/requirement-88
+func TestExclusiveDesiredStateSingleSelectionClearsSiblingResults(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{{
+		ID:       "demo::desired-state",
+		Label:    "B - Desired State",
+		Kind:     "group",
+		Runnable: false,
+		Profiles: []string{},
+	}}
+	fake.desiredGroups = []testbridge.DesiredStateGroup{{
+		Label:             "Data Set",
+		Order:             20,
+		MutuallyExclusive: true,
+		Rows: []testbridge.DesiredStateRow{
+			probedRow("demo::desired-state::dataset::small", "app-db-small", "fixture-data", "small", "small", true, "small active", false, true),
+			probedRow("demo::desired-state::dataset::full", "app-db-full", "fixture-data", "full", "full", true, "full active", false, true),
+		},
+	}}
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{
+		Root:     root,
+		Protocol: &protocol,
+		RunID:    func() string { return "run-exclusive" },
+	})
+
+	fullID := "demo::desired-state::dataset::full"
+	unknownID := "demo::desired-state::group::data-set::unknown"
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", fullID}); err != nil {
+		t.Fatalf("run concrete dispatch: %v\n%s", err, protocol.String())
+	}
+	events := decodeEvents(t, protocol.String())
+	if !eventsContain(events, "passed", fullID, "full active") ||
+		!eventsContain(events, "skipped", "demo::desired-state::dataset::small", "deactivated by exclusive desired-state selection") ||
+		!eventsContain(events, "skipped", unknownID, "deactivated by exclusive desired-state selection") {
+		t.Fatalf("concrete selection events = %+v, want selected pass and sibling clear events", events)
+	}
+
+	protocol.Reset()
+	fake.runCalls = 0
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", unknownID}); err != nil {
+		t.Fatalf("run Unknown dispatch: %v\n%s", err, protocol.String())
+	}
+	if fake.runCalls != 0 {
+		t.Fatalf("consumer Run calls = %d, want 0 for bridge-owned Unknown reset", fake.runCalls)
+	}
+	events = decodeEvents(t, protocol.String())
+	if !eventsContain(events, "passed", unknownID, "selected Unknown State") ||
+		!eventsContain(events, "skipped", "demo::desired-state::dataset::small", "deactivated by exclusive desired-state selection") ||
+		!eventsContain(events, "skipped", fullID, "deactivated by exclusive desired-state selection") {
+		t.Fatalf("Unknown selection events = %+v, want Unknown pass and concrete sibling clear events", events)
+	}
+}
+
 // DHF-TEST: keel/requirement-87
 func TestDiscoverInjectsBridgeOwnedMaintenanceVocabulary(t *testing.T) {
 	root := t.TempDir()
