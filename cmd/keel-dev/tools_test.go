@@ -387,3 +387,139 @@ func TestCiStepsHasStaticBattery(t *testing.T) {
 		t.Error("golangci-lint must be blocking, not advisory")
 	}
 }
+
+// DHF-TEST: keel/requirement-85
+func TestCiStepsFileSelectingGatesUseTrackedFiles(t *testing.T) {
+	requireTool(t, "git")
+
+	dir := t.TempDir()
+	mustRun(t, dir, "git", "init")
+	writeFile(t, dir, ".gitignore", "ignored.go\nignored.md\n")
+	writeFile(t, dir, "tracked.go", "package p\n")
+	writeFile(t, dir, "tracked.md", "# tracked\n")
+	writeFile(t, dir, "ignored.go", "package p\n\nvar    Bad = 1\n")
+	writeFile(t, dir, "ignored.md", "zzzzzzzzzz\n")
+	writeFile(t, dir, "untracked.go", "package p\n\nvar    Bad = 1\n")
+	writeFile(t, dir, "untracked.md", "zzzzzzzzzz\n")
+	mustRun(t, dir, "git", "add", "tracked.go", "tracked.md", ".gitignore")
+
+	byName := map[string]step{}
+	for _, s := range ciSteps(dir) {
+		byName[s.name] = s
+	}
+
+	gofmtStep, ok := byName["gofmt"]
+	if !ok {
+		t.Fatal("ci gate is missing gofmt")
+	}
+	if !stringSliceEqual(gofmtStep.args, []string{"-l", "tracked.go"}) {
+		t.Fatalf("gofmt args = %v, want tracked Go file only", gofmtStep.args)
+	}
+
+	cspellStep, ok := byName["cspell"]
+	if !ok {
+		t.Fatal("ci gate is missing cspell")
+	}
+	if !stringSliceEqual(cspellStep.args, []string{"--no-progress", "tracked.go", "tracked.md"}) {
+		t.Fatalf("cspell args = %v, want tracked Go/Markdown files only", cspellStep.args)
+	}
+}
+
+// DHF-TEST: keel/requirement-85
+func TestGofmtGateIgnoresUntrackedAndIgnoredFilesButFailsTrackedOffenders(t *testing.T) {
+	requireTool(t, "git")
+	requireTool(t, "gofmt")
+
+	dir := t.TempDir()
+	mustRun(t, dir, "git", "init")
+	writeFile(t, dir, ".gitignore", "ignored.go\n")
+	writeFile(t, dir, "tracked.go", "package p\n")
+	writeFile(t, dir, "ignored.go", "package p\n\nvar    Ignored = 1\n")
+	writeFile(t, dir, "untracked.go", "package p\n\nvar    Untracked = 1\n")
+	mustRun(t, dir, "git", "add", ".gitignore", "tracked.go")
+
+	if err := runStep(context.Background(), discardLogger(), dir, stepByName(t, ciSteps(dir), "gofmt")); err != nil {
+		t.Fatalf("gofmt should ignore untracked/gitignored offenders, got %v", err)
+	}
+
+	writeFile(t, dir, "tracked_bad.go", "package p\n\nvar    Tracked = 1\n")
+	mustRun(t, dir, "git", "add", "tracked_bad.go")
+	err := runStep(context.Background(), discardLogger(), dir, stepByName(t, ciSteps(dir), "gofmt"))
+	if err == nil {
+		t.Fatal("gofmt should fail on a tracked offender, got nil")
+	}
+	if !strings.Contains(err.Error(), "tracked_bad.go") {
+		t.Fatalf("gofmt error should name tracked offender, got %v", err)
+	}
+}
+
+// DHF-TEST: keel/requirement-85
+func TestCspellGateIgnoresUntrackedAndIgnoredFilesButFailsTrackedOffenders(t *testing.T) {
+	requireTool(t, "git")
+
+	dir := t.TempDir()
+	mustRun(t, dir, "git", "init")
+	writeFile(t, dir, ".gitignore", "ignored.md\n")
+	writeFile(t, dir, "tracked.md", "# tracked\n")
+	writeFile(t, dir, "ignored.md", "ignored spelling offender\n")
+	writeFile(t, dir, "untracked.md", "untracked spelling offender\n")
+	mustRun(t, dir, "git", "add", ".gitignore", "tracked.md")
+
+	bin := t.TempDir()
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cspell := `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "10.0.1"
+  exit 0
+fi
+for arg in "$@"; do
+  case "$arg" in
+    *ignored.md|*untracked.md)
+      echo "unexpected untracked input: $arg"
+      exit 2
+      ;;
+    *tracked_bad.md)
+      echo "tracked spelling offender"
+      exit 1
+      ;;
+  esac
+done
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(bin, "cspell"), []byte(cspell), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runStep(context.Background(), discardLogger(), dir, stepByName(t, ciSteps(dir), "cspell")); err != nil {
+		t.Fatalf("cspell should ignore untracked/gitignored offenders, got %v", err)
+	}
+
+	writeFile(t, dir, "tracked_bad.md", "tracked spelling offender\n")
+	mustRun(t, dir, "git", "add", "tracked_bad.md")
+	if err := runStep(context.Background(), discardLogger(), dir, stepByName(t, ciSteps(dir), "cspell")); err == nil {
+		t.Fatal("cspell should fail on a tracked offender, got nil")
+	}
+}
+
+func stepByName(t *testing.T, steps []step, name string) step {
+	t.Helper()
+	for _, s := range steps {
+		if s.name == name {
+			return s
+		}
+	}
+	t.Fatalf("ci gate is missing %q", name)
+	return step{}
+}
+
+func stringSliceEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
