@@ -146,6 +146,22 @@ type MaintenanceItemProvider interface {
 	MaintenanceItems(context.Context) ([]vscode.TestItem, error)
 }
 
+// Bridge-owned maintenance vocabulary. Consumers may reference these ids from
+// run handlers, but they do not author the discovery rows or capability arrays.
+const (
+	MaintenanceGroupID        = "keel" + "::maintenance"
+	MaintenanceDetectLanesID  = MaintenanceGroupID + "::detect-lanes"
+	MaintenanceUnlockID       = MaintenanceGroupID + "::unlock"
+	MaintenanceClearResultsID = MaintenanceGroupID + "::clear-results"
+	MaintenanceClearStateID   = MaintenanceGroupID + "::clear-state"
+)
+
+// ClearStateProvider supplies the only consumer-owned action behind the
+// bridge-owned Group-A vocabulary: clearing local devtool state.
+type ClearStateProvider interface {
+	ClearState(context.Context, RunRequest, vscode.RunEventWriter) (int, error)
+}
+
 // LaneProvider describes runnable lanes a consumer may fold into its discovery
 // tree before returning a DiscoveryDocument.
 type LaneProvider interface {
@@ -229,7 +245,65 @@ func discoverWithDerivedDesiredState(ctx context.Context, bridge Bridge) (vscode
 	if err != nil {
 		return vscode.DiscoveryDocument{}, err
 	}
+	doc, err = deriveMaintenanceDiscovery(doc)
+	if err != nil {
+		return vscode.DiscoveryDocument{}, err
+	}
 	return deriveDesiredStateDiscovery(ctx, bridge, doc)
+}
+
+// DHF-REQ: keel/requirement-87
+func deriveMaintenanceDiscovery(doc vscode.DiscoveryDocument) (vscode.DiscoveryDocument, error) {
+	doc.Capabilities.ClearResultsTestIDs = []string{MaintenanceClearResultsID}
+	doc.Capabilities.ClearStateTestIDs = []string{MaintenanceClearStateID}
+	doc.Items = appendMissingDiscoveryItems(doc.Items, bridgeMaintenanceItems()...)
+	return doc, nil
+}
+
+func bridgeMaintenanceItems() []vscode.TestItem {
+	return []vscode.TestItem{
+		{
+			ID:       MaintenanceGroupID,
+			Label:    "A - Test Bridge Maintenance",
+			SortText: "a",
+			Kind:     "group",
+			Profiles: []string{},
+		},
+		bridgeMaintenanceItem(MaintenanceDetectLanesID, "a.1 detect lanes", "a.001"),
+		bridgeMaintenanceItem(MaintenanceUnlockID, "a.2 unlock test bridge", "a.002"),
+		bridgeMaintenanceItem(MaintenanceClearResultsID, "a.3 clear test results", "a.003"),
+		bridgeMaintenanceItem(MaintenanceClearStateID, "a.4 clear local test state", "a.004"),
+	}
+}
+
+func bridgeMaintenanceItem(id, label, sortText string) vscode.TestItem {
+	return vscode.TestItem{
+		ID:          id,
+		ParentID:    MaintenanceGroupID,
+		Label:       label,
+		SortText:    sortText,
+		Kind:        "maintenance",
+		Framework:   "keel",
+		Runner:      "testbridge",
+		RunnerLabel: "testbridge",
+		Runnable:    true,
+		Profiles:    []string{"run"},
+	}
+}
+
+func appendMissingDiscoveryItems(items []vscode.TestItem, candidates ...vscode.TestItem) []vscode.TestItem {
+	seen := make(map[string]struct{}, len(items)+len(candidates))
+	for _, item := range items {
+		seen[item.ID] = struct{}{}
+	}
+	for _, item := range candidates {
+		if _, ok := seen[item.ID]; ok {
+			continue
+		}
+		items = append(items, item)
+		seen[item.ID] = struct{}{}
+	}
+	return items
 }
 
 // DHF-REQ: keel/requirement-74, keel/requirement-83
@@ -578,7 +652,7 @@ func handleRun(bridge Bridge) cli.Handler {
 		defer closeWriter()
 		exitCode := 1
 		writer(vscode.RunEvent{Event: "run_started", Live: boolPtr(true), Requested: runResolutionRequests(requests)})
-		if locker, ok := bridge.(lockExemptRunner); !ok || !locker.LockExemptRun(ids) {
+		if !bridgeLockExempt(bridge, ids) {
 			releaseLock, err := acquireRunLock(runtimeRoot(rt, bridge), ids, runID)
 			if err != nil {
 				writer(vscode.RunEvent{Event: "errored", Message: err.Error()})
@@ -610,6 +684,14 @@ func handleRun(bridge Bridge) cli.Handler {
 		}
 		return nil
 	}
+}
+
+func bridgeLockExempt(bridge Bridge, ids []string) bool {
+	if len(ids) == 1 && ids[0] == MaintenanceUnlockID {
+		return true
+	}
+	locker, ok := bridge.(lockExemptRunner)
+	return ok && locker.LockExemptRun(ids)
 }
 
 // DHF-REQ: keel/requirement-75
@@ -662,6 +744,16 @@ func runRemainingSelections(ctx context.Context, bridge Bridge, requests []runRe
 
 	batch := make([]string, 0, len(requests))
 	for _, request := range requests {
+		if bridgeHandlesMaintenanceRun(request.Request.ID) {
+			if exitCode, err := runBatch(batch); err != nil || exitCode != 0 {
+				return exitCode, err
+			}
+			batch = batch[:0]
+			if exitCode, err := runBridgeMaintenance(ctx, bridge, root, runID, request.Request.ID, writer); err != nil || exitCode != 0 {
+				return exitCode, err
+			}
+			continue
+		}
 		if !request.ExpandedGroupChild {
 			batch = append(batch, request.Request.ID)
 			continue
@@ -675,6 +767,40 @@ func runRemainingSelections(ctx context.Context, bridge Bridge, requests []runRe
 		}
 	}
 	return runBatch(batch)
+}
+
+func bridgeHandlesMaintenanceRun(id string) bool {
+	switch id {
+	case MaintenanceUnlockID, MaintenanceClearResultsID, MaintenanceClearStateID:
+		return true
+	default:
+		return false
+	}
+}
+
+// DHF-REQ: keel/requirement-87
+func runBridgeMaintenance(ctx context.Context, bridge Bridge, root, runID, id string, writer vscode.RunEventWriter) (int, error) {
+	writer(vscode.RunEvent{Event: "test_started", TestID: id})
+	switch id {
+	case MaintenanceUnlockID:
+		if err := os.Remove(RunLockPath(root)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return 1, err
+		}
+	case MaintenanceClearResultsID:
+	case MaintenanceClearStateID:
+		clearer, ok := bridge.(ClearStateProvider)
+		if !ok {
+			return 1, fmt.Errorf("keel/testbridge: bridge does not implement clear-state callback")
+		}
+		exitCode, err := clearer.ClearState(ctx, RunRequest{IDs: []string{id}, RunID: runID, Root: root}, writer)
+		if err != nil || exitCode != 0 {
+			return exitCode, err
+		}
+	default:
+		return 2, cli.NewUsageError("unknown bridge maintenance id %q", id)
+	}
+	writer(vscode.RunEvent{Event: "passed", TestID: id})
+	return 0, nil
 }
 
 func desiredStateDeclarationsByRunID(desiredState DesiredStateDeclaration) map[string]DesiredStateRow {
