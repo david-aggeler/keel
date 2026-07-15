@@ -852,21 +852,26 @@ func (s lanesState) coverItems(eff effectiveLane) []vscode.TestItem {
 		Runnable: false,
 		Profiles: []string{},
 	}}
-	seen := map[string]bool{}
-	addAlias := func(canonicalID, label, kind string) {
-		if canonicalID == "" || seen[canonicalID] {
-			return
+	seen := map[string]string{}
+	addAlias := func(parentID, canonicalID, label, kind string) string {
+		if canonicalID == "" {
+			return ""
 		}
-		seen[canonicalID] = true
+		if id, ok := seen[canonicalID]; ok {
+			return id
+		}
+		id := coversID + "::" + StableIDSegment(canonicalID)
+		seen[canonicalID] = id
 		items = append(items, vscode.TestItem{
-			ID:          coversID + "::" + StableIDSegment(canonicalID),
-			ParentID:    coversID,
+			ID:          id,
+			ParentID:    parentID,
 			Label:       label,
 			Kind:        kind,
 			Runnable:    false,
 			Profiles:    []string{},
 			CanonicalID: canonicalID,
 		})
+		return id
 	}
 	packages, _ := parseGoTestPackages(s.root)
 	byPkg := map[string]discoveredGoPackage{}
@@ -875,36 +880,36 @@ func (s lanesState) coverItems(eff effectiveLane) []vscode.TestItem {
 	}
 	for _, pkgRel := range eff.directGoPackages {
 		pkgID := "go::pkg::" + filepath.ToSlash(pkgRel)
-		addAlias(pkgID, pkgRel, "package")
+		pkgAliasID := addAlias(coversID, pkgID, pkgRel, "package")
 		for _, file := range byPkg[pkgRel].files {
 			fileID := "go::file::" + filepath.ToSlash(file.rel)
-			addAlias(fileID, filepath.Base(file.rel), "file")
+			fileAliasID := addAlias(pkgAliasID, fileID, filepath.Base(file.rel), "file")
 			for _, test := range file.tests {
-				addAlias("go::test::"+filepath.ToSlash(pkgRel)+"::"+test.name, test.name, "test")
+				addAlias(fileAliasID, "go::test::"+filepath.ToSlash(pkgRel)+"::"+test.name, test.name, "test")
 			}
 		}
 	}
 	for _, rel := range eff.directVSIXFiles {
-		addAlias("vsix::file::"+filepath.ToSlash(rel), filepath.Base(rel), "file")
+		addAlias(coversID, "vsix::file::"+filepath.ToSlash(rel), filepath.Base(rel), "file")
 	}
 	for _, rootID := range eff.directRootIDs {
 		switch rootID {
 		case "go::root":
-			addAlias(rootID, "Go", "root")
+			addAlias(coversID, rootID, "Go", "root")
 		case "vsix::root":
-			addAlias(rootID, "Mocha (vsix)", "root")
+			addAlias(coversID, rootID, "Mocha (vsix)", "root")
 		default:
-			addAlias(rootID, strings.TrimSuffix(strings.TrimPrefix(rootID, "keel::"), "::root"), "root")
+			addAlias(coversID, rootID, strings.TrimSuffix(strings.TrimPrefix(rootID, "keel::"), "::root"), "root")
 		}
 	}
 	for _, laneID := range eff.systemLanes {
 		if laneID == eff.id {
 			continue
 		}
-		addAlias(laneID, strings.TrimPrefix(laneID, "keel::lane::"), "lane")
+		addAlias(coversID, laneID, strings.TrimPrefix(laneID, "keel::lane::"), "lane")
 	}
 	for _, laneID := range eff.laneRefs {
-		addAlias(laneID, strings.TrimPrefix(laneID, "keel::lane::"), "lane")
+		addAlias(coversID, laneID, strings.TrimPrefix(laneID, "keel::lane::"), "lane")
 	}
 	return items
 }
