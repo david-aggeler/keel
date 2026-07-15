@@ -17,6 +17,7 @@ import {
   setCurrentTreeForTest,
   desiredStateDocumentOutputLines,
   shouldInvalidateResultsForEvent,
+  invalidateClearedResults,
   testControllerForTest
 } from '../../extension';
 import { configRelativePath, currentConfigVersion, defaultConfigTemplate, discoverTests, readDesiredState, readAdapterConfig, runTests, upgradeConfig } from '../../bridgeAdapter';
@@ -749,6 +750,81 @@ suite('Keel Test Bridge config contract', () => {
       assert.match(outputs.join(''), /coverage artifact is no longer available/);
     } finally {
       fs.rmSync(profile, { force: true });
+    }
+  });
+
+  // DHF-TEST: keel/requirement-88
+  test('exclusive-group cleared events leave siblings with no result (not skipped) and invalidate them', () => {
+    const controller = vscode.tests.createTestController(`keelExclusiveClear-${Date.now()}`, 'Keel Exclusive Clear');
+    const tree = publishDiscovery(controller, process.cwd(), {
+      version: 1,
+      workspace: process.cwd(),
+      generated_at: new Date().toISOString(),
+      items: [
+        { id: 'demo::desired-state::dataset', label: 'Data Set', kind: 'group', runnable: false, profiles: [] },
+        { id: 'demo::desired-state::dataset::small', parent_id: 'demo::desired-state::dataset', label: 'small', kind: 'test', runnable: true, profiles: ['run'] },
+        { id: 'demo::desired-state::dataset::full', parent_id: 'demo::desired-state::dataset', label: 'full', kind: 'test', runnable: true, profiles: ['run'] }
+      ]
+    });
+    setCurrentTreeForTest(tree);
+    try {
+      const passed: string[] = [];
+      const skipped: string[] = [];
+      const failed: string[] = [];
+      const errored: string[] = [];
+      const outputs: string[] = [];
+      const run = {
+        started() { /* no-op */ },
+        passed(item: vscode.TestItem) { passed.push(item.id); },
+        skipped(item: vscode.TestItem) { skipped.push(item.id); },
+        failed(item: vscode.TestItem) { failed.push(item.id); },
+        errored(item: vscode.TestItem) { errored.push(item.id); },
+        appendOutput(data: string) { outputs.push(data); }
+      };
+
+      const selectedItemIds = new Set(['demo::desired-state::dataset::full']);
+      const resultItemIds = new Set<string>();
+
+      // Activate the concrete member 'full'.
+      applyRunEvent(run as unknown as vscode.TestRun, JSON.stringify(runEvent({
+        event: 'passed', test_id: 'demo::desired-state::dataset::full'
+      })), selectedItemIds, resultItemIds);
+
+      // The bridge deactivates sibling 'small' with a 'cleared' event.
+      const applied = applyRunEvent(run as unknown as vscode.TestRun, JSON.stringify(runEvent({
+        event: 'cleared', test_id: 'demo::desired-state::dataset::small', message: 'deactivated by exclusive desired-state selection'
+      })), selectedItemIds, resultItemIds);
+
+      assert.deepEqual(passed, ['demo::desired-state::dataset::full'], 'selected member shows a result');
+      assert.ok(!skipped.includes('demo::desired-state::dataset::small'), 'deactivated sibling must NOT get a terminal skipped result');
+      assert.ok(!failed.includes('demo::desired-state::dataset::small') && !errored.includes('demo::desired-state::dataset::small'), 'deactivated sibling gets no terminal result at all');
+      assert.deepEqual(applied.clearedResultIds, ['demo::desired-state::dataset::small'], 'cleared event surfaces the sibling id for invalidation');
+      assert.ok(!resultItemIds.has('demo::desired-state::dataset::small'), 'cleared sibling holds no result');
+      assert.ok(resultItemIds.has('demo::desired-state::dataset::full'), 'selected member retains its result');
+
+      // The run loop invalidates cleared items on the controller so any stale
+      // result from a prior run drops to no-result — scoped to the siblings,
+      // never the member left active.
+      const spyTarget = controller as vscode.TestController & { invalidateTestResults: (items?: vscode.TestItem | readonly vscode.TestItem[]) => void };
+      const original = spyTarget.invalidateTestResults.bind(controller);
+      const invalidated: string[] = [];
+      spyTarget.invalidateTestResults = (items?: vscode.TestItem | readonly vscode.TestItem[]) => {
+        if (Array.isArray(items)) {
+          for (const it of items) {
+            invalidated.push(it.id);
+          }
+        }
+        original(items as never);
+      };
+      try {
+        invalidateClearedResults(controller, new Set(['demo::desired-state::dataset::small']));
+      } finally {
+        spyTarget.invalidateTestResults = original;
+      }
+      assert.deepEqual(invalidated, ['demo::desired-state::dataset::small'], 'cleared sibling result is invalidated on the controller');
+    } finally {
+      setCurrentTreeForTest(undefined);
+      controller.dispose();
     }
   });
 });
