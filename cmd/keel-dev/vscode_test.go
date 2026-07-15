@@ -2027,7 +2027,13 @@ func TestVSCodeRunGoFileSelectionReportsParseFailure(t *testing.T) {
 
 	bin := t.TempDir()
 	callsFile := filepath.Join(bin, "calls.log")
-	stub(t, bin, callsFile, "go", "printf 'go test must not run after a file parse failure\\n' >&2\nexit 2")
+	stub(t, bin, callsFile, "go", `case "$*" in
+  "test ./exec/codex ./exec/claude")
+    exit 0
+    ;;
+esac
+printf 'go test must not run after a file parse failure\n' >&2
+exit 2`)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	var protocol bytes.Buffer
@@ -2035,8 +2041,8 @@ func TestVSCodeRunGoFileSelectionReportsParseFailure(t *testing.T) {
 	if err == nil {
 		t.Fatalf("go file selection parse failure returned nil\nprotocol:\n%s\ncalls:\n%s", protocol.String(), calls(t, callsFile))
 	}
-	if got := strings.TrimSpace(calls(t, callsFile)); got != "" {
-		t.Fatalf("go test ran despite parse failure:\n%s", got)
+	if got := strings.TrimSpace(calls(t, callsFile)); got != "go test ./exec/codex ./exec/claude" {
+		t.Fatalf("unexpected go test command after parse failure:\n%s", got)
 	}
 	events := decodeRunEvents(t, protocol.String())
 	if !runEventsContain(events, "errored", "") || !strings.Contains(protocol.String(), "broken_test.go") || !strings.Contains(protocol.String(), "expected") {
@@ -2115,7 +2121,13 @@ func TestVSCodeRunGoFileSelectionRejectsInactiveFile(t *testing.T) {
 
 			bin := t.TempDir()
 			callsFile := filepath.Join(bin, "calls.log")
-			stub(t, bin, callsFile, "go", "printf 'go test must not run for inactive file selections\\n' >&2\nexit 2")
+			stub(t, bin, callsFile, "go", `case "$*" in
+  "test ./exec/codex ./exec/claude")
+    exit 0
+    ;;
+esac
+printf 'go test must not run for inactive file selections\n' >&2
+exit 2`)
 			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 			var protocol bytes.Buffer
@@ -2123,8 +2135,8 @@ func TestVSCodeRunGoFileSelectionRejectsInactiveFile(t *testing.T) {
 			if err == nil {
 				t.Fatalf("inactive go file selection returned nil\nprotocol:\n%s\ncalls:\n%s", protocol.String(), calls(t, callsFile))
 			}
-			if got := strings.TrimSpace(calls(t, callsFile)); got != "" {
-				t.Fatalf("go test ran despite inactive file selection:\n%s", got)
+			if got := strings.TrimSpace(calls(t, callsFile)); got != "go test ./exec/codex ./exec/claude" {
+				t.Fatalf("unexpected go test command for inactive file selection:\n%s", got)
 			}
 			events := decodeRunEvents(t, protocol.String())
 			if !runEventsContain(events, "errored", "") || !strings.Contains(protocol.String(), tt.want) {

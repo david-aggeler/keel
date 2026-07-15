@@ -247,7 +247,12 @@ func deriveDesiredStateDiscovery(ctx context.Context, bridge Bridge, doc vscode.
 		}
 		return doc, nil
 	}
-	doc.Items = append(doc.Items, desiredStateDeclarationDiscoveryItems(parent.ID, desiredState.Groups)...)
+	rt := runtimeOrDefault(ctx, bridge)
+	items, err := desiredStateDeclarationDiscoveryItems(ctx, runtimeRoot(rt, bridge), parent.ID, desiredState.Groups)
+	if err != nil {
+		return vscode.DiscoveryDocument{}, err
+	}
+	doc.Items = append(doc.Items, items...)
 	if err := validateUniqueDiscoveryItemIDs(doc.Items); err != nil {
 		return vscode.DiscoveryDocument{}, err
 	}
@@ -310,8 +315,8 @@ func desiredStateDiagnosticItem(parentID string, err error) vscode.TestItem {
 	}
 }
 
-// DHF-REQ: keel/requirement-83
-func desiredStateDeclarationDiscoveryItems(parentID string, groups []DesiredStateGroup) []vscode.TestItem {
+// DHF-REQ: keel/requirement-75, keel/requirement-83
+func desiredStateDeclarationDiscoveryItems(ctx context.Context, root, parentID string, groups []DesiredStateGroup) ([]vscode.TestItem, error) {
 	groups = append([]DesiredStateGroup(nil), groups...)
 	sort.SliceStable(groups, func(i, j int) bool { return groups[i].Order < groups[j].Order })
 	items := make([]vscode.TestItem, 0)
@@ -334,10 +339,14 @@ func desiredStateDeclarationDiscoveryItems(parentID string, groups []DesiredStat
 		}
 		items = append(items, groupItem)
 		for rowIndex, row := range group.Rows {
-			items = append(items, desiredStateDeclarationDiscoveryItem(groupID, groupItem.SortText, rowIndex+1, row))
+			derived, err := deriveDesiredStateRow(ctx, root, row)
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, desiredStateDeclarationDiscoveryItem(groupID, groupItem.SortText, rowIndex+1, row, derived))
 		}
 	}
-	return items
+	return items, nil
 }
 
 func desiredStateGroupHasRunnableRows(group DesiredStateGroup) bool {
@@ -349,14 +358,11 @@ func desiredStateGroupHasRunnableRows(group DesiredStateGroup) bool {
 	return false
 }
 
-func desiredStateDeclarationDiscoveryItem(parentID, parentSort string, rowIndex int, row DesiredStateRow) vscode.TestItem {
-	action := "reconcile_during_run"
-	if row.Reusable {
-		action = "reuse"
-	}
+func desiredStateDeclarationDiscoveryItem(parentID, parentSort string, rowIndex int, row DesiredStateRow, derived vscode.DesiredState) vscode.TestItem {
+	action := derived.Action
 	id := row.RunID
 	if id == "" {
-		id = parentID + "::row::" + stableIDSegment(strings.Join([]string{row.Resource, row.Desired, action}, "-"))
+		id = parentID + "::row::" + stableIDSegment(strings.Join([]string{row.Resource, row.Kind, row.Desired, row.Detail}, "-"))
 	}
 	profiles := []string{}
 	if row.RunID != "" {
@@ -370,7 +376,7 @@ func desiredStateDeclarationDiscoveryItem(parentID, parentSort string, rowIndex 
 		Kind:        "group",
 		Runnable:    row.RunID != "",
 		Profiles:    profiles,
-		Limitations: []string{"action=" + action, fmt.Sprintf("active=%t", row.Active)},
+		Limitations: []string{"current=" + derived.Current, "action=" + action, fmt.Sprintf("active=%t", row.Active)},
 	}
 }
 

@@ -396,7 +396,7 @@ func TestDiscoverDerivesDesiredStateGroupsFromProvider(t *testing.T) {
 	if !ok || runnable.ParentID != group.ID || !runnable.Runnable || !equalStrings(runnable.Profiles, []string{"run"}) {
 		t.Fatalf("run_id row = %+v ok=%v, want runnable run-profile child", runnable, ok)
 	}
-	informational, ok := testItemByID(doc.Items, "demo::desired-state::group::provisioning::row::python-available-reuse")
+	informational, ok := testItemByID(doc.Items, "demo::desired-state::group::provisioning::row::python-tool-available")
 	if !ok || informational.ParentID != group.ID || informational.Runnable || len(informational.Profiles) != 0 {
 		t.Fatalf("informational row = %+v ok=%v, want non-runnable child", informational, ok)
 	}
@@ -405,6 +405,114 @@ func TestDiscoverDerivesDesiredStateGroupsFromProvider(t *testing.T) {
 	}
 	if legacy, ok := testItemByID(doc.Items, "demo::desired-state::legacy-child"); ok {
 		t.Fatalf("consumer-authored B child was not replaced by bridge derivation: %+v", legacy)
+	}
+}
+
+// DHF-TEST: keel/requirement-75
+func TestDiscoverDesiredStateRowUsesProbeDerivedCurrentAndAction(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{{
+		ID:       "demo::desired-state",
+		Label:    "B - Desired State",
+		Kind:     "group",
+		Profiles: []string{},
+	}}
+	fake.desiredGroups = []testbridge.DesiredStateGroup{{
+		Label:             "Data Set",
+		Order:             10,
+		MutuallyExclusive: true,
+		Rows: []testbridge.DesiredStateRow{
+			probedRow("demo::desired-state::app-db-full", "app-db-full", "fixture-data", "full", "full", true, "already full", false, true),
+		},
+	}}
+
+	var discoverOut bytes.Buffer
+	discoverCtx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &discoverOut})
+	if err := testbridge.CommandSpec(fake).Dispatch(discoverCtx, []string{"test-bridge", "tests", "discover", "--format", "json"}); err != nil {
+		t.Fatalf("discover dispatch: %v", err)
+	}
+	var discovery vscode.DiscoveryDocument
+	decodeJSON(t, &discoverOut, &discovery)
+
+	var desiredOut bytes.Buffer
+	desiredCtx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &desiredOut})
+	if err := testbridge.CommandSpec(fake).Dispatch(desiredCtx, []string{"test-bridge", "tests", "desired-state", "--format", "json"}); err != nil {
+		t.Fatalf("desired-state dispatch: %v", err)
+	}
+	var desiredState vscode.DesiredStateDocument
+	decodeJSON(t, &desiredOut, &desiredState)
+
+	discoveryRow, ok := testItemByID(discovery.Items, "demo::desired-state::app-db-full")
+	if !ok {
+		t.Fatalf("discovery row missing from items: %+v", discovery.Items)
+	}
+	documentRow := desiredState.Groups[0].Rows[0]
+	gotCurrent := limitationValue(discoveryRow.Limitations, "current")
+	gotAction := limitationValue(discoveryRow.Limitations, "action")
+	if gotCurrent != documentRow.Current || gotAction != documentRow.Action {
+		t.Fatalf("discovery row limitations = %v, desired-state row = %+v; want matching current/action", discoveryRow.Limitations, documentRow)
+	}
+	if gotCurrent != "full" || gotAction != "reuse" {
+		t.Fatalf("discovery current/action = %q/%q, want probe-derived full/reuse", gotCurrent, gotAction)
+	}
+}
+
+// DHF-TEST: keel/requirement-75
+func TestDiscoverAnonymousDesiredStateRowIDIgnoresProbeDerivedAction(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{{
+		ID:       "demo::desired-state",
+		Label:    "B - Desired State",
+		Kind:     "group",
+		Profiles: []string{},
+	}}
+	current := "empty"
+	satisfied := false
+	fake.desiredGroups = []testbridge.DesiredStateGroup{{
+		Label: "Data Set",
+		Order: 10,
+		Rows: []testbridge.DesiredStateRow{{
+			Resource: "app-db-full",
+			Kind:     "fixture-data",
+			Desired:  "full",
+			Active:   true,
+			Probe: func(context.Context, testbridge.DesiredStateProbeRequest) testbridge.DesiredStateProbeResult {
+				return testbridge.DesiredStateProbeResult{Current: current, Satisfied: satisfied}
+			},
+		}},
+	}}
+	discover := func() vscode.TestItem {
+		t.Helper()
+		var out bytes.Buffer
+		ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &out})
+		if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "discover", "--format", "json"}); err != nil {
+			t.Fatalf("discover dispatch: %v", err)
+		}
+		var doc vscode.DiscoveryDocument
+		decodeJSON(t, &out, &doc)
+		for _, item := range doc.Items {
+			if item.Label == "app-db-full: full" {
+				return item
+			}
+		}
+		t.Fatalf("anonymous desired-state row missing from items: %+v", doc.Items)
+		return vscode.TestItem{}
+	}
+
+	before := discover()
+	current = "full"
+	satisfied = true
+	after := discover()
+	if before.ID != after.ID {
+		t.Fatalf("anonymous row ID changed with probe-derived action: before=%q after=%q", before.ID, after.ID)
+	}
+	if got := limitationValue(before.Limitations, "action"); got != "reconcile_during_run" {
+		t.Fatalf("first discovery action = %q, want reconcile_during_run", got)
+	}
+	if got := limitationValue(after.Limitations, "action"); got != "reuse" {
+		t.Fatalf("second discovery action = %q, want reuse", got)
 	}
 }
 
@@ -466,7 +574,7 @@ func TestDiscoverServesRunnableNonExclusiveDesiredStateGroups(t *testing.T) {
 	if !ok || !runnableRow.Runnable || !equalStrings(runnableRow.Profiles, []string{"run"}) {
 		t.Fatalf("runnable row = %+v ok=%v, want existing row run state retained", runnableRow, ok)
 	}
-	informationalRow, ok := testItemByID(doc.Items, "demo::desired-state::group::test-preconditions::row::python-available-reuse")
+	informationalRow, ok := testItemByID(doc.Items, "demo::desired-state::group::test-preconditions::row::python-tool-available")
 	if !ok || informationalRow.Runnable || len(informationalRow.Profiles) != 0 {
 		t.Fatalf("informational row = %+v ok=%v, want existing row informational state retained", informationalRow, ok)
 	}
@@ -717,8 +825,8 @@ func TestRunExpandsRunnableDesiredStateGroupToRows(t *testing.T) {
 	if len(fake.runIDs) != 0 {
 		t.Fatalf("consumer runner received group run ids: %v", fake.runIDs)
 	}
-	if calls["demo::desired-state::db"] != 1 || calls["demo::desired-state::cache"] != 1 {
-		t.Fatalf("probe calls = %+v, want one per runnable member row", calls)
+	if calls["demo::desired-state::db"] != 2 || calls["demo::desired-state::cache"] != 2 {
+		t.Fatalf("probe calls = %+v, want plan-derivation probe plus row-run probe per runnable member row", calls)
 	}
 	events := decodeEvents(t, protocol.String())
 	wantRequested := []vscode.RunRequest{
@@ -808,8 +916,8 @@ func TestRunGroupSelectionDoesNotDuplicateExplicitMemberRows(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("mixed group run dispatch: %v\n%s", err, protocol.String())
 	}
-	if calls["demo::desired-state::db"] != 1 || calls["demo::desired-state::cache"] != 1 {
-		t.Fatalf("probe calls = %+v, want each member row run once", calls)
+	if calls["demo::desired-state::db"] != 2 || calls["demo::desired-state::cache"] != 2 {
+		t.Fatalf("probe calls = %+v, want plan-derivation probe plus one deduplicated row-run probe per member row", calls)
 	}
 	events := decodeEvents(t, protocol.String())
 	wantRequested := []vscode.RunRequest{
@@ -1553,6 +1661,16 @@ func equalStrings(got, want []string) bool {
 		}
 	}
 	return true
+}
+
+func limitationValue(limitations []string, key string) string {
+	prefix := key + "="
+	for _, limitation := range limitations {
+		if strings.HasPrefix(limitation, prefix) {
+			return strings.TrimPrefix(limitation, prefix)
+		}
+	}
+	return ""
 }
 
 func (f *fakeBridge) Discover(_ context.Context) (vscode.DiscoveryDocument, error) {
