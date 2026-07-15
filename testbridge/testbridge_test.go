@@ -408,6 +408,70 @@ func TestDiscoverDerivesDesiredStateGroupsFromProvider(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-83
+func TestDiscoverServesRunnableNonExclusiveDesiredStateGroups(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{{
+		ID:       "demo::desired-state",
+		Label:    "B - Desired State",
+		Kind:     "group",
+		Profiles: []string{},
+	}}
+	fake.desiredGroups = []testbridge.DesiredStateGroup{{
+		Label:             "Test Preconditions",
+		Order:             10,
+		MutuallyExclusive: false,
+		Rows: []testbridge.DesiredStateRow{
+			probedRow("demo::desired-state::db", "db", "service", "seeded", "empty", false, "seed db", false, false),
+			probedRow("", "python", "tool", "available", "available", true, "ok", true, false),
+		},
+	}, {
+		Label:             "Exclusive Choices",
+		Order:             20,
+		MutuallyExclusive: true,
+		Rows: []testbridge.DesiredStateRow{
+			probedRow("demo::desired-state::small", "db", "fixture-data", "small", "empty", false, "seed small", false, true),
+		},
+	}, {
+		Label:             "Informational Checks",
+		Order:             30,
+		MutuallyExclusive: false,
+		Rows: []testbridge.DesiredStateRow{
+			probedRow("", "go", "tool", "installed", "installed", true, "ok", true, false),
+		},
+	}}
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol})
+
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "discover", "--format", "json"}); err != nil {
+		t.Fatalf("discover dispatch: %v", err)
+	}
+	var doc vscode.DiscoveryDocument
+	decodeJSON(t, &protocol, &doc)
+
+	runnableGroup, ok := testItemByID(doc.Items, "demo::desired-state::group::test-preconditions")
+	if !ok || !runnableGroup.Runnable || !equalStrings(runnableGroup.Profiles, []string{"run"}) {
+		t.Fatalf("non-exclusive runnable group = %+v ok=%v, want runnable run profile", runnableGroup, ok)
+	}
+	exclusiveGroup, ok := testItemByID(doc.Items, "demo::desired-state::group::exclusive-choices")
+	if !ok || exclusiveGroup.Runnable || len(exclusiveGroup.Profiles) != 0 {
+		t.Fatalf("exclusive group = %+v ok=%v, want non-runnable empty profiles", exclusiveGroup, ok)
+	}
+	emptyGroup, ok := testItemByID(doc.Items, "demo::desired-state::group::informational-checks")
+	if !ok || emptyGroup.Runnable || len(emptyGroup.Profiles) != 0 {
+		t.Fatalf("zero-runnable group = %+v ok=%v, want non-runnable empty profiles", emptyGroup, ok)
+	}
+	runnableRow, ok := testItemByID(doc.Items, "demo::desired-state::db")
+	if !ok || !runnableRow.Runnable || !equalStrings(runnableRow.Profiles, []string{"run"}) {
+		t.Fatalf("runnable row = %+v ok=%v, want existing row runnability retained", runnableRow, ok)
+	}
+	informationalRow, ok := testItemByID(doc.Items, "demo::desired-state::group::test-preconditions::row::python-available-reuse")
+	if !ok || informationalRow.Runnable || len(informationalRow.Profiles) != 0 {
+		t.Fatalf("informational row = %+v ok=%v, want existing row informational state retained", informationalRow, ok)
+	}
+}
+
 // DHF-TEST: keel/requirement-74
 func TestRunDryRunResolvesDerivedDesiredStateRunIDsReadOnly(t *testing.T) {
 	root := t.TempDir()
