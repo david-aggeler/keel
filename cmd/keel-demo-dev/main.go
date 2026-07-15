@@ -25,7 +25,7 @@ const (
 	demoVersion = "demo"
 
 	idRoot        = "keel-demo-dev::root"
-	idMaintenance = "keel-demo-dev::maintenance"
+	idMaintenance = testbridge.MaintenanceGroupID
 	idDesired     = "keel::desired-state"
 	idLanes       = "keel-demo-dev::lanes"
 	idFrameworks  = "keel-demo-dev::frameworks"
@@ -39,7 +39,7 @@ const (
 	idTestGoPass = "go::test::passing::TestReferencePass"
 	idTestGoFail = "go::test::failing::TestReferenceFailure"
 
-	idDetectLanes    = "keel-demo-dev::maintenance::detect-lanes"
+	idDetectLanes    = testbridge.MaintenanceDetectLanesID
 	idBlockBadLane   = "keel-demo-dev::maintenance::block-bad-lane"
 	idUnblockBadLane = "keel-demo-dev::maintenance::unblock-bad-lane"
 
@@ -146,15 +146,13 @@ func (b demoBridge) Discover(ctx context.Context) (vscode.DiscoveryDocument, err
 	ws := b.workspace(ctx)
 	items := []vscode.TestItem{
 		group(idRoot, "", "Keel Demo Dev"),
-		group(idMaintenance, idRoot, "A - Test Bridge Maintenance"),
 		group(idDesired, idRoot, "B - Desired State"),
 		group(idLanes, idRoot, "C - Lanes"),
 		group(idFrameworks, idRoot, "D - Frameworks"),
 		group(idGoFramework, idFrameworks, "Go"),
 		group(idFakeFamily, idFrameworks, "Fake infrastructure"),
-		maintenance(idDetectLanes, idMaintenance, "A.1 detect lanes"),
-		maintenance(idBlockBadLane, idMaintenance, "A.2 block failing Go lane"),
-		maintenance(idUnblockBadLane, idMaintenance, "A.3 unblock failing Go lane"),
+		maintenance(idBlockBadLane, idMaintenance, "A.10 block failing Go lane"),
+		maintenance(idUnblockBadLane, idMaintenance, "A.11 unblock failing Go lane"),
 	}
 	if hasDemoLanesFile(ws.Root) {
 		items = append(items,
@@ -175,7 +173,6 @@ func (b demoBridge) Discover(ctx context.Context) (vscode.DiscoveryDocument, err
 			ClearResults:              true,
 			RefreshInvalidatesResults: true,
 			NeutralParentRollups:      true,
-			ClearStateTestIDs:         []string{idUnblockBadLane},
 		},
 		Items: items,
 	}, nil
@@ -246,6 +243,14 @@ func (b demoBridge) Run(ctx context.Context, req testbridge.RunRequest, emit vsc
 		}
 	}
 	return exitCode, nil
+}
+
+// DHF-REQ: keel/requirement-87
+func (b demoBridge) ClearState(_ context.Context, req testbridge.RunRequest, _ vscode.RunEventWriter) (int, error) {
+	if err := os.RemoveAll(filepath.Join(req.Root, ".devtools", "keel-demo-dev")); err != nil {
+		return 1, err
+	}
+	return 0, nil
 }
 
 func (b demoBridge) runOne(ctx context.Context, root, id string, emit vscode.RunEventWriter) (int, error) {
