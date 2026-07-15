@@ -828,10 +828,18 @@ func runDesiredStateSelections(ctx context.Context, bridge Bridge, requests []ru
 	return exitCode, remaining, nil
 }
 
+// emitExclusiveDesiredStateSiblingClears emits a bridge-owned "cleared" event
+// per exclusive sibling so the VSIX drops the sibling's stale result to
+// no-result (verbatim apply), rather than a "skipped" terminal state that
+// merely swaps the icon. This satisfies requirement-88's at-most-one-result
+// invariant: after activating a concrete member or Unknown, every other member
+// of the exclusive group shows no result.
+//
+// DHF-REQ: keel/requirement-88
 func emitExclusiveDesiredStateSiblingClears(ids []string, writer vscode.RunEventWriter) {
 	for _, id := range ids {
 		writer(vscode.RunEvent{
-			Event:   "skipped",
+			Event:   "cleared",
 			TestID:  id,
 			Message: "deactivated by exclusive desired-state selection",
 		})

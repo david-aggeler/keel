@@ -14,7 +14,7 @@
     "event": {
       "type": "string",
       "$comment": "Unknown-event tolerance: this producer emits only the enum values below and validates its own output against them. Consumers, however, MUST tolerate an unknown (unrecognized) event value by rendering it as output and logging it — never a silent drop. The closed enum here is a producer conformance bar; the render-as-output-plus-log fallback is the consumer's obligation.",
-      "enum": ["run_started", "test_started", "output", "passed", "failed", "errored", "cancelled", "skipped", "artifact", "run_finished"]
+      "enum": ["run_started", "test_started", "output", "passed", "failed", "errored", "cancelled", "skipped", "cleared", "artifact", "run_finished"]
     },
     "time": {
       "type": "string",

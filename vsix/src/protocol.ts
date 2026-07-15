@@ -86,7 +86,7 @@ export interface DesiredState {
 
 export interface RunEvent {
   version: 1;
-  event: 'run_started' | 'test_started' | 'output' | 'passed' | 'failed' | 'errored' | 'cancelled' | 'skipped' | 'artifact' | 'run_finished';
+  event: 'run_started' | 'test_started' | 'output' | 'passed' | 'failed' | 'errored' | 'cancelled' | 'skipped' | 'cleared' | 'artifact' | 'run_finished';
   time: string;
   run_id?: string;
   source?: 'vscode' | 'external';
