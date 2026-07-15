@@ -60,12 +60,12 @@ type runLogLocator interface {
 // it runs (keel/ac-42) so a missing or drifted tool fails loud.
 //
 // DHF-REQ: keel/requirement-10, keel/requirement-11, keel/requirement-12
-func ciSteps(dir string) []step {
+func ciSteps(ctx context.Context, logger *slog.Logger, dir string) []step {
 	// Shell scripts are enumerated up front so shellcheck/shfmt receive explicit
 	// paths (no shell is involved to expand a glob). Sorted for stable output.
 	scripts, _ := filepath.Glob(filepath.Join(dir, "scripts", "*.sh"))
-	gofmtFiles, gofmtListErr := trackedFilesWithExt(dir, ".go")
-	cspellFiles, cspellListErr := trackedFilesWithExt(dir, ".go", ".md")
+	gofmtFiles, gofmtListErr := trackedFilesWithExt(ctx, logger, dir, ".go")
+	cspellFiles, cspellListErr := trackedFilesWithExt(ctx, logger, dir, ".go", ".md")
 	gofmtStep := step{
 		name:    "gofmt",
 		program: "gofmt",
@@ -155,17 +155,29 @@ func ciSteps(dir string) []step {
 // untracked or gitignored scratch in the checkout cannot red the gate.
 //
 // DHF-REQ: keel/requirement-85
-func trackedFilesWithExt(dir string, exts ...string) ([]string, error) {
-	out, err := exec.Command("git", "-C", dir, "ls-files").Output()
+func trackedFilesWithExt(ctx context.Context, logger *slog.Logger, dir string, exts ...string) ([]string, error) {
+	proc, err := procexec.ProcessStart(ctx, procexec.Request{
+		Program: "git",
+		Args:    []string{"ls-files"},
+		Dir:     dir,
+		Logger:  logger,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("keel-dev: list git-tracked files: %w", err)
+	}
+	res, waitErr := proc.Wait()
+	if waitErr != nil {
+		return nil, fmt.Errorf("keel-dev: list git-tracked files: %w", waitErr)
+	}
+	if res.ExitCode != 0 {
+		return nil, fmt.Errorf("keel-dev: list git-tracked files: git ls-files exited %d", res.ExitCode)
 	}
 	want := make(map[string]bool, len(exts))
 	for _, ext := range exts {
 		want[ext] = true
 	}
 	var files []string
-	for _, file := range strings.Split(string(out), "\n") {
+	for _, file := range strings.Split(res.Stdout, "\n") {
 		file = strings.TrimSpace(file)
 		if file == "" || !want[filepath.Ext(file)] {
 			continue
@@ -199,7 +211,7 @@ func runCIWithRunLog(ctx context.Context, logger *slog.Logger, runLog runLogLoca
 	if err := logExpectedRed(logger, dir); err != nil {
 		return gateOperationalError("expected-red", "", 0, err)
 	}
-	for _, s := range ciSteps(dir) {
+	for _, s := range ciSteps(ctx, logger, dir) {
 		startLine := 0
 		logFile := ""
 		if runLog != nil {

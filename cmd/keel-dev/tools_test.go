@@ -364,7 +364,7 @@ func TestCiStepsHasStaticBattery(t *testing.T) {
 		t.Fatalf("findModuleRoot: %v", err)
 	}
 	byName := map[string]step{}
-	for _, s := range ciSteps(root) {
+	for _, s := range ciSteps(context.Background(), discardLogger(), root) {
 		byName[s.name] = s
 	}
 	for _, want := range []string{"golangci-lint", "govulncheck", "cspell", "gitleaks", "shellcheck", "shfmt", "deadcode"} {
@@ -404,8 +404,12 @@ func TestCiStepsFileSelectingGatesUseTrackedFiles(t *testing.T) {
 	mustRun(t, dir, "git", "add", "tracked.go", "tracked.md", ".gitignore")
 
 	byName := map[string]step{}
-	for _, s := range ciSteps(dir) {
+	logger, cap := testLogger("keel-dev")
+	for _, s := range ciSteps(context.Background(), logger, dir) {
 		byName[s.name] = s
+	}
+	if !processLifecycleRecorded(cap.AllJSON(), "git", []string{"ls-files"}) {
+		t.Fatalf("ciSteps must list tracked files through keel/exec lifecycle logging; records=%#v", cap.AllJSON())
 	}
 
 	gofmtStep, ok := byName["gofmt"]
@@ -438,13 +442,13 @@ func TestGofmtGateIgnoresUntrackedAndIgnoredFilesButFailsTrackedOffenders(t *tes
 	writeFile(t, dir, "untracked.go", "package p\n\nvar    Untracked = 1\n")
 	mustRun(t, dir, "git", "add", ".gitignore", "tracked.go")
 
-	if err := runStep(context.Background(), discardLogger(), dir, stepByName(t, ciSteps(dir), "gofmt")); err != nil {
+	if err := runStep(context.Background(), discardLogger(), dir, stepByName(t, ciSteps(context.Background(), discardLogger(), dir), "gofmt")); err != nil {
 		t.Fatalf("gofmt should ignore untracked/gitignored offenders, got %v", err)
 	}
 
 	writeFile(t, dir, "tracked_bad.go", "package p\n\nvar    Tracked = 1\n")
 	mustRun(t, dir, "git", "add", "tracked_bad.go")
-	err := runStep(context.Background(), discardLogger(), dir, stepByName(t, ciSteps(dir), "gofmt"))
+	err := runStep(context.Background(), discardLogger(), dir, stepByName(t, ciSteps(context.Background(), discardLogger(), dir), "gofmt"))
 	if err == nil {
 		t.Fatal("gofmt should fail on a tracked offender, got nil")
 	}
@@ -490,13 +494,13 @@ exit 0
 		t.Fatal(err)
 	}
 
-	if err := runStep(context.Background(), discardLogger(), dir, stepByName(t, ciSteps(dir), "cspell")); err != nil {
+	if err := runStep(context.Background(), discardLogger(), dir, stepByName(t, ciSteps(context.Background(), discardLogger(), dir), "cspell")); err != nil {
 		t.Fatalf("cspell should ignore untracked/gitignored offenders, got %v", err)
 	}
 
 	writeFile(t, dir, "tracked_bad.md", "tracked spelling offender\n")
 	mustRun(t, dir, "git", "add", "tracked_bad.md")
-	if err := runStep(context.Background(), discardLogger(), dir, stepByName(t, ciSteps(dir), "cspell")); err == nil {
+	if err := runStep(context.Background(), discardLogger(), dir, stepByName(t, ciSteps(context.Background(), discardLogger(), dir), "cspell")); err == nil {
 		t.Fatal("cspell should fail on a tracked offender, got nil")
 	}
 }
@@ -510,6 +514,23 @@ func stepByName(t *testing.T, steps []step, name string) step {
 	}
 	t.Fatalf("ci gate is missing %q", name)
 	return step{}
+}
+
+func processLifecycleRecorded(records []map[string]any, program string, args []string) bool {
+	wantCommand := strings.TrimSpace(program + " " + strings.Join(args, " "))
+	var sawStart, sawEnd bool
+	for _, rec := range records {
+		switch rec["event_type"] {
+		case "process_start":
+			commandLine, _ := rec["command_line"].(string)
+			if rec["program"] == program && commandLine == wantCommand {
+				sawStart = true
+			}
+		case "process_end":
+			sawEnd = true
+		}
+	}
+	return sawStart && sawEnd
 }
 
 func stringSliceEqual(a, b []string) bool {
