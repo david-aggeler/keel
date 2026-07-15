@@ -551,6 +551,7 @@ func deriveDesiredStateRow(ctx context.Context, root string, row DesiredStateRow
 }
 
 // DHF-REQ: keel/requirement-58
+// DHF-REQ: keel/requirement-86
 func handleRun(bridge Bridge) cli.Handler {
 	return func(ctx context.Context, args []string) error {
 		rt := runtimeOrDefault(ctx, bridge)
@@ -568,7 +569,7 @@ func handleRun(bridge Bridge) cli.Handler {
 		if dryRun {
 			return nil
 		}
-		ids = runRequestIDs(requests)
+		ids = runResolutionIDs(requests)
 		runID := newRunID(rt)
 		writer, closeWriter, err := newRunWriter(rt, bridge.Workspace(), runID)
 		if err != nil {
@@ -576,7 +577,7 @@ func handleRun(bridge Bridge) cli.Handler {
 		}
 		defer closeWriter()
 		exitCode := 1
-		writer(vscode.RunEvent{Event: "run_started", Live: boolPtr(true), Requested: requests})
+		writer(vscode.RunEvent{Event: "run_started", Live: boolPtr(true), Requested: runResolutionRequests(requests)})
 		if locker, ok := bridge.(lockExemptRunner); !ok || !locker.LockExemptRun(ids) {
 			releaseLock, err := acquireRunLock(runtimeRoot(rt, bridge), ids, runID)
 			if err != nil {
@@ -592,10 +593,10 @@ func handleRun(bridge Bridge) cli.Handler {
 		}
 
 		root := runtimeRoot(rt, bridge)
-		var remaining []string
-		exitCode, remaining, runErr := runDesiredStateSelections(ctx, bridge, ids, writer)
+		var remaining []runResolution
+		exitCode, remaining, runErr := runDesiredStateSelections(ctx, bridge, requests, writer)
 		if runErr == nil && len(remaining) > 0 {
-			exitCode, runErr = bridge.Run(ctx, RunRequest{IDs: append([]string{}, remaining...), RunID: runID, Root: root}, writer)
+			exitCode, runErr = runRemainingSelections(ctx, bridge, remaining, runID, root, writer)
 		}
 		if runErr != nil {
 			writer(vscode.RunEvent{Event: "errored", Message: runErr.Error()})
@@ -612,19 +613,21 @@ func handleRun(bridge Bridge) cli.Handler {
 }
 
 // DHF-REQ: keel/requirement-75
-func runDesiredStateSelections(ctx context.Context, bridge Bridge, ids []string, writer vscode.RunEventWriter) (int, []string, error) {
+func runDesiredStateSelections(ctx context.Context, bridge Bridge, requests []runResolution, writer vscode.RunEventWriter) (int, []runResolution, error) {
+	ids := runResolutionIDs(requests)
 	declared, err := bridge.DesiredState(ctx, ids)
 	if err != nil {
-		return 0, append([]string{}, ids...), nil
+		return 0, append([]runResolution{}, requests...), nil
 	}
 	rt := runtimeOrDefault(ctx, bridge)
 	rows := desiredStateDeclarationsByRunID(declared)
-	remaining := make([]string, 0, len(ids))
+	remaining := make([]runResolution, 0, len(requests))
 	exitCode := 0
-	for _, id := range ids {
+	for _, request := range requests {
+		id := request.Request.ID
 		row, ok := rows[id]
 		if !ok {
-			remaining = append(remaining, id)
+			remaining = append(remaining, request)
 			continue
 		}
 		derived, err := deriveDesiredStateRow(ctx, runtimeRoot(rt, bridge), row)
@@ -643,6 +646,35 @@ func runDesiredStateSelections(ctx context.Context, bridge Bridge, ids []string,
 		return exitCode, remaining, fmt.Errorf("desired-state row failed")
 	}
 	return exitCode, remaining, nil
+}
+
+// DHF-REQ: keel/requirement-86
+func runRemainingSelections(ctx context.Context, bridge Bridge, requests []runResolution, runID, root string, writer vscode.RunEventWriter) (int, error) {
+	runBatch := func(ids []string) (int, error) {
+		if len(ids) == 0 {
+			return 0, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return 1, err
+		}
+		return bridge.Run(ctx, RunRequest{IDs: append([]string{}, ids...), RunID: runID, Root: root}, writer)
+	}
+
+	batch := make([]string, 0, len(requests))
+	for _, request := range requests {
+		if !request.ExpandedGroupChild {
+			batch = append(batch, request.Request.ID)
+			continue
+		}
+		if exitCode, err := runBatch(batch); err != nil || exitCode != 0 {
+			return exitCode, err
+		}
+		batch = batch[:0]
+		if exitCode, err := runBatch([]string{request.Request.ID}); err != nil || exitCode != 0 {
+			return exitCode, err
+		}
+	}
+	return runBatch(batch)
 }
 
 func desiredStateDeclarationsByRunID(desiredState DesiredStateDeclaration) map[string]DesiredStateRow {
@@ -683,8 +715,8 @@ func parseRunArgs(args []string) ([]string, bool, error) {
 }
 
 // DHF-REQ: keel/requirement-58, keel/requirement-72
-// DHF-REQ: keel/requirement-84
-func resolveRunRequests(ctx context.Context, bridge Bridge, ids []string, strict bool) ([]vscode.RunRequest, error) {
+// DHF-REQ: keel/requirement-84, keel/requirement-86
+func resolveRunRequests(ctx context.Context, bridge Bridge, ids []string, strict bool) ([]runResolution, error) {
 	doc, err := discoverWithDerivedDesiredState(ctx, bridge)
 	if err != nil {
 		return nil, err
@@ -693,20 +725,20 @@ func resolveRunRequests(ctx context.Context, bridge Bridge, ids []string, strict
 	for _, item := range doc.Items {
 		items[item.ID] = item
 	}
-	resolved := make([]vscode.RunRequest, 0, len(ids))
+	resolved := make([]runResolution, 0, len(ids))
 	resolvedIDs := map[string]struct{}{}
-	appendResolved := func(request vscode.RunRequest) {
-		if _, ok := resolvedIDs[request.ID]; ok {
+	appendResolved := func(request runResolution) {
+		if _, ok := resolvedIDs[request.Request.ID]; ok {
 			return
 		}
-		resolvedIDs[request.ID] = struct{}{}
+		resolvedIDs[request.Request.ID] = struct{}{}
 		resolved = append(resolved, request)
 	}
 	for _, id := range ids {
 		item, ok := items[id]
 		if !ok {
 			if !strict {
-				appendResolved(vscode.RunRequest{ID: id, Label: id})
+				appendResolved(runResolution{Request: vscode.RunRequest{ID: id, Label: id}})
 				continue
 			}
 			return nil, cli.NewUsageError("unknown test id %q", id)
@@ -728,16 +760,31 @@ func resolveRunRequests(ctx context.Context, bridge Bridge, ids []string, strict
 				return nil, cli.NewUsageError("test id %q resolves to non-runnable desired-state group %q", id, targetID)
 			}
 			for _, child := range children {
-				appendResolved(runRequestForTestItem(child))
+				appendResolved(runResolution{Request: runRequestForTestItem(child)})
+			}
+			continue
+		}
+		if nonDesiredStateGroupItemWithDescendants(doc.Items, target) {
+			children := runnableDescendantLeafItems(doc.Items, targetID)
+			if len(children) == 0 {
+				return nil, cli.NewUsageError("group %q has no runnable descendants", targetID)
+			}
+			for _, child := range children {
+				appendResolved(runResolution{Request: runRequestForTestItem(child), ExpandedGroupChild: true})
 			}
 			continue
 		}
 		if !target.Runnable && (strict || item.CanonicalID != "") {
 			return nil, cli.NewUsageError("test id %q resolves to non-runnable id %q", id, targetID)
 		}
-		appendResolved(runRequestForTestItem(target))
+		appendResolved(runResolution{Request: runRequestForTestItem(target)})
 	}
 	return resolved, nil
+}
+
+type runResolution struct {
+	Request            vscode.RunRequest
+	ExpandedGroupChild bool
 }
 
 func desiredStateGroupItem(item vscode.TestItem) bool {
@@ -752,6 +799,18 @@ func desiredStateGroupItem(item vscode.TestItem) bool {
 	return false
 }
 
+func nonDesiredStateGroupItemWithDescendants(items []vscode.TestItem, item vscode.TestItem) bool {
+	if item.Kind != "group" || desiredStateGroupItem(item) {
+		return false
+	}
+	for _, candidate := range items {
+		if candidate.ParentID == item.ID {
+			return true
+		}
+	}
+	return false
+}
+
 func runnableDesiredStateGroupChildren(items []vscode.TestItem, groupID string) []vscode.TestItem {
 	children := make([]vscode.TestItem, 0)
 	for _, item := range items {
@@ -760,6 +819,32 @@ func runnableDesiredStateGroupChildren(items []vscode.TestItem, groupID string) 
 		}
 	}
 	return children
+}
+
+func runnableDescendantLeafItems(items []vscode.TestItem, groupID string) []vscode.TestItem {
+	childrenByParent := make(map[string][]vscode.TestItem)
+	for _, item := range items {
+		if item.ParentID == "" {
+			continue
+		}
+		childrenByParent[item.ParentID] = append(childrenByParent[item.ParentID], item)
+	}
+
+	leaves := make([]vscode.TestItem, 0)
+	var walk func(string)
+	walk = func(parentID string) {
+		for _, child := range childrenByParent[parentID] {
+			if len(childrenByParent[child.ID]) > 0 {
+				walk(child.ID)
+				continue
+			}
+			if child.Runnable {
+				leaves = append(leaves, child)
+			}
+		}
+	}
+	walk(groupID)
+	return leaves
 }
 
 func runRequestForTestItem(item vscode.TestItem) vscode.RunRequest {
@@ -1080,10 +1165,18 @@ func newRunID(rt Runtime) string {
 	return "run-" + now.UTC().Format("20060102T150405.000000000Z")
 }
 
-func runRequestIDs(requests []vscode.RunRequest) []string {
+func runResolutionIDs(requests []runResolution) []string {
 	out := make([]string, 0, len(requests))
 	for _, request := range requests {
-		out = append(out, request.ID)
+		out = append(out, request.Request.ID)
+	}
+	return out
+}
+
+func runResolutionRequests(requests []runResolution) []vscode.RunRequest {
+	out := make([]vscode.RunRequest, 0, len(requests))
+	for _, request := range requests {
+		out = append(out, request.Request)
 	}
 	return out
 }

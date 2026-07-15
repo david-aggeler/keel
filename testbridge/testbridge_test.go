@@ -963,6 +963,200 @@ func TestRunDesiredStateGroupWithNoRunnableRowsFailsLoudly(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-86
+func TestRunExpandsNonDesiredStateGroupToRunnableDescendantLeaves(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{
+		{
+			ID:       "demo::lanes",
+			Label:    "C - Lanes",
+			Kind:     "group",
+			Runnable: false,
+			Profiles: []string{},
+		},
+		{
+			ID:       "demo::lane::fast",
+			ParentID: "demo::lanes",
+			Label:    "Fast",
+			Kind:     "lane",
+			Runnable: true,
+			Profiles: []string{"run"},
+		},
+		{
+			ID:       "demo::lane::slow",
+			ParentID: "demo::lanes",
+			Label:    "Slow",
+			Kind:     "lane",
+			Runnable: true,
+			Profiles: []string{"run"},
+		},
+		{
+			ID:       "demo::lane::manual",
+			ParentID: "demo::lanes",
+			Label:    "Manual",
+			Kind:     "lane",
+			Runnable: false,
+			Profiles: []string{},
+		},
+	}
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return "run-lanes" }})
+
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", "demo::lanes"}); err != nil {
+		t.Fatalf("non-desired group run dispatch: %v\n%s", err, protocol.String())
+	}
+	if !equalStrings(fake.runIDs, []string{"demo::lane::fast", "demo::lane::slow"}) {
+		t.Fatalf("consumer runner ids = %v, want runnable descendant leaves only", fake.runIDs)
+	}
+	events := decodeEvents(t, protocol.String())
+	wantRequested := []vscode.RunRequest{
+		{ID: "demo::lane::fast", Label: "Fast"},
+		{ID: "demo::lane::slow", Label: "Slow"},
+	}
+	if len(events) == 0 || !reflect.DeepEqual(events[0].Requested, wantRequested) {
+		t.Fatalf("run_started requested = %+v, want expanded leaf requests %+v", events[0].Requested, wantRequested)
+	}
+}
+
+// DHF-TEST: keel/requirement-86
+func TestRunNonDesiredStateGroupWithNoRunnableDescendantsFailsLoudly(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{
+		{
+			ID:       "demo::empty-group",
+			Label:    "Empty Group",
+			Kind:     "group",
+			Runnable: false,
+			Profiles: []string{},
+		},
+		{
+			ID:       "demo::empty-group::info",
+			ParentID: "demo::empty-group",
+			Label:    "Info",
+			Kind:     "note",
+			Runnable: false,
+			Profiles: []string{},
+		},
+	}
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return "run-empty-tree" }})
+
+	err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", "demo::empty-group"})
+	var usage cli.UsageError
+	if !errors.As(err, &usage) || !strings.Contains(err.Error(), `group "demo::empty-group" has no runnable descendants`) {
+		t.Fatalf("zero-runnable non-desired group err = %v, want loud usage error", err)
+	}
+	if len(fake.runIDs) != 0 {
+		t.Fatalf("consumer runner received zero-runnable group ids: %v", fake.runIDs)
+	}
+	if events := decodeEvents(t, protocol.String()); len(events) != 0 {
+		t.Fatalf("events = %+v, want no success events before run resolution", events)
+	}
+}
+
+// DHF-TEST: keel/requirement-86
+func TestRunNonDesiredStateGroupSelectionDoesNotDuplicateExplicitLeaves(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{
+		{
+			ID:       "demo::lanes",
+			Label:    "C - Lanes",
+			Kind:     "group",
+			Runnable: false,
+			Profiles: []string{},
+		},
+		{
+			ID:       "demo::lane::fast",
+			ParentID: "demo::lanes",
+			Label:    "Fast",
+			Kind:     "lane",
+			Runnable: true,
+			Profiles: []string{"run"},
+		},
+		{
+			ID:       "demo::lane::slow",
+			ParentID: "demo::lanes",
+			Label:    "Slow",
+			Kind:     "lane",
+			Runnable: true,
+			Profiles: []string{"run"},
+		},
+	}
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return "run-mixed-lanes" }})
+
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{
+		"test-bridge", "tests", "run",
+		"--id", "demo::lanes",
+		"--id", "demo::lane::fast",
+	}); err != nil {
+		t.Fatalf("mixed non-desired group run dispatch: %v\n%s", err, protocol.String())
+	}
+	if !equalStrings(fake.runIDs, []string{"demo::lane::fast", "demo::lane::slow"}) {
+		t.Fatalf("consumer runner ids = %v, want deduplicated runnable leaves", fake.runIDs)
+	}
+	events := decodeEvents(t, protocol.String())
+	wantRequested := []vscode.RunRequest{
+		{ID: "demo::lane::fast", Label: "Fast"},
+		{ID: "demo::lane::slow", Label: "Slow"},
+	}
+	if len(events) == 0 || !reflect.DeepEqual(events[0].Requested, wantRequested) {
+		t.Fatalf("run_started requested = %+v, want deduplicated leaf requests %+v", events[0].Requested, wantRequested)
+	}
+}
+
+// DHF-TEST: keel/requirement-86
+func TestRunNonDesiredStateGroupCancellationStopsRemainingChildren(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{
+		{
+			ID:       "demo::lanes",
+			Label:    "C - Lanes",
+			Kind:     "group",
+			Runnable: false,
+			Profiles: []string{},
+		},
+		{
+			ID:       "demo::lane::fast",
+			ParentID: "demo::lanes",
+			Label:    "Fast",
+			Kind:     "lane",
+			Runnable: true,
+			Profiles: []string{"run"},
+		},
+		{
+			ID:       "demo::lane::slow",
+			ParentID: "demo::lanes",
+			Label:    "Slow",
+			Kind:     "lane",
+			Runnable: true,
+			Profiles: []string{"run"},
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	fake.cancelAfterFirstRun = cancel
+	var protocol bytes.Buffer
+	ctx = testbridge.WithRuntime(ctx, testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return "run-cancel-lanes" }})
+
+	err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", "demo::lanes"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled group run err = %v, want context.Canceled", err)
+	}
+	if got, want := fake.runCalls, 1; got != want {
+		t.Fatalf("runner calls = %d, want %d", got, want)
+	}
+	if !equalStrings(fake.runIDs, []string{"demo::lane::fast"}) {
+		t.Fatalf("consumer runner ids = %v, want only first child before cancellation", fake.runIDs)
+	}
+	if events := decodeEvents(t, protocol.String()); !eventsContain(events, "passed", "demo::lane::fast", "") || eventsContain(events, "passed", "demo::lane::slow", "") {
+		t.Fatalf("events = %+v, want first child only before cancellation", events)
+	}
+}
+
 // DHF-TEST: keel/requirement-84
 func TestRunDoesNotTreatLimitationStringAloneAsDesiredStateGroup(t *testing.T) {
 	root := t.TempDir()
@@ -1624,6 +1818,8 @@ type fakeBridge struct {
 	calls                   string
 	extraItems              []vscode.TestItem
 	runIDs                  []string
+	runCalls                int
+	cancelAfterFirstRun     context.CancelFunc
 	mutateDuringRun         string
 	sawRunLock              bool
 	exemptRun               bool
@@ -1784,7 +1980,11 @@ func testItemByID(items []vscode.TestItem, id string) (vscode.TestItem, bool) {
 }
 
 func (f *fakeBridge) Run(_ context.Context, req testbridge.RunRequest, emit vscode.RunEventWriter) (int, error) {
-	f.runIDs = append([]string{}, req.IDs...)
+	f.runCalls++
+	f.runIDs = append(f.runIDs, req.IDs...)
+	if f.cancelAfterFirstRun != nil && f.runCalls == 1 {
+		f.cancelAfterFirstRun()
+	}
 	if _, err := os.Stat(filepath.Join(f.root, ".devtools", "vscode-runs", "run.lock")); err == nil {
 		f.sawRunLock = true
 	}
