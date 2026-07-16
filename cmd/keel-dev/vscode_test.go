@@ -1268,6 +1268,9 @@ esac`)
 				t.Fatalf("pnpm call missing exact vsix file filter %q:\n%s", tc.wantCall, got)
 			}
 			events := decodeRunEvents(t, protocol.String())
+			if !runEventsContain(events, "test_started", tc.id) {
+				t.Fatalf("run events missing selected id start for %s: %+v", tc.id, events)
+			}
 			if !runEventsContain(events, "passed", tc.id) {
 				t.Fatalf("run events missing selected id pass for %s: %+v", tc.id, events)
 			}
@@ -1275,6 +1278,48 @@ esac`)
 				t.Fatalf("terminal event = %+v, want run_finished exit 0", events[len(events)-1])
 			}
 		})
+	}
+}
+
+// DHF-TEST: keel/requirement-91
+func TestVSCodeRunDirectVSIXSelectionFailureUsesSelectedID(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	for _, dir := range []string{".vscode", filepath.Join("vsix", "src", "test", "suite")} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, root, filepath.Join("vsix", "src", "test", "suite", "tree.test.ts"), "suite('y', () => {});\n")
+	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{"version":1,"lanes":[]}`+"\n")
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", "exit 0")
+	stub(t, bin, callsFile, "pnpm", `
+printf 'mocha failed\n' >&2
+exit 1`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	const selectedID = "vsix::file::src/test/suite/tree.test.ts"
+	var protocol bytes.Buffer
+	err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), selectedID)
+	if err == nil {
+		t.Fatalf("direct vsix selection failure returned nil\nprotocol:\n%s\ncalls:\n%s", protocol.String(), calls(t, callsFile))
+	}
+	events := decodeRunEvents(t, protocol.String())
+	if !runEventsContain(events, "test_started", selectedID) {
+		t.Fatalf("run events missing selected id start for %s: %+v", selectedID, events)
+	}
+	if !runEventsContain(events, "failed", selectedID) {
+		t.Fatalf("run events missing selected id failure for %s: %+v", selectedID, events)
+	}
+	if !runEventsContain(events, "errored", "") {
+		t.Fatalf("run events missing generic errored event for command failure: %+v", events)
+	}
+	if events[len(events)-1].Event != "run_finished" || events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode == 0 {
+		t.Fatalf("terminal event = %+v, want run_finished non-zero", events[len(events)-1])
 	}
 }
 

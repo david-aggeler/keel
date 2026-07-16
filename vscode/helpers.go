@@ -62,13 +62,24 @@ func ParseVSIXItemID(id string) (VSIXSelection, bool) {
 		return VSIXSelection{Kind: "root"}, true
 	case strings.HasPrefix(id, "vsix::file::"):
 		rel := strings.TrimPrefix(id, "vsix::file::")
-		if rel == "" {
+		clean := filepath.Clean(filepath.FromSlash(rel))
+		slashRel := filepath.ToSlash(clean)
+		if rel == "" || filepath.IsAbs(clean) || slashRel == "." || slashRel == ".." || strings.HasPrefix(slashRel, "../") || rel != slashRel || !isVSIXTestFileRel(slashRel) {
 			return VSIXSelection{}, false
 		}
-		return VSIXSelection{Kind: "file", File: rel}, true
+		return VSIXSelection{Kind: "file", File: slashRel}, true
 	default:
 		return VSIXSelection{}, false
 	}
+}
+
+func isVSIXTestFileRel(rel string) bool {
+	for _, suffix := range []string{".test.ts", ".spec.ts", ".test.tsx", ".spec.tsx"} {
+		if strings.HasSuffix(rel, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // GoEventPackageRel resolves a go test -json package path to a module-relative
