@@ -599,13 +599,19 @@ func TestExclusiveDesiredStateReconcileSelectionClearsSiblingResults(t *testing.
 		Profiles: []string{},
 	}}
 	fake.desiredStateEmptyForSelectedIDs = true
+	marker := filepath.Join(root, ".devtools", "selected-full")
+	fake.mutateDuringRun = marker
+	selectedFull := func() bool {
+		_, err := os.Stat(marker)
+		return err == nil
+	}
 	fake.desiredGroups = []testbridge.DesiredStateGroup{{
 		Label:             "Data Set",
 		Order:             20,
 		MutuallyExclusive: true,
 		Rows: []testbridge.DesiredStateRow{
-			probedRow("demo::desired-state::dataset::small", "app-db-small", "fixture-data", "small", "small", true, "small active", false, true),
-			probedRow("demo::desired-state::dataset::full", "app-db-full", "fixture-data", "full", "small", false, "full reconcilable", false, false),
+			mutableDesiredStateRow("demo::desired-state::dataset::small", "app-db-small", "small", func() bool { return !selectedFull() }),
+			mutableDesiredStateRow("demo::desired-state::dataset::full", "app-db-full", "full", selectedFull),
 		},
 	}}
 	var protocol bytes.Buffer
@@ -628,6 +634,24 @@ func TestExclusiveDesiredStateReconcileSelectionClearsSiblingResults(t *testing.
 		!eventsContain(events, "cleared", "demo::desired-state::dataset::small", "deactivated by exclusive desired-state selection") ||
 		!eventsContain(events, "cleared", unknownID, "deactivated by exclusive desired-state selection") {
 		t.Fatalf("reconcile selection events = %+v, want selected pass and sibling clear events", events)
+	}
+
+	protocol.Reset()
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "desired-state", "--format", "json"}); err != nil {
+		t.Fatalf("post-run desired-state dispatch: %v", err)
+	}
+	var desired vscode.DesiredStateDocument
+	decodeJSON(t, &protocol, &desired)
+	group := desiredStateGroupByLabel(t, desired.Groups, "Data Set")
+	full := desiredStateRowByResource(t, group.Rows, "app-db-full")
+	if !full.Active || full.Action != "reuse" || full.Status != "satisfied" {
+		t.Fatalf("post-run full row = %+v, want selected active satisfied reuse row", full)
+	}
+	for _, resource := range []string{"app-db-small", "Unknown State"} {
+		row := desiredStateRowByResource(t, group.Rows, resource)
+		if row.Active {
+			t.Fatalf("post-run row %q active with selected full active: %+v", resource, group.Rows)
+		}
 	}
 }
 
@@ -2402,6 +2426,22 @@ func probedRow(runID, resource, kind, desired, current string, satisfied bool, m
 		Active:   active,
 		Probe: func(context.Context, testbridge.DesiredStateProbeRequest) testbridge.DesiredStateProbeResult {
 			return testbridge.DesiredStateProbeResult{Current: current, Satisfied: satisfied, Message: message}
+		},
+	}
+}
+
+func mutableDesiredStateRow(runID, resource, desired string, satisfied func() bool) testbridge.DesiredStateRow {
+	return testbridge.DesiredStateRow{
+		RunID:    runID,
+		Resource: resource,
+		Kind:     "fixture-data",
+		Desired:  desired,
+		Owned:    true,
+		Probe: func(context.Context, testbridge.DesiredStateProbeRequest) testbridge.DesiredStateProbeResult {
+			if satisfied() {
+				return testbridge.DesiredStateProbeResult{Current: desired, Satisfied: true, Message: resource + " active"}
+			}
+			return testbridge.DesiredStateProbeResult{Current: "small", Satisfied: false, Message: resource + " reconcilable"}
 		},
 	}
 }
