@@ -587,6 +587,74 @@ func TestExclusiveDesiredStateSingleSelectionClearsSiblingResults(t *testing.T) 
 	}
 }
 
+// DHF-TEST: keel/requirement-88
+func TestExclusiveDesiredStateReconcileSelectionClearsSiblingResults(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{{
+		ID:       "demo::desired-state",
+		Label:    "B - Desired State",
+		Kind:     "group",
+		Runnable: false,
+		Profiles: []string{},
+	}}
+	fake.desiredStateEmptyForSelectedIDs = true
+	marker := filepath.Join(root, ".devtools", "selected-full")
+	fake.mutateDuringRun = marker
+	selectedFull := func() bool {
+		_, err := os.Stat(marker)
+		return err == nil
+	}
+	fake.desiredGroups = []testbridge.DesiredStateGroup{{
+		Label:             "Data Set",
+		Order:             20,
+		MutuallyExclusive: true,
+		Rows: []testbridge.DesiredStateRow{
+			mutableDesiredStateRow("demo::desired-state::dataset::small", "app-db-small", "small", func() bool { return !selectedFull() }),
+			mutableDesiredStateRow("demo::desired-state::dataset::full", "app-db-full", "full", selectedFull),
+		},
+	}}
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{
+		Root:     root,
+		Protocol: &protocol,
+		RunID:    func() string { return "run-exclusive-reconcile" },
+	})
+
+	fullID := "demo::desired-state::dataset::full"
+	unknownID := "demo::desired-state::group::data-set::unknown"
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", fullID}); err != nil {
+		t.Fatalf("run reconcile concrete dispatch: %v\n%s", err, protocol.String())
+	}
+	if got, want := fake.runIDs, []string{fullID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("consumer Run ids = %v, want reconcile path for %v", got, want)
+	}
+	events := decodeEvents(t, protocol.String())
+	if !eventsContain(events, "passed", fullID, "") ||
+		!eventsContain(events, "cleared", "demo::desired-state::dataset::small", "deactivated by exclusive desired-state selection") ||
+		!eventsContain(events, "cleared", unknownID, "deactivated by exclusive desired-state selection") {
+		t.Fatalf("reconcile selection events = %+v, want selected pass and sibling clear events", events)
+	}
+
+	protocol.Reset()
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "desired-state", "--format", "json"}); err != nil {
+		t.Fatalf("post-run desired-state dispatch: %v", err)
+	}
+	var desired vscode.DesiredStateDocument
+	decodeJSON(t, &protocol, &desired)
+	group := desiredStateGroupByLabel(t, desired.Groups, "Data Set")
+	full := desiredStateRowByResource(t, group.Rows, "app-db-full")
+	if !full.Active || full.Action != "reuse" || full.Status != "satisfied" {
+		t.Fatalf("post-run full row = %+v, want selected active satisfied reuse row", full)
+	}
+	for _, resource := range []string{"app-db-small", "Unknown State"} {
+		row := desiredStateRowByResource(t, group.Rows, resource)
+		if row.Active {
+			t.Fatalf("post-run row %q active with selected full active: %+v", resource, group.Rows)
+		}
+	}
+}
+
 // DHF-TEST: keel/requirement-87
 func TestDiscoverInjectsBridgeOwnedMaintenanceVocabulary(t *testing.T) {
 	root := t.TempDir()
@@ -2218,23 +2286,24 @@ func desiredStateRowByResource(t *testing.T, rows []vscode.DesiredState, resourc
 }
 
 type fakeBridge struct {
-	root                    string
-	calls                   string
-	extraItems              []vscode.TestItem
-	runIDs                  []string
-	runCalls                int
-	cancelAfterFirstRun     context.CancelFunc
-	mutateDuringRun         string
-	sawRunLock              bool
-	exemptRun               bool
-	removeRunLockDuringRun  bool
-	clearStatePath          string
-	clearStateCalls         int
-	runErr                  error
-	discoverErr             error
-	desiredErr              error
-	desiredGroups           []testbridge.DesiredStateGroup
-	filterDesiredStateByIDs bool
+	root                            string
+	calls                           string
+	extraItems                      []vscode.TestItem
+	runIDs                          []string
+	runCalls                        int
+	cancelAfterFirstRun             context.CancelFunc
+	mutateDuringRun                 string
+	sawRunLock                      bool
+	exemptRun                       bool
+	removeRunLockDuringRun          bool
+	clearStatePath                  string
+	clearStateCalls                 int
+	runErr                          error
+	discoverErr                     error
+	desiredErr                      error
+	desiredGroups                   []testbridge.DesiredStateGroup
+	filterDesiredStateByIDs         bool
+	desiredStateEmptyForSelectedIDs bool
 }
 
 func newFakeBridge(root string) *fakeBridge {
@@ -2306,6 +2375,9 @@ func (f *fakeBridge) DesiredState(_ context.Context, ids []string) (testbridge.D
 		return testbridge.DesiredStateDeclaration{}, f.desiredErr
 	}
 	f.appendCall("desiredState:" + strings.Join(ids, ","))
+	if f.desiredStateEmptyForSelectedIDs && len(ids) > 0 {
+		return testbridge.DesiredStateDeclaration{}, nil
+	}
 	groups := f.desiredGroups
 	if groups == nil {
 		groups = []testbridge.DesiredStateGroup{{
@@ -2354,6 +2426,22 @@ func probedRow(runID, resource, kind, desired, current string, satisfied bool, m
 		Active:   active,
 		Probe: func(context.Context, testbridge.DesiredStateProbeRequest) testbridge.DesiredStateProbeResult {
 			return testbridge.DesiredStateProbeResult{Current: current, Satisfied: satisfied, Message: message}
+		},
+	}
+}
+
+func mutableDesiredStateRow(runID, resource, desired string, satisfied func() bool) testbridge.DesiredStateRow {
+	return testbridge.DesiredStateRow{
+		RunID:    runID,
+		Resource: resource,
+		Kind:     "fixture-data",
+		Desired:  desired,
+		Owned:    true,
+		Probe: func(context.Context, testbridge.DesiredStateProbeRequest) testbridge.DesiredStateProbeResult {
+			if satisfied() {
+				return testbridge.DesiredStateProbeResult{Current: desired, Satisfied: true, Message: resource + " active"}
+			}
+			return testbridge.DesiredStateProbeResult{Current: "small", Satisfied: false, Message: resource + " reconcilable"}
 		},
 	}
 }
