@@ -491,7 +491,7 @@ suite('Keel Test Bridge config contract', () => {
     const demoController = vscode.tests.createTestController(`keelDemoDevDiscovery-${Date.now()}`, 'Keel Demo Dev Discovery');
     try {
       const demoTree = publishDiscovery(demoController, root, demoDiscovery);
-      assert.ok(demoTree.discoveryItemsById.has('keel-demo-dev::maintenance'));
+      assert.ok(demoTree.discoveryItemsById.has('keel::maintenance'));
       assert.ok(demoTree.discoveryItemsById.has('keel-demo-dev::lanes'));
       assert.ok(demoTree.discoveryItemsById.has('keel-demo-dev::frameworks'));
       assert.ok(demoTree.discoveryItemsById.has('keel-demo-dev::lane::fake-smoke'));
