@@ -846,19 +846,27 @@ func emitExclusiveDesiredStateSiblingClears(ids []string, writer vscode.RunEvent
 	}
 }
 
-// DHF-REQ: keel/requirement-86
+// DHF-REQ: keel/requirement-86, keel/requirement-88
 func runRemainingSelections(ctx context.Context, bridge Bridge, requests []runResolution, runID, root string, writer vscode.RunEventWriter) (int, error) {
-	runBatch := func(ids []string) (int, error) {
-		if len(ids) == 0 {
+	runBatch := func(batch []runResolution) (int, error) {
+		if len(batch) == 0 {
 			return 0, nil
 		}
 		if err := ctx.Err(); err != nil {
 			return 1, err
 		}
-		return bridge.Run(ctx, RunRequest{IDs: append([]string{}, ids...), RunID: runID, Root: root}, writer)
+		ids := runResolutionIDs(batch)
+		exitCode, err := bridge.Run(ctx, RunRequest{IDs: ids, RunID: runID, Root: root}, writer)
+		if err != nil || exitCode != 0 {
+			return exitCode, err
+		}
+		for _, request := range batch {
+			emitExclusiveDesiredStateSiblingClears(request.ExclusiveSiblingIDs, writer)
+		}
+		return exitCode, nil
 	}
 
-	batch := make([]string, 0, len(requests))
+	batch := make([]runResolution, 0, len(requests))
 	for _, request := range requests {
 		if bridgeHandlesMaintenanceRun(request.Request.ID) {
 			if exitCode, err := runBatch(batch); err != nil || exitCode != 0 {
@@ -871,14 +879,14 @@ func runRemainingSelections(ctx context.Context, bridge Bridge, requests []runRe
 			continue
 		}
 		if !request.ExpandedGroupChild {
-			batch = append(batch, request.Request.ID)
+			batch = append(batch, request)
 			continue
 		}
 		if exitCode, err := runBatch(batch); err != nil || exitCode != 0 {
 			return exitCode, err
 		}
 		batch = batch[:0]
-		if exitCode, err := runBatch([]string{request.Request.ID}); err != nil || exitCode != 0 {
+		if exitCode, err := runBatch([]runResolution{request}); err != nil || exitCode != 0 {
 			return exitCode, err
 		}
 	}

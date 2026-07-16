@@ -587,6 +587,50 @@ func TestExclusiveDesiredStateSingleSelectionClearsSiblingResults(t *testing.T) 
 	}
 }
 
+// DHF-TEST: keel/requirement-88
+func TestExclusiveDesiredStateReconcileSelectionClearsSiblingResults(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{{
+		ID:       "demo::desired-state",
+		Label:    "B - Desired State",
+		Kind:     "group",
+		Runnable: false,
+		Profiles: []string{},
+	}}
+	fake.desiredStateEmptyForSelectedIDs = true
+	fake.desiredGroups = []testbridge.DesiredStateGroup{{
+		Label:             "Data Set",
+		Order:             20,
+		MutuallyExclusive: true,
+		Rows: []testbridge.DesiredStateRow{
+			probedRow("demo::desired-state::dataset::small", "app-db-small", "fixture-data", "small", "small", true, "small active", false, true),
+			probedRow("demo::desired-state::dataset::full", "app-db-full", "fixture-data", "full", "small", false, "full reconcilable", false, false),
+		},
+	}}
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{
+		Root:     root,
+		Protocol: &protocol,
+		RunID:    func() string { return "run-exclusive-reconcile" },
+	})
+
+	fullID := "demo::desired-state::dataset::full"
+	unknownID := "demo::desired-state::group::data-set::unknown"
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", fullID}); err != nil {
+		t.Fatalf("run reconcile concrete dispatch: %v\n%s", err, protocol.String())
+	}
+	if got, want := fake.runIDs, []string{fullID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("consumer Run ids = %v, want reconcile path for %v", got, want)
+	}
+	events := decodeEvents(t, protocol.String())
+	if !eventsContain(events, "passed", fullID, "") ||
+		!eventsContain(events, "cleared", "demo::desired-state::dataset::small", "deactivated by exclusive desired-state selection") ||
+		!eventsContain(events, "cleared", unknownID, "deactivated by exclusive desired-state selection") {
+		t.Fatalf("reconcile selection events = %+v, want selected pass and sibling clear events", events)
+	}
+}
+
 // DHF-TEST: keel/requirement-87
 func TestDiscoverInjectsBridgeOwnedMaintenanceVocabulary(t *testing.T) {
 	root := t.TempDir()
@@ -2218,23 +2262,24 @@ func desiredStateRowByResource(t *testing.T, rows []vscode.DesiredState, resourc
 }
 
 type fakeBridge struct {
-	root                    string
-	calls                   string
-	extraItems              []vscode.TestItem
-	runIDs                  []string
-	runCalls                int
-	cancelAfterFirstRun     context.CancelFunc
-	mutateDuringRun         string
-	sawRunLock              bool
-	exemptRun               bool
-	removeRunLockDuringRun  bool
-	clearStatePath          string
-	clearStateCalls         int
-	runErr                  error
-	discoverErr             error
-	desiredErr              error
-	desiredGroups           []testbridge.DesiredStateGroup
-	filterDesiredStateByIDs bool
+	root                            string
+	calls                           string
+	extraItems                      []vscode.TestItem
+	runIDs                          []string
+	runCalls                        int
+	cancelAfterFirstRun             context.CancelFunc
+	mutateDuringRun                 string
+	sawRunLock                      bool
+	exemptRun                       bool
+	removeRunLockDuringRun          bool
+	clearStatePath                  string
+	clearStateCalls                 int
+	runErr                          error
+	discoverErr                     error
+	desiredErr                      error
+	desiredGroups                   []testbridge.DesiredStateGroup
+	filterDesiredStateByIDs         bool
+	desiredStateEmptyForSelectedIDs bool
 }
 
 func newFakeBridge(root string) *fakeBridge {
@@ -2306,6 +2351,9 @@ func (f *fakeBridge) DesiredState(_ context.Context, ids []string) (testbridge.D
 		return testbridge.DesiredStateDeclaration{}, f.desiredErr
 	}
 	f.appendCall("desiredState:" + strings.Join(ids, ","))
+	if f.desiredStateEmptyForSelectedIDs && len(ids) > 0 {
+		return testbridge.DesiredStateDeclaration{}, nil
+	}
 	groups := f.desiredGroups
 	if groups == nil {
 		groups = []testbridge.DesiredStateGroup{{
