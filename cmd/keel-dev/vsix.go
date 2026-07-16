@@ -35,7 +35,7 @@ func handleVSIXGate(ctx context.Context, args []string) error {
 	return runVSIXGate(ctx, state.logger, state.root)
 }
 
-// DHF-REQ: keel/requirement-40, keel/requirement-76
+// DHF-REQ: keel/requirement-40, keel/requirement-76, keel/requirement-90
 func runVSIXGate(ctx context.Context, logger *slog.Logger, dir string) error {
 	for _, tool := range []string{"node", "pnpm", "xvfb-run"} {
 		if _, err := exec.LookPath(tool); err != nil {
