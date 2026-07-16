@@ -18,6 +18,13 @@ type GoSelection struct {
 	TestNames []string
 }
 
+// VSIXSelection is the parsed shape of a VS Code VSIX test item id selected in
+// VS Code.
+type VSIXSelection struct {
+	Kind string
+	File string
+}
+
 // ParseGoItemID decodes a VS Code Go test item id into a GoSelection.
 //
 // DHF-REQ: keel/requirement-23
@@ -43,6 +50,24 @@ func ParseGoItemID(id string) (GoSelection, bool) {
 		return GoSelection{Kind: "test", Pkg: pkg, TestName: testName}, true
 	default:
 		return GoSelection{}, false
+	}
+}
+
+// ParseVSIXItemID decodes a VS Code VSIX test item id into a VSIXSelection.
+//
+// DHF-REQ: keel/requirement-91
+func ParseVSIXItemID(id string) (VSIXSelection, bool) {
+	switch {
+	case id == "vsix::root":
+		return VSIXSelection{Kind: "root"}, true
+	case strings.HasPrefix(id, "vsix::file::"):
+		rel := strings.TrimPrefix(id, "vsix::file::")
+		if rel == "" {
+			return VSIXSelection{}, false
+		}
+		return VSIXSelection{Kind: "file", File: rel}, true
+	default:
+		return VSIXSelection{}, false
 	}
 }
 

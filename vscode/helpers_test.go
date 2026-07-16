@@ -31,6 +31,30 @@ func TestParseGoItemID(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-91
+func TestParseVSIXItemID(t *testing.T) {
+	cases := []struct {
+		id   string
+		want VSIXSelection
+		ok   bool
+	}{
+		{"vsix::root", VSIXSelection{Kind: "root"}, true},
+		{"vsix::file::src/test/suite/extension.test.ts", VSIXSelection{Kind: "file", File: "src/test/suite/extension.test.ts"}, true},
+		{"vsix::file::", VSIXSelection{}, false},
+		{"vsix::test::src/test/suite/extension.test.ts::runs", VSIXSelection{}, false},
+		{"nonsense", VSIXSelection{}, false},
+	}
+	for _, tc := range cases {
+		got, ok := ParseVSIXItemID(tc.id)
+		if ok != tc.ok {
+			t.Fatalf("ParseVSIXItemID(%q) ok = %v, want %v", tc.id, ok, tc.ok)
+		}
+		if got.Kind != tc.want.Kind || got.File != tc.want.File {
+			t.Fatalf("ParseVSIXItemID(%q) = %#v, want %#v", tc.id, got, tc.want)
+		}
+	}
+}
+
 // DHF-TEST: keel/requirement-23
 func TestGoEventPackageRel(t *testing.T) {
 	const mod = "github.com/david-aggeler/keel"

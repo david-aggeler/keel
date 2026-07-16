@@ -1654,6 +1654,16 @@ func runVSCodeLane(ctx context.Context, logger *slog.Logger, root, laneID, runID
 		}
 		return 0, nil
 	}
+	// DHF-REQ: keel/requirement-91
+	if selection, ok := vscode.ParseVSIXItemID(laneID); ok {
+		if logger == nil {
+			logger = vscodeDiscardLogger()
+		}
+		if err := runVSCodeVSIXSelection(ctx, logger, root, selection, maxOutputBytes); err != nil {
+			return gateExitCode(err), err
+		}
+		return 0, nil
+	}
 	if strings.HasPrefix(laneID, "keel::lane::") && !knownVSCodeLaneID(laneID) {
 		if logger == nil {
 			logger = vscodeDiscardLogger()
@@ -1754,6 +1764,36 @@ func runVSIXFileSelection(ctx context.Context, logger *slog.Logger, root string,
 		return err
 	}
 	return nil
+}
+
+// DHF-REQ: keel/requirement-91
+func runVSCodeVSIXSelection(ctx context.Context, logger *slog.Logger, root string, selection vscode.VSIXSelection, maxOutputBytes int) error {
+	files, err := vsixSelectionFiles(root, selection)
+	if err != nil {
+		return err
+	}
+	return runVSIXFileSelection(ctx, logger, root, files, maxOutputBytes)
+}
+
+func vsixSelectionFiles(root string, selection vscode.VSIXSelection) ([]string, error) {
+	switch selection.Kind {
+	case "root":
+		items, err := discoverVSIXTestItems(root)
+		if err != nil {
+			return nil, err
+		}
+		var files []string
+		for _, item := range items {
+			if item.ParentID == "vsix::root" && strings.HasPrefix(item.ID, "vsix::file::") {
+				files = append(files, strings.TrimPrefix(item.ID, "vsix::file::"))
+			}
+		}
+		return files, nil
+	case "file":
+		return []string{selection.File}, nil
+	default:
+		return nil, fmt.Errorf("vscode run vsix selection: unknown selection kind %q", selection.Kind)
+	}
 }
 
 func emitLaneGoPackageEvents(raw, modulePath string, writer vscode.RunEventWriter) {
