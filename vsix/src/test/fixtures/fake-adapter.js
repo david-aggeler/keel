@@ -23,6 +23,28 @@ function configPath() {
   return path.join(process.cwd(), '.vscode', 'test-bridge.json');
 }
 
+function provisionedPath() {
+  return path.join(process.cwd(), '.devtools', 'python-venv-provisioned');
+}
+
+function pythonVenvProvisioned() {
+  return fs.existsSync(provisionedPath());
+}
+
+function pythonVenvDiscoveryItem() {
+  const active = pythonVenvProvisioned();
+  return {
+    id: 'keel::action::provision-python-venv',
+    parent_id: 'keel::desired-state::group::test-preconditions',
+    label: active ? 'python-venv satisfied: provisioned -> provisioned' : 'python-venv reconcilable: missing -> provisioned',
+    sort_text: 'b.010.002',
+    kind: 'maintenance',
+    runnable: true,
+    profiles: ['run'],
+    limitations: [`action=${active ? 'reuse' : 'reconcile'}`, `active=${active}`]
+  };
+}
+
 function upgradeConfig() {
   const file = configPath();
   const cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -57,7 +79,7 @@ if (command === 'test-bridge tests discover --format') {
       { id: 'keel::desired-state', label: 'B - Desired State', sort_text: 'b', kind: 'group', runnable: false, profiles: [] },
       { id: 'keel::desired-state::group::test-preconditions', parent_id: 'keel::desired-state', label: 'Test Preconditions', sort_text: 'b.010', kind: 'group', runnable: false, profiles: [], limitations: ['mutually_exclusive=false'] },
       { id: 'keel::desired-state::test-preconditions::python::available::reuse', parent_id: 'keel::desired-state::group::test-preconditions', label: 'python satisfied: available -> available', sort_text: 'b.010.001', kind: 'group', runnable: false, profiles: [], limitations: ['action=reuse', 'active=false'] },
-      { id: 'keel::action::provision-python-venv', parent_id: 'keel::desired-state::group::test-preconditions', label: 'python-venv reconcilable: missing -> provisioned', sort_text: 'b.010.002', kind: 'maintenance', runnable: true, profiles: ['run'], limitations: ['action=reconcile', 'active=false'] },
+      pythonVenvDiscoveryItem(),
       { id: 'keel::lanes', label: 'C - Lanes', sort_text: 'c', kind: 'group', runnable: false, profiles: [] },
       { id: 'keel::frameworks', label: 'D - Frameworks', sort_text: 'd', kind: 'group', runnable: false, profiles: [] },
       { id: 'keel::agents', parent_id: 'keel::frameworks', label: 'Agents', kind: 'root', framework: 'keel', runner: 'go-test', runner_label: 'Go test', runnable: true, profiles: ['run'] },
@@ -90,6 +112,7 @@ if (args.slice(0, 4).join(' ') === 'test-bridge tests desired-state --format') {
       i += 1;
     }
   }
+  const active = pythonVenvProvisioned();
   process.stdout.write(JSON.stringify({
     version: 3,
     workspace: process.cwd(),
@@ -100,7 +123,7 @@ if (args.slice(0, 4).join(' ') === 'test-bridge tests desired-state --format') {
       mutually_exclusive: false,
       rows: [
         { resource: 'python', kind: 'tool', desired: 'available', current: 'available', status: 'satisfied', action: 'reuse', message: 'python available', reusable: true, owned: false },
-        { run_id: 'keel::action::provision-python-venv', resource: 'python-venv', kind: 'dependency', desired: 'provisioned', current: 'missing', status: 'reconcilable', action: 'reconcile', message: 'venv can be provisioned', reusable: true, owned: true }
+        { run_id: 'keel::action::provision-python-venv', resource: 'python-venv', kind: 'dependency', desired: 'provisioned', current: active ? 'provisioned' : 'missing', status: active ? 'satisfied' : 'reconcilable', action: active ? 'reuse' : 'reconcile', message: active ? 'venv provisioned' : 'venv can be provisioned', reusable: true, owned: true, active }
       ]
     }],
     teardown_policy: 'reuse fake python'
@@ -132,6 +155,8 @@ if (args.slice(0, 3).join(' ') === 'test-bridge tests run') {
   emit({ event: 'run_started', message: 'OpenBrain fake test run started' });
   const selected = ids[0] ?? 'keel::test::agents/test_memory.go::TestRecall';
   if (servedRunIds.includes(selected)) {
+    fs.mkdirSync(path.dirname(provisionedPath()), { recursive: true });
+    fs.writeFileSync(provisionedPath(), 'provisioned\n');
     emit({ event: 'test_started', test_id: selected });
     emit({ event: 'output', test_id: selected, message: `reconciled ${selected}` });
     emit({ event: 'passed', test_id: selected, duration_ms: 2 });

@@ -331,6 +331,29 @@ function refresh(controller: vscode.TestController): Promise<void> {
   return next;
 }
 
+// DHF-REQ: keel/requirement-88
+async function refreshDesiredStateAfterRun(
+  run: vscode.TestRun,
+  controller: vscode.TestController,
+  workspaceRoot: string,
+  selectedProtocolIds: readonly string[]
+): Promise<void> {
+  if (selectedProtocolIds.length === 0) {
+    return;
+  }
+  const next = refreshChain.then(async () => {
+    const desiredState = await readDesiredState(workspaceRoot, [...selectedProtocolIds]);
+    appendDesiredStateDocument(run, desiredState);
+    await refreshNow(controller);
+  });
+  refreshChain = next.catch(() => undefined);
+  try {
+    await next;
+  } catch (error) {
+    appendRunOutput(run, `Failed to refresh desired state after ${currentAdapterConfig().displayName} test run: ${error instanceof Error ? error.message : String(error)}`, 'WARN');
+  }
+}
+
 async function refreshNow(controller: vscode.TestController): Promise<void> {
   const workspaceRoot = getWorkspaceRoot();
   output.appendLine(`[${new Date().toISOString()}] refresh requested`);
@@ -489,9 +512,6 @@ async function runSelected(
         const applied = applyRunEvent(run, line, selectedItemIds, resultItemIds, applyOptions);
         resetResultsAfterRun = applied.resetResults || resetResultsAfterRun;
         applied.clearedResultIds?.forEach((id) => clearedResultIds.add(id));
-        if (applied.finished) {
-          finishRun();
-        }
       }
     }
   });
@@ -508,24 +528,22 @@ async function runSelected(
       finishRun();
       resolve();
     });
-    child.on('close', () => {
+    child.on('close', async () => {
       if (stdout.trim()) {
         const applied = applyRunEvent(run, stdout, selectedItemIds, resultItemIds, applyOptions);
         resetResultsAfterRun = applied.resetResults || resetResultsAfterRun;
         applied.clearedResultIds?.forEach((id) => clearedResultIds.add(id));
-        if (applied.finished) {
-          finishRun();
-        }
       }
       cancellation.dispose();
       if (forceKill) {
         clearTimeout(forceKill);
       }
-      finishRun();
       if (resetResultsAfterRun) {
-        void resetKeelTestResults(controller);
+        await resetKeelTestResults(controller);
       }
       invalidateClearedResults(controller, clearedResultIds);
+      await refreshDesiredStateAfterRun(run, controller, workspaceRoot, selectedProtocolIds);
+      finishRun();
       resolve();
     });
   });
