@@ -3,10 +3,11 @@
 # automated-change-request `merge` verb.
 #
 # It merges <branch> into main with a --no-ff merge commit, then re-verifies the
-# merged tree with keel's full gate (`go run ./cmd/keel-dev ci`). If the gate is
-# red, it reverts the merge in place so main never lands red — the issue-166
-# post-merge re-verify guard that a raw `git merge` would bypass. On success it
-# prints the merge commit SHA as `MERGE_SHA=<sha>` for the caller to capture.
+# merged tree with keel's core gate (`go run ./cmd/keel-dev ci`) and VSIX gate
+# (`go run ./cmd/keel-dev vsix ci`). If either gate is red, it reverts the merge
+# in place so main never lands red — the issue-166 post-merge re-verify guard
+# that a raw `git merge` would bypass. On success it prints the merge commit SHA
+# as `MERGE_SHA=<sha>` for the caller to capture.
 #
 # Usage: merge-branch.sh <branch>
 #
@@ -47,9 +48,16 @@ fi
 
 merged="$(git rev-parse HEAD)"
 
-# Post-merge re-verify: keel's full gate must be green on the merged tree.
+# DHF-REQ: keel/requirement-89
+# Post-merge re-verify: keel's core and VSIX gates must be green on the merged tree.
 if ! go run ./cmd/keel-dev ci; then
-	echo "merge-branch: post-merge gate red; reverting merge to keep main green" >&2
+	echo "merge-branch: post-merge core gate red; reverting merge to keep main green" >&2
+	git reset --hard "$before"
+	exit 1
+fi
+
+if ! go run ./cmd/keel-dev vsix ci; then
+	echo "merge-branch: post-merge VSIX gate red; reverting merge to keep main green" >&2
 	git reset --hard "$before"
 	exit 1
 fi
