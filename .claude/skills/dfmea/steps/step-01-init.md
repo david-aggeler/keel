@@ -10,7 +10,7 @@
 
 ## CONTEXT BOUNDARIES
 
-- Architecture document is **required** — do not proceed without it
+- gold architecture tree is **required** — do not proceed without a product `architecture_description` root
 - PRD and project-context are valuable but optional
 - Scope can be full system or a named subsystem; clarify if ambiguous
 - The `formal_review` record is the session anchor — create it before any failure_mode record
@@ -31,13 +31,17 @@ Call `list_formal_review` with `type=dfmea status=in_progress product=<slug>` fo
 - **More than one result** → load `./step-02-continue.md` immediately. Stop here.
 - **No results** → proceed with fresh initialization below.
 
-### 2. Input Document Discovery
+### 2. gold Architecture Discovery
 
-Discover and load documents from: `./`, `./`, `docs/`, `api/`
+Call `list_architecture_description product=<slug>` and locate the active root record for the product. Then call `get_architecture_description` for the root and every chapter listed by the root's `chapters` field, in order. This root plus ordered chapters is the **gold architecture tree** and is the only DFMEA architecture input.
+
+Do not search for or read local architecture files. Local architecture markdown is not canonical for this workflow.
+
+Discover and load optional interface/supporting documents from: `api/`, `docs/`
 
 | Document | Pattern | Required? |
 |----------|---------|-----------|
-| Architecture | `*architecture*.md` | **Yes** — abort without it |
+| Architecture | gold `architecture_description` root + chapters | **Yes** — abort without it |
 | OpenAPI spec | `api/openapi.yaml` | **Yes** — essential for API endpoint failure mode coverage |
 | AsyncAPI spec | `api/asyncapi.yaml` | **Yes** — essential for event/message failure mode coverage |
 | PRD | `*prd*.md` | Recommended |
@@ -46,10 +50,8 @@ Discover and load documents from: `./`, `./`, `docs/`, `api/`
 
 The API specs are the authoritative contract for what the system promises to callers and consumers. Load them fully — they reveal interface failure modes (wrong response shapes, missing error codes, uncovered edge cases) that the architecture document alone does not surface.
 
-For sharded documents (folder + `index.md`): load the index first, then all section files.
-
-**If architecture document not found:**
-> "I can't start the DFMEA without the architecture document. Please run `architecture-create` first, or provide the path to the architecture document."
+**If the gold architecture root is not found:**
+> "I can't start the DFMEA without a gold architecture_description root for this product. Please run `architecture-create` first so the architecture is authored in gold."
 > Stop. Do not proceed.
 
 ### 3. Confirm Inputs and Define Scope
@@ -58,7 +60,7 @@ Present what was found and ask one question:
 
 ```text
 I found the following inputs:
-- Architecture:   [filename] ✓
+- Architecture:   gold architecture_description root [ref] ✓
 - OpenAPI spec:   [filename or "not found — API endpoint coverage will be limited"]
 - AsyncAPI spec:  [filename or "not found — event/message coverage will be limited"]
 - PRD:            [filename or "not found"]
@@ -85,7 +87,7 @@ Then call `create_formal_review` with:
   "subject_text": "<scope description from user's answer above>",
   "participants": [{"name": "<user name if known>", "role": "analyst"}],
   "conducted_at": "<today's date>",
-  "details": "Session initialized. Scope: <scope>. Input documents: <list loaded files>."
+  "details": "Session initialized. Scope: <scope>. Architecture input: <root ref plus chapter refs>. Input documents: <list loaded support files>."
 }
 ```
 
@@ -100,7 +102,7 @@ DFMEA session initialized.
 
 Session anchor: <formal_review ref>
 Scope: [user-confirmed scope]
-Architecture loaded: [filename]
+Architecture loaded: gold architecture_description root [ref]
 
 Next: I'll map the system components from the architecture document.
 
@@ -112,14 +114,14 @@ Wait for `[C]`.
 ## SUCCESS METRICS
 
 ✅ Existing in-progress DFMEA session detected and handed to step-02-continue correctly
-✅ Architecture document loaded (or workflow aborted cleanly)
+✅ gold architecture tree loaded (or workflow aborted cleanly)
 ✅ Scope confirmed with user
 ✅ `formal_review` record created with type=dfmea, status=in_progress, product, subject_text, participants
 ✅ Session anchor ref captured
 
 ## FAILURE MODES
 
-❌ Proceeding without an architecture document
+❌ Proceeding without the gold architecture_description tree
 ❌ Creating a new formal_review when one already exists for this product
 ❌ Omitting `product` from the create_formal_review call
 ❌ Generating any failure modes or scores in this step

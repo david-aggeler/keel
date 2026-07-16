@@ -14,6 +14,8 @@
 
 For every component on the attack surface, enumerate concrete threats using STRIDE. Load `../references/stride.md` now — it has the category definitions, common patterns, and Vela-specific examples.
 
+For every concrete threat that survives this pass, create or update a `failure_mode` row whose `identified_in_review` points at the product `threat_model`. The threat_model remains the session anchor; the failure_mode rows are the durable threat register.
+
 A good threat is **falsifiable**: someone reading it can say "yes, that's possible here" or "no, X prevents that." Bad threats are vague ("the API could be attacked"). Be specific.
 
 ---
@@ -67,7 +69,7 @@ For each threat, name:
 
 ## OUTPUT
 
-Populate the **Threat Register** table in `security-review.md`. Columns:
+Populate the threat register in the product `threat_model` and maintain one `failure_mode` row per concrete threat. Use these columns in the threat_model details:
 
 | # | Component | STRIDE | Attacker | Asset | Path | Source | Notes |
 |---|---|---|---|---|---|---|---|
@@ -77,7 +79,7 @@ Populate the **Threat Register** table in `security-review.md`. Columns:
 
 Aim for breadth over depth in this step — get every plausible threat written down. Step 5 scoring will rank them; trivial threats fall to the bottom naturally and don't need to be filtered upfront.
 
-After populating, write to frontmatter: `stepsCompleted: [1, 2, 3, 4]`.
+After populating, call `update_threat_model` to record `stepsCompleted: [1, 2, 3, 4]` and the current threat/failure_mode refs.
 
 ## REPORT AND HAND OFF
 
@@ -106,7 +108,7 @@ Wait for `[C]`.
 ✅ Every Step 3 control gap produced at least one threat
 ✅ DFMEA cross-references made where applicable (no duplication)
 ✅ Each threat names attacker, asset, and path concretely
-✅ `stepsCompleted: [1, 2, 3, 4]` in frontmatter
+✅ `stepsCompleted: [1, 2, 3, 4]` recorded in the threat_model
 ✅ Wait for `[C]`
 
 ## FAILURE MODES

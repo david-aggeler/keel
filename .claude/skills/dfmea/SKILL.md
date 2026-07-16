@@ -1,16 +1,14 @@
 ---
 name: dfmea
-description: "Design Failure Mode and Effects Analysis workflow facilitated by Vera. Reads a completed architecture document, autonomously identifies failure modes, scores them on FMEA severity/occurrence/detection scales, and produces a prioritized risk document. Use when the user says: '/dfmea', 'risk analysis', 'FMEA', 'failure modes', 'risk register', 'talk to Vera', 'hazard analysis'"
-allowed-tools: mcp__gold__create_failure_mode, mcp__gold__update_failure_mode, mcp__gold__list_failure_mode, mcp__gold__get_failure_mode, mcp__gold__create_formal_review, mcp__gold__update_formal_review, mcp__gold__get_formal_review, mcp__gold__list_formal_review, mcp__gold__get_template_for, mcp__gold__search_requirement, mcp__gold__create_requirement, mcp__gold__update_requirement
+description: "Design Failure Mode and Effects Analysis workflow facilitated by Vera. Reads the gold architecture_description tree, autonomously identifies failure modes, scores them on FMEA severity/occurrence/detection scales, and produces a prioritized risk document. Use when the user says: '/dfmea', 'risk analysis', 'FMEA', 'failure modes', 'risk register', 'talk to Vera', 'hazard analysis'"
+allowed-tools: mcp__gold__list_architecture_description, mcp__gold__get_architecture_description, mcp__gold__create_failure_mode, mcp__gold__update_failure_mode, mcp__gold__list_failure_mode, mcp__gold__get_failure_mode, mcp__gold__create_formal_review, mcp__gold__update_formal_review, mcp__gold__get_formal_review, mcp__gold__list_formal_review, mcp__gold__get_template_for, mcp__gold__search_requirement, mcp__gold__create_requirement, mcp__gold__update_requirement
 targets_templates:
   - failure_mode-template
   - formal_review-template
-x-openbrain-source: dfmea/v4
-x-openbrain-content-source-hash: sha256:6a8cb6712f8a7ade08ca2705f42386e5ee23e918f9e4c334695c62b80ada51af
-x-openbrain-content-hash: sha256:12bc883c0e34b1fd956da2c0bad143511e40218a2d46cc93d0cb8a65f714c51e
+x-openbrain-source: dfmea/v5
+x-openbrain-content-source-hash: sha256:f7c1f7f192fa2f37e72a495322e04600d015924342db845a00352446144d5d77
+x-openbrain-content-hash: sha256:7eeeccd6398b3548e3a3256cc09c106363613a690d719602fec1f37b7d82ac8a
 ---
-
-<!-- markdownlint-disable MD033 MD036 MD034 MD040 MD026 MD032 MD012 MD024 MD028 MD031 MD025 MD041 -->
 
 # DFMEA Workflow — Vera, Failure Mode Analyst
 
@@ -49,8 +47,9 @@ Tools and target templates are declared in the frontmatter (`allowed-tools`, `ta
 
 ## Prerequisites
 
-- A completed architecture document at `./architecture.md`
-- Read that document fully before beginning analysis
+- A completed gold `architecture_description` root for this product
+- Read the full gold architecture tree before beginning analysis: call `list_architecture_description product=<slug>` to find the root, then `get_architecture_description` for the root and each chapter in order
+- If no root/chapter tree exists, fail loud and tell the user to run `architecture-create`; do not fall back to local files
 
 ## Execution
 

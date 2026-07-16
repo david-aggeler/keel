@@ -11,15 +11,15 @@
 
 ## CONTEXT BOUNDARIES
 
-- Architecture document is **required** — do not proceed without it
+- gold architecture tree is **required** — do not proceed without a product `architecture_description` root
 - OpenAPI and AsyncAPI specs are **required** — they're the actual contract callers depend on; the threat surface is undercounted without them
 - PRD and project-context are valuable but optional
 - Scope can be the full system or a named subsystem; clarify if ambiguous
-- `.` is the output folder — security review document lives here
+- The product `threat_model` record is the working review artifact; `failure_mode` rows are the durable threat register
 
 ## YOUR TASK
 
-Initialize the security review workflow: detect continuation, load inputs, confirm scope, create the output document.
+Initialize the security review workflow: detect continuation, load inputs, confirm scope, create or load the product threat_model.
 
 ---
 
@@ -27,19 +27,23 @@ Initialize the security review workflow: detect continuation, load inputs, confi
 
 ### 1. Check for Existing Security Review
 
-Look for `./*security-review*.md` or `./*threat-model*.md` (including sharded folders with `index.md`).
+Call `list_threat_model product=<slug>` and locate the active product threat model.
 
-- **Found with `stepsCompleted` in frontmatter** → load `./step-02-continue.md` immediately. Stop here.
-- **Found without `stepsCompleted`** → treat as fresh (may be a stale file from an aborted run); confirm with user before overwriting.
+- **Found with in-progress details** → load `./step-02-continue.md` immediately. Stop here.
+- **Found without in-progress details** → load it as the current baseline and continue.
 - **Not found** → proceed with fresh initialization below.
 
-### 2. Input Document Discovery
+### 2. gold Architecture Discovery
 
-Discover and load documents from: `./`, `./`, `docs/`, `api/`
+Call `list_architecture_description product=<slug>` and locate the active root record. Then call `get_architecture_description` for the root and every chapter listed by the root's `chapters` field, in order. This root plus ordered chapters is the gold architecture_description tree and is the only architecture input.
+
+Do not search for or read local architecture files. Local architecture markdown is not canonical for this workflow.
+
+Discover and load optional interface/supporting documents from: `api/`, `docs/`
 
 | Document | Pattern | Required? |
 |----------|---------|-----------|
-| Architecture | `*architecture*.md` | **Yes** — abort without it |
+| Architecture | gold `architecture_description` root + chapters | **Yes** — abort without it |
 | OpenAPI spec | `api/openapi.yaml` | **Yes** — every HTTP endpoint is part of the attack surface |
 | AsyncAPI spec | `api/asyncapi.yaml` | **Yes** — every event channel is part of the attack surface |
 | PRD | `*prd*.md` | Recommended — context for what data matters |
@@ -51,10 +55,8 @@ The API specs are the authoritative contract for what the system promises to cal
 
 If a DFMEA exists, load its risk register so you can cross-reference: failure modes Vera already mitigated should be acknowledged, not re-litigated. Sera's findings focus on **adversarial** paths; Vera's focus on **reliability** paths. Overlap exists (e.g., DoS) but the framing differs.
 
-For sharded documents (folder + `index.md`): load the index first, then all section files.
-
-**If the architecture document is not found:**
-> "I can't start the security review without the architecture document. Please run `architecture-create` first, or provide the path."
+**If the gold architecture root is not found:**
+> "I can't start the security review without a gold architecture_description root for this product. Please run `architecture-create` first so the architecture is authored in gold."
 > Stop. Do not proceed.
 
 **If OpenAPI or AsyncAPI specs are missing**, warn the user but offer to proceed with reduced coverage — the API/event surface findings will be marked "spec not loaded — review skipped" rather than guessed.
@@ -65,7 +67,7 @@ Present what was found and ask one question:
 
 ```
 I found the following inputs:
-- Architecture:   [filename] ✓
+- Architecture:   gold architecture_description root [ref] ✓
 - OpenAPI spec:   [filename or "not found — HTTP API coverage will be limited"]
 - AsyncAPI spec:  [filename or "not found — event/message coverage will be limited"]
 - DFMEA:          [filename or "not found — no reliability cross-reference"]
@@ -85,30 +87,29 @@ hypervisor adapter)?
 
 Wait for the user's response.
 
-### 4. Create Output Document
+### 4. Create or Update Threat Model
 
-Copy `../security-review-template.md` to `./security-review.md`.
+Fetch the `threat_model-template` with `get_template_for dto_type=threat_model`.
 
-Populate frontmatter:
-- `project`: from config or architecture doc title
-- `scope`: the user's answer from step 3
-- `mvp_baseline_mode`: from `True`
-- `score_critical`: from `15`
-- `score_major`: from `8`
-- `inputDocuments`: list of loaded files
-- `stepsCompleted`: `[1]`
+If no current threat_model exists, call `create_threat_model` for the product. If one exists, call `update_threat_model` to record:
+- scope from the user's answer
+- MVP baseline mode
+- score thresholds
+- architecture_description root/chapter refs
+- loaded interface/support documents
+- steps completed: `[1]`
 
-If full-compliance mode is on (mvp_baseline_mode = false), note in the document header: "Full-compliance mode — regulatory items are scored alongside MVP findings."
+If full-compliance mode is on (mvp_baseline_mode = false), note in the threat_model details: "Full-compliance mode — regulatory items are scored alongside MVP findings."
 
 ### 5. Report and Hand Off
 
 ```
-Security review workspace initialized.
+Security review initialized.
 
-Document: ./security-review.md
+Threat model: [threat_model ref]
 Scope: [user-confirmed scope]
 MVP-baseline mode: [on/off]
-Architecture loaded: [filename]
+Architecture loaded: gold architecture_description root [ref]
 API specs loaded: [openapi: yes/no, asyncapi: yes/no]
 DFMEA cross-reference: [yes/no]
 
@@ -123,17 +124,17 @@ Wait for `[C]`.
 ## SUCCESS METRICS
 
 ✅ Existing review detected and handed to step-02-continue correctly
-✅ Architecture document loaded (or workflow aborted cleanly)
+✅ gold architecture tree loaded (or workflow aborted cleanly)
 ✅ API spec status confirmed (loaded or warned-and-skipped)
 ✅ Scope confirmed with user
-✅ Output document created from template with correct frontmatter
-✅ `stepsCompleted: [1]` written to frontmatter
+✅ Threat model created or updated with correct initialization details
+✅ `stepsCompleted: [1]` recorded in the threat_model
 
 ## FAILURE MODES
 
-❌ Proceeding without an architecture document
+❌ Proceeding without the gold architecture_description tree
 ❌ Silently skipping API specs without warning the user that coverage will be reduced
-❌ Overwriting an existing security review without user confirmation
+❌ Creating a duplicate threat_model when one already exists for the product
 ❌ Generating any threats or control findings in this step
 ❌ Proceeding to Step 2 without user pressing `[C]`
 

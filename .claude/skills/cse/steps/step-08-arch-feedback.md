@@ -57,18 +57,18 @@ If MVP-baseline mode is on (the default for vela), ask:
 I have N architecture-feedback items.
 
 I can either:
-  (a) Append a new "## Security Review Findings" section to the architecture
-      document, with a bidirectional link back to security-review.md
-  (b) Just leave it in security-review.md and let you take it to Winston manually
+  (a) Append a new "## Security Review Findings" section to the gold
+      architecture_description, with a bidirectional link back to the threat_model
+  (b) Just leave it in the threat_model and let you take it to Winston manually
 
 Which?
 ```
 
 If (a):
-- Re-read `./architecture.md` (or sharded equivalent)
-- Append a section after the existing content (don't insert mid-document and don't reorder)
+- Re-read the gold `architecture_description` root and relevant chapters
+- Append a section after the existing content with `update_architecture_description` (don't insert mid-document and don't reorder)
 - The section header is `## Security Review Findings — Sera, {today}`
-- Each item links back to its threat IDs in `security-review.md` (e.g. `see security-review.md §threats #14`)
+- Each item links back to its threat/failure_mode IDs in the threat_model
 - Show the user the diff before writing — confirm with `[Y]`
 
 If (b): no file modification; just continue.
@@ -100,16 +100,16 @@ Wait for `[C]`.
 
 ✅ Architecture Feedback section populated with grouped, urgency-ranked items
 ✅ Each item cites the threats it addresses
-✅ Writeback handled per user choice (no surprise edits to architecture.md)
-✅ `stepsCompleted: [1..7]` in frontmatter
+✅ Writeback handled per user choice (no surprise edits to architecture_description)
+✅ `stepsCompleted: [1..7]` recorded in the threat_model
 ✅ Wait for `[C]`
 
 ## FAILURE MODES
 
 ❌ Promoting implementation hygiene items into architecture feedback (clutter dilutes the signal)
-❌ Modifying architecture.md without explicit `[Y]`
+❌ Modifying architecture_description without explicit `[Y]`
 ❌ Inserting feedback mid-document or reordering existing content during writeback
-❌ Forgetting to back-link from architecture.md to security-review.md (loses the audit trail)
+❌ Forgetting to back-link from architecture_description to the threat_model/cybersecurity_summary review (loses the audit trail)
 
 ## NEXT STEP
 

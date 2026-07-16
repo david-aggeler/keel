@@ -94,22 +94,29 @@ Before proceeding, verify we have the essential inputs:
 
 - UX Spec: "Provides UI/UX architectural requirements"
 
-#### C. Create Initial Document
+#### C. Create Initial Architecture Records
 
-Copy the template from `../architecture-decision-template.md` to `./architecture.md`
+Fetch `architecture_description-template` with `get_template_for dto_type=architecture_description`.
+
+Call `list_architecture_description product=<slug>`:
+
+- If a root record exists, load it and its ordered `chapters` with `get_architecture_description`; continue by extending that tree.
+- If no root exists, call `create_architecture_description` for a root record, then create chapter records as the workflow sections are completed and update the root `chapters` list in order.
+
+The architecture_description root/chapter tree is the canonical output. Do not create a local architecture markdown file.
 
 #### D. Complete Initialization and Report
 
 Complete setup and report to user:
 
-**Document Setup:**
+**Record Setup:**
 
-- Created: `./architecture.md` from template
-- Initialized frontmatter with workflow state
+- Created or loaded: gold `architecture_description` root
+- Initialized ordered architecture chapter plan
 
 **Input Documents Discovered:**
 Report what was found:
-"Welcome {user_name}! I've set up your Architecture workspace for keel.
+"Welcome {user_name}! I've set up your Architecture workspace for openbrain.
 
 **Documents Found:**
 

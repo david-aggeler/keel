@@ -87,7 +87,7 @@ Calculate and present project complexity:
 
 Present your analysis back to user for validation:
 
-"I'm reviewing your project documentation for keel.
+"I'm reviewing your project documentation for openbrain.
 
 {if_epics_loaded}I see {epic_count} epics with {story_count} total stories.{/if_epics_loaded}
 {if_no_epics}I found {fr_count} functional requirements organized into {fr_category_list}.{/if_no_epics}
@@ -168,7 +168,7 @@ Show the generated content and present choices:
 
 #### If 'C' (Continue):
 
-- Append the final content to `./architecture.md`
+- Append the final content to the active `architecture_description` chapter with `update_architecture_description`
 - Update frontmatter: `stepsCompleted: [1, 2]`
 - Load `./step-04-starter.md`
 

@@ -262,7 +262,7 @@ Show the generated decisions content and present choices:
 
 #### If 'C' (Continue):
 
-- Append the final content to `./architecture.md`
+- Append the final content to the active `architecture_description` chapter with `update_architecture_description`
 - Update frontmatter: `stepsCompleted: [1, 2, 3, 4]`
 - Load `./step-06-patterns.md`
 

@@ -3,7 +3,7 @@
 
 ## YOUR TASK
 
-Write the executive summary, validate document completeness, generate the party brief for Winston, and hand off.
+Write the executive summary, validate record completeness, create the cybersecurity_summary formal_review, generate the party brief for Winston, and hand off.
 
 ---
 
@@ -11,7 +11,7 @@ Write the executive summary, validate document completeness, generate the party 
 
 ### 1. Write Executive Summary
 
-Populate the **Executive Summary** at the top of `security-review.md`. Keep it to 6–8 bullets a stakeholder can read in 60 seconds:
+Populate the Executive Summary in the product `threat_model` details. Keep it to 6–8 bullets a stakeholder can read in 60 seconds:
 
 - Scope of review (components / subsystems analysed)
 - Total threats identified and the Critical / Major / Minor split
@@ -24,9 +24,9 @@ Populate the **Executive Summary** at the top of `security-review.md`. Keep it t
 
 If `mvp_baseline_mode` is true and any baseline item is `Gap`, lead the summary with that — it's the most consequential thing on the page.
 
-### 2. Validate Document Completeness
+### 2. Validate Threat Model Completeness
 
-Check every section:
+Check every threat_model section:
 - ✅ Document Control (title, scope, version, date, mvp_baseline_mode flag visible)
 - ✅ Executive Summary
 - ✅ Attack Surface (components, trust boundaries, data flows, identities, external deps)
@@ -42,11 +42,17 @@ Check every section:
 
 If any section has placeholder text, fill it now.
 
-### 3. Update Frontmatter
+### 3. Update Threat Model
 
-- `status`: `Draft — Pending Review`
+Call `update_threat_model` with:
+- status/details marker: `Draft - Pending Review`
 - `stepsCompleted`: `[1, 2, 3, 4, 5, 6, 7, 8]`
-- `version`: `1.0`
+- version marker: `1.0`
+- all linked failure_mode refs
+
+### 3b. Create Cybersecurity Summary Review
+
+Fetch the formal_review template, then call `create_formal_review` with `type=cybersecurity_summary`, `status=completed`, `product=<slug>`, and `subject_refs` containing the threat_model plus the material failure_mode rows. If a release baseline/product_version is already known, include those refs in `materials`; otherwise state that the summary is pre-release and must be linked during `/publish`.
 
 ### 4. Generate Handoff Brief
 
@@ -62,7 +68,7 @@ The brief must include:
 ### 6. Final Handoff
 
 ```
-Security review complete. 📄 ./security-review.md
+Security review complete. Threat model: [threat_model ref]
 
 ─── Summary ────────────────────────────────
 Scope:       [scope]
@@ -89,8 +95,9 @@ To reopen this review later: invoke cse and it will resume from here.
 ## SUCCESS METRICS
 
 ✅ Executive summary written, MVP-baseline gaps surfaced first if any
-✅ All sections populated, no placeholders remaining
-✅ Frontmatter at `stepsCompleted: [1..8]`, `status: Draft — Pending Review`
+✅ All threat_model sections populated, no placeholders remaining
+✅ Threat_model records `stepsCompleted: [1..8]`, `status: Draft - Pending Review`
+✅ formal_review type=cybersecurity_summary created with threat_model and failure_mode refs
 ✅ Party brief generated — sharp questions, ready to paste
 ✅ `on_complete` hook executed if configured
 

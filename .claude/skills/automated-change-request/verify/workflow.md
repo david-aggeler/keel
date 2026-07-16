@@ -54,6 +54,29 @@ the Codex executor that produced dev/review/merge.
    the oracle.
 5. Collect objective evidence as you go: relevant diff hunks, present or missing
    symbols/files/tests, and the exact requirement atom each evidence item maps to.
+6. Lifecycle and environment residue audit before any close write:
+   <!-- DHF-REQ: openbrain/requirement-874 -->
+   - assert a formal_review exists for the closed unit before this verifier closes
+     it. Call `list_inbound_refs ref=<this change_request ref>
+     src_dto_type=formal_review` (or the available formal_review list/search
+     surface) and confirm at least one formal_review is objectively tied to this
+     CR, for example through `subject_refs`, `materials`, or `related`. If none is
+     found, route a discrepancy when no formal_review is found: create an issue or
+     action_item with the CR ref, merge SHA, checked command/tool, and observed
+     empty result, then continue through the normal verdict routing.
+   - inspect for leftover `cr-<seq>` worktree, branch, or stopped-stack residue
+     using objective local evidence keyed to this unit id: `git worktree list
+     --porcelain`, `git branch --list cr-<seq>`, and the local Compose/Docker stack
+     listing available in the checkout. Resolve only residue that is clearly safe
+     for the verifier to clean up, and report any unresolved residue as a discrepancy
+     with the exact command output and why it was not resolved. This audit is
+     distinct from harness teardown: do not treat teardown success as proof that
+     no residue exists, and do not skip the audit because a harness or runner says
+     it cleaned up.
+   - The primary implement approach is mandatory here: do not narrow requirement-144
+     (b)/(c) out of the verify actor's remit. Missing
+     formal_review evidence and unresolved `cr-<seq>` residue are verifier
+     discrepancies, not owner-only scope exclusions.
 
 ## 3. Verdict routing
 
@@ -69,6 +92,13 @@ Choose exactly one route:
   CR ref, requirement refs, expected behavior, observed diff gap, missing
   files/symbols/tests, relevant command output), then **continue to the wrap-up +
   close below** — the gap is tracked as its own issue; the unit still closes.
+
+  Bring the new issue to `analyzed`:
+  - Collect objective evidence into the issue: HEAD-cited (`git rev-parse --short HEAD`
+    + `file:line` or a verbatim quote), checkable without asking the author anything.
+  - Verify against the current repo/records, not the record's prose. If reality
+    differs, fix or close the record.
+  - Search for a related requirement and link it. Create a new one only if none fits.
 - **Human decision or operation needed:** call `create_action_item` (CR ref,
   requirement refs, decision/operation needed, objective evidence), then **continue
   to the wrap-up + close below**.

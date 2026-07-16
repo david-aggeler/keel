@@ -303,7 +303,7 @@ Show the validation results and present choices:
 
 #### If 'C' (Continue):
 
-- Append the final content to `./architecture.md`
+- Append the final content to the active `architecture_description` chapter with `update_architecture_description`
 - Update frontmatter: `stepsCompleted: [1, 2, 3, 4, 5, 6, 7]`
 - Load `./step-09-complete.md`
 

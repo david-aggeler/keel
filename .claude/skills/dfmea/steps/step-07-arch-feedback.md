@@ -85,20 +85,19 @@ Flag any failure_mode where `iec_class="c"` has no mitigations item — these re
 I've identified X items that require architecture-level changes:
   [1 Blocker, X Recommended, X Improvement]
 
-Would you like me to append a "DFMEA Risk Findings" section to the architecture document?
-This would be a new section at the end of ./architecture.md summarising
-the architecture changes needed, for traceability between the records and the design.
+Would you like me to append a "DFMEA Risk Findings" section to the gold architecture_description root?
+This would be append-only content on the architecture root, summarising the architecture changes needed for traceability between the records and the design.
 
-[Y] Yes, append to architecture.md
+[Y] Yes, append to architecture_description
 [N] No, I'll handle it manually
 ```
 
 If the user confirms `[Y]`:
 
-- Read `./architecture.md`
-- Append a new `## DFMEA Risk Findings` section with: date, formal_review ref, list of architecture changes with urgency
+- Fetch the architecture root with `get_architecture_description`
+- Call `update_architecture_description` to append a new `## DFMEA Risk Findings` section with: date, formal_review ref, list of architecture changes with urgency
 - Do NOT modify any existing section — append only
-- Confirm to the user: "Appended to architecture.md."
+- Confirm to the user: "Appended to architecture_description."
 
 ### 5. Continue
 
@@ -117,12 +116,12 @@ Wait for `[C]`.
 ✅ `post_mitigation` set on all Critical and Major records via `update_failure_mode`
 ✅ Class C items without mitigations flagged
 ✅ User given clear choice about architecture writeback
-✅ If writeback confirmed: architecture.md updated with append-only change
+✅ If writeback confirmed: architecture_description updated with append-only change
 
 ## FAILURE MODES (meta)
 
 ❌ Calling implementation controls "architecture changes" (muddies the architecture document)
-❌ Auto-appending to architecture.md without user confirmation
+❌ Auto-appending to architecture_description without user confirmation
 ❌ Modifying or reorganising existing architecture sections
 ❌ Advancing to Step 7 without user pressing `[C]`
 

@@ -1,16 +1,15 @@
 ---
 name: cse
-description: "Cybersecurity Engineering review workflow facilitated by Sera. Runs attack-surface mapping, control review, STRIDE threat enumeration, likelihood/impact scoring, and prioritized mitigations — producing a security review document with an explicit MVP-baseline checklist. Use when the user says: '/cse', 'security review', 'threat model', 'STRIDE', 'security analysis'"
-allowed-tools: mcp__gold__create_failure_mode, mcp__gold__update_failure_mode, mcp__gold__list_failure_mode, mcp__gold__create_formal_review, mcp__gold__update_formal_review, mcp__gold__get_template_for, mcp__gold__search_requirement, mcp__gold__create_requirement, mcp__gold__update_requirement
+description: "Cybersecurity Engineering review workflow facilitated by Sera. Reads the gold architecture_description tree, maintains the product threat_model plus failure_mode rows, and produces a cybersecurity_summary formal_review. Use when the user says: '/cse', 'security review', 'threat model', 'STRIDE', 'security analysis'"
+allowed-tools: mcp__gold__list_architecture_description, mcp__gold__get_architecture_description, mcp__gold__create_threat_model, mcp__gold__update_threat_model, mcp__gold__list_threat_model, mcp__gold__get_threat_model, mcp__gold__create_failure_mode, mcp__gold__update_failure_mode, mcp__gold__list_failure_mode, mcp__gold__create_formal_review, mcp__gold__update_formal_review, mcp__gold__get_template_for, mcp__gold__search_requirement, mcp__gold__create_requirement, mcp__gold__update_requirement
 targets_templates:
+  - threat_model-template
   - failure_mode-template
   - formal_review-template
-x-openbrain-source: cse/v4
-x-openbrain-content-source-hash: sha256:b6044f92516e76560ebc2219f051589457facb5252fb047afeabb6bf26b10d41
-x-openbrain-content-hash: sha256:36d277c5d09be8477551eb225448a9db4def5a7a24f08ea1ce95a8149731ea13
+x-openbrain-source: cse/v5
+x-openbrain-content-source-hash: sha256:50bb665ade0914e432b45d060f6d1631a6b2ab77e6c87ee5f00f6d47d89f43c0
+x-openbrain-content-hash: sha256:816eaf35907c872f8cc8e5d8d949f6398f132c83e2a763a56820eb5b81697659
 ---
-
-<!-- markdownlint-disable MD033 MD036 MD034 MD040 MD026 MD032 MD012 MD024 MD028 MD031 MD025 MD041 -->
 
 # Cybersecurity Engineering Review Workflow — Sera, Cybersecurity Engineer
 
@@ -51,9 +50,9 @@ Tools and target templates are declared in the frontmatter (`allowed-tools`, `ta
 
 ## Prerequisites
 
-- A completed architecture document at `./architecture.md`
+- A completed gold architecture_description tree for this product
 - API contracts if available
-- Read all available documents fully before beginning analysis
+- Read the full gold architecture tree and all available contracts before beginning analysis
 
 ## Execution
 

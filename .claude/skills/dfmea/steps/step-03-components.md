@@ -2,7 +2,7 @@
 
 ## MANDATORY EXECUTION RULES
 
-- 📖 Read the architecture document fully before mapping — partial reads produce incomplete coverage
+- 📖 Read the gold architecture tree fully before mapping — partial reads produce incomplete coverage
 - 🔍 Extract EVERY distinct component within the defined scope — coverage gaps here become blind spots in the analysis
 - ✅ Organize by subsystem so the user can spot omissions easily
 - 🛑 Do NOT start generating failure modes — that is Step 3
@@ -10,7 +10,7 @@
 
 ## YOUR TASK
 
-Parse the architecture document and produce a structured component map as an in-conversation artifact. Every component in scope that could fail in a way that matters should appear here. When in doubt, include it — it's easier to remove an item in review than to rediscover it later.
+Parse the root and ordered chapter records from the product's `architecture_description` tree and produce a structured component map as an in-conversation artifact. Every component in scope that could fail in a way that matters should appear here. When in doubt, include it — it's easier to remove an item in review than to rediscover it later.
 
 The component map is a conversational artifact, not a record: it is scaffolding to ensure coverage. The durable output of this step is the `component` string stamped on each `failure_mode` record in step-03. If this session is resumed, coverage can be reconstructed by grouping `list_failure_mode` results by `component`.
 
@@ -20,7 +20,7 @@ The component map is a conversational artifact, not a record: it is scaffolding 
 
 ### What to extract
 
-From the architecture document, extract:
+From the gold architecture tree, extract:
 
 1. **Subsystems / layers** — logical groupings (e.g., API layer, data layer, event system)
 2. **Components within each subsystem** — individual services, modules, adapters, daemons

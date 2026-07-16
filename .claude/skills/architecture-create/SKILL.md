@@ -1,13 +1,14 @@
 ---
 name: architecture-create
-description: "Create comprehensive architecture decisions through collaborative step-by-step discovery. Multi-step guided workflow producing architecture docs that AI agents implement consistently. Use when the user says: '/architecture', 'create architecture', 'architecture document', 'technical architecture', 'design the architecture'"
-allowed-tools: mcp__gold__create_design_decision, mcp__gold__update_design_decision, mcp__gold__list_design_decision, mcp__gold__get_design_decision, mcp__gold__get_template_for, mcp__gold__list_glossary_term, mcp__gold__create_glossary_term, mcp__gold__update_glossary_term
+description: "Create comprehensive architecture decisions through collaborative step-by-step discovery. Multi-step guided workflow authoring architecture_description records that AI agents implement consistently. Use when the user says: '/architecture', 'create architecture', 'architecture document', 'technical architecture', 'design the architecture'"
+allowed-tools: mcp__gold__create_architecture_description, mcp__gold__update_architecture_description, mcp__gold__list_architecture_description, mcp__gold__get_architecture_description, mcp__gold__create_design_decision, mcp__gold__update_design_decision, mcp__gold__list_design_decision, mcp__gold__get_design_decision, mcp__gold__get_template_for, mcp__gold__list_glossary_term, mcp__gold__create_glossary_term, mcp__gold__update_glossary_term
 targets_templates:
+  - architecture_description-template
   - design_decision-template
   - dd_plan-template
-x-openbrain-source: architecture-create/v5
-x-openbrain-content-source-hash: sha256:e51113f4aa0c78cad5a394bb1a057195be3595b0cb60e931d4487f73bbff03f9
-x-openbrain-content-hash: sha256:908aba20894dfec2fd2a07807312ecce8b989dc23c38f0dd0ea02649ecf574aa
+x-openbrain-source: architecture-create/v6
+x-openbrain-content-source-hash: sha256:849bb0391c43c16da66959cf5a0dcc905860443178b9924778e563bd7cd6d510
+x-openbrain-content-hash: sha256:76b57e2dbd84043a503c0694679abe9b5f32168ccc2712ecefeb597a5b87cba0
 ---
 
 # Architecture Workflow
@@ -22,7 +23,7 @@ Load these as foundational context before beginning. They are decisions already 
 
 - **Project:** keel
 - **Primary language:** Go
-- **Existing architecture decisions** are documented in `./architecture.md` when present. If that file exists, read it fully before starting — the goal is to extend or refine, not restart.
+- **Existing architecture decisions** are documented in gold `architecture_description` records. Load the product root with `list_architecture_description` and `get_architecture_description`; if a root exists, extend or refine it rather than restarting.
 
 ## Required output sections
 
@@ -36,6 +37,8 @@ Both sections are required. If either is absent at handoff, the architecture is 
 ## MCP
 
 Tools and target templates are declared in the frontmatter (`allowed-tools`, `targets_templates`); invoke a tool as `mcp__gold__<tool>`. Before authoring any record, fetch its template with `get_template_for dto_type=<type>` — it is authoritative for fields and enums.
+
+The write target for this workflow is `architecture_description`: create or update a root record plus ordered chapter records in gold. Do not create a local architecture markdown file as the canonical output.
 
 Before exploring or planning, load this product's glossary once with `list_glossary_term` (`include_summary=true`, `limit=100`; paginate by offset beyond 100) and use its vocabulary; when you coin or sharpen a term, record it with `create_glossary_term` / `update_glossary_term`.
 

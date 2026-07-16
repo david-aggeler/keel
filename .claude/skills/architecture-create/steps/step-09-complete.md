@@ -30,15 +30,15 @@ Complete the architecture workflow, provide a comprehensive completion summary, 
 
 Both you and the User completed something amazing here - give a summary of what you achieved together and really congratulate the user on a job well done.
 
-### 2. Update the created document's frontmatter
+### 2. Update the architecture_description root
 
-```yaml
-stepsCompleted: [1, 2, 3, 4, 5, 6, 7, 8]
-workflowType: 'architecture'
-lastStep: 8
-status: 'complete'
-completedAt: '{current_date}'
-```
+Call `update_architecture_description` on the root record with completion metadata in its details:
+
+- steps completed: 1 through 8
+- workflow type: architecture
+- status: complete
+- completed date: `{current_date}`
+- ordered chapter refs
 
 ### 3. Next Steps Guidance
 
@@ -48,19 +48,19 @@ Upon Completion of task output: offer to answer any questions about the Architec
 
 ## SUCCESS METRICS:
 
-✅ Complete architecture document delivered with all sections
+✅ Complete architecture_description root/chapter tree delivered with all sections
 ✅ All architectural decisions documented and validated
 ✅ Implementation patterns and consistency rules finalized
 ✅ Project structure complete with all files and directories
 ✅ User provided with clear next steps and implementation guidance
-✅ Workflow status properly updated
+✅ Architecture_description completion metadata properly updated
 ✅ User collaboration maintained throughout completion process
 
 ## FAILURE MODES:
 
 ❌ Not providing clear implementation guidance
 ❌ Missing final validation of document completeness
-❌ Not updating workflow status appropriately
+❌ Not updating the architecture_description completion metadata appropriately
 ❌ Failing to celebrate the successful completion
 ❌ Not providing specific next steps for the user
 ❌ Rushing completion without proper summary
@@ -71,7 +71,7 @@ Upon Completion of task output: offer to answer any questions about the Architec
 
 ## WORKFLOW COMPLETE:
 
-This is the final step of the Architecture workflow. The user now has a complete, validated architecture document ready for AI agent implementation.
+This is the final step of the Architecture workflow. The user now has a complete, validated gold architecture_description tree ready for AI agent implementation.
 
 The architecture will serve as the single source of truth for all technical decisions, ensuring consistent implementation across the entire project development lifecycle.
 
