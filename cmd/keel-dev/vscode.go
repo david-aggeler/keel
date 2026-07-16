@@ -59,6 +59,8 @@ var vscodeGateLaneDefs = []testFileLane{
 	{ID: "ci", Label: "ci", Order: "c.30", Description: "Run the full keel-dev CI gate.", Members: []laneMember{{Lane: "lint"}, {Lane: "test-coverage"}}},
 }
 
+var vsixCIToolResources = []string{"pnpm", "node", "xvfb-run"}
+
 type testLanesFile struct {
 	Version int            `json:"version"`
 	Lanes   []testFileLane `json:"lanes"`
@@ -609,10 +611,12 @@ func laneItem(id, label, sortText string) vscode.TestItem {
 	}
 }
 
+// DHF-REQ: keel/requirement-90
 func laneRequiredResources(id string) []string {
 	resources := []string{"go-toolchain", "keel-module-root", "stub-binaries"}
 	if id == vscodeLaneVSIXGate {
-		resources = append(resources, "pnpm")
+		resources = []string{"go-toolchain", "keel-module-root"}
+		resources = append(resources, vsixCIToolResources...)
 	}
 	return resources
 }
@@ -746,7 +750,11 @@ func (s *lanesState) expand(id string, stack []string, depth int) (effectiveLane
 				prereq["keel-module-root"] = true
 			case "vsix":
 				rootSet["vsix::root"] = true
-				prereq["pnpm"] = true
+				prereq["go-toolchain"] = true
+				prereq["keel-module-root"] = true
+				for _, resource := range vsixCIToolResources {
+					prereq[resource] = true
+				}
 			default:
 				return effectiveLane{}, fmt.Errorf("unknown root member %q in lane %q", member.Root, id)
 			}
@@ -1128,7 +1136,7 @@ func sortedKeys(values map[string]bool) []string {
 }
 
 func orderedResources(values map[string]bool) []string {
-	order := []string{"go-toolchain", "keel-module-root", "stub-binaries", "pnpm"}
+	order := []string{"go-toolchain", "keel-module-root", "stub-binaries", "pnpm", "node", "xvfb-run"}
 	var out []string
 	for _, resource := range order {
 		if values[resource] {
@@ -2002,13 +2010,17 @@ func (p keelWorkspaceProfile) RemediationHint() string {
 }
 func (p keelWorkspaceProfile) ConsumerID() string { return "keel-dev" }
 func (p keelWorkspaceProfile) Node() string       { return workspaceNode(p.root) }
+
+// DHF-REQ: keel/requirement-90
 func (p keelWorkspaceProfile) PrepareLane(_ context.Context, laneID string) vscode.LaneReadiness {
 	if _, err := exec.LookPath("go"); err != nil {
 		return vscode.LaneReadiness{Blocked: []vscode.BlockedPrereq{{Resource: "go-toolchain", Detail: err.Error()}}}
 	}
 	if laneID == vscodeLaneVSIXGate {
-		if _, err := exec.LookPath("pnpm"); err != nil {
-			return vscode.LaneReadiness{Blocked: []vscode.BlockedPrereq{{Resource: "pnpm", Detail: err.Error()}}}
+		for _, resource := range vsixCIToolResources {
+			if _, err := exec.LookPath(resource); err != nil {
+				return vscode.LaneReadiness{Blocked: []vscode.BlockedPrereq{{Resource: resource, Detail: err.Error()}}}
+			}
 		}
 	}
 	if _, err := os.Stat(filepath.Join(p.root, "go.mod")); err != nil {
