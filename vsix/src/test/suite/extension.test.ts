@@ -331,6 +331,50 @@ suite('Keel Test Bridge config contract', () => {
     }
   });
 
+  // DHF-TEST: keel/requirement-88
+  test('run-finished re-queries desired state and refreshes rendered rows', async function () {
+    this.timeout(10_000);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-post-run-desired-state-'));
+    const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+    process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = root;
+    fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+    fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+      version: currentConfigVersion,
+      command: process.execPath,
+      args: [path.resolve(__dirname, '../../../src/test/fixtures/fake-adapter.js')],
+      displayName: 'Keel'
+    }, null, 2) + '\n');
+
+    try {
+      const extension = vscode.extensions.getExtension('aggeler.keel-test-bridge');
+      assert.ok(extension, 'extension should be discoverable');
+      await extension.activate();
+
+      const runID = 'keel::action::provision-python-venv';
+      await runProfileHandlerForTest(runID);
+
+      const calls = fs.readFileSync(path.join(root, '.devtools', 'fake-adapter-calls.log'), 'utf8')
+        .trim()
+        .split(/\r?\n/);
+      assert.equal(
+        calls.filter((call) => call === `test-bridge tests desired-state --format json --id ${runID}`).length,
+        2,
+        'run-finished must re-query desired-state after the devtool changes the selected row'
+      );
+      const refreshed = currentTree()?.discoveryItemsById.get(runID);
+      assert.ok(refreshed, 'post-run refresh should keep the selected desired-state row published');
+      assert.ok(refreshed.limitations?.includes('active=true'), `post-run row limitations = ${refreshed.limitations}`);
+      assert.ok(refreshed.limitations?.includes('action=reuse'), `post-run row limitations = ${refreshed.limitations}`);
+    } finally {
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   // DHF-TEST: keel/requirement-40
   test('extension activates and registers Keel commands', async () => {
     const extension = vscode.extensions.getExtension('aggeler.keel-test-bridge');
