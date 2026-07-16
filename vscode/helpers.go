@@ -18,6 +18,13 @@ type GoSelection struct {
 	TestNames []string
 }
 
+// VSIXSelection is the parsed shape of a VS Code VSIX test item id selected in
+// VS Code.
+type VSIXSelection struct {
+	Kind string
+	File string
+}
+
 // ParseGoItemID decodes a VS Code Go test item id into a GoSelection.
 //
 // DHF-REQ: keel/requirement-23
@@ -44,6 +51,35 @@ func ParseGoItemID(id string) (GoSelection, bool) {
 	default:
 		return GoSelection{}, false
 	}
+}
+
+// ParseVSIXItemID decodes a VS Code VSIX test item id into a VSIXSelection.
+//
+// DHF-REQ: keel/requirement-91
+func ParseVSIXItemID(id string) (VSIXSelection, bool) {
+	switch {
+	case id == "vsix::root":
+		return VSIXSelection{Kind: "root"}, true
+	case strings.HasPrefix(id, "vsix::file::"):
+		rel := strings.TrimPrefix(id, "vsix::file::")
+		clean := filepath.Clean(filepath.FromSlash(rel))
+		slashRel := filepath.ToSlash(clean)
+		if rel == "" || filepath.IsAbs(clean) || slashRel == "." || slashRel == ".." || strings.HasPrefix(slashRel, "../") || rel != slashRel || !isVSIXTestFileRel(slashRel) {
+			return VSIXSelection{}, false
+		}
+		return VSIXSelection{Kind: "file", File: slashRel}, true
+	default:
+		return VSIXSelection{}, false
+	}
+}
+
+func isVSIXTestFileRel(rel string) bool {
+	for _, suffix := range []string{".test.ts", ".spec.ts", ".test.tsx", ".spec.tsx"} {
+		if strings.HasSuffix(rel, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // GoEventPackageRel resolves a go test -json package path to a module-relative
