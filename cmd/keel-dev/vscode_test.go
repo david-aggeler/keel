@@ -1213,6 +1213,164 @@ esac`)
 	}
 }
 
+// DHF-TEST: keel/requirement-91
+func TestVSCodeRunDirectVSIXSelectionsUseSelectedIDAndFileFilter(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	for _, dir := range []string{".vscode", filepath.Join("vsix", "src", "test", "suite")} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, root, filepath.Join("vsix", "src", "test", "suite", "extension.test.ts"), "suite('x', () => {});\n")
+	writeFile(t, root, filepath.Join("vsix", "src", "test", "suite", "tree.test.ts"), "suite('y', () => {});\n")
+	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{"version":1,"lanes":[]}`+"\n")
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", "exit 0")
+	stub(t, bin, callsFile, "pnpm", `
+case "$*" in
+  "--dir "*"/vsix run test:headless -- src/test/suite/extension.test.ts src/test/suite/tree.test.ts")
+    exit 0
+    ;;
+  "--dir "*"/vsix run test:headless -- src/test/suite/tree.test.ts")
+    exit 0
+    ;;
+  *)
+    printf 'unexpected pnpm invocation: %s\n' "$*" >&2
+    exit 2
+    ;;
+esac`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	cases := []struct {
+		id       string
+		wantCall string
+	}{
+		{
+			id:       "vsix::root",
+			wantCall: "pnpm --dir " + filepath.Join(root, "vsix") + " run test:headless -- src/test/suite/extension.test.ts src/test/suite/tree.test.ts",
+		},
+		{
+			id:       "vsix::file::src/test/suite/tree.test.ts",
+			wantCall: "pnpm --dir " + filepath.Join(root, "vsix") + " run test:headless -- src/test/suite/tree.test.ts",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.id, func(t *testing.T) {
+			var protocol bytes.Buffer
+			if err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), tc.id); err != nil {
+				t.Fatalf("direct vsix selection run: %v\nprotocol:\n%s\ncalls:\n%s", err, protocol.String(), calls(t, callsFile))
+			}
+			if got := calls(t, callsFile); !strings.Contains(got, tc.wantCall) {
+				t.Fatalf("pnpm call missing exact vsix file filter %q:\n%s", tc.wantCall, got)
+			}
+			events := decodeRunEvents(t, protocol.String())
+			if !runEventsContain(events, "test_started", tc.id) {
+				t.Fatalf("run events missing selected id start for %s: %+v", tc.id, events)
+			}
+			if !runEventsContain(events, "passed", tc.id) {
+				t.Fatalf("run events missing selected id pass for %s: %+v", tc.id, events)
+			}
+			if events[len(events)-1].Event != "run_finished" || events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode != 0 {
+				t.Fatalf("terminal event = %+v, want run_finished exit 0", events[len(events)-1])
+			}
+		})
+	}
+}
+
+// DHF-TEST: keel/requirement-91
+func TestVSCodeRunDirectVSIXSelectionFailureUsesSelectedID(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	for _, dir := range []string{".vscode", filepath.Join("vsix", "src", "test", "suite")} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, root, filepath.Join("vsix", "src", "test", "suite", "tree.test.ts"), "suite('y', () => {});\n")
+	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{"version":1,"lanes":[]}`+"\n")
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", "exit 0")
+	stub(t, bin, callsFile, "pnpm", `
+printf 'mocha failed\n' >&2
+exit 1`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	const selectedID = "vsix::file::src/test/suite/tree.test.ts"
+	var protocol bytes.Buffer
+	err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), selectedID)
+	if err == nil {
+		t.Fatalf("direct vsix selection failure returned nil\nprotocol:\n%s\ncalls:\n%s", protocol.String(), calls(t, callsFile))
+	}
+	events := decodeRunEvents(t, protocol.String())
+	if !runEventsContain(events, "test_started", selectedID) {
+		t.Fatalf("run events missing selected id start for %s: %+v", selectedID, events)
+	}
+	if !runEventsContain(events, "failed", selectedID) {
+		t.Fatalf("run events missing selected id failure for %s: %+v", selectedID, events)
+	}
+	if !runEventsContain(events, "errored", "") {
+		t.Fatalf("run events missing generic errored event for command failure: %+v", events)
+	}
+	if events[len(events)-1].Event != "run_finished" || events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode == 0 {
+		t.Fatalf("terminal event = %+v, want run_finished non-zero", events[len(events)-1])
+	}
+}
+
+// DHF-TEST: keel/requirement-91
+func TestVSCodeDiscoveredRunnableVSIXItemsAreAcceptedByRunDispatcher(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	for _, dir := range []string{".vscode", filepath.Join("vsix", "src", "test", "suite")} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, root, filepath.Join("vsix", "src", "test", "suite", "extension.test.ts"), "suite('x', () => {});\n")
+	writeFile(t, root, filepath.Join("vsix", "src", "test", "suite", "tree.test.ts"), "suite('y', () => {});\n")
+	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{"version":1,"lanes":[]}`+"\n")
+
+	built, err := buildVSCodeDiscovery(root)
+	if err != nil {
+		t.Fatalf("buildVSCodeDiscovery: %v", err)
+	}
+	var discover bytes.Buffer
+	if err := testbridge.EncodeDocument(&discover, built); err != nil {
+		t.Fatalf("encode protocol document: %v", err)
+	}
+	var doc vscode.DiscoveryDocument
+	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
+		t.Fatalf("discovery JSON: %v\n%s", err, discover.String())
+	}
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", "exit 0")
+	stub(t, bin, callsFile, "pnpm", "exit 0")
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	for _, item := range doc.Items {
+		if !item.Runnable || item.Framework != "vsix" {
+			continue
+		}
+		var protocol bytes.Buffer
+		err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), item.ID)
+		if err != nil {
+			t.Fatalf("runnable vsix discovery item %q was rejected: %v\nprotocol:\n%s\ncalls:\n%s", item.ID, err, protocol.String(), calls(t, callsFile))
+		}
+		if strings.Contains(protocol.String(), "unknown vscode lane id") {
+			t.Fatalf("runnable vsix discovery item %q reached unknown-lane default:\n%s", item.ID, protocol.String())
+		}
+	}
+}
+
 func discoveryHasAlias(doc vscode.DiscoveryDocument, parentID, canonicalID string) bool {
 	for _, item := range doc.Items {
 		if item.ParentID == parentID && item.CanonicalID == canonicalID {
