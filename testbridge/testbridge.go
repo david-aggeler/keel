@@ -993,33 +993,42 @@ func resolveRunRequests(ctx context.Context, bridge Bridge, ids []string, strict
 		if !ok {
 			return nil, cli.NewUsageError("test id %q resolves to unknown canonical id %q", id, targetID)
 		}
-		if desiredStateGroupItem(target) {
-			children := runnableDesiredStateGroupChildren(doc.Items, targetID)
-			if len(children) == 0 {
-				return nil, cli.NewUsageError("desired-state group %q has no runnable rows", targetID)
+		for {
+			if desiredStateGroupItem(target) {
+				children := runnableDesiredStateGroupChildren(doc.Items, targetID)
+				if len(children) == 0 {
+					return nil, cli.NewUsageError("desired-state group %q has no runnable rows", targetID)
+				}
+				if !target.Runnable {
+					return nil, cli.NewUsageError("test id %q resolves to non-runnable desired-state group %q", id, targetID)
+				}
+				for _, child := range children {
+					appendResolved(runResolution{Request: runRequestForTestItem(child)})
+				}
+				break
 			}
-			if !target.Runnable {
-				return nil, cli.NewUsageError("test id %q resolves to non-runnable desired-state group %q", id, targetID)
+			if nonDesiredStateGroupItemWithDescendants(doc.Items, target) {
+				children := runnableDescendantLeafItems(doc.Items, targetID)
+				if len(children) == 0 {
+					ancestor, ok := nearestRunnableAncestor(items, target)
+					if !ok {
+						return nil, cli.NewUsageError("group %q has no runnable descendants", targetID)
+					}
+					targetID = ancestor.ID
+					target = ancestor
+					continue
+				}
+				for _, child := range children {
+					appendResolved(runResolution{Request: runRequestForTestItem(child), ExpandedGroupChild: true})
+				}
+				break
 			}
-			for _, child := range children {
-				appendResolved(runResolution{Request: runRequestForTestItem(child)})
+			if !target.Runnable && (strict || item.CanonicalID != "") {
+				return nil, cli.NewUsageError("test id %q resolves to non-runnable id %q", id, targetID)
 			}
-			continue
+			appendResolved(runResolution{Request: runRequestForTestItem(target), ExclusiveSiblingIDs: exclusiveDesiredStateSiblingIDs(doc.Items, target)})
+			break
 		}
-		if nonDesiredStateGroupItemWithDescendants(doc.Items, target) {
-			children := runnableDescendantLeafItems(doc.Items, targetID)
-			if len(children) == 0 {
-				return nil, cli.NewUsageError("group %q has no runnable descendants", targetID)
-			}
-			for _, child := range children {
-				appendResolved(runResolution{Request: runRequestForTestItem(child), ExpandedGroupChild: true})
-			}
-			continue
-		}
-		if !target.Runnable && (strict || item.CanonicalID != "") {
-			return nil, cli.NewUsageError("test id %q resolves to non-runnable id %q", id, targetID)
-		}
-		appendResolved(runResolution{Request: runRequestForTestItem(target), ExclusiveSiblingIDs: exclusiveDesiredStateSiblingIDs(doc.Items, target)})
 	}
 	return resolved, nil
 }
@@ -1087,6 +1096,21 @@ func testItemByID(items []vscode.TestItem, id string) (vscode.TestItem, bool) {
 		if item.ID == id {
 			return item, true
 		}
+	}
+	return vscode.TestItem{}, false
+}
+
+// DHF-REQ: keel/requirement-86
+func nearestRunnableAncestor(items map[string]vscode.TestItem, item vscode.TestItem) (vscode.TestItem, bool) {
+	for parentID := item.ParentID; parentID != ""; {
+		parent, ok := items[parentID]
+		if !ok {
+			return vscode.TestItem{}, false
+		}
+		if parent.Runnable {
+			return parent, true
+		}
+		parentID = parent.ParentID
 	}
 	return vscode.TestItem{}, false
 }

@@ -1275,6 +1275,115 @@ func TestRunExpandsNonDesiredStateGroupToRunnableDescendantLeaves(t *testing.T) 
 }
 
 // DHF-TEST: keel/requirement-86
+func TestRunCoversGroupResolvesToSameRequestsAsOwningLane(t *testing.T) {
+	items := []vscode.TestItem{
+		{
+			ID:       "keel::lane::ci",
+			Label:    "ci",
+			Kind:     "group",
+			Runnable: true,
+			Profiles: []string{"run"},
+		},
+		{
+			ID:       "keel::lane::ci::lint",
+			ParentID: "keel::lane::ci",
+			Label:    "lint",
+			Kind:     "lane",
+			Runnable: true,
+			Profiles: []string{"run"},
+		},
+		{
+			ID:       "keel::lane::ci::test-coverage",
+			ParentID: "keel::lane::ci",
+			Label:    "test-coverage",
+			Kind:     "lane",
+			Runnable: true,
+			Profiles: []string{"run"},
+		},
+		{
+			ID:       "keel::lane::ci::covers",
+			ParentID: "keel::lane::ci",
+			Label:    "covers",
+			Kind:     "group",
+			Runnable: false,
+			Profiles: []string{},
+		},
+		{
+			ID:          "keel::lane::ci::covers::lint",
+			ParentID:    "keel::lane::ci::covers",
+			Label:       "lint",
+			Kind:        "lane",
+			Runnable:    false,
+			Profiles:    []string{},
+			CanonicalID: "keel::lane::lint",
+		},
+	}
+
+	laneRunIDs, laneRequested := runTestBridgeID(t, items, "keel::lane::ci")
+	coversRunIDs, coversRequested := runTestBridgeID(t, items, "keel::lane::ci::covers")
+
+	if !equalStrings(coversRunIDs, laneRunIDs) {
+		t.Fatalf("covers consumer runner ids = %v, want same as owning lane %v", coversRunIDs, laneRunIDs)
+	}
+	if !reflect.DeepEqual(coversRequested, laneRequested) {
+		t.Fatalf("covers requested = %+v, want same as owning lane %+v", coversRequested, laneRequested)
+	}
+	if !equalStrings(coversRunIDs, []string{"keel::lane::ci::lint", "keel::lane::ci::test-coverage"}) {
+		t.Fatalf("ci covers runner ids = %v, want ci lane leaf runs", coversRunIDs)
+	}
+}
+
+// DHF-TEST: keel/requirement-86
+func TestRunCoversGroupSelectionDoesNotDuplicateExplicitOwningLane(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{
+		{
+			ID:       "keel::lane::lint",
+			Label:    "lint",
+			Kind:     "lane",
+			Runnable: true,
+			Profiles: []string{"run"},
+		},
+		{
+			ID:       "keel::lane::lint::covers",
+			ParentID: "keel::lane::lint",
+			Label:    "covers",
+			Kind:     "group",
+			Runnable: false,
+			Profiles: []string{},
+		},
+		{
+			ID:          "keel::lane::lint::covers::go-root",
+			ParentID:    "keel::lane::lint::covers",
+			Label:       "Go",
+			Kind:        "root",
+			Runnable:    false,
+			Profiles:    []string{},
+			CanonicalID: "go::root",
+		},
+	}
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return "run-mixed-covers" }})
+
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{
+		"test-bridge", "tests", "run",
+		"--id", "keel::lane::lint::covers",
+		"--id", "keel::lane::lint",
+	}); err != nil {
+		t.Fatalf("mixed covers run dispatch: %v\n%s", err, protocol.String())
+	}
+	if !equalStrings(fake.runIDs, []string{"keel::lane::lint"}) {
+		t.Fatalf("consumer runner ids = %v, want deduplicated owning lane", fake.runIDs)
+	}
+	events := decodeEvents(t, protocol.String())
+	wantRequested := []vscode.RunRequest{{ID: "keel::lane::lint", Label: "lint"}}
+	if len(events) == 0 || !reflect.DeepEqual(events[0].Requested, wantRequested) {
+		t.Fatalf("run_started requested = %+v, want deduplicated owning lane request %+v", events[0].Requested, wantRequested)
+	}
+}
+
+// DHF-TEST: keel/requirement-86
 func TestRunNonDesiredStateGroupWithNoRunnableDescendantsFailsLoudly(t *testing.T) {
 	root := t.TempDir()
 	fake := newFakeBridge(root)
@@ -1361,6 +1470,24 @@ func TestRunNonDesiredStateGroupSelectionDoesNotDuplicateExplicitLeaves(t *testi
 	if len(events) == 0 || !reflect.DeepEqual(events[0].Requested, wantRequested) {
 		t.Fatalf("run_started requested = %+v, want deduplicated leaf requests %+v", events[0].Requested, wantRequested)
 	}
+}
+
+func runTestBridgeID(t *testing.T, items []vscode.TestItem, id string) ([]string, []vscode.RunRequest) {
+	t.Helper()
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = items
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return "run-" + strings.ReplaceAll(id, ":", "-") }})
+
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", id}); err != nil {
+		t.Fatalf("run %q dispatch: %v\n%s", id, err, protocol.String())
+	}
+	events := decodeEvents(t, protocol.String())
+	if len(events) == 0 {
+		t.Fatalf("run %q emitted no events", id)
+	}
+	return fake.runIDs, events[0].Requested
 }
 
 // DHF-TEST: keel/requirement-86
