@@ -242,6 +242,47 @@ func TestRunVSIXGateIncludesPackagedE2ELane(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-90
+func TestRunVSIXGateRequiresNodeAndXVFBRunBeforePNPM(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		present     []string
+		wantMissing string
+	}{
+		{
+			name:        "node absent",
+			present:     []string{"pnpm", "xvfb-run"},
+			wantMissing: "node",
+		},
+		{
+			name:        "xvfb-run absent",
+			present:     []string{"node", "pnpm"},
+			wantMissing: "xvfb-run",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bin := t.TempDir()
+			callsFile := filepath.Join(bin, "calls.log")
+			for _, tool := range tc.present {
+				body := "exit 0"
+				if tool == "pnpm" {
+					body = "printf 'unexpected pnpm invocation\\n' >&2\nexit 2"
+				}
+				stub(t, bin, callsFile, tool, body)
+			}
+			t.Setenv("PATH", bin)
+
+			err := runVSIXGate(context.Background(), discardLogger(), moduleFixture(t))
+			if err == nil || !strings.Contains(err.Error(), tc.wantMissing) {
+				t.Fatalf("runVSIXGate err = %v, want missing %s", err, tc.wantMissing)
+			}
+			if strings.Contains(calls(t, callsFile), "pnpm ") {
+				t.Fatalf("vsix gate should not start pnpm when %s is absent; calls:\n%s", tc.wantMissing, calls(t, callsFile))
+			}
+		})
+	}
+}
+
 // DHF-TEST: keel/requirement-79
 func TestVSIXGateScriptRunsCoverageWithExcludedFixtures(t *testing.T) {
 	body, err := os.ReadFile(filepath.Join("..", "..", "vsix", "package.json"))

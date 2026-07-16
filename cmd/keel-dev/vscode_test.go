@@ -2600,6 +2600,94 @@ func TestVSCodeProtocolWriterIsOnlyStdoutAllowlistGrowth(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-90
+func TestVSCodeVSIXGateReadinessRequiresCompleteToolchain(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+
+	for _, tc := range []struct {
+		name        string
+		present     []string
+		wantBlocked string
+	}{
+		{
+			name:        "xvfb-run absent",
+			present:     []string{"go", "pnpm", "node"},
+			wantBlocked: "xvfb-run",
+		},
+		{
+			name:        "node absent",
+			present:     []string{"go", "pnpm", "xvfb-run"},
+			wantBlocked: "node",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bin := t.TempDir()
+			callsFile := filepath.Join(bin, "calls.log")
+			for _, tool := range tc.present {
+				body := "exit 0"
+				if tool == "pnpm" {
+					body = "printf 'unexpected pnpm invocation\\n' >&2\nexit 2"
+				}
+				stub(t, bin, callsFile, tool, body)
+			}
+			t.Setenv("PATH", bin)
+
+			profile := newKeelWorkspaceProfile(root)
+			readiness := profile.PrepareLane(context.Background(), vscodeLaneVSIXGate)
+			if readiness.Ready() || len(readiness.Blocked) != 1 || readiness.Blocked[0].Resource != tc.wantBlocked {
+				t.Fatalf("PrepareLane blocked = %+v, want exactly %q", readiness.Blocked, tc.wantBlocked)
+			}
+
+			var protocol bytes.Buffer
+			err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), vscodeLaneVSIXGate)
+			if err == nil {
+				t.Fatalf("vsix-ci without %s returned nil error; want structured block", tc.wantBlocked)
+			}
+			events := decodeRunEvents(t, protocol.String())
+			if !runEventsContain(events, "failed", vscodeLaneVSIXGate) || !strings.Contains(protocol.String(), tc.wantBlocked) {
+				t.Fatalf("blocked events = %+v, protocol=%s; want failed event naming %s", events, protocol.String(), tc.wantBlocked)
+			}
+			if strings.Contains(calls(t, callsFile), "pnpm ") {
+				t.Fatalf("vsix-ci should not start gate work when %s is absent; calls:\n%s", tc.wantBlocked, calls(t, callsFile))
+			}
+		})
+	}
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	for _, tool := range []string{"go", "pnpm", "node", "xvfb-run"} {
+		stub(t, bin, callsFile, tool, "exit 0")
+	}
+	t.Setenv("PATH", bin)
+	if readiness := newKeelWorkspaceProfile(root).PrepareLane(context.Background(), vscodeLaneVSIXGate); !readiness.Ready() {
+		t.Fatalf("PrepareLane with full vsix-ci toolchain = %+v, want ready", readiness)
+	}
+
+	seedDetectedLanes(t, root)
+	built, err := buildVSCodeDiscovery(root)
+	if err != nil {
+		t.Fatalf("buildVSCodeDiscovery: %v", err)
+	}
+	var discover bytes.Buffer
+	if err := testbridge.EncodeDocument(&discover, built); err != nil {
+		t.Fatalf("encode protocol document: %v", err)
+	}
+	var doc vscode.DiscoveryDocument
+	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
+		t.Fatalf("discovery JSON: %v\n%s", err, discover.String())
+	}
+	item, ok := discoveryItemByID(doc, vscodeLaneVSIXGate)
+	if !ok {
+		t.Fatalf("discovery missing %q", vscodeLaneVSIXGate)
+	}
+	wantResources := []string{"go-toolchain", "keel-module-root", "pnpm", "node", "xvfb-run"}
+	if !stringSlicesEqual(item.RequiredResources, wantResources) {
+		t.Fatalf("vsix-ci required resources = %+v, want %+v", item.RequiredResources, wantResources)
+	}
+}
+
 // DHF-TEST: keel/requirement-81
 func TestVSCodeArgumentAndProfileEdges(t *testing.T) {
 	if _, err := parseVSCodeIDs([]string{"--format", "yaml"}, true); err == nil {
