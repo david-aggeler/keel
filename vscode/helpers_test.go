@@ -41,6 +41,10 @@ func TestParseVSIXItemID(t *testing.T) {
 		{"vsix::root", VSIXSelection{Kind: "root"}, true},
 		{"vsix::file::src/test/suite/extension.test.ts", VSIXSelection{Kind: "file", File: "src/test/suite/extension.test.ts"}, true},
 		{"vsix::file::", VSIXSelection{}, false},
+		{"vsix::file::/src/test/suite/extension.test.ts", VSIXSelection{}, false},
+		{"vsix::file::../src/test/suite/extension.test.ts", VSIXSelection{}, false},
+		{"vsix::file::src/test/suite/../extension.test.ts", VSIXSelection{}, false},
+		{"vsix::file::src/test/suite/extension.ts", VSIXSelection{}, false},
 		{"vsix::test::src/test/suite/extension.test.ts::runs", VSIXSelection{}, false},
 		{"nonsense", VSIXSelection{}, false},
 	}

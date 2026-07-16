@@ -1659,7 +1659,7 @@ func runVSCodeLane(ctx context.Context, logger *slog.Logger, root, laneID, runID
 		if logger == nil {
 			logger = vscodeDiscardLogger()
 		}
-		if err := runVSCodeVSIXSelection(ctx, logger, root, selection, maxOutputBytes); err != nil {
+		if err := runVSCodeVSIXSelection(ctx, logger, root, laneID, selection, maxOutputBytes, writer); err != nil {
 			return gateExitCode(err), err
 		}
 		return 0, nil
@@ -1767,12 +1767,21 @@ func runVSIXFileSelection(ctx context.Context, logger *slog.Logger, root string,
 }
 
 // DHF-REQ: keel/requirement-91
-func runVSCodeVSIXSelection(ctx context.Context, logger *slog.Logger, root string, selection vscode.VSIXSelection, maxOutputBytes int) error {
+func runVSCodeVSIXSelection(ctx context.Context, logger *slog.Logger, root, selectedID string, selection vscode.VSIXSelection, maxOutputBytes int, writer vscode.RunEventWriter) error {
 	files, err := vsixSelectionFiles(root, selection)
 	if err != nil {
 		return err
 	}
-	return runVSIXFileSelection(ctx, logger, root, files, maxOutputBytes)
+	if writer != nil {
+		writer(vscode.RunEvent{Event: "test_started", TestID: selectedID})
+	}
+	if err := runVSIXFileSelection(ctx, logger, root, files, maxOutputBytes); err != nil {
+		if writer != nil {
+			writer(vscode.RunEvent{Event: "failed", TestID: selectedID, Message: err.Error()})
+		}
+		return err
+	}
+	return nil
 }
 
 func vsixSelectionFiles(root string, selection vscode.VSIXSelection) ([]string, error) {
