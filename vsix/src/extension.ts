@@ -14,7 +14,10 @@ let output: vscode.OutputChannel;
 let activeRun = false;
 let statusItem: vscode.StatusBarItem;
 let activeRunLabel = '';
-let testTreeGeneration = 0;
+// refreshChain serializes every refresh() so a watcher-scheduled refresh and
+// an awaited refresh (e.g. from runProfileHandlerForTest or an explicit
+// keel.tests.refresh) never overlap. See refresh() for why.
+let refreshChain: Promise<void> = Promise.resolve();
 let externalRunMirror: ExternalRunMirror | undefined;
 let testControllerForRunProfile: vscode.TestController | undefined;
 let testRunProfileForRunProfile: vscode.TestRunProfile | undefined;
@@ -310,24 +313,36 @@ export function rejectConcurrentRun(
 }
 
 // DHF-REQ: keel/requirement-70
-async function refresh(controller: vscode.TestController): Promise<void> {
+//
+// refresh() serializes discovery through refreshChain so concurrent callers
+// never overlap. A test run's file writes schedule a debounced watcher
+// refresh (scheduleWatcherRefresh), which would otherwise race an awaited
+// refresh from runProfileHandlerForTest or an explicit keel.tests.refresh:
+// both would discover in parallel and the LATER one to finish would win,
+// leaving the awaiting caller to observe an undefined or stale `tree` when
+// its own refresh lost the race. That surfaced in the packaged e2e lane
+// (keel/issue-71 Layer 3) as an intermittent "Keel test item not found" and
+// a flaky stale active-row assertion. Serializing makes every awaited
+// refresh observe a completed, current discovery, and removes the need for
+// the prior generation-guard heuristic.
+function refresh(controller: vscode.TestController): Promise<void> {
+  const next = refreshChain.then(() => refreshNow(controller));
+  refreshChain = next.catch(() => undefined);
+  return next;
+}
+
+async function refreshNow(controller: vscode.TestController): Promise<void> {
   const workspaceRoot = getWorkspaceRoot();
   output.appendLine(`[${new Date().toISOString()}] refresh requested`);
   if (!workspaceRoot) {
     controller.invalidateTestResults();
-    testTreeGeneration++;
     output.appendLine('No workspace root is open; clearing Keel test tree.');
     controller.items.replace([]);
     return;
   }
   try {
-    const generation = ++testTreeGeneration;
     const discovery = await discoverTests(workspaceRoot);
-    if (generation !== testTreeGeneration) {
-      output.appendLine(`Ignored stale discovery generation ${generation}.`);
-      return;
-    }
-    tree = publishDiscovery(controller, workspaceRoot, discovery, generation);
+    tree = publishDiscovery(controller, workspaceRoot, discovery);
     output.appendLine(`Published ${discovery.items.length} Keel test items from ${workspaceRoot}.`);
     void externalRunMirror?.syncWorkspace();
   } catch (error) {
