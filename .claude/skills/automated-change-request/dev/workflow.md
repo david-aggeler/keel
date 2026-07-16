@@ -47,8 +47,16 @@ it.**
    it** (the runner did not set the session up; do not commit to the default
    branch).
 
-2. `update_change_request` with `fields: { status: "in_progress" }`. Re-read and
-   confirm `status == in_progress` before continuing.
+2. `update_change_request` with sparse fields only.
+   <!-- DHF-REQ: openbrain/requirement-870 -->
+   The claim write's sparse fields = status (plus last_edited_by) only: use
+   `fields: { status: "in_progress" }` and, if you supply editor identity, include
+   only `last_edited_by` with it; never include server-managed fields such as
+   `created_at`, `last_edited_at`, `template`, `git_sha`, `schema_version`, or
+   `source_path`.
+   If the write fails with invalid_argument naming a server-managed field, strip the server-managed field and retry the claim once in-session.
+   Do not halt on this first mechanical rejection; halt only if the corrected retry
+   also fails. Re-read and confirm `status == in_progress` before continuing.
 
 3. **Resume check (the branch may already carry work from an interrupted run).**
    Inspect what is already committed on this branch:

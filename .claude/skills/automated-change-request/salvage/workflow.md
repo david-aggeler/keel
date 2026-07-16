@@ -78,7 +78,7 @@ If `--auto-salvage` is present:
 
 - Apply only classification `salvage`.
 - Commit the dirty work on the current unit branch with a conventional subject
-  such as `fix(cr-<N>): salvage interrupted dev work`.
+  such as `fix(cr-<N>): salvage interrupted dev work.`.
 - Do not apply `hand-back`, `reset`, or `manual`; stop after the review record.
 - After committing, leave the CR at `in_progress` so the runner can re-check the
   branch state and resume at `review`.
