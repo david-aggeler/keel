@@ -50,14 +50,16 @@ suite('packaged VSIX e2e lane', () => {
     assertMissing(tree, 'keel::desired-state::group::app-db-data-set');
     assertMissing(tree, 'keel-demo-dev::lane::fake-smoke');
 
-    await runAndRead(workspaceRoot, api, 'keel-demo-dev::maintenance::detect-lanes');
+    await runAndRead(workspaceRoot, api, 'keel::maintenance::detect-lanes');
     await vscode.commands.executeCommand('keel.tests.refresh');
     tree = requireTree(api);
     assertPresent(tree, 'keel-demo-dev::lane::go-pass');
     assertPresent(tree, 'keel-demo-dev::lane::go-fail');
     assertPresent(tree, 'keel-demo-dev::lane::fake-smoke');
     assert.equal(childrenOf(tree, 'keel::desired-state').length, 2);
-    assertOneActiveDataSet(tree, 'keel-demo-dev::desired-state::dataset::small');
+    // cr-101 / requirement-88: a mutually-exclusive group with nothing selected
+    // has the bridge-synthesized Unknown State member as its sole active row.
+    assertOneActiveDataSet(tree, 'keel::desired-state::group::app-db-data-set::unknown');
 
     for (const id of [
       'keel-demo-dev::desired-state::docker-env',
@@ -74,7 +76,7 @@ suite('packaged VSIX e2e lane', () => {
 
     fs.rmSync(path.join(workspaceRoot, '.devtools', 'keel-demo-dev', 'ready', 'docker-env'), { force: true });
     assertRunEvent(await runAndRead(workspaceRoot, api, 'keel-demo-dev::desired-state::docker-env'), 'failed', 'keel-demo-dev::desired-state::docker-env');
-    await runAndRead(workspaceRoot, api, 'keel-demo-dev::maintenance::detect-lanes');
+    await runAndRead(workspaceRoot, api, 'keel::maintenance::detect-lanes');
     assertRunEvent(await runAndRead(workspaceRoot, api, 'keel-demo-dev::desired-state::docker-env'), 'passed', 'keel-demo-dev::desired-state::docker-env');
 
     await runAndRead(workspaceRoot, api, 'keel-demo-dev::desired-state::dataset::full');
@@ -123,7 +125,11 @@ function assertOneActiveDataSet(tree: PublishedTreeSnapshot, activeID: string): 
   const rows = [
     'keel-demo-dev::desired-state::dataset::empty',
     'keel-demo-dev::desired-state::dataset::small',
-    'keel-demo-dev::desired-state::dataset::full'
+    'keel-demo-dev::desired-state::dataset::full',
+    // cr-101 / requirement-88: the bridge-synthesized Unknown State member is
+    // the sole active row until a concrete dataset is selected, then it
+    // deactivates. Including it here proves both halves of that toggle.
+    'keel::desired-state::group::app-db-data-set::unknown'
   ];
   const active = rows.filter((id) => (tree.discoveryItemsById.get(id)?.limitations ?? []).includes('active=true'));
   assert.deepEqual(active, [activeID]);
