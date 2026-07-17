@@ -2,7 +2,7 @@
   "name": "keel-test-bridge",
   "displayName": "Keel Test Bridge",
   "description": "VS Code Testing API bridge for Keel's canonical devtool test protocol.",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "publisher": "aggeler",
   "private": true,
   "license": "Apache-2.0",
