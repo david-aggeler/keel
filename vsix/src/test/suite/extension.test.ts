@@ -543,6 +543,152 @@ suite('Keel Test Bridge config contract', () => {
     }
   });
 
+  // DHF-TEST: keel/requirement-93
+  test('run-finished reconciles exclusive-group results at rest after discovery refresh', async function () {
+    this.timeout(10_000);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-post-run-mutex-results-'));
+    const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+    process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = root;
+    fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+    const adapter = path.join(root, 'exclusive-adapter.js');
+    fs.writeFileSync(adapter, `
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+const now = () => new Date().toISOString();
+const activePath = path.join(process.cwd(), '.devtools', 'active-member');
+if (args.includes('--version')) {
+  process.stdout.write('dev\\n');
+  process.exit(0);
+}
+function activeMember() {
+  try {
+    return fs.readFileSync(activePath, 'utf8').trim();
+  } catch {
+    return 'demo::desired-state::dataset::small';
+  }
+}
+function discovery() {
+  const active = activeMember();
+  return {
+    version: 1,
+    workspace: process.cwd(),
+    generated_at: now(),
+    items: [
+      { id: 'demo::desired-state::dataset', label: 'Data Set', kind: 'group', runnable: false, profiles: [], limitations: ['mutually_exclusive=true'] },
+      { id: 'demo::desired-state::dataset::small', parent_id: 'demo::desired-state::dataset', label: 'small', kind: 'test', runnable: true, profiles: ['run'], limitations: ['active=' + (active === 'demo::desired-state::dataset::small')] },
+      { id: 'demo::desired-state::dataset::full', parent_id: 'demo::desired-state::dataset', label: 'full', kind: 'test', runnable: true, profiles: ['run'], limitations: ['active=' + (active === 'demo::desired-state::dataset::full')] },
+      { id: 'demo::desired-state::dataset::unknown', parent_id: 'demo::desired-state::dataset', label: 'Unknown State', kind: 'test', runnable: true, profiles: ['run'], limitations: ['active=' + (active === 'demo::desired-state::dataset::unknown')] }
+    ]
+  };
+}
+function desiredState() {
+  const active = activeMember();
+  const rows = [
+    ['demo::desired-state::dataset::small', 'small'],
+    ['demo::desired-state::dataset::full', 'full'],
+    ['demo::desired-state::dataset::unknown', 'Unknown State']
+  ].map(([run_id, resource]) => ({
+    run_id,
+    resource,
+    kind: 'dataset',
+    desired: resource,
+    current: resource,
+    status: run_id === active ? 'satisfied' : 'available',
+    action: run_id === active ? 'reuse' : 'none',
+    message: resource,
+    reusable: true,
+    owned: false,
+    active: run_id === active
+  }));
+  return {
+    version: 3,
+    workspace: process.cwd(),
+    generated_at: now(),
+    groups: [{ label: 'Data Set', order: 1, mutually_exclusive: true, rows }]
+  };
+}
+if (args.slice(0, 4).join(' ') === 'test-bridge tests discover --format') {
+  process.stdout.write(JSON.stringify(discovery()) + '\\n');
+  process.exit(0);
+}
+if (args.slice(0, 4).join(' ') === 'test-bridge tests desired-state --format') {
+  process.stdout.write(JSON.stringify(desiredState()) + '\\n');
+  process.exit(0);
+}
+if (args.slice(0, 3).join(' ') === 'test-bridge tests run') {
+  const selected = args[args.indexOf('--id') + 1];
+  fs.mkdirSync(path.dirname(activePath), { recursive: true });
+  fs.writeFileSync(activePath, selected + '\\n');
+  const emit = (event) => process.stdout.write(JSON.stringify({ version: 1, time: now(), run_id: 'mutex-run', ...event }) + '\\n');
+  emit({ event: 'run_started', test_id: selected });
+  emit({ event: 'test_started', test_id: selected });
+  emit({ event: 'passed', test_id: selected, duration_ms: 1 });
+  emit({ event: 'run_finished', exit_code: 0 });
+  process.exit(0);
+}
+process.stderr.write('unsupported command ' + args.join(' ') + '\\n');
+process.exit(2);
+`);
+    fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+      version: currentConfigVersion,
+      command: process.execPath,
+      args: [adapter],
+      displayName: 'Keel'
+    }, null, 2) + '\n');
+
+    try {
+      const extension = vscode.extensions.getExtension('aggeler.keel-test-bridge');
+      assert.ok(extension, 'extension should be discoverable');
+      await extension.activate();
+      await vscode.commands.executeCommand('keel.tests.refresh');
+      const controller = testControllerForTest();
+      const initialTree = currentTree();
+      assert.ok(controller, 'extension should expose its active TestController for tests');
+      assert.ok(initialTree, 'discovery should publish the initial tree');
+      const originalSmall = initialTree.itemsById.get('demo::desired-state::dataset::small');
+      const originalFull = initialTree.itemsById.get('demo::desired-state::dataset::full');
+      const originalUnknown = initialTree.itemsById.get('demo::desired-state::dataset::unknown');
+      assert.ok(originalSmall && originalFull && originalUnknown, 'exclusive group members should be published');
+
+      const spyTarget = controller as vscode.TestController & { invalidateTestResults: (items?: vscode.TestItem | readonly vscode.TestItem[]) => void };
+      const originalInvalidate = spyTarget.invalidateTestResults.bind(controller);
+      const invalidated: string[] = [];
+      spyTarget.invalidateTestResults = (items?: vscode.TestItem | readonly vscode.TestItem[]) => {
+        if (Array.isArray(items)) {
+          invalidated.push(...items.map((item) => item.id));
+        } else if (items) {
+          invalidated.push((items as vscode.TestItem).id);
+        }
+        originalInvalidate(items as never);
+      };
+
+      try {
+        await runProfileHandlerForTest('demo::desired-state::dataset::full');
+      } finally {
+        spyTarget.invalidateTestResults = originalInvalidate;
+      }
+
+      const refreshedTree = currentTree();
+      assert.ok(refreshedTree, 'post-run discovery refresh should leave a published tree');
+      assert.deepEqual(
+        invalidated.sort(),
+        ['demo::desired-state::dataset::small', 'demo::desired-state::dataset::unknown'],
+        'non-active exclusive members are invalidated to no-result after run_finished'
+      );
+      assert.notEqual(refreshedTree.itemsById.get('demo::desired-state::dataset::small'), originalSmall, 'non-active sibling is replaced, proving its prior result is dropped');
+      assert.notEqual(refreshedTree.itemsById.get('demo::desired-state::dataset::unknown'), originalUnknown, 'non-active reset peer is replaced, proving its prior result is dropped');
+      assert.equal(refreshedTree.itemsById.get('demo::desired-state::dataset::full'), originalFull, 'active member keeps its TestItem identity and exactly one result');
+    } finally {
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   // DHF-TEST: keel/requirement-40
   test('extension activates and registers Keel commands', async () => {
     const extension = vscode.extensions.getExtension('aggeler.keel-test-bridge');
