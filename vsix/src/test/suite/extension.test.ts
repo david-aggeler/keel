@@ -713,6 +713,85 @@ suite('Keel Test Bridge config contract', () => {
     }
   });
 
+  // DHF-TEST: keel/requirement-36
+  test('external run mirror does not re-red an item from historical completed failed streams', async function () {
+    this.timeout(10_000);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-external-stale-import-'));
+    const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+    process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = root;
+    const controller = vscode.tests.createTestController(`keelStaleImport-${Date.now()}`, 'Keel Stale Import');
+    const tree = publishDiscovery(controller, root, {
+      version: 1,
+      workspace: root,
+      generated_at: new Date().toISOString(),
+      items: [{ id: 'keel::lane::test-fast', label: 'test-fast', kind: 'lane', runnable: true, profiles: ['run'] }]
+    });
+    setCurrentTreeForTest(tree);
+    const passed: string[] = [];
+    const failed: string[] = [];
+    const errored: string[] = [];
+    const spyTarget = controller as vscode.TestController & {
+      createTestRun: (request: vscode.TestRunRequest, name?: string, persist?: boolean) => vscode.TestRun;
+    };
+    const originalCreateTestRun = spyTarget.createTestRun.bind(controller);
+    spyTarget.createTestRun = (request: vscode.TestRunRequest, name?: string, persist?: boolean): vscode.TestRun => {
+      const run = originalCreateTestRun(request, name, persist);
+      const originalPassed = run.passed.bind(run);
+      const originalFailed = run.failed.bind(run);
+      const originalErrored = run.errored.bind(run);
+      run.passed = (item: vscode.TestItem, duration?: number) => {
+        passed.push(item.id);
+        originalPassed(item, duration);
+      };
+      run.failed = (item: vscode.TestItem, message: vscode.TestMessage | readonly vscode.TestMessage[], duration?: number) => {
+        failed.push(item.id);
+        originalFailed(item, message, duration);
+      };
+      run.errored = (item: vscode.TestItem, message: vscode.TestMessage | readonly vscode.TestMessage[], duration?: number) => {
+        errored.push(item.id);
+        originalErrored(item, message, duration);
+      };
+      return run;
+    };
+    const mirror = new ExternalRunMirror(controller);
+    const runsDir = path.join(root, '.devtools', 'vscode-runs');
+    fs.mkdirSync(runsDir, { recursive: true });
+    const currentRunFile = path.join(runsDir, '001-current-passed.jsonl');
+    fs.writeFileSync(currentRunFile, [
+      JSON.stringify(runEvent({ event: 'run_started', run_id: 'current-pass', test_id: 'keel::lane::test-fast' })),
+      JSON.stringify(runEvent({ event: 'test_started', run_id: 'current-pass', test_id: 'keel::lane::test-fast' })),
+      JSON.stringify(runEvent({ event: 'passed', run_id: 'current-pass', test_id: 'keel::lane::test-fast' })),
+      JSON.stringify(runEvent({ event: 'run_finished', run_id: 'current-pass', exit_code: 0 }))
+    ].join('\n') + '\n');
+    const historicalRunFile = path.join(runsDir, '999-historical-failed.jsonl');
+    fs.writeFileSync(historicalRunFile, [
+      JSON.stringify(runEvent({ event: 'run_started', run_id: 'historical-fail', test_id: 'keel::lane::test-fast' })),
+      JSON.stringify(runEvent({ event: 'test_started', run_id: 'historical-fail', test_id: 'keel::lane::test-fast' })),
+      JSON.stringify(runEvent({ event: 'failed', run_id: 'historical-fail', test_id: 'keel::lane::test-fast', message: 'old failure' })),
+      JSON.stringify(runEvent({ event: 'run_finished', run_id: 'historical-fail', exit_code: 1 }))
+    ].join('\n') + '\n');
+    const oldTime = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    fs.utimesSync(historicalRunFile, oldTime, oldTime);
+
+    try {
+      await mirror.syncWorkspace();
+      assert.ok(passed.includes('keel::lane::test-fast'), 'current completed pass is still imported');
+      assert.ok(!failed.includes('keel::lane::test-fast'), 'historical completed failure must not re-red the item');
+      assert.ok(!errored.includes('keel::lane::test-fast'), 'historical completed error must not re-red the item');
+    } finally {
+      spyTarget.createTestRun = originalCreateTestRun;
+      fs.rmSync(root, { recursive: true, force: true });
+      mirror.dispose();
+      setCurrentTreeForTest(undefined);
+      controller.dispose();
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
+    }
+  });
+
   // DHF-TEST: keel/requirement-88
   test('external run mirror invalidates exclusive-group siblings cleared by imported streams', async function () {
     this.timeout(10_000);

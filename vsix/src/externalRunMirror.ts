@@ -49,6 +49,7 @@ interface ExternalRunStreamState {
 }
 
 let externalRunStaleMs = 60_000;
+const externalRunImportRecencyMs = 60_000;
 
 // DHF-REQ: keel/requirement-36
 export function setExternalRunStaleMsForTest(ms: number): void {
@@ -59,6 +60,8 @@ export class ExternalRunMirror implements vscode.Disposable {
   private watcher?: vscode.FileSystemWatcher;
   private workspaceRoot?: string;
   private readonly streams = new Map<string, ExternalRunStreamState>();
+  private readonly latestTerminalByProtocolId = new Map<string, number>();
+  private readonly sessionStartedAt = Date.now();
   private readonly disposables: vscode.Disposable[] = [];
 
   constructor(private readonly controller: vscode.TestController) {}
@@ -122,8 +125,33 @@ export class ExternalRunMirror implements vscode.Disposable {
       return;
     }
     for (const name of names.filter((candidate) => candidate.endsWith('.jsonl')).sort()) {
-      await this.process(path.join(dir, name));
+      const file = path.join(dir, name);
+      if (await this.isHistoricalCompletedImport(file)) {
+        continue;
+      }
+      await this.process(file);
     }
+  }
+
+  // DHF-REQ: keel/requirement-36
+  private async isHistoricalCompletedImport(file: string): Promise<boolean> {
+    let stat: Awaited<ReturnType<typeof fs.stat>>;
+    try {
+      stat = await fs.stat(file);
+    } catch {
+      return false;
+    }
+    const recentEnough = stat.mtimeMs >= this.sessionStartedAt || Date.now() - stat.mtimeMs <= externalRunImportRecencyMs;
+    if (recentEnough) {
+      return false;
+    }
+    let body: string;
+    try {
+      body = await fs.readFile(file, 'utf8');
+    } catch {
+      return false;
+    }
+    return body.split(/\r?\n/).some((line) => line.trim().length > 0 && isRunFinishedLine(line));
   }
 
   private forget(file: string): void {
@@ -140,7 +168,7 @@ export class ExternalRunMirror implements vscode.Disposable {
     this.streams.delete(file);
   }
 
-  // DHF-REQ: keel/requirement-88
+  // DHF-REQ: keel/requirement-88, keel/requirement-36
   private async process(file: string): Promise<void> {
     if (!this.workspaceRoot || !file.startsWith(path.join(this.workspaceRoot, '.devtools', 'vscode-runs') + path.sep)) {
       return;
@@ -175,11 +203,17 @@ export class ExternalRunMirror implements vscode.Disposable {
       }
     }
     for (const line of lines.slice(state.lineCount)) {
-      const resultID = terminalRunEventTestID(line);
-      if (resultID) {
-        state.protocolResultIds.add(resultID);
+      const terminal = terminalRunEvent(line);
+      if (terminal?.test_id && this.isOlderTerminalResult(terminal)) {
+        continue;
+      }
+      if (terminal?.test_id) {
+        state.protocolResultIds.add(terminal.test_id);
       }
       const applied = applyRunEvent(state.run, line, state.selectedItemIds, state.resultItemIds);
+      if (terminal?.test_id) {
+        this.latestTerminalByProtocolId.set(terminal.test_id, terminalEventTime(terminal));
+      }
       applied.clearedResultIds?.forEach((id) => state.clearedResultIds.add(id));
       if (applied.finished) {
         state.finished = true;
@@ -193,6 +227,14 @@ export class ExternalRunMirror implements vscode.Disposable {
     }
     state.lineCount = lines.length;
     this.scheduleStaleClose(state);
+  }
+
+  private isOlderTerminalResult(event: RunEvent): boolean {
+    if (!event.test_id) {
+      return false;
+    }
+    const latest = this.latestTerminalByProtocolId.get(event.test_id);
+    return latest !== undefined && terminalEventTime(event) < latest;
   }
 
   private createState(file: string, lines: string[], importedCompleted: boolean, first = firstRunEvent(lines)): ExternalRunStreamState {
@@ -284,14 +326,19 @@ function isRunFinishedLine(line: string): boolean {
   }
 }
 
-function terminalRunEventTestID(line: string): string | undefined {
+function terminalRunEvent(line: string): RunEvent | undefined {
   try {
     const event = JSON.parse(line) as RunEvent;
     if (event.test_id && ['passed', 'failed', 'errored', 'cancelled', 'skipped'].includes(event.event)) {
-      return event.test_id;
+      return event;
     }
   } catch {
     return undefined;
   }
   return undefined;
+}
+
+function terminalEventTime(event: RunEvent): number {
+  const parsed = Date.parse(event.time);
+  return Number.isFinite(parsed) ? parsed : Date.now();
 }
