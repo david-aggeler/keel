@@ -543,6 +543,159 @@ suite('Keel Test Bridge config contract', () => {
     }
   });
 
+  // DHF-TEST: keel/requirement-93
+  test('run-finished reconciles exclusive-group results at rest after discovery refresh', async function () {
+    this.timeout(10_000);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-post-run-mutex-results-'));
+    const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+    process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = root;
+    fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+    const adapter = path.join(root, 'exclusive-adapter.js');
+    fs.writeFileSync(adapter, `
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+const now = () => new Date().toISOString();
+const activePath = path.join(process.cwd(), '.devtools', 'active-member');
+if (args.includes('--version')) {
+  process.stdout.write('dev\\n');
+  process.exit(0);
+}
+function activeMember() {
+  try {
+    return fs.readFileSync(activePath, 'utf8').trim();
+  } catch {
+    return 'demo::desired-state::dataset::small';
+  }
+}
+function discovery() {
+  const active = activeMember();
+  return {
+    version: 1,
+    workspace: process.cwd(),
+    generated_at: now(),
+    items: [
+      { id: 'demo::desired-state::dataset', label: 'Data Set', kind: 'group', runnable: false, profiles: [], limitations: ['mutually_exclusive=true'] },
+      { id: 'demo::desired-state::dataset::small', parent_id: 'demo::desired-state::dataset', label: 'small', kind: 'test', runnable: true, profiles: ['run'], limitations: ['active=' + (active === 'demo::desired-state::dataset::small')] },
+      { id: 'demo::desired-state::dataset::full', parent_id: 'demo::desired-state::dataset', label: 'full', kind: 'test', runnable: true, profiles: ['run'], limitations: ['active=' + (active === 'demo::desired-state::dataset::full')] },
+      { id: 'demo::desired-state::dataset::unknown', parent_id: 'demo::desired-state::dataset', label: 'Unknown State', kind: 'test', runnable: true, profiles: ['run'], limitations: ['active=' + (active === 'demo::desired-state::dataset::unknown')] }
+    ]
+  };
+}
+function desiredState() {
+  const active = activeMember();
+  const rows = [
+    ['demo::desired-state::dataset::small', 'small'],
+    ['demo::desired-state::dataset::full', 'full'],
+    ['demo::desired-state::dataset::unknown', 'Unknown State']
+  ].map(([run_id, resource]) => ({
+    run_id,
+    resource,
+    kind: 'dataset',
+    desired: resource,
+    current: resource,
+    status: run_id === active ? 'satisfied' : 'available',
+    action: run_id === active ? 'reuse' : 'none',
+    message: resource,
+    reusable: true,
+    owned: false,
+    active: run_id === active
+  }));
+  return {
+    version: 3,
+    workspace: process.cwd(),
+    generated_at: now(),
+    groups: [{ label: 'Data Set', order: 1, mutually_exclusive: true, rows }]
+  };
+}
+if (args.slice(0, 4).join(' ') === 'test-bridge tests discover --format') {
+  process.stdout.write(JSON.stringify(discovery()) + '\\n');
+  process.exit(0);
+}
+if (args.slice(0, 4).join(' ') === 'test-bridge tests desired-state --format') {
+  process.stdout.write(JSON.stringify(desiredState()) + '\\n');
+  process.exit(0);
+}
+if (args.slice(0, 3).join(' ') === 'test-bridge tests run') {
+  const selected = args[args.indexOf('--id') + 1];
+  fs.mkdirSync(path.dirname(activePath), { recursive: true });
+  fs.writeFileSync(activePath, selected + '\\n');
+  const emit = (event) => process.stdout.write(JSON.stringify({ version: 1, time: now(), run_id: 'mutex-run', ...event }) + '\\n');
+  emit({ event: 'run_started', test_id: selected });
+  emit({ event: 'test_started', test_id: selected });
+  emit({ event: 'passed', test_id: selected, duration_ms: 1 });
+  emit({ event: 'run_finished', exit_code: 0 });
+  process.exit(0);
+}
+process.stderr.write('unsupported command ' + args.join(' ') + '\\n');
+process.exit(2);
+`);
+    fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+      version: currentConfigVersion,
+      command: process.execPath,
+      args: [adapter],
+      displayName: 'Keel'
+    }, null, 2) + '\n');
+
+    try {
+      const extension = vscode.extensions.getExtension('aggeler.keel-test-bridge');
+      assert.ok(extension, 'extension should be discoverable');
+      await extension.activate();
+      await vscode.commands.executeCommand('keel.tests.refresh');
+      const controller = testControllerForTest();
+      const initialTree = currentTree();
+      assert.ok(controller, 'extension should expose its active TestController for tests');
+      assert.ok(initialTree, 'discovery should publish the initial tree');
+      const originalSmall = initialTree.itemsById.get('demo::desired-state::dataset::small');
+      const originalFull = initialTree.itemsById.get('demo::desired-state::dataset::full');
+      const originalUnknown = initialTree.itemsById.get('demo::desired-state::dataset::unknown');
+      assert.ok(originalSmall && originalFull && originalUnknown, 'exclusive group members should be published');
+
+      const spyTarget = controller as vscode.TestController & { invalidateTestResults: (items?: vscode.TestItem | readonly vscode.TestItem[]) => void };
+      const originalInvalidate = spyTarget.invalidateTestResults.bind(controller);
+      const invalidated: string[] = [];
+      spyTarget.invalidateTestResults = (items?: vscode.TestItem | readonly vscode.TestItem[]) => {
+        if (Array.isArray(items)) {
+          invalidated.push(...items.map((item) => item.id));
+        } else if (items) {
+          invalidated.push((items as vscode.TestItem).id);
+        }
+        originalInvalidate(items as never);
+      };
+
+      try {
+        await runProfileHandlerForTest('demo::desired-state::dataset::full');
+      } finally {
+        spyTarget.invalidateTestResults = originalInvalidate;
+      }
+
+      const refreshedTree = currentTree();
+      assert.ok(refreshedTree, 'post-run discovery refresh should leave a published tree');
+      assert.deepEqual(
+        invalidated.sort(),
+        ['demo::desired-state::dataset::small', 'demo::desired-state::dataset::unknown'],
+        'non-active exclusive members are invalidated to no-result after run_finished'
+      );
+      assert.notEqual(refreshedTree.itemsById.get('demo::desired-state::dataset::small'), originalSmall, 'non-active sibling is replaced, proving its prior result is dropped');
+      assert.notEqual(refreshedTree.itemsById.get('demo::desired-state::dataset::unknown'), originalUnknown, 'non-active reset peer is replaced, proving its prior result is dropped');
+      assert.equal(refreshedTree.itemsById.get('demo::desired-state::dataset::full'), originalFull, 'active member keeps its TestItem identity and exactly one result');
+
+      await vscode.commands.executeCommand('keel.tests.refresh');
+      const afterExplicitRefresh = currentTree();
+      assert.ok(afterExplicitRefresh, 'explicit discovery refresh should leave a published tree');
+      assert.notEqual(afterExplicitRefresh.itemsById.get('demo::desired-state::dataset::small'), originalSmall, 'non-active sibling remains replaced after a later discovery refresh');
+      assert.notEqual(afterExplicitRefresh.itemsById.get('demo::desired-state::dataset::unknown'), originalUnknown, 'non-active reset peer remains replaced after a later discovery refresh');
+      assert.equal(afterExplicitRefresh.itemsById.get('demo::desired-state::dataset::full'), originalFull, 'active member still keeps its original TestItem after a later discovery refresh');
+    } finally {
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   // DHF-TEST: keel/requirement-40
   test('extension activates and registers Keel commands', async () => {
     const extension = vscode.extensions.getExtension('aggeler.keel-test-bridge');
@@ -1441,6 +1594,239 @@ suite('Keel Test Bridge config contract', () => {
       assert.deepEqual(snapshot.resultIds, ['demo::desired-state::dataset::full'], 'only the selected member keeps a displayed result');
     } finally {
       spyTarget.invalidateTestResults = originalInvalidate;
+      fs.rmSync(root, { recursive: true, force: true });
+      mirror.dispose();
+      setCurrentTreeForTest(undefined);
+      controller.dispose();
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
+    }
+  });
+
+  // DHF-TEST: keel/requirement-93
+  test('external run mirror does not replay a completed stream while desired-state refresh is awaiting', async function () {
+    this.timeout(10_000);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-external-refresh-cursor-'));
+    const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+    process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = root;
+    fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+    const adapter = path.join(root, 'blocking-adapter.js');
+    const marker = path.join(root, '.devtools', 'desired-state-called');
+    const release = path.join(root, '.devtools', 'release-desired-state');
+    fs.writeFileSync(adapter, `
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+const now = () => new Date().toISOString();
+const marker = ${JSON.stringify(marker)};
+const release = ${JSON.stringify(release)};
+const item = { id: 'demo::desired-state::dataset::full', label: 'full', kind: 'test', runnable: true, profiles: ['run'] };
+function writeDiscovery() {
+  process.stdout.write(JSON.stringify({ version: 1, workspace: process.cwd(), generated_at: now(), items: [item] }) + '\\n');
+}
+function writeDesiredState() {
+  process.stdout.write(JSON.stringify({
+    version: 3,
+    workspace: process.cwd(),
+    generated_at: now(),
+    groups: [{ label: 'Data Set', order: 1, mutually_exclusive: true, rows: [{
+      run_id: item.id,
+      resource: 'full',
+      kind: 'dataset',
+      desired: 'full',
+      current: 'full',
+      status: 'satisfied',
+      action: 'reuse',
+      message: 'full',
+      reusable: true,
+      owned: false,
+      active: true
+    }] }]
+  }) + '\\n');
+}
+if (args.includes('--version')) {
+  process.stdout.write('dev\\n');
+  process.exit(0);
+}
+if (args.slice(0, 4).join(' ') === 'test-bridge tests discover --format') {
+  writeDiscovery();
+  process.exit(0);
+}
+if (args.slice(0, 4).join(' ') === 'test-bridge tests desired-state --format') {
+  fs.mkdirSync(path.dirname(marker), { recursive: true });
+  fs.writeFileSync(marker, args.join(' ') + '\\n');
+  const wait = () => {
+    if (fs.existsSync(release)) {
+      writeDesiredState();
+      process.exit(0);
+    }
+    setTimeout(wait, 10);
+  };
+  wait();
+} else {
+  process.stderr.write('unsupported command ' + args.join(' ') + '\\n');
+  process.exit(2);
+}
+`);
+    fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+      version: currentConfigVersion,
+      command: process.execPath,
+      args: [adapter],
+      displayName: 'Keel'
+    }, null, 2) + '\n');
+
+    const controller = vscode.tests.createTestController(`keelExternalRefreshCursor-${Date.now()}`, 'Keel External Refresh Cursor');
+    const tree = publishDiscovery(controller, root, {
+      version: 1,
+      workspace: root,
+      generated_at: new Date().toISOString(),
+      items: [{ id: 'demo::desired-state::dataset::full', label: 'full', kind: 'test', runnable: true, profiles: ['run'] }]
+    });
+    setCurrentTreeForTest(tree);
+    const passed: string[] = [];
+    let endCount = 0;
+    const spyTarget = controller as vscode.TestController & {
+      createTestRun: (request: vscode.TestRunRequest, name?: string, persist?: boolean) => vscode.TestRun;
+    };
+    const originalCreateTestRun = spyTarget.createTestRun.bind(controller);
+    spyTarget.createTestRun = (request: vscode.TestRunRequest, name?: string, persist?: boolean): vscode.TestRun => {
+      const run = originalCreateTestRun(request, name, persist);
+      const originalPassed = run.passed.bind(run);
+      const originalEnd = run.end.bind(run);
+      run.passed = (item: vscode.TestItem, duration?: number) => {
+        passed.push(item.id);
+        originalPassed(item, duration);
+      };
+      run.end = () => {
+        endCount += 1;
+        originalEnd();
+      };
+      return run;
+    };
+    const mirror = new ExternalRunMirror(controller);
+    const runsDir = path.join(root, '.devtools', 'vscode-runs');
+    fs.mkdirSync(runsDir, { recursive: true });
+    fs.writeFileSync(path.join(runsDir, 'cursor-race.jsonl'), [
+      JSON.stringify(runEvent({ event: 'run_started', run_id: 'cursor-race', test_id: 'demo::desired-state::dataset::full' })),
+      JSON.stringify(runEvent({ event: 'test_started', run_id: 'cursor-race', test_id: 'demo::desired-state::dataset::full' })),
+      JSON.stringify(runEvent({ event: 'passed', run_id: 'cursor-race', test_id: 'demo::desired-state::dataset::full' })),
+      JSON.stringify(runEvent({ event: 'run_finished', run_id: 'cursor-race', exit_code: 0 }))
+    ].join('\n') + '\n');
+
+    try {
+      const firstSync = mirror.syncWorkspace();
+      await waitFor(() => fs.existsSync(marker));
+      const secondSync = mirror.syncWorkspace();
+      fs.writeFileSync(release, 'ok\n');
+      await Promise.all([firstSync, secondSync]);
+
+      assert.deepEqual(passed, ['demo::desired-state::dataset::full'], 'completed stream is applied once while post-run refresh is awaiting');
+      assert.equal(endCount, 1, 'completed stream ends exactly one TestRun');
+    } finally {
+      spyTarget.createTestRun = originalCreateTestRun;
+      fs.rmSync(root, { recursive: true, force: true });
+      mirror.dispose();
+      setCurrentTreeForTest(undefined);
+      controller.dispose();
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
+    }
+  });
+
+  // DHF-TEST: keel/requirement-93
+  test('external run mirror refreshes desired state for observed terminal result ids', async function () {
+    this.timeout(10_000);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-external-refresh-result-ids-'));
+    const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+    process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = root;
+    fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+    const callsPath = path.join(root, '.devtools', 'adapter-calls.log');
+    const adapter = path.join(root, 'result-id-adapter.js');
+    fs.writeFileSync(adapter, `
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+const now = () => new Date().toISOString();
+const callsPath = ${JSON.stringify(callsPath)};
+const fullId = 'demo::desired-state::dataset::full';
+fs.mkdirSync(path.dirname(callsPath), { recursive: true });
+fs.appendFileSync(callsPath, args.join(' ') + '\\n');
+if (args.includes('--version')) {
+  process.stdout.write('dev\\n');
+  process.exit(0);
+}
+if (args.slice(0, 4).join(' ') === 'test-bridge tests discover --format') {
+  process.stdout.write(JSON.stringify({
+    version: 1,
+    workspace: process.cwd(),
+    generated_at: now(),
+    items: [{ id: fullId, label: 'full', kind: 'test', runnable: true, profiles: ['run'] }]
+  }) + '\\n');
+  process.exit(0);
+}
+if (args.slice(0, 4).join(' ') === 'test-bridge tests desired-state --format') {
+  process.stdout.write(JSON.stringify({
+    version: 3,
+    workspace: process.cwd(),
+    generated_at: now(),
+    groups: [{ label: 'Data Set', order: 1, mutually_exclusive: true, rows: [{
+      run_id: fullId,
+      resource: 'full',
+      kind: 'dataset',
+      desired: 'full',
+      current: 'full',
+      status: 'satisfied',
+      action: 'reuse',
+      message: 'full',
+      reusable: true,
+      owned: false,
+      active: true
+    }] }]
+  }) + '\\n');
+  process.exit(0);
+}
+process.stderr.write('unsupported command ' + args.join(' ') + '\\n');
+process.exit(2);
+`);
+    fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+      version: currentConfigVersion,
+      command: process.execPath,
+      args: [adapter],
+      displayName: 'Keel'
+    }, null, 2) + '\n');
+
+    const controller = vscode.tests.createTestController(`keelExternalRefreshResultIds-${Date.now()}`, 'Keel External Refresh Result IDs');
+    const tree = publishDiscovery(controller, root, {
+      version: 1,
+      workspace: root,
+      generated_at: new Date().toISOString(),
+      items: [{ id: 'demo::desired-state::dataset::full', label: 'full', kind: 'test', runnable: true, profiles: ['run'] }]
+    });
+    setCurrentTreeForTest(tree);
+    const mirror = new ExternalRunMirror(controller);
+    const runsDir = path.join(root, '.devtools', 'vscode-runs');
+    fs.mkdirSync(runsDir, { recursive: true });
+    fs.writeFileSync(path.join(runsDir, 'terminal-result-id.jsonl'), [
+      JSON.stringify(runEvent({ event: 'run_started', run_id: 'terminal-result-id' })),
+      JSON.stringify(runEvent({ event: 'test_started', run_id: 'terminal-result-id', test_id: 'demo::desired-state::dataset::full' })),
+      JSON.stringify(runEvent({ event: 'passed', run_id: 'terminal-result-id', test_id: 'demo::desired-state::dataset::full' })),
+      JSON.stringify(runEvent({ event: 'run_finished', run_id: 'terminal-result-id', exit_code: 0 }))
+    ].join('\n') + '\n');
+
+    try {
+      await mirror.syncWorkspace();
+      const calls = fs.readFileSync(callsPath, 'utf8').trim().split(/\r?\n/);
+      assert.ok(
+        calls.includes('test-bridge tests desired-state --format json --id demo::desired-state::dataset::full'),
+        `desired-state refresh calls should include terminal result id; calls=${calls.join(' | ')}`
+      );
+    } finally {
       fs.rmSync(root, { recursive: true, force: true });
       mirror.dispose();
       setCurrentTreeForTest(undefined);
