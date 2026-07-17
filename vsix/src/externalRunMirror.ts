@@ -21,6 +21,7 @@ import {
   extensionOutput,
   getWorkspaceRoot,
   invalidateClearedResults,
+  refreshDesiredStateAfterRun,
   resultItemsForRunEvent,
   testItemsForRunEvent
 } from './extension';
@@ -168,7 +169,7 @@ export class ExternalRunMirror implements vscode.Disposable {
     this.streams.delete(file);
   }
 
-  // DHF-REQ: keel/requirement-88, keel/requirement-36
+  // DHF-REQ: keel/requirement-88, keel/requirement-36, keel/requirement-93
   private async process(file: string): Promise<void> {
     if (!this.workspaceRoot || !file.startsWith(path.join(this.workspaceRoot, '.devtools', 'vscode-runs') + path.sep)) {
       return;
@@ -184,6 +185,10 @@ export class ExternalRunMirror implements vscode.Disposable {
     }
     const lines = body.split(/\r?\n/).filter((line) => line.trim().length > 0);
     let state = this.streams.get(file);
+    if (state?.finished) {
+      state.lineCount = Math.max(state.lineCount, lines.length);
+      return;
+    }
     if (state && lines.length <= state.lineCount) {
       return;
     }
@@ -217,11 +222,15 @@ export class ExternalRunMirror implements vscode.Disposable {
       applied.clearedResultIds?.forEach((id) => state.clearedResultIds.add(id));
       if (applied.finished) {
         state.finished = true;
+        state.lineCount = lines.length;
         if (state.staleTimer) {
           clearTimeout(state.staleTimer);
           state.staleTimer = undefined;
         }
         invalidateClearedResults(this.controller, state.clearedResultIds);
+        if (this.workspaceRoot) {
+          await refreshDesiredStateAfterRun(state.run, this.controller, this.workspaceRoot, refreshProtocolIds(state));
+        }
         state.run.end();
       }
     }
@@ -302,6 +311,13 @@ export class ExternalRunMirror implements vscode.Disposable {
     state.finished = true;
     state.run.end();
   }
+}
+
+function refreshProtocolIds(state: ExternalRunStreamState): string[] {
+  return Array.from(new Set([
+    ...state.selectedProtocolIds,
+    ...state.protocolResultIds
+  ]));
 }
 
 function firstRunEvent(lines: string[]): RunEvent | undefined {
