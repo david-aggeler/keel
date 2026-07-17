@@ -6,22 +6,41 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 import {
   applyRunEvent,
+  activeRunStatusSnapshot,
+  artifactCommandUri,
+  artifactOutputLine,
+  beginActiveRun,
+  cancelActiveRun,
   coverageFileSnapshotsForTest,
   currentTree,
   currentAdapterConfig,
+  deferredWatcherEventCountForTest,
   desiredStateRowProtocolID,
   ExternalRunMirror,
+  finishActiveRun,
+  isRunActive,
+  isWatcherRefreshPending,
   parseGoCoverageProfile,
+  publishedTestItemIds,
+  rejectConcurrentRun,
+  resultItemsForRunEvent,
+  runEventApplicationSnapshot,
   runProfileHandlerForTest,
+  setWatcherDebounceMs,
   setExternalRunStaleMsForTest,
   setCurrentTreeForTest,
   desiredStateDocumentOutputLines,
   shouldInvalidateResultsForEvent,
+  shouldApplyResultToItem,
+  signalProcessGroup,
   invalidateClearedResults,
-  testControllerForTest
+  testControllerForTest,
+  testMessageFromEvent,
+  timestampedRunOutputLines,
+  triggerWatcherEventForTest
 } from '../../extension';
-import { configRelativePath, currentConfigVersion, defaultConfigTemplate, discoverTests, readDesiredState, readAdapterConfig, runTests, upgradeConfig } from '../../bridgeAdapter';
-import { publishDiscovery } from '../../tree';
+import { adapterConfig, configRelativePath, currentConfigVersion, defaultConfigTemplate, discoverTests, readDesiredState, readAdapterConfig, runTests, upgradeConfig } from '../../bridgeAdapter';
+import { publishDiscovery, replacePublishedTestItem } from '../../tree';
 import { DesiredStateGroup, DiscoveryItem, RunEvent } from '../../protocol';
 
 suite('Keel Test Bridge config contract', () => {
@@ -104,6 +123,131 @@ suite('Keel Test Bridge config contract', () => {
     assert.equal(cfg.command, 'bin/future-dev');
     assert.deepEqual(cfg.args, ['wrapper']);
     assert.equal(cfg.displayName, 'Future');
+  });
+
+  // DHF-TEST: keel/requirement-40
+  test('adapter config resolves relative commands and preserves env overrides', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-adapter-config-'));
+    fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+    fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+      version: currentConfigVersion,
+      command: 'tools/custom-devtool',
+      args: ['launcher'],
+      displayName: 'Custom',
+      env: { KEEL_ADAPTER_ENV_TEST: 'configured' }
+    }, null, 2) + '\n');
+
+    try {
+      const cfg = adapterConfig(root);
+      assert.equal(cfg.command, path.join(root, 'tools', 'custom-devtool'));
+      assert.deepEqual(cfg.args, ['launcher']);
+      assert.equal(cfg.displayName, 'Custom');
+      assert.equal(cfg.outputChannel, 'Custom Test Bridge');
+      assert.deepEqual(cfg.env, { KEEL_ADAPTER_ENV_TEST: 'configured' });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // DHF-TEST: keel/requirement-40, keel/requirement-66
+  test('adapter env is applied to version checks, discovery, and run spawns', async function () {
+    this.timeout(10_000);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-adapter-env-'));
+    const fake = path.join(root, 'env-adapter.cjs');
+    fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+    fs.writeFileSync(fake, [
+      "const fs = require('node:fs');",
+      "const path = require('node:path');",
+      "const args = process.argv.slice(2);",
+      "const now = () => new Date().toISOString();",
+      "const seen = process.env.KEEL_ADAPTER_ENV_TEST || 'missing';",
+      "fs.mkdirSync(path.join(process.cwd(), '.devtools'), { recursive: true });",
+      "fs.appendFileSync(path.join(process.cwd(), '.devtools', 'env-adapter.log'), `${args.join(' ')} env=${seen}\\n`);",
+      "if (args.includes('--version')) { console.log('dev'); process.exit(0); }",
+      "if (args.join(' ') === 'test-bridge tests discover --format json') {",
+      "  console.log(JSON.stringify({ version: 1, workspace: seen, generated_at: now(), items: [] }));",
+      "  process.exit(0);",
+      "}",
+      "if (args.slice(0, 3).join(' ') === 'test-bridge tests run') {",
+      "  process.stdout.write(`${JSON.stringify({ version: 1, event: 'run_started', time: now(), message: seen })}\\n`);",
+      "  process.stdout.write(`${JSON.stringify({ version: 1, event: 'run_finished', time: now(), exit_code: 0 })}\\n`);",
+      "  process.exit(0);",
+      "}",
+      "process.exit(2);"
+    ].join('\n'));
+    fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+      version: currentConfigVersion,
+      command: process.execPath,
+      args: [fake],
+      displayName: 'Env Adapter',
+      env: { KEEL_ADAPTER_ENV_TEST: 'configured' }
+    }, null, 2) + '\n');
+
+    try {
+      const discovery = await discoverTests(root);
+      assert.equal(discovery.workspace, 'configured');
+
+      const run = await collectChild(runTests(root, ['keel::lane::env']));
+      assert.equal(run.code, 0);
+      assert.match(run.stdout, /"message":"configured"/);
+      assert.match(fs.readFileSync(path.join(root, '.devtools', 'env-adapter.log'), 'utf8'), /--version env=configured/);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // DHF-TEST: keel/requirement-40, keel/requirement-66
+  test('adapter rejects malformed config, unsupported documents, and unreadable versions', async function () {
+    this.timeout(10_000);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-adapter-rejects-'));
+    const fake = path.join(root, 'rejecting-adapter.cjs');
+    fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+
+    const writeConfig = (body: unknown) => {
+      fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify(body, null, 2) + '\n');
+    };
+
+    try {
+      writeConfig({ command: 'bin/keel-dev', args: [], displayName: 'Keel' });
+      assert.throws(() => readAdapterConfig(root), /missing numeric version/);
+
+      writeConfig({ version: currentConfigVersion, command: '', args: [], displayName: 'Keel' });
+      assert.throws(() => readAdapterConfig(root), /missing command/);
+
+      writeConfig({ version: currentConfigVersion, command: 'bin/keel-dev', args: ['test-bridge'], displayName: 'Keel' });
+      assert.throws(() => readAdapterConfig(root), /launcher-only/);
+
+      writeConfig({ version: currentConfigVersion, command: 'bin/keel-dev', args: [], displayName: '' });
+      assert.throws(() => readAdapterConfig(root), /missing displayName/);
+
+      fs.writeFileSync(fake, [
+        "const args = process.argv.slice(2);",
+        "if (args.includes('--version')) { console.log(process.env.BAD_VERSION ? 'not-a-version' : 'dev'); process.exit(process.env.BAD_VERSION ? 2 : 0); }",
+        "if (args.join(' ') === 'test-bridge tests discover --format json') { console.log(JSON.stringify({ version: 2, items: null })); process.exit(0); }",
+        "if (args.slice(0, 4).join(' ') === 'test-bridge tests desired-state --format') { console.log(JSON.stringify({ version: 1, groups: null })); process.exit(0); }",
+        "process.exit(2);"
+      ].join('\n'));
+
+      writeConfig({
+        version: currentConfigVersion,
+        command: process.execPath,
+        args: [fake],
+        displayName: 'Rejecting'
+      });
+      await assert.rejects(discoverTests(root), /unsupported VS Code discovery document/);
+      await assert.rejects(readDesiredState(root, ['case::id']), /unsupported VS Code desired-state document/);
+
+      writeConfig({
+        version: currentConfigVersion,
+        command: process.execPath,
+        args: [fake],
+        displayName: 'Rejecting',
+        env: { BAD_VERSION: '1' }
+      });
+      assert.throws(() => runTests(root, ['case::id']), /could not read devtool version/);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   // DHF-TEST: keel/requirement-64, keel/requirement-66
@@ -259,6 +403,30 @@ suite('Keel Test Bridge config contract', () => {
     ]);
   });
 
+  // DHF-TEST: keel/requirement-42
+  test('run output helpers normalize nested log prefixes and artifact command URIs', () => {
+    const lines = timestampedRunOutputLines([
+      '2025-01-01 00:00:00 stdout 2025-01-01 00:00:00 warn queued',
+      '2025-01-01 00:00:01 stderr 2025-01-01 00:00:01 error failed',
+      'plain output'
+    ].join('\n'), new Date(2026, 0, 2, 3, 4, 5), 'DEBUG');
+
+    assert.deepEqual(lines, [
+      '2026-01-02 03:04:05 WARN queued',
+      '2026-01-02 03:04:05 ERROR failed',
+      '2026-01-02 03:04:05 DEBUG plain output'
+    ]);
+
+    const artifact = runEvent({
+      event: 'artifact',
+      test_id: 'keel::lane::ci',
+      artifact: { name: 'log', uri: '/tmp/keel.log', kind: 'log' }
+    });
+    assert.match(artifactCommandUri('/tmp/keel.log'), /^command:keel\.tests\.openArtifact\?/);
+    assert.match(artifactOutputLine(artifact), /artifact keel::lane::ci: log log \/tmp\/keel\.log/);
+    assert.equal(artifactOutputLine(runEvent({ event: 'artifact', message: 'artifact omitted' })), 'artifact omitted\r\n');
+  });
+
   // DHF-TEST: keel/requirement-60
   test('desired-state rows activate through the ordinary run argv path', async function () {
     this.timeout(10_000);
@@ -390,6 +558,195 @@ suite('Keel Test Bridge config contract', () => {
     assert.equal(currentAdapterConfig().displayName, 'Keel');
   });
 
+  // DHF-TEST: keel/requirement-40
+  test('current adapter config falls back to the workspace default when config cannot be read', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-config-fallback-'));
+    const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+    process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = root;
+    fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+    fs.writeFileSync(path.join(root, configRelativePath), '{not-json');
+
+    try {
+      const cfg = currentAdapterConfig();
+      assert.equal(cfg.version, currentConfigVersion);
+      assert.equal(cfg.command, path.join(root, 'bin', process.platform === 'win32' ? 'keel-dev.exe' : 'keel-dev'));
+      assert.deepEqual(cfg.args, []);
+      assert.equal(cfg.displayName, 'Keel');
+      assert.equal(cfg.outputChannel, 'Keel Test Bridge');
+    } finally {
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // DHF-TEST: keel/requirement-36, keel/requirement-44
+  test('registered commands run maintenance paths and report missing artifacts', async function () {
+    this.timeout(10_000);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-command-maintenance-'));
+    const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+    process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = root;
+    fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+    fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+      version: currentConfigVersion,
+      command: process.execPath,
+      args: [path.resolve(__dirname, '../../../src/test/fixtures/fake-adapter.js')],
+      displayName: 'Keel'
+    }, null, 2) + '\n');
+
+    try {
+      const extension = vscode.extensions.getExtension('aggeler.keel-test-bridge');
+      assert.ok(extension, 'extension should be discoverable');
+      await extension.activate();
+
+      await vscode.commands.executeCommand('keel.tests.clearLocalState');
+      await vscode.commands.executeCommand('keel.tests.unlock');
+      await vscode.commands.executeCommand('keel.tests.detectLanes');
+      await vscode.commands.executeCommand('keel.tests.openArtifact', path.join(root, 'missing-artifact.txt'));
+
+      const calls = fs.readFileSync(path.join(root, '.devtools', 'fake-adapter-calls.log'), 'utf8');
+      assert.match(calls, /test-bridge tests run --id keel::maintenance::clear-state/);
+      assert.match(calls, /test-bridge tests run --id keel::maintenance::unlock/);
+      assert.match(calls, /test-bridge tests run --id keel::maintenance::detect-lanes/);
+    } finally {
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // DHF-TEST: keel/requirement-51, keel/requirement-70
+  test('watcher refreshes are deferred while a run is active and flushed afterward', async function () {
+    this.timeout(10_000);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-watcher-deferral-'));
+    const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+    process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = root;
+    fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+    fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+      version: currentConfigVersion,
+      command: process.execPath,
+      args: [path.resolve(__dirname, '../../../src/test/fixtures/fake-adapter.js')],
+      displayName: 'Keel'
+    }, null, 2) + '\n');
+
+    try {
+      const extension = vscode.extensions.getExtension('aggeler.keel-test-bridge');
+      assert.ok(extension, 'extension should be discoverable');
+      await extension.activate();
+      const controller = testControllerForTest();
+      assert.ok(controller, 'extension should expose its active TestController for tests');
+      const item = controller.createTestItem(`keelWatcher-${Date.now()}`, 'watcher lane');
+
+      setWatcherDebounceMs(25);
+      beginActiveRun([item]);
+      assert.equal(isRunActive(), true);
+      assert.match(activeRunStatusSnapshot().text, /watcher lane/);
+
+      triggerWatcherEventForTest(controller);
+      assert.equal(deferredWatcherEventCountForTest(), true);
+      assert.equal(isWatcherRefreshPending(), false);
+
+      finishActiveRun();
+      assert.equal(isRunActive(), false);
+      assert.equal(isWatcherRefreshPending(), true);
+      await waitFor(() => !isWatcherRefreshPending(), 2_000);
+    } finally {
+      setWatcherDebounceMs(300);
+      finishActiveRun();
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // DHF-TEST: keel/requirement-42, keel/requirement-70
+  test('run profile handles desired-state, start, stderr, and reset-result branches', async function () {
+    this.timeout(15_000);
+    const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-run-profile-branches-'));
+    const fake = path.join(root, 'profile-adapter.cjs');
+    fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+    fs.writeFileSync(fake, [
+      "const fs = require('node:fs');",
+      "const path = require('node:path');",
+      "const args = process.argv.slice(2);",
+      "const now = () => new Date().toISOString();",
+      "const mode = process.env.KEEL_PROFILE_MODE || 'reset';",
+      "const selected = process.env.KEEL_PROFILE_ID || 'case::maintenance::clear';",
+      "const sentinel = path.join(process.cwd(), '.devtools', `${mode}.sentinel`);",
+      "fs.mkdirSync(path.dirname(sentinel), { recursive: true });",
+      "if (args.includes('--version')) {",
+      "  if (mode === 'start-fail' && fs.existsSync(sentinel)) { console.log('v0.0.0'); } else { console.log('dev'); }",
+      "  process.exit(0);",
+      "}",
+      "if (args.join(' ') === 'test-bridge tests discover --format json') {",
+      "  console.log(JSON.stringify({ version: 1, workspace: process.cwd(), generated_at: now(), capabilities: { clear_results_test_ids: ['case::maintenance::clear'] }, items: [{ id: selected, label: selected, kind: 'maintenance', runnable: true, profiles: ['run'] }] }));",
+      "  process.exit(0);",
+      "}",
+      "if (args.slice(0, 4).join(' ') === 'test-bridge tests desired-state --format') {",
+      "  if (mode === 'desired-fail') { console.error('desired-state failed intentionally'); process.exit(3); }",
+      "  if (mode === 'start-fail') { fs.writeFileSync(sentinel, 'ready'); }",
+      "  console.log(JSON.stringify({ version: 3, workspace: process.cwd(), generated_at: now(), groups: [{ label: 'Empty', order: 1, mutually_exclusive: false, rows: [] }] }));",
+      "  process.exit(0);",
+      "}",
+      "if (args.slice(0, 3).join(' ') === 'test-bridge tests run') {",
+      "  process.stderr.write('profile warning on stderr\\n');",
+      "  process.stdout.write(`${JSON.stringify({ version: 1, event: 'run_started', time: now(), test_id: selected })}\\n`);",
+      "  process.stdout.write(`${JSON.stringify({ version: 1, event: 'passed', time: now(), test_id: selected })}\\n`);",
+      "  process.stdout.write(`${JSON.stringify({ version: 1, event: 'run_finished', time: now(), exit_code: 0 })}`);",
+      "  process.exit(0);",
+      "}",
+      "process.exit(2);"
+    ].join('\n'));
+
+    const writeConfig = (mode: string, id: string) => {
+      fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+        version: currentConfigVersion,
+        command: process.execPath,
+        args: [fake],
+        displayName: 'Profile Branches',
+        env: { KEEL_PROFILE_MODE: mode, KEEL_PROFILE_ID: id }
+      }, null, 2) + '\n');
+    };
+
+    try {
+      process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = root;
+      const extension = vscode.extensions.getExtension('aggeler.keel-test-bridge');
+      assert.ok(extension, 'extension should be discoverable');
+      await extension.activate();
+
+      writeConfig('desired-fail', 'case::lane::desired-fail');
+      await runProfileHandlerForTest('case::lane::desired-fail');
+      assert.equal(isRunActive(), false);
+
+      writeConfig('start-fail', 'case::lane::start-fail');
+      fs.rmSync(path.join(root, '.devtools', 'start-fail.sentinel'), { force: true });
+      await runProfileHandlerForTest('case::lane::start-fail');
+      assert.equal(isRunActive(), false);
+
+      writeConfig('reset', 'case::maintenance::clear');
+      await runProfileHandlerForTest('case::maintenance::clear');
+      assert.equal(isRunActive(), false);
+      assert.ok(publishedTestItemIds().includes('case::maintenance::clear'));
+    } finally {
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   // DHF-TEST: keel/requirement-70
   test('open-workspace refresh does not invalidate terminal results on surviving items', async function () {
     this.timeout(10_000);
@@ -486,6 +843,55 @@ suite('Keel Test Bridge config contract', () => {
     }
   });
 
+  // DHF-TEST: keel/requirement-70, keel/requirement-88
+  test('tree replacement preserves root, child, alias, and metadata relationships', () => {
+    const controller = vscode.tests.createTestController(`keelTreeReplace-${Date.now()}`, 'Keel Tree Replace');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-tree-replace-'));
+    const tree = publishDiscovery(controller, root, {
+      version: 1,
+      workspace: root,
+      generated_at: new Date().toISOString(),
+      items: [
+        { id: 'tree::root', label: 'root', kind: 'root', runnable: true, profiles: ['run'], required_resources: ['go'] },
+        {
+          id: 'tree::child',
+          parent_id: 'tree::root',
+          label: 'child',
+          sort_text: 'b',
+          kind: 'test',
+          uri: 'child.test.ts',
+          range: { start_line: 1, start_column: 2, end_line: 3, end_column: 4 },
+          runnable: true,
+          profiles: ['run'],
+          limitations: ['slow']
+        },
+        { id: 'tree::alias', parent_id: 'tree::root', label: 'alias', kind: 'test', canonical_id: 'tree::child', runnable: true, profiles: ['run'] }
+      ]
+    });
+
+    try {
+      const replacedChild = replacePublishedTestItem(controller, tree, 'tree::child');
+      assert.ok(replacedChild);
+      assert.equal(replacedChild.label, 'child');
+      assert.equal(replacedChild.sortText, 'b');
+      assert.equal(replacedChild.description, 'slow');
+      assert.equal(replacedChild.range?.start.line, 1);
+      assert.equal(tree.parentByItemId.get('tree::child')?.id, 'tree::root');
+
+      const replacedAlias = replacePublishedTestItem(controller, tree, 'tree::alias');
+      assert.ok(replacedAlias);
+      assert.equal(tree.aliasesByCanonicalId.get('tree::child')?.[0].id, 'tree::alias');
+
+      const replacedRoot = replacePublishedTestItem(controller, tree, 'tree::root');
+      assert.ok(replacedRoot);
+      assert.equal(tree.itemsById.get('tree::root')?.id, 'tree::root');
+      assert.equal(replacePublishedTestItem(controller, tree, 'tree::missing'), undefined);
+    } finally {
+      controller.dispose();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   // DHF-TEST: keel/requirement-71
   // Verifies: keel/ac-303
   test('lane-run Go package import-path events settle framework package rows', () => {
@@ -540,6 +946,131 @@ suite('Keel Test Bridge config contract', () => {
       assert.ok(resultItemIds.has('go::pkg::log'), 'log package row must hold a terminal result');
       assert.ok(resultItemIds.has('go::pkg::vscode'), 'vscode package row must hold a terminal result');
       assert.match(outputs.join(''), /passed go::package::github\.com\/david-aggeler\/keel\/log/);
+    } finally {
+      setCurrentTreeForTest(undefined);
+      controller.dispose();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // DHF-TEST: keel/requirement-71, keel/requirement-88
+  test('run-event application covers aliases, siblings, locations, and run control fallbacks', () => {
+    const controller = vscode.tests.createTestController(`keelRunEventBranches-${Date.now()}`, 'Keel Run Event Branches');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-run-event-branches-'));
+    const tree = publishDiscovery(controller, root, {
+      version: 1,
+      workspace: root,
+      module_path: 'github.com/david-aggeler/keel',
+      generated_at: new Date().toISOString(),
+      capabilities: { clear_results_test_ids: ['case::maintenance::clear'] },
+      items: [
+        { id: 'case::suite', label: 'suite', kind: 'suite', runnable: true, profiles: ['run'] },
+        { id: 'case::test::a', parent_id: 'case::suite', label: 'a', kind: 'test', runnable: true, profiles: ['run'] },
+        { id: 'case::test::b', parent_id: 'case::suite', label: 'b', kind: 'test', runnable: true, profiles: ['run'] },
+        { id: 'case::alias::a', parent_id: 'case::suite', label: 'alias a', kind: 'test', canonical_id: 'case::test::a', runnable: true, profiles: ['run'] },
+        { id: 'go::root', label: 'Go', kind: 'root', framework: 'go', runnable: true, profiles: ['run'] },
+        { id: 'go::pkg::log', parent_id: 'go::root', label: 'log', kind: 'package', framework: 'go', runnable: true, profiles: ['run'] },
+        { id: 'case::maintenance::clear', label: 'clear results', kind: 'maintenance', runnable: true, profiles: ['run'] }
+      ]
+    });
+    setCurrentTreeForTest(tree);
+
+    const started: string[] = [];
+    const passed: string[] = [];
+    const failed: Array<{ id: string; message: string; line?: number }> = [];
+    const errored: string[] = [];
+    const skipped: string[] = [];
+    const outputs: string[] = [];
+    const coverages: vscode.FileCoverage[] = [];
+    const run = {
+      started(item: vscode.TestItem) { started.push(item.id); },
+      passed(item: vscode.TestItem) { passed.push(item.id); },
+      failed(item: vscode.TestItem, message: vscode.TestMessage) {
+        failed.push({ id: item.id, message: typeof message.message === 'string' ? message.message : message.message.value, line: message.location?.range.start.line });
+      },
+      errored(item: vscode.TestItem) { errored.push(item.id); },
+      skipped(item: vscode.TestItem) { skipped.push(item.id); },
+      appendOutput(data: string) { outputs.push(data); },
+      addCoverage(fileCoverage: vscode.FileCoverage) { coverages.push(fileCoverage); },
+      end() { outputs.push('ended'); }
+    };
+
+    try {
+      const selected = new Set(['case::suite']);
+      const resultIds = new Set<string>();
+      const snapshot = runEventApplicationSnapshot('case::test::a', selected, resultIds);
+      assert.deepEqual(snapshot.resultIds.sort(), ['case::alias::a', 'case::test::a']);
+      assert.deepEqual(snapshot.skippedSiblingIds.sort(), ['case::alias::a', 'case::test::a', 'case::test::b']);
+      assert.deepEqual(runEventApplicationSnapshot('case::test::a', new Set(['case::test::a']), resultIds).neutralAncestorIds, ['case::suite']);
+      assert.equal(shouldApplyResultToItem(tree.itemsById.get('case::suite') as vscode.TestItem, new Set(), new Set(['case::test::a', 'case::test::b', 'case::alias::a'])), true);
+      assert.deepEqual(resultItemsForRunEvent([tree.itemsById.get('case::test::a') as vscode.TestItem, tree.itemsById.get('case::test::a') as vscode.TestItem]).map((item) => item.id), ['case::test::a']);
+
+      applyRunEvent(run as unknown as vscode.TestRun, 'not-json', selected, resultIds);
+      applyRunEvent(run as unknown as vscode.TestRun, JSON.stringify(runEvent({ event: 'test_started', test_id: 'case::test::a' })), selected, resultIds);
+      applyRunEvent(run as unknown as vscode.TestRun, JSON.stringify(runEvent({ event: 'passed', test_id: 'case::test::a', duration_ms: 7 })), selected, resultIds);
+      applyRunEvent(run as unknown as vscode.TestRun, JSON.stringify(runEvent({
+        event: 'failed',
+        test_id: 'case::test::b',
+        message: 'broken',
+        location: { uri: path.join(root, 'case.test.ts'), line: 12, column: 3 }
+      })), selected, resultIds);
+      applyRunEvent(run as unknown as vscode.TestRun, JSON.stringify(runEvent({ event: 'errored', test_id: 'case::alias::a', message: 'boom' })), selected, resultIds);
+      applyRunEvent(run as unknown as vscode.TestRun, JSON.stringify(runEvent({ event: 'cancelled', test_id: 'case::test::b', message: 'stop' })), selected, resultIds);
+      applyRunEvent(run as unknown as vscode.TestRun, JSON.stringify(runEvent({ event: 'skipped', test_id: 'case::alias::a', message: 'skip reason' })), selected, resultIds);
+      applyRunEvent(run as unknown as vscode.TestRun, JSON.stringify(runEvent({ event: 'output' })), selected, resultIds);
+      applyRunEvent(run as unknown as vscode.TestRun, JSON.stringify(runEvent({ event: 'artifact', test_id: 'case::test::a', artifact: { name: 'log', uri: '/tmp/case.log', kind: 'log' } })), selected, resultIds);
+      const finished = applyRunEvent(run as unknown as vscode.TestRun, JSON.stringify(runEvent({ event: 'run_finished' })), selected, resultIds);
+      const reset = applyRunEvent(run as unknown as vscode.TestRun, JSON.stringify(runEvent({ event: 'passed', test_id: 'case::maintenance::clear' })), new Set(['case::maintenance::clear']), new Set());
+      const packageItems = runEventApplicationSnapshot('go::package::github.com/david-aggeler/keel/log', new Set(['go::root']), new Set());
+
+      assert.deepEqual(started.sort(), ['case::alias::a', 'case::test::a']);
+      assert.ok(passed.includes('case::test::a'));
+      assert.ok(passed.includes('case::alias::a'));
+      assert.deepEqual(failed, [{ id: 'case::test::b', message: 'broken', line: 12 }]);
+      assert.ok(errored.includes('case::alias::a'));
+      assert.ok(skipped.includes('case::test::b'));
+      assert.match(outputs.join(''), /not-json/);
+      assert.match(outputs.join(''), /skip reason/);
+      assert.match(outputs.join(''), /artifact case::test::a: log log/);
+      assert.equal(finished.finished, true);
+      assert.equal(reset.resetResults, true);
+      assert.deepEqual(packageItems.resultIds, ['go::pkg::log']);
+
+      const located = testMessageFromEvent(runEvent({
+        event: 'failed',
+        message: 'located',
+        location: { uri: path.join(root, 'located.test.ts'), line: 5, column: 6 }
+      }), 'fallback');
+      assert.equal(located.message, 'located');
+      assert.equal(located.location?.range.start.line, 5);
+
+      const killed: Array<NodeJS.Signals | number | undefined> = [];
+      const child = {
+        pid: 99_999_999,
+        kill(signal?: NodeJS.Signals | number) {
+          killed.push(signal);
+          return true;
+        }
+      };
+      assert.equal(signalProcessGroup(child, 'SIGTERM'), true);
+      cancelActiveRun(run as unknown as vscode.TestRun, [tree.itemsById.get('case::test::a') as vscode.TestItem], child);
+      assert.deepEqual(killed.slice(-2), ['SIGTERM', 'SIGTERM']);
+
+      const rejected: string[] = [];
+      const fakeController = {
+        createTestRun() {
+          return {
+            appendOutput(data: string) { rejected.push(data); },
+            skipped(item: vscode.TestItem) { rejected.push(`skipped:${item.id}`); },
+            end() { rejected.push('end'); }
+          };
+        }
+      };
+      rejectConcurrentRun(fakeController as unknown as vscode.TestController, new vscode.TestRunRequest([tree.itemsById.get('case::test::a') as vscode.TestItem]), [tree.itemsById.get('case::test::a') as vscode.TestItem]);
+      assert.ok(rejected.some((line) => /already active/.test(line)));
+      assert.ok(rejected.includes('skipped:case::test::a'));
+      assert.ok(rejected.includes('end'));
+      assert.deepEqual(coverages, []);
     } finally {
       setCurrentTreeForTest(undefined);
       controller.dispose();
@@ -997,6 +1528,22 @@ suite('Keel Test Bridge config contract', () => {
       assert.equal(added.length, 1);
       applyRunEvent(run as vscode.TestRun, JSON.stringify(event), new Set(), new Set(), { coverage: false, workspaceRoot: root, modulePath: 'github.com/david-aggeler/keel' });
       assert.equal(added.length, 1, 'plain Run profile must not add coverage');
+
+      applyRunEvent(run as vscode.TestRun, JSON.stringify(runEvent({
+        event: 'artifact',
+        test_id: 'keel::lane::test-coverage',
+        artifact: { name: 'coverage profile', uri: 'not a uri', kind: 'coverage' }
+      })), new Set(), new Set(), { coverage: true, workspaceRoot: root, modulePath: 'github.com/david-aggeler/keel' });
+      assert.match(outputs.join(''), /coverage artifact URI is not a file URI/);
+
+      applyRunEvent(run as vscode.TestRun, JSON.stringify(event), new Set(), new Set(), { coverage: true, workspaceRoot: root });
+      assert.match(outputs.join(''), /coverage artifact cannot be applied because discovery did not provide module_path/);
+
+      applyRunEvent(run as vscode.TestRun, JSON.stringify(runEvent({
+        event: 'artifact',
+        message: 'artifact metadata omitted'
+      })), new Set(), new Set(), { coverage: true, workspaceRoot: root, modulePath: 'github.com/david-aggeler/keel' });
+      assert.match(outputs.join(''), /artifact metadata omitted/);
 
       fs.rmSync(profile, { force: true });
       applyRunEvent(run as vscode.TestRun, JSON.stringify(event), new Set(), new Set(), { coverage: true, workspaceRoot: root, modulePath: 'github.com/david-aggeler/keel' });
