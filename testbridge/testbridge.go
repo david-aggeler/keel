@@ -24,6 +24,7 @@ import (
 )
 
 type runtimeKey struct{}
+type desiredStateReportKey struct{}
 
 // Runtime carries the process-local sinks and workspace root used while a
 // canonical test-bridge command is executing.
@@ -46,6 +47,17 @@ func WithRuntime(ctx context.Context, rt Runtime) context.Context {
 func RuntimeFrom(ctx context.Context) (Runtime, bool) {
 	rt, ok := ctx.Value(runtimeKey{}).(Runtime)
 	return rt, ok
+}
+
+func withDesiredStateReport(ctx context.Context) context.Context {
+	return context.WithValue(ctx, desiredStateReportKey{}, true)
+}
+
+// DesiredStateReportRequested reports whether the current DesiredState call is
+// serving the read-only desired-state document rather than planning a run.
+func DesiredStateReportRequested(ctx context.Context) bool {
+	requested, _ := ctx.Value(desiredStateReportKey{}).(bool)
+	return requested
 }
 
 // Workspace identifies the consumer workspace in protocol envelopes.
@@ -505,7 +517,8 @@ func deriveDesiredStateDeclaration(ctx context.Context, bridge Bridge, ids []str
 	if err != nil {
 		return vscode.DesiredStateDocument{}, err
 	}
-	declared, err := bridge.DesiredState(ctx, ids)
+	reportCtx := withDesiredStateReport(ctx)
+	declared, err := bridge.DesiredState(reportCtx, ids)
 	if err != nil {
 		return vscode.DesiredStateDocument{}, err
 	}
@@ -513,7 +526,7 @@ func deriveDesiredStateDeclaration(ctx context.Context, bridge Bridge, ids []str
 	root := runtimeRoot(rt, bridge)
 	groups := make([]vscode.DesiredStateGroup, 0, len(declared.Groups))
 	for _, group := range declared.Groups {
-		derivedRows, err := deriveDesiredStateGroupRows(ctx, root, desiredStateRootID(bridge), group)
+		derivedRows, err := deriveDesiredStateGroupRows(reportCtx, root, desiredStateRootID(bridge), group)
 		if err != nil {
 			return vscode.DesiredStateDocument{}, err
 		}
