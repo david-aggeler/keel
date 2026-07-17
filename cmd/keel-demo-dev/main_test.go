@@ -163,13 +163,33 @@ func TestKeelDemoDevDesiredStateRowsAreRunnable(t *testing.T) {
 		{id: "keel-demo-dev::desired-state::dataset::small", code: 0, event: "passed", message: "reuse_small_data_set"},
 		{id: "keel-demo-dev::desired-state::dataset::empty", code: 0, event: "passed", message: "select_empty_stopped_data_set"},
 	}
+	selectedStateOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "desired-state", "--format", "json", "--id", idDataSetSmall)
+	if code != 0 {
+		t.Fatalf("selected data-set desired-state exit = %d, want 0\n%s", code, selectedStateOut)
+	}
+	var selectedState vscode.DesiredStateDocument
+	decodeJSON(t, selectedStateOut, &selectedState)
+	assertExclusiveDataSetGroupActive(t, selectedState.Groups, "Unknown State")
+
 	for _, tc := range cases {
 		out, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", tc.id)
 		if code != tc.code {
 			t.Fatalf("desired-state row %s exit = %d, want %d\n%s", tc.id, code, tc.code, out)
 		}
-		assertRunEvent(t, decodeRunEvents(t, out), tc.event, tc.id, tc.message)
+		events := decodeRunEvents(t, out)
+		assertRunEvent(t, events, tc.event, tc.id, tc.message)
+		if tc.id == idDataSetSmall {
+			assertRunEvent(t, events, "cleared", idDataSetEmpty, "deactivated by exclusive desired-state selection")
+			assertRunEvent(t, events, "cleared", idDataSetFull, "deactivated by exclusive desired-state selection")
+			selectedStateOut, code = runDemoDev(t, root, exe, "test-bridge", "tests", "desired-state", "--format", "json", "--id", idDataSetSmall)
+			if code != 0 {
+				t.Fatalf("post-run selected data-set desired-state exit = %d, want 0\n%s", code, selectedStateOut)
+			}
+			decodeJSON(t, selectedStateOut, &selectedState)
+			assertExclusiveDataSetGroupActive(t, selectedState.Groups, "app-db-small")
+		}
 	}
+
 	out, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::desired-state::dataset::small")
 	if code != 0 {
 		t.Fatalf("reset data-set small exit = %d, want 0\n%s", code, out)
@@ -525,6 +545,11 @@ func desiredStateRowByResource(t *testing.T, rows []vscode.DesiredState, resourc
 
 func assertExclusiveDataSetGroup(t *testing.T, groups []vscode.DesiredStateGroup) {
 	t.Helper()
+	assertExclusiveDataSetGroupActive(t, groups, "Unknown State")
+}
+
+func assertExclusiveDataSetGroupActive(t *testing.T, groups []vscode.DesiredStateGroup, activeResource string) {
+	t.Helper()
 	for _, group := range groups {
 		if group.Label != "app-db data set" {
 			continue
@@ -542,7 +567,7 @@ func assertExclusiveDataSetGroup(t *testing.T, groups []vscode.DesiredStateGroup
 				active++
 			}
 			wantAction := "reconcile_during_run"
-			if row.Resource == "Unknown State" {
+			if row.Resource == "Unknown State" || row.Resource == activeResource {
 				wantAction = "reuse"
 			}
 			if row.RunID == "" || row.Action != wantAction {
@@ -557,8 +582,8 @@ func assertExclusiveDataSetGroup(t *testing.T, groups []vscode.DesiredStateGroup
 				t.Fatalf("data-set group missing %s: %+v", resource, group.Rows)
 			}
 		}
-		if row := desiredStateRowByResource(t, group.Rows, "Unknown State"); !row.Active {
-			t.Fatalf("Unknown State row inactive in default demo data-set group: %+v", group.Rows)
+		if row := desiredStateRowByResource(t, group.Rows, activeResource); !row.Active {
+			t.Fatalf("data-set active row %s inactive: %+v", activeResource, group.Rows)
 		}
 		return
 	}
