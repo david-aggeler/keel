@@ -22,7 +22,7 @@ import {
 } from '../../extension';
 import { configRelativePath, currentConfigVersion, defaultConfigTemplate, discoverTests, readDesiredState, readAdapterConfig, runTests, upgradeConfig } from '../../bridgeAdapter';
 import { publishDiscovery } from '../../tree';
-import { DesiredStateGroup, RunEvent } from '../../protocol';
+import { DesiredStateGroup, DiscoveryItem, RunEvent } from '../../protocol';
 
 suite('Keel Test Bridge config contract', () => {
   // DHF-TEST: keel/requirement-40
@@ -481,6 +481,67 @@ suite('Keel Test Bridge config contract', () => {
       assert.equal(tree.parentByItemId.get('go::pkg::log')?.id, 'go::root');
       assert.equal(tree.parentByItemId.get('go::test::log::TestLog')?.id, 'go::pkg::log');
     } finally {
+      controller.dispose();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // DHF-TEST: keel/requirement-71
+  // Verifies: keel/ac-303
+  test('lane-run Go package import-path events settle framework package rows', () => {
+    const controller = vscode.tests.createTestController(`keelGoPackageSettle-${Date.now()}`, 'Keel Go Package Settle');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-go-package-settle-'));
+    const items: DiscoveryItem[] = [
+      { id: 'keel::frameworks', label: 'D - Frameworks', kind: 'group', runnable: false, profiles: [] },
+      { id: 'go::root', parent_id: 'keel::frameworks', label: 'd.1 Go', kind: 'root', framework: 'go', runner: 'go-test', runnable: true, profiles: ['run'] },
+      { id: 'go::pkg::log', parent_id: 'go::root', label: 'log', kind: 'package', framework: 'go', runner: 'go-test', runnable: true, profiles: ['run'] },
+      { id: 'go::pkg::vscode', parent_id: 'go::root', label: 'vscode', kind: 'package', framework: 'go', runner: 'go-test', runnable: true, profiles: ['run'] }
+    ];
+    for (let i = 0; i < 9; i += 1) {
+      items.push({ id: `go::file::log/file${i}_test.go`, parent_id: 'go::pkg::log', label: `file${i}_test.go`, kind: 'file', framework: 'go', runner: 'go-test', runnable: true, profiles: ['run'] });
+    }
+    for (let i = 0; i < 14; i += 1) {
+      items.push({ id: `go::file::vscode/file${i}_test.go`, parent_id: 'go::pkg::vscode', label: `file${i}_test.go`, kind: 'file', framework: 'go', runner: 'go-test', runnable: true, profiles: ['run'] });
+    }
+    const tree = publishDiscovery(controller, root, {
+      version: 1,
+      workspace: 'keel',
+      module_path: 'github.com/david-aggeler/keel',
+      generated_at: new Date().toISOString(),
+      items
+    });
+    setCurrentTreeForTest(tree);
+    try {
+      const passed: string[] = [];
+      const skipped: string[] = [];
+      const outputs: string[] = [];
+      const run = {
+        started() { /* no-op */ },
+        passed(item: vscode.TestItem) { passed.push(item.id); },
+        failed() { /* no-op */ },
+        errored() { /* no-op */ },
+        skipped(item: vscode.TestItem) { skipped.push(item.id); },
+        appendOutput(data: string) { outputs.push(data); }
+      };
+      const selectedItemIds = new Set(['keel::lane::test-coverage']);
+      const resultItemIds = new Set<string>();
+
+      applyRunEvent(run as unknown as vscode.TestRun, JSON.stringify(runEvent({
+        event: 'passed',
+        test_id: 'go::package::github.com/david-aggeler/keel/log'
+      })), selectedItemIds, resultItemIds);
+      applyRunEvent(run as unknown as vscode.TestRun, JSON.stringify(runEvent({
+        event: 'passed',
+        test_id: 'go::package::github.com/david-aggeler/keel/vscode'
+      })), selectedItemIds, resultItemIds);
+
+      assert.deepEqual(passed.sort(), ['go::pkg::log', 'go::pkg::vscode']);
+      assert.deepEqual(skipped, [], 'package terminal events must not demote package rows or their children');
+      assert.ok(resultItemIds.has('go::pkg::log'), 'log package row must hold a terminal result');
+      assert.ok(resultItemIds.has('go::pkg::vscode'), 'vscode package row must hold a terminal result');
+      assert.match(outputs.join(''), /passed go::package::github\.com\/david-aggeler\/keel\/log/);
+    } finally {
+      setCurrentTreeForTest(undefined);
       controller.dispose();
       fs.rmSync(root, { recursive: true, force: true });
     }
