@@ -801,7 +801,7 @@ func runDesiredStateSelections(ctx context.Context, bridge Bridge, requests []ru
 		if isExclusiveUnknownRunID(id) {
 			writer(vscode.RunEvent{Event: "test_started", TestID: id})
 			writer(vscode.RunEvent{Event: "passed", TestID: id, Message: "selected Unknown State without running consumer reconcile"})
-			emitExclusiveDesiredStateSiblingClears(request.ExclusiveSiblingIDs, writer)
+			emitExclusiveDesiredStateSiblingClears(request.ExclusiveSiblingIDs, id, writer)
 			continue
 		}
 		row, ok := rows[id]
@@ -816,7 +816,7 @@ func runDesiredStateSelections(ctx context.Context, bridge Bridge, requests []ru
 		writer(vscode.RunEvent{Event: "test_started", TestID: id})
 		if derived.Status == "satisfied" {
 			writer(vscode.RunEvent{Event: "passed", TestID: id, Message: derived.Message})
-			emitExclusiveDesiredStateSiblingClears(request.ExclusiveSiblingIDs, writer)
+			emitExclusiveDesiredStateSiblingClears(request.ExclusiveSiblingIDs, id, writer)
 			continue
 		}
 		writer(vscode.RunEvent{Event: "failed", TestID: id, Message: derived.Message})
@@ -836,12 +836,12 @@ func runDesiredStateSelections(ctx context.Context, bridge Bridge, requests []ru
 // of the exclusive group shows no result.
 //
 // DHF-REQ: keel/requirement-88
-func emitExclusiveDesiredStateSiblingClears(ids []string, writer vscode.RunEventWriter) {
+func emitExclusiveDesiredStateSiblingClears(ids []string, selectedID string, writer vscode.RunEventWriter) {
 	for _, id := range ids {
 		writer(vscode.RunEvent{
 			Event:   "cleared",
 			TestID:  id,
-			Message: "deactivated by exclusive desired-state selection",
+			Message: fmt.Sprintf("%s deactivated by exclusive desired-state selection of %s", id, selectedID),
 		})
 	}
 }
@@ -861,7 +861,7 @@ func runRemainingSelections(ctx context.Context, bridge Bridge, requests []runRe
 			return exitCode, err
 		}
 		for _, request := range batch {
-			emitExclusiveDesiredStateSiblingClears(request.ExclusiveSiblingIDs, writer)
+			emitExclusiveDesiredStateSiblingClears(request.ExclusiveSiblingIDs, request.Request.ID, writer)
 		}
 		return exitCode, nil
 	}
