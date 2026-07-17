@@ -20,6 +20,7 @@ import {
   currentTree,
   extensionOutput,
   getWorkspaceRoot,
+  invalidateClearedResults,
   resultItemsForRunEvent,
   testItemsForRunEvent
 } from './extension';
@@ -40,6 +41,7 @@ interface ExternalRunStreamState {
   selectedProtocolIds: Set<string>;
   resultItemIds: Set<string>;
   protocolResultIds: Set<string>;
+  clearedResultIds: Set<string>;
   lineCount: number;
   finished: boolean;
   importedCompleted: boolean;
@@ -138,6 +140,7 @@ export class ExternalRunMirror implements vscode.Disposable {
     this.streams.delete(file);
   }
 
+  // DHF-REQ: keel/requirement-88
   private async process(file: string): Promise<void> {
     if (!this.workspaceRoot || !file.startsWith(path.join(this.workspaceRoot, '.devtools', 'vscode-runs') + path.sep)) {
       return;
@@ -177,12 +180,14 @@ export class ExternalRunMirror implements vscode.Disposable {
         state.protocolResultIds.add(resultID);
       }
       const applied = applyRunEvent(state.run, line, state.selectedItemIds, state.resultItemIds);
+      applied.clearedResultIds?.forEach((id) => state.clearedResultIds.add(id));
       if (applied.finished) {
         state.finished = true;
         if (state.staleTimer) {
           clearTimeout(state.staleTimer);
           state.staleTimer = undefined;
         }
+        invalidateClearedResults(this.controller, state.clearedResultIds);
         state.run.end();
       }
     }
@@ -202,6 +207,7 @@ export class ExternalRunMirror implements vscode.Disposable {
       selectedProtocolIds: new Set(first?.test_id ? [first.test_id] : []),
       resultItemIds: new Set<string>(),
       protocolResultIds: new Set<string>(),
+      clearedResultIds: new Set<string>(),
       lineCount: 0,
       finished: false,
       importedCompleted

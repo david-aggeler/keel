@@ -713,6 +713,75 @@ suite('Keel Test Bridge config contract', () => {
     }
   });
 
+  // DHF-TEST: keel/requirement-88
+  test('external run mirror invalidates exclusive-group siblings cleared by imported streams', async function () {
+    this.timeout(10_000);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-external-exclusive-clear-'));
+    const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+    process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = root;
+    const controller = vscode.tests.createTestController(`keelExternalExclusiveClear-${Date.now()}`, 'Keel External Exclusive Clear');
+    const tree = publishDiscovery(controller, root, {
+      version: 1,
+      workspace: root,
+      generated_at: new Date().toISOString(),
+      items: [
+        { id: 'demo::desired-state::dataset', label: 'Data Set', kind: 'group', runnable: false, profiles: [] },
+        { id: 'demo::desired-state::dataset::small', parent_id: 'demo::desired-state::dataset', label: 'small', kind: 'test', runnable: true, profiles: ['run'] },
+        { id: 'demo::desired-state::dataset::full', parent_id: 'demo::desired-state::dataset', label: 'full', kind: 'test', runnable: true, profiles: ['run'] }
+      ]
+    });
+    setCurrentTreeForTest(tree);
+    const mirror = new ExternalRunMirror(controller);
+    const runsDir = path.join(root, '.devtools', 'vscode-runs');
+    fs.mkdirSync(runsDir, { recursive: true });
+    const runFile = path.join(runsDir, `exclusive-clear-${process.pid}-${Date.now()}.jsonl`);
+    fs.writeFileSync(runFile, [
+      JSON.stringify(runEvent({ event: 'run_started', run_id: 'external-exclusive', test_id: 'demo::desired-state::dataset::full' })),
+      JSON.stringify(runEvent({ event: 'test_started', run_id: 'external-exclusive', test_id: 'demo::desired-state::dataset::full' })),
+      JSON.stringify(runEvent({ event: 'passed', run_id: 'external-exclusive', test_id: 'demo::desired-state::dataset::full' })),
+      JSON.stringify(runEvent({
+        event: 'cleared',
+        run_id: 'external-exclusive',
+        test_id: 'demo::desired-state::dataset::small',
+        message: 'small deactivated by exclusive desired-state selection'
+      })),
+      JSON.stringify(runEvent({ event: 'run_finished', run_id: 'external-exclusive', exit_code: 0 }))
+    ].join('\n') + '\n');
+
+    const spyTarget = controller as vscode.TestController & { invalidateTestResults: (items?: vscode.TestItem | readonly vscode.TestItem[]) => void };
+    const originalInvalidate = spyTarget.invalidateTestResults.bind(controller);
+    const invalidated: string[] = [];
+    spyTarget.invalidateTestResults = (items?: vscode.TestItem | readonly vscode.TestItem[]) => {
+      if (Array.isArray(items)) {
+        for (const item of items as readonly vscode.TestItem[]) {
+          invalidated.push(item.id);
+        }
+      } else if (items) {
+        invalidated.push((items as vscode.TestItem).id);
+      }
+      originalInvalidate(items as never);
+    };
+
+    try {
+      await mirror.syncWorkspace();
+      assert.deepEqual(invalidated, ['demo::desired-state::dataset::small'], 'imported cleared sibling result is invalidated on the controller');
+      const snapshot = mirror.snapshots().find((candidate) => candidate.runId === 'external-exclusive');
+      assert.ok(snapshot?.finished, 'completed external stream is imported as finished');
+      assert.deepEqual(snapshot.resultIds, ['demo::desired-state::dataset::full'], 'only the selected member keeps a displayed result');
+    } finally {
+      spyTarget.invalidateTestResults = originalInvalidate;
+      fs.rmSync(root, { recursive: true, force: true });
+      mirror.dispose();
+      setCurrentTreeForTest(undefined);
+      controller.dispose();
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
+    }
+  });
+
   // DHF-TEST: keel/requirement-36
   test('hostile artifact demotion is rendered as output instead of a clickable artifact link', () => {
     const controller = vscode.tests.createTestController(`keelArtifactDemotion-${Date.now()}`, 'Keel Artifact Demotion');
