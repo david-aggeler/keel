@@ -181,7 +181,7 @@ func (b demoBridge) Discover(ctx context.Context) (vscode.DiscoveryDocument, err
 // DHF-REQ: keel/requirement-62, keel/requirement-75, keel/requirement-76, keel/requirement-88
 func (b demoBridge) DesiredState(ctx context.Context, ids []string) (testbridge.DesiredStateDeclaration, error) {
 	root := b.workspace(ctx).Root
-	if !hasDemoLanesFile(root) || selectedDataSetRowsOnly(ids) {
+	if !hasDemoLanesFile(root) || (selectedDataSetRowsOnly(ids) && !testbridge.DesiredStateReportRequested(ctx)) {
 		return testbridge.DesiredStateDeclaration{
 			TeardownPolicy: "demo-only fake resources; no teardown command mutates real infrastructure",
 		}, nil
