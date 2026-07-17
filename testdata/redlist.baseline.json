@@ -24,6 +24,12 @@
       "requirement": "keel/requirement-72",
       "fixing_cr": "keel/change_request-78",
       "reason": "Current real binary has no dry-run resolution mode for sweeping every discovery-served runnable id."
+    },
+    {
+      "id": "vsix:req-88:exclusive-real-controller-clear",
+      "requirement": "keel/requirement-88",
+      "fixing_cr": "keel/change_request-115",
+      "reason": "On a real vscode.TestController the exclusive-group deactivated sibling keeps its result because invalidateClearedResults only calls invalidateTestResults (marks the result outdated, not removed); cr-115 rebuilds/removes the sibling item to drop it."
     }
   ]
 }
