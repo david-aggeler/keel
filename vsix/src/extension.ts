@@ -1015,7 +1015,7 @@ export function shouldApplyResultToItem(
 
 function resultExplicitlyTargetsItem(protocolId: string, item: vscode.TestItem): boolean {
   const itemProtocolId = protocolIDForTestItem(item);
-  return itemProtocolId === protocolId || canonicalIdForItem(itemProtocolId) === protocolId;
+  return itemProtocolId === protocolId || canonicalIdForItem(itemProtocolId) === protocolId || goPackageItemForRunEvent(protocolId)?.id === item.id;
 }
 
 export function resultItemsForRunEvent(items: readonly vscode.TestItem[], explicitResultId?: string): vscode.TestItem[] {
@@ -1122,11 +1122,35 @@ export function shouldInvalidateResultsForEvent(event: RunEvent): boolean {
 export function testItemsForRunEvent(id: string): vscode.TestItem[] {
   const canonical = tree?.itemsById.get(id);
   const aliases = tree?.aliasesByCanonicalId.get(id) ?? [];
-  return canonical ? [canonical, ...aliases] : aliases;
+  if (canonical) {
+    return [canonical, ...aliases];
+  }
+  if (aliases.length > 0) {
+    return aliases;
+  }
+  const goPackage = goPackageItemForRunEvent(id);
+  return goPackage ? [goPackage] : [];
 }
 
 function canonicalIdForItem(id: string): string | undefined {
   return tree?.canonicalIdByAliasId.get(id);
+}
+
+function goPackageItemForRunEvent(id: string): vscode.TestItem | undefined {
+  const prefix = 'go::package::';
+  if (!id.startsWith(prefix)) {
+    return undefined;
+  }
+  const modulePath = tree?.modulePath;
+  if (!modulePath) {
+    return undefined;
+  }
+  const importPath = id.slice(prefix.length);
+  if (importPath !== modulePath && !importPath.startsWith(`${modulePath}/`)) {
+    return undefined;
+  }
+  const rel = importPath === modulePath ? '.' : importPath.slice(modulePath.length + 1);
+  return tree?.itemsById.get(`go::pkg::${rel}`);
 }
 
 export function testMessageFromEvent(event: RunEvent, fallback: string): vscode.TestMessage {
