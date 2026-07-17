@@ -21,6 +21,7 @@ import {
   extensionOutput,
   getWorkspaceRoot,
   invalidateClearedResults,
+  refreshDesiredStateAfterRun,
   resultItemsForRunEvent,
   testItemsForRunEvent
 } from './extension';
@@ -222,6 +223,9 @@ export class ExternalRunMirror implements vscode.Disposable {
           state.staleTimer = undefined;
         }
         invalidateClearedResults(this.controller, state.clearedResultIds);
+        if (this.workspaceRoot) {
+          await refreshDesiredStateAfterRun(state.run, this.controller, this.workspaceRoot, Array.from(state.selectedProtocolIds));
+        }
         state.run.end();
       }
     }
