@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import * as vscode from 'vscode';
 import { adapterConfig, configRelativePath, currentConfigVersion, defaultAdapterConfig, defaultConfigTemplate, discoverTests, readDesiredState, readAdapterConfig, runTests, upgradeConfig } from './bridgeAdapter';
 import { ExternalRunMirror, ExternalRunStateSnapshot, setExternalRunStaleMsForTest } from './externalRunMirror';
-import { publishDiscovery, PublishedTree } from './tree';
+import { publishDiscovery, PublishedTree, replacePublishedTestItem } from './tree';
 import { DesiredState, DesiredStateGroup, RunEvent, DesiredStateDocument } from './protocol';
 
 let tree: PublishedTree | undefined;
@@ -398,6 +398,13 @@ export function invalidateClearedResults(controller: vscode.TestController, clea
   }
   if (items.length > 0) {
     controller.invalidateTestResults(items);
+    const currentTree = tree;
+    if (!currentTree) {
+      return;
+    }
+    for (const item of items) {
+      replacePublishedTestItem(controller, currentTree, item.id);
+    }
   }
 }
 

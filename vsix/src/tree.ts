@@ -66,6 +66,54 @@ export function publishDiscovery(
   };
 }
 
+// DHF-REQ: keel/requirement-88
+export function replacePublishedTestItem(
+  controller: vscode.TestController,
+  publishedTree: PublishedTree,
+  id: string
+): vscode.TestItem | undefined {
+  const oldItem = publishedTree.itemsById.get(id);
+  if (!oldItem) {
+    return undefined;
+  }
+  const replacement = controller.createTestItem(oldItem.id, oldItem.label, oldItem.uri);
+  replacement.sortText = oldItem.sortText;
+  replacement.canResolveChildren = oldItem.canResolveChildren;
+  replacement.description = oldItem.description;
+  replacement.tags = oldItem.tags;
+  replacement.range = oldItem.range;
+
+  const children: vscode.TestItem[] = [];
+  oldItem.children.forEach((child) => children.push(child));
+  const parent = publishedTree.parentByItemId.get(id);
+  if (parent) {
+    parent.children.delete(id);
+    parent.children.add(replacement);
+  } else {
+    controller.items.delete(id);
+    controller.items.add(replacement);
+  }
+  for (const child of children) {
+    replacement.children.add(child);
+    publishedTree.parentByItemId.set(child.id, replacement);
+  }
+
+  publishedTree.itemsById.set(id, replacement);
+  const protocolId = publishedTree.protocolIdByItemId.get(id);
+  if (protocolId) {
+    publishedTree.protocolIdByItemId.set(replacement.id, protocolId);
+  }
+  const canonicalId = publishedTree.canonicalIdByAliasId.get(id);
+  if (canonicalId) {
+    const aliases = publishedTree.aliasesByCanonicalId.get(canonicalId) ?? [];
+    publishedTree.aliasesByCanonicalId.set(
+      canonicalId,
+      aliases.map((alias) => alias.id === id ? replacement : alias)
+    );
+  }
+  return replacement;
+}
+
 function collectExistingItems(controller: vscode.TestController): {
   itemsById: Map<string, vscode.TestItem>;
   parentById: Map<string, vscode.TestItem>;
