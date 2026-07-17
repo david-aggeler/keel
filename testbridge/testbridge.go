@@ -35,6 +35,8 @@ type Runtime struct {
 	RunID    func() string
 }
 
+const externalRunStreamRetentionLimit = 32
+
 // WithRuntime stores Runtime in ctx for a CommandSpec handler.
 func WithRuntime(ctx context.Context, rt Runtime) context.Context {
 	return context.WithValue(ctx, runtimeKey{}, rt)
@@ -1343,7 +1345,90 @@ func newRunWriter(rt Runtime, workspace Workspace, runID string) (vscode.RunEven
 		_, _ = out.Write(line)
 		_, _ = external.Write(line)
 		runLog.observe(stamped)
+		if stamped.Event == "run_finished" {
+			if err := pruneCompletedRunStreams(runDir, externalRunStreamRetentionLimit); err != nil && rt.Log != nil {
+				rt.Log.Warn("prune testbridge run streams", "error", err.Error())
+			}
+		}
 	}, closeFn, nil
+}
+
+type completedRunStream struct {
+	path        string
+	name        string
+	completedAt time.Time
+}
+
+// DHF-REQ: keel/requirement-92
+func pruneCompletedRunStreams(runDir string, keep int) error {
+	if keep < 1 {
+		return nil
+	}
+	entries, err := os.ReadDir(runDir)
+	if err != nil {
+		return err
+	}
+	completed := make([]completedRunStream, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			continue
+		}
+		path := filepath.Join(runDir, entry.Name())
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		completedAt, ok := completedRunStreamTime(path, info.ModTime())
+		if !ok {
+			continue
+		}
+		completed = append(completed, completedRunStream{path: path, name: entry.Name(), completedAt: completedAt})
+	}
+	if len(completed) <= keep {
+		return nil
+	}
+	sort.Slice(completed, func(i, j int) bool {
+		if completed[i].completedAt.Equal(completed[j].completedAt) {
+			return completed[i].name > completed[j].name
+		}
+		return completed[i].completedAt.After(completed[j].completedAt)
+	})
+	var errs []error
+	for _, stream := range completed[keep:] {
+		if err := os.Remove(stream.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func completedRunStreamTime(path string, fallback time.Time) (time.Time, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return time.Time{}, false
+	}
+	completedAt := time.Time{}
+	completed := false
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var event vscode.RunEvent
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			continue
+		}
+		if event.Event != "run_finished" {
+			continue
+		}
+		completed = true
+		if !event.Time.IsZero() && (completedAt.IsZero() || event.Time.After(completedAt)) {
+			completedAt = event.Time
+		}
+	}
+	if completed && completedAt.IsZero() {
+		completedAt = fallback
+	}
+	return completedAt, completed
 }
 
 type bridgeRunLog struct {
