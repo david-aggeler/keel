@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { applyRunEvent, setCurrentTreeForTest } from '../../extension';
+import { applyRunEvent, invalidateClearedResults, setCurrentTreeForTest } from '../../extension';
 import { configRelativePath, currentConfigVersion, discoverTests, runTests } from '../../bridgeAdapter';
 import { DiscoveryDocument, DiscoveryItem, RunEvent } from '../../protocol';
 import { publishDiscovery } from '../../tree';
@@ -259,6 +259,89 @@ suite('Keel Test Bridge expected-red specs', () => {
         assert.match(rejected.stderr + rejected.stdout, /unknown .*id/i);
       } finally {
         fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
+  });
+
+  // req-88: mutually-exclusive group — switching the active member must clear
+  // the deactivated sibling's result on a REAL vscode.TestController. This
+  // upgrades the mocked-controller assertion in extension.test.ts (which only
+  // proves invalidateTestResults is *called*) to the real controller, where
+  // invalidateTestResults marks a result OUTDATED rather than removing it — so
+  // the sibling keeps its green check (issue-80). VS Code exposes no API to read
+  // a rendered result or to clear a single item's result, so the only faithful,
+  // observable proxy for "result removed" is that the deactivated sibling's
+  // TestItem is rebuilt/removed on the controller (mechanism (b), cr-115).
+  //
+  // DHF-TEST: keel/requirement-88
+  test('req-88 exclusive-group switch clears the deactivated sibling on a real TestController', async () => {
+    await expectKnownRed('vsix:req-88:exclusive-real-controller-clear', () => {
+      const controller = vscode.tests.createTestController(`keelReq88Exclusive-${Date.now()}`, 'Keel Req 88 exclusive');
+      const groupId = 'demo::desired-state::dataset';
+      const fullId = 'demo::desired-state::dataset::full';
+      const smallId = 'demo::desired-state::dataset::small';
+      try {
+        const tree = publishDiscovery(controller, os.tmpdir(), {
+          version: 1,
+          workspace: 'req-88-exclusive',
+          generated_at: new Date().toISOString(),
+          items: [
+            { id: groupId, label: 'app-db data set', kind: 'group', runnable: false, profiles: [] },
+            { id: fullId, parent_id: groupId, label: 'full', kind: 'test', runnable: true, profiles: ['run'] },
+            { id: smallId, parent_id: groupId, label: 'small', kind: 'test', runnable: true, profiles: ['run'] }
+          ]
+        });
+        setCurrentTreeForTest(tree);
+
+        const memberOnController = (id: string): vscode.TestItem | undefined =>
+          controller.items.get(groupId)?.children.get(id);
+
+        // Run 1 — activate the concrete member 'full' on a REAL TestRun, so the
+        // pass is stamped on the real controller.
+        const fullItem = tree.itemsById.get(fullId);
+        assert.ok(fullItem, 'full item is discovered');
+        let run = controller.createTestRun(new vscode.TestRunRequest([fullItem]));
+        applyRunEvent(run, JSON.stringify(runEvent({ event: 'passed', test_id: fullId })), new Set([fullId]), new Set());
+        run.end();
+
+        const fullBefore = memberOnController(fullId);
+        assert.ok(fullBefore, 'full is present on the controller after its own run');
+
+        // Run 2 — activate 'small'; the bridge deactivates 'full' with a
+        // 'cleared' event and the run loop invalidates it on the controller.
+        // This is the exact production sibling-deactivation path.
+        const smallItem = tree.itemsById.get(smallId);
+        assert.ok(smallItem, 'small item is discovered');
+        run = controller.createTestRun(new vscode.TestRunRequest([smallItem]));
+        applyRunEvent(run, JSON.stringify(runEvent({ event: 'passed', test_id: smallId })), new Set([smallId]), new Set());
+        const smallBefore = memberOnController(smallId);
+        assert.ok(smallBefore, 'small is present on the controller after its own run');
+        const applied = applyRunEvent(run, JSON.stringify(runEvent({
+          event: 'cleared', test_id: fullId, message: 'deactivated by exclusive desired-state selection'
+        })), new Set([smallId]), new Set());
+        invalidateClearedResults(controller, new Set(applied.clearedResultIds ?? []));
+        run.end();
+
+        // Desired (requirement-88 ac-283): after switching to 'small', the
+        // deactivated sibling 'full' must have its result actually removed, while
+        // the newly-active 'small' and the group parent are retained in place.
+        // Today the clear path only calls invalidateTestResults, which marks the
+        // result OUTDATED but leaves the same TestItem carrying its green check —
+        // so 'full' is the unchanged object and the first assertion fails
+        // (issue-80). cr-115 rebuilds/removes only the sibling so its result drops.
+        const fullAfter = memberOnController(fullId);
+        assert.notStrictEqual(fullAfter, fullBefore,
+          'deactivated sibling full must be rebuilt/removed so its result drops; invalidateTestResults only marks it outdated, so the same TestItem persists and keeps its green check (issue-80)');
+        // Guard against a "cleared too much" fix: the active member and the group
+        // must survive. A mechanism that rebuilds the whole subtree would also drop
+        // small's just-stamped result, violating at-most-one-*retained*-result.
+        const smallAfter = memberOnController(smallId);
+        assert.strictEqual(smallAfter, smallBefore,
+          'the newly-active member small must be retained in place (not rebuilt) when a sibling is deactivated');
+        assert.ok(controller.items.get(groupId), 'the exclusive group parent must survive the switch');
+      } finally {
+        setCurrentTreeForTest(undefined);
+        controller.dispose();
       }
     });
   });
