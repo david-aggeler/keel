@@ -2559,6 +2559,59 @@ func TestVSCodeRunWritesStampedExternalRunStream(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-92
+func TestVSCodeRunPrunesExternalRunSpoolToRecentCompletedStreams(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	t.Setenv("PATH", t.TempDir())
+
+	runDir := filepath.Join(root, ".devtools", "vscode-runs")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(runDir, "run.lock")
+	if err := os.WriteFile(lockPath, []byte(`{"pid":1,"created_at":"2026-07-13T00:00:00Z","ids":["x"],"token":"t"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join(".devtools", "vscode-runs", "in-flight.jsonl"), `{"version":1,"event":"run_started","run_id":"in-flight"}`+"\n")
+
+	for i := 0; i < 37; i++ {
+		var protocol bytes.Buffer
+		err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), "keel::lane::test-fast")
+		if err == nil {
+			t.Fatal("blocked lane returned nil error; want non-zero")
+		}
+	}
+
+	entries, err := os.ReadDir(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var completed int
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(runDir, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), `"event":"run_finished"`) {
+			completed++
+		}
+	}
+	if completed > 32 {
+		t.Fatalf("completed streams = %d, want at most 32 after retention", completed)
+	}
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("run.lock was pruned: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "in-flight.jsonl")); err != nil {
+		t.Fatalf("in-flight stream was pruned: %v", err)
+	}
+}
+
 func discoveryHasLane(doc vscode.DiscoveryDocument, id string) bool {
 	for _, item := range doc.Items {
 		if item.ID == id {
