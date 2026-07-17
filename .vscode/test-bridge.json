@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "command": "bin/keel-dev",
+  "command": "/projects/keel/bin/keel-dev",
   "args": [],
   "displayName": "Keel"
 }
