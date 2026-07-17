@@ -562,12 +562,13 @@ func TestExclusiveDesiredStateSingleSelectionClearsSiblingResults(t *testing.T) 
 		t.Fatalf("run concrete dispatch: %v\n%s", err, protocol.String())
 	}
 	events := decodeEvents(t, protocol.String())
+	smallID := "demo::desired-state::dataset::small"
 	if !eventsContain(events, "passed", fullID, "full active") ||
-		!eventsContain(events, "cleared", "demo::desired-state::dataset::small", "deactivated by exclusive desired-state selection") ||
-		!eventsContain(events, "cleared", unknownID, "deactivated by exclusive desired-state selection") {
+		!eventMessageContainsAll(events, "cleared", smallID, smallID, fullID) ||
+		!eventMessageContainsAll(events, "cleared", unknownID, unknownID, fullID) {
 		t.Fatalf("concrete selection events = %+v, want selected pass and sibling clear events", events)
 	}
-	if eventsContain(events, "skipped", "demo::desired-state::dataset::small", "deactivated by exclusive desired-state selection") {
+	if eventsContain(events, "skipped", smallID, "deactivated by exclusive desired-state selection") {
 		t.Fatalf("sibling deactivation must emit a cleared event, not a terminal skipped result: %+v", events)
 	}
 
@@ -581,8 +582,8 @@ func TestExclusiveDesiredStateSingleSelectionClearsSiblingResults(t *testing.T) 
 	}
 	events = decodeEvents(t, protocol.String())
 	if !eventsContain(events, "passed", unknownID, "selected Unknown State") ||
-		!eventsContain(events, "cleared", "demo::desired-state::dataset::small", "deactivated by exclusive desired-state selection") ||
-		!eventsContain(events, "cleared", fullID, "deactivated by exclusive desired-state selection") {
+		!eventMessageContainsAll(events, "cleared", smallID, smallID, unknownID) ||
+		!eventMessageContainsAll(events, "cleared", fullID, fullID, unknownID) {
 		t.Fatalf("Unknown selection events = %+v, want Unknown pass and concrete sibling clear events", events)
 	}
 }
@@ -630,9 +631,10 @@ func TestExclusiveDesiredStateReconcileSelectionClearsSiblingResults(t *testing.
 		t.Fatalf("consumer Run ids = %v, want reconcile path for %v", got, want)
 	}
 	events := decodeEvents(t, protocol.String())
+	smallID := "demo::desired-state::dataset::small"
 	if !eventsContain(events, "passed", fullID, "") ||
-		!eventsContain(events, "cleared", "demo::desired-state::dataset::small", "deactivated by exclusive desired-state selection") ||
-		!eventsContain(events, "cleared", unknownID, "deactivated by exclusive desired-state selection") {
+		!eventMessageContainsAll(events, "cleared", smallID, smallID, fullID) ||
+		!eventMessageContainsAll(events, "cleared", unknownID, unknownID, fullID) {
 		t.Fatalf("reconcile selection events = %+v, want selected pass and sibling clear events", events)
 	}
 
@@ -2528,6 +2530,21 @@ func eventsContain(events []vscode.RunEvent, event, testID, message string) bool
 		if got.Event == event && got.TestID == testID && strings.Contains(got.Message, message) {
 			return true
 		}
+	}
+	return false
+}
+
+func eventMessageContainsAll(events []vscode.RunEvent, event, testID string, substrings ...string) bool {
+	for _, got := range events {
+		if got.Event != event || got.TestID != testID {
+			continue
+		}
+		for _, substring := range substrings {
+			if !strings.Contains(got.Message, substring) {
+				return false
+			}
+		}
+		return true
 	}
 	return false
 }
