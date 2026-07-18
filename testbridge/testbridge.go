@@ -326,7 +326,7 @@ func appendMissingDiscoveryItems(items []vscode.TestItem, candidates ...vscode.T
 	return items
 }
 
-// DHF-REQ: keel/requirement-74, keel/requirement-83
+// DHF-REQ: keel/requirement-74, keel/requirement-83, keel/requirement-95
 func deriveDesiredStateDiscovery(ctx context.Context, bridge Bridge, doc vscode.DiscoveryDocument) (vscode.DiscoveryDocument, error) {
 	parent, ok := desiredStateParent(doc.Items)
 	if !ok {
@@ -342,11 +342,12 @@ func deriveDesiredStateDiscovery(ctx context.Context, bridge Bridge, doc vscode.
 		return doc, nil
 	}
 	rt := runtimeOrDefault(ctx, bridge)
-	items, err := desiredStateDeclarationDiscoveryItems(ctx, runtimeRoot(rt, bridge), parent.ID, desiredState.Groups)
+	items, noResultIDs, err := desiredStateDeclarationDiscoveryItems(ctx, runtimeRoot(rt, bridge), parent.ID, desiredState.Groups)
 	if err != nil {
 		return vscode.DiscoveryDocument{}, err
 	}
 	doc.Items = append(doc.Items, items...)
+	doc.Capabilities.ReconcileNoResultTestIDs = noResultIDs
 	if err := validateUniqueDiscoveryItemIDs(doc.Items); err != nil {
 		return vscode.DiscoveryDocument{}, err
 	}
@@ -409,16 +410,23 @@ func desiredStateDiagnosticItem(parentID string, err error) vscode.TestItem {
 	}
 }
 
-// DHF-REQ: keel/requirement-75, keel/requirement-83, keel/requirement-88
-func desiredStateDeclarationDiscoveryItems(ctx context.Context, root, parentID string, groups []DesiredStateGroup) ([]vscode.TestItem, error) {
+// desiredStateDeclarationDiscoveryItems derives the B-group discovery items
+// and, alongside them, the bridge-computed reconcile_no_result_test_ids
+// capability content: the run ids of mutually-exclusive rows (including the
+// synthetic Unknown State peer) whose derived active is false. Consumers
+// drop exactly those rendered results on every refresh.
+//
+// DHF-REQ: keel/requirement-75, keel/requirement-83, keel/requirement-88, keel/requirement-95
+func desiredStateDeclarationDiscoveryItems(ctx context.Context, root, parentID string, groups []DesiredStateGroup) ([]vscode.TestItem, []string, error) {
 	groups = append([]DesiredStateGroup(nil), groups...)
 	sort.SliceStable(groups, func(i, j int) bool { return groups[i].Order < groups[j].Order })
 	items := make([]vscode.TestItem, 0)
+	var noResultIDs []string
 	for _, group := range groups {
 		groupID := parentID + "::group::" + stableIDSegment(group.Label)
 		derivedRows, err := deriveDesiredStateGroupRows(ctx, root, parentID, group)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		runnable := !group.MutuallyExclusive && desiredStateGroupHasRunnableRows(group)
 		profiles := []string{}
@@ -438,9 +446,12 @@ func desiredStateDeclarationDiscoveryItems(ctx context.Context, root, parentID s
 		items = append(items, groupItem)
 		for rowIndex, row := range derivedRows {
 			items = append(items, desiredStateDeclarationDiscoveryItem(groupID, groupItem.SortText, rowIndex+1, row.Declaration, row.State))
+			if group.MutuallyExclusive && row.State.RunID != "" && !row.State.Active {
+				noResultIDs = append(noResultIDs, row.State.RunID)
+			}
 		}
 	}
-	return items, nil
+	return items, noResultIDs, nil
 }
 
 func desiredStateGroupHasRunnableRows(group DesiredStateGroup) bool {

@@ -574,6 +574,11 @@ function discovery() {
     version: 1,
     workspace: process.cwd(),
     generated_at: now(),
+    capabilities: { reconcile_no_result_test_ids: [
+      'demo::desired-state::dataset::small',
+      'demo::desired-state::dataset::full',
+      'demo::desired-state::dataset::unknown'
+    ].filter((id) => id !== active) },
     items: [
       { id: 'demo::desired-state::dataset', label: 'Data Set', kind: 'group', runnable: false, profiles: [], limitations: ['mutually_exclusive=true'] },
       { id: 'demo::desired-state::dataset::small', parent_id: 'demo::desired-state::dataset', label: 'small', kind: 'test', runnable: true, profiles: ['run'], limitations: ['active=' + (active === 'demo::desired-state::dataset::small')] },
@@ -671,21 +676,27 @@ process.exit(2);
 
       const refreshedTree = currentTree();
       assert.ok(refreshedTree, 'post-run discovery refresh should leave a published tree');
-      assert.deepEqual(
-        invalidated.sort(),
-        ['demo::desired-state::dataset::small', 'demo::desired-state::dataset::unknown'],
-        'non-active exclusive members are invalidated to no-result after run_finished'
+      // Pre-run, small is the active member, so only the post-run discovery
+      // refresh (serving the updated reconcile_no_result_test_ids) can have
+      // invalidated it — proving the reconcile fired after run_finished.
+      assert.ok(
+        invalidated.includes('demo::desired-state::dataset::small'),
+        'the post-run discovery refresh invalidates the newly non-active member'
       );
       assert.notEqual(refreshedTree.itemsById.get('demo::desired-state::dataset::small'), originalSmall, 'non-active sibling is replaced, proving its prior result is dropped');
       assert.notEqual(refreshedTree.itemsById.get('demo::desired-state::dataset::unknown'), originalUnknown, 'non-active reset peer is replaced, proving its prior result is dropped');
-      assert.equal(refreshedTree.itemsById.get('demo::desired-state::dataset::full'), originalFull, 'active member keeps its TestItem identity and exactly one result');
+      // full was non-active during the pre-run refresh, so the at-rest
+      // reconcile legitimately replaced it once back then; from the moment
+      // it became the active member its TestItem identity is retained.
+      const fullAfterRun = refreshedTree.itemsById.get('demo::desired-state::dataset::full');
+      assert.ok(fullAfterRun, 'active member is published after the run');
 
       await vscode.commands.executeCommand('keel.tests.refresh');
       const afterExplicitRefresh = currentTree();
       assert.ok(afterExplicitRefresh, 'explicit discovery refresh should leave a published tree');
       assert.notEqual(afterExplicitRefresh.itemsById.get('demo::desired-state::dataset::small'), originalSmall, 'non-active sibling remains replaced after a later discovery refresh');
       assert.notEqual(afterExplicitRefresh.itemsById.get('demo::desired-state::dataset::unknown'), originalUnknown, 'non-active reset peer remains replaced after a later discovery refresh');
-      assert.equal(afterExplicitRefresh.itemsById.get('demo::desired-state::dataset::full'), originalFull, 'active member still keeps its original TestItem after a later discovery refresh');
+      assert.equal(afterExplicitRefresh.itemsById.get('demo::desired-state::dataset::full'), fullAfterRun, 'active member keeps its TestItem identity across an at-rest refresh');
     } finally {
       if (previousDevWorkspace === undefined) {
         delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
@@ -694,6 +705,28 @@ process.exit(2);
       }
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  // ac-311 (requirement-95 / design_decision-5): the VSIX applies bridge
+  // decisions verbatim and must not branch on the mutually_exclusive wire
+  // flag. Allowed occurrences in production sources: the protocol.ts type
+  // declaration and the display passthrough in formatDesiredStateGroup.
+  //
+  // DHF-TEST: keel/requirement-95
+  test('production sources do not branch on mutually_exclusive', () => {
+    const srcDir = path.resolve(__dirname, '../../../src');
+    const allowed = new Map([['protocol.ts', 1], ['extension.ts', 1]]);
+    const offenders: string[] = [];
+    for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.ts')) {
+        continue;
+      }
+      const occurrences = fs.readFileSync(path.join(srcDir, entry.name), 'utf8').split('mutually_exclusive').length - 1;
+      if (occurrences !== (allowed.get(entry.name) ?? 0)) {
+        offenders.push(`${entry.name}: ${occurrences} occurrence(s), allowed ${allowed.get(entry.name) ?? 0}`);
+      }
+    }
+    assert.deepEqual(offenders, [], 'mutually_exclusive may appear only as the protocol type declaration and the verbatim display passthrough');
   });
 
   // DHF-TEST: keel/requirement-40

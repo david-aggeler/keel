@@ -26,6 +26,12 @@
       "reason": "Current real binary has no dry-run resolution mode for sweeping every discovery-served runnable id."
     },
     {
+      "id": "vsix:req-95:at-rest-reconcile",
+      "requirement": "keel/requirement-95",
+      "fixing_cr": "keel/change_request-121",
+      "reason": "applyReconcileNoResultCapability is a stub: nothing drops a non-active exclusive member's rendered result on an at-rest discovery refresh; only an activation-run cleared event does (keel/issue-89, rca-3 root #1)."
+    },
+    {
       "id": "vsix:req-88:exclusive-real-controller-clear",
       "requirement": "keel/requirement-88",
       "fixing_cr": "keel/change_request-115",
