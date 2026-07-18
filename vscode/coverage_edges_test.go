@@ -47,8 +47,8 @@ func TestGoSelectionFiltersAndResultIDs(t *testing.T) {
 	if !GoJSONResultBelongsToSelection(fileSelection, GoTestJSONEvent{Test: "TestB"}) {
 		t.Fatal("file selection should include selected test result")
 	}
-	if GoJSONResultBelongsToSelection(GoSelection{Kind: "root"}, GoTestJSONEvent{Test: "TestA"}) {
-		t.Fatal("root selection aggregate should ignore leaf test result")
+	if !GoJSONResultBelongsToSelection(GoSelection{Kind: "root"}, GoTestJSONEvent{Test: "TestA"}) {
+		t.Fatal("root selection should own leaf test results so they settle per id (requirement-71)")
 	}
 
 	id := GoRunEventTestID(GoSelection{Kind: "package", Pkg: "pkg"}, GoTestJSONEvent{Package: "example.org/mod/pkg"}, "go::pkg::pkg", "example.org/mod")
