@@ -44,6 +44,7 @@ classDiagram
         +bool neutral_parent_rollups
         -List~string~ clear_results_test_ids
         -List~string~ clear_state_test_ids
+        -List~string~ reconcile_no_result_test_ids
     }
     class test_item {
         +string id
@@ -74,6 +75,7 @@ classDiagram
 
 - `test_item.kind` — root, lane, package, file, suite, test, project, group, maintenance
 - `test_item.profiles` — run, debug, coverage
+- `capabilities.reconcile_no_result_test_ids` — bridge-computed authority for exclusive desired-state rendering: ids whose rendered result the consumer drops to no-result on **every** discovery refresh (rows with derived `active = false`, incl. the inactive Unknown State peer). Applied verbatim — no consumer branching on `mutually_exclusive` (requirement-95, supersedes requirement-93's post-run-only reconcile)
 
 ---
 
