@@ -29,6 +29,7 @@ func TestSchemasDriftAgainstGoTypes(t *testing.T) {
 	}{
 		{"discovery", reflect.TypeOf(DiscoveryDocument{}), ""},
 		{"discovery capabilities", reflect.TypeOf(DiscoveryCapabilities{}), "#/$defs/capabilities"},
+		{"discovery reconcile result", reflect.TypeOf(ReconcileResult{}), "#/$defs/capabilities/properties/reconcile_results/items"},
 		{"discovery test item", reflect.TypeOf(TestItem{}), "#/$defs/test_item"},
 		{"discovery range", reflect.TypeOf(Range{}), "#/$defs/test_item/properties/range"},
 		{"desired-state", reflect.TypeOf(DesiredStateDocument{}), ""},
@@ -139,6 +140,11 @@ func schemaAtRef(root jsonSchema, ref string) jsonSchema {
 		case "$defs":
 			continue
 		case "properties":
+			continue
+		case "items":
+			if cur.Items != nil {
+				cur = *cur.Items
+			}
 			continue
 		default:
 			if next, ok := cur.Defs[part]; ok {
