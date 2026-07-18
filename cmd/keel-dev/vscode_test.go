@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"log/slog"
 	"os"
@@ -2856,6 +2859,15 @@ func runEventsContain(events []vscode.RunEvent, event, id string) bool {
 	return false
 }
 
+func eventsContainMessage(events []vscode.RunEvent, text string) bool {
+	for _, got := range events {
+		if strings.Contains(got.Message, text) {
+			return true
+		}
+	}
+	return false
+}
+
 func stringSlicesEqual(got, want []string) bool {
 	if len(got) != len(want) {
 		return false
@@ -2997,6 +3009,16 @@ func TestVSCodeVSIXGateReadinessRequiresCompleteToolchain(t *testing.T) {
 
 // DHF-TEST: keel/requirement-81
 func TestVSCodeArgumentAndProfileEdges(t *testing.T) {
+	ids, err := parseVSCodeIDs([]string{"--format", "json", "--id", "go::root", "--id", vscodeLaneLint}, false)
+	if err != nil {
+		t.Fatalf("parseVSCodeIDs valid args: %v", err)
+	}
+	if !stringSlicesEqual(ids, []string{"go::root", vscodeLaneLint}) {
+		t.Fatalf("parseVSCodeIDs ids = %#v", ids)
+	}
+	if ids, err := parseVSCodeIDs(nil, true); err != nil || len(ids) != 0 {
+		t.Fatalf("parseVSCodeIDs allow empty = %#v, %v; want empty nil", ids, err)
+	}
 	if _, err := parseVSCodeIDs([]string{"--format", "yaml"}, true); err == nil {
 		t.Fatal("non-json format should fail")
 	}
@@ -3022,6 +3044,9 @@ func TestVSCodeArgumentAndProfileEdges(t *testing.T) {
 	if profile.Repo() == "" || profile.ModulePath() != modulePath || profile.LogDir() == "" || profile.MaxOutputBytes() == 0 {
 		t.Fatalf("profile scalar methods returned empty values: %+v", profile)
 	}
+	if profile.ConsumerID() != "keel-dev" || profile.Node() == "" {
+		t.Fatalf("profile identity = consumer %q node %q, want keel-dev plus node", profile.ConsumerID(), profile.Node())
+	}
 	if got := profile.MaxOutputBytes(); got != procexec.DefaultMaxOutputBytes {
 		t.Fatalf("profile MaxOutputBytes = %d, want shared default %d", got, procexec.DefaultMaxOutputBytes)
 	}
@@ -3030,6 +3055,229 @@ func TestVSCodeArgumentAndProfileEdges(t *testing.T) {
 	}
 	if statusWord(false) != "blocked" || workspaceNode("") != "unknown" {
 		t.Fatal("status/workspace fallback helpers returned unexpected values")
+	}
+	if got := (vscodeRunError{exitCode: 7, msg: "lane failed"}).Error(); got != "lane failed" {
+		t.Fatalf("vscodeRunError.Error = %q", got)
+	}
+}
+
+// DHF-TEST: keel/requirement-11
+func TestVSCodePureHelperCoverageEdges(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want string
+	}{
+		{in: filepath.Join("vsix", "out", "test", "suite", "extension.test.js"), want: "src/test/suite/extension.test.ts"},
+		{in: "out/test/suite/tree.test.js", want: "src/test/suite/tree.test.ts"},
+		{in: "vsix/src/test/suite/tree.test.ts", want: ""},
+		{in: "out/test/suite/tree.test.mjs", want: ""},
+		{in: "", want: ""},
+	} {
+		if got := vsixSourceRelFromCompiled(tc.in); got != tc.want {
+			t.Fatalf("vsixSourceRelFromCompiled(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+
+	src, err := parser.ParseFile(token.NewFileSet(), "sample_test.go", `package p
+	import sample "testing"
+	type LocalT = sample.T
+	type NextT = LocalT
+	func TestAlias(t *NextT) {}
+	`, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, dot := testingImportBinding(src)
+	if name != "sample" || dot {
+		t.Fatalf("testingImportBinding alias = %q dot=%v, want sample false", name, dot)
+	}
+	parsed := parseGoTestFile("sample_test.go", "sample_test.go")
+	if len(parsed.tests) != 0 {
+		t.Fatalf("parseGoTestFile on missing file should not invent tests: %+v", parsed.tests)
+	}
+	aliases := fileTypeAliases(src)
+	if !typeDenotesTestingT(aliases["NextT"], name, dot, aliases, 0) {
+		t.Fatal("typeDenotesTestingT did not resolve alias chain to testing.T")
+	}
+	if typeDenotesTestingT(aliases["NextT"], "", false, aliases, 9) {
+		t.Fatal("typeDenotesTestingT should stop at recursion depth cap")
+	}
+
+	root := t.TempDir()
+	writeFile(t, root, "a.go", "package a\n")
+	writeFile(t, root, "b.go", "package b\n")
+	if err := goPackageBuildDiagnostic(root, "."); err == nil || !strings.Contains(err.Error(), "found packages") {
+		t.Fatalf("goPackageBuildDiagnostic mixed package err = %v, want found packages", err)
+	}
+
+	recvSrc, err := parser.ParseFile(token.NewFileSet(), "recv.go", `package p
+type worker struct{}
+func (w *worker) Run() {}
+`, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recv *ast.FieldList
+	for _, decl := range recvSrc.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == "Run" {
+			recv = fn.Recv
+		}
+	}
+	if got := receiverTypeName(recv); got != "worker" {
+		t.Fatalf("receiverTypeName = %q, want worker", got)
+	}
+	if got := receiverTypeName(nil); got != "" {
+		t.Fatalf("receiverTypeName(nil) = %q, want empty", got)
+	}
+}
+
+// DHF-TEST: keel/requirement-11, keel/requirement-43, keel/requirement-46
+func TestParseGoTestPackagesCoversBuildAndParseEdges(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	if err := os.MkdirAll(filepath.Join(root, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join("pkg", "alias_test.go"), `package pkg
+
+	import sample "testing"
+
+type LocalT = sample.T
+
+func TestAlias(t *LocalT) {}
+func Testcase(t *sample.T) {}
+func BenchmarkIgnored(t *sample.T) {}
+	`)
+	writeFile(t, root, filepath.Join("pkg", "dot_test.go"), `package pkg
+
+import . "testing"
+
+func TestDot(t *T) {}
+`)
+	writeFile(t, root, filepath.Join("pkg", "excluded_test.go"), `//go:build never
+
+package pkg
+
+import "testing"
+
+func TestExcluded(t *testing.T) {}
+`)
+	writeFile(t, root, filepath.Join("pkg", "broken_test.go"), "package pkg\n\nfunc TestBroken(\n")
+	if err := os.MkdirAll(filepath.Join(root, "pkg", "testdata"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join("pkg", "testdata", "ignored_test.go"), "package testdata\n\nimport \"testing\"\n\nfunc TestIgnored(t *testing.T) {}\n")
+
+	packages, err := parseGoTestPackages(root)
+	if err != nil {
+		t.Fatalf("parseGoTestPackages: %v", err)
+	}
+	if len(packages) != 1 || packages[0].rel != "pkg" {
+		t.Fatalf("packages = %+v, want one pkg package", packages)
+	}
+	var tests []string
+	var sawBroken bool
+	for _, file := range packages[0].files {
+		if strings.Contains(file.rel, "testdata") || strings.Contains(file.rel, "excluded") {
+			t.Fatalf("unexpected skipped file in package result: %+v", file)
+		}
+		if file.parseErr != nil {
+			if !strings.Contains(file.rel, "broken_test.go") {
+				t.Fatalf("unexpected parseErr file: %+v", file)
+			}
+			sawBroken = true
+			continue
+		}
+		for _, test := range file.tests {
+			tests = append(tests, test.name)
+			if test.rng.EndLine < test.rng.StartLine {
+				t.Fatalf("invalid range for %+v", test)
+			}
+		}
+	}
+	sort.Strings(tests)
+	if !sawBroken || !stringSlicesEqual(tests, []string{"TestAlias", "TestDot"}) {
+		t.Fatalf("sawBroken=%v tests=%v, want broken parse and alias/dot tests only", sawBroken, tests)
+	}
+}
+
+// DHF-TEST: keel/requirement-11, keel/requirement-48, keel/requirement-65
+func TestRunVSCodeLaneDirectDispatcherBranches(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	writeFile(t, root, "root_test.go", "package keel\n\nimport \"testing\"\n\nfunc TestRoot(t *testing.T) {}\n")
+
+	if code, err := runVSCodeLane(context.Background(), nil, root, "keel::maintenance::bogus", "run-1", 1024, nil); err == nil || code != 2 {
+		t.Fatalf("unknown maintenance lane = code %d err %v, want usage code 2", code, err)
+	}
+	if code, err := runVSCodeLane(context.Background(), nil, root, "keel::lane::missing", "run-1", 1024, nil); err == nil || code != 1 || !strings.Contains(err.Error(), "unknown vscode lane id") {
+		t.Fatalf("unknown file lane = code %d err %v, want unknown-lane error", code, err)
+	}
+
+	var events []vscode.RunEvent
+	if code, err := runVSCodeLane(context.Background(), nil, root, vscodeMaintenanceDetectLanes, "run-1", 1024, func(event vscode.RunEvent) {
+		events = append(events, event)
+	}); err != nil || code != 0 {
+		t.Fatalf("detect lanes = code %d err %v, want success", code, err)
+	}
+	if !runEventsContain(events, "output", vscodeMaintenanceDetectLanes) {
+		t.Fatalf("detect lanes events = %+v, want output maintenance events", events)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".vscode", "test-lanes.json")); err != nil {
+		t.Fatalf("detect lanes did not write test-lanes.json: %v", err)
+	}
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", "exit 0")
+	t.Setenv("PATH", bin)
+	if code, err := runVSCodeLane(context.Background(), nil, root, vscodeLaneTestFast, "run-1", 1024, nil); err != nil || code != 0 {
+		t.Fatalf("test-fast lane = code %d err %v, want success", code, err)
+	}
+	if !strings.Contains(calls(t, callsFile), "go test ./...") {
+		t.Fatalf("test-fast lane calls = %s, want go test ./...", calls(t, callsFile))
+	}
+
+	t.Setenv("PATH", t.TempDir())
+	if code, err := runVSCodeLane(context.Background(), nil, root, vscodeLaneVSIXGate, "run-1", 1024, nil); err == nil || code != 1 || !strings.Contains(err.Error(), `required tool "node" not found`) {
+		t.Fatalf("vsix gate lane missing toolchain = code %d err %v, want node missing", code, err)
+	}
+}
+
+// DHF-TEST: keel/requirement-11, keel/requirement-65
+func TestRunVSCodeDetectLanesMaintenanceEmitsAllDeltaKinds(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	if err := os.MkdirAll(filepath.Join(root, "log"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".vscode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join("log", "logging_test.go"), "package log\n\nimport \"testing\"\n\nfunc TestLog(t *testing.T) {}\n")
+	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{
+  "version": 1,
+  "lanes": [
+    {"id": "lint", "label": "lint", "order": "c.1", "description": "Run keel-dev lint checks.", "members": [{"root": "go"}]},
+    {"id": "test-fast", "label": "stale test-fast", "order": "c.2", "description": "stale", "members": [{"go": "./stale"}]},
+    {"id": "obsolete", "label": "obsolete", "order": "c.99", "description": "removed", "members": [{"go": "./obsolete"}]}
+  ]
+}
+`)
+
+	var events []vscode.RunEvent
+	err := runVSCodeDetectLanesMaintenance(root, func(event vscode.RunEvent) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatalf("runVSCodeDetectLanesMaintenance: %v", err)
+	}
+	for _, want := range []string{"unchanged lint", "changed test-fast", "removed obsolete", "added test-coverage", "added go-log"} {
+		if !eventsContainMessage(events, want) {
+			t.Fatalf("detect-lanes maintenance missing output containing %q in %+v", want, events)
+		}
 	}
 }
 

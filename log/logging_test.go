@@ -182,6 +182,37 @@ func TestNewConfigJSONCaptureHelper_ReturnsLoggerAndCapture(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-11
+func TestLoggerExportedContextMethodsAndWithGroup(t *testing.T) {
+	capture := &recordCapture{}
+	logger := mustNewLogger(t, logging.Config{
+		Service:          "svc",
+		ConsoleVerbosity: slog.LevelDebug,
+		Console:          logging.ConsoleJSON,
+		Writer:           capture,
+	})
+
+	grouped := logger.WithGroup("request").With("id", "req-1")
+	grouped.DebugContext(context.Background(), "debug message")
+	grouped.InfoContext(context.Background(), "info message")
+	grouped.WarnContext(context.Background(), "warn message")
+	grouped.ErrorContext(context.Background(), "error message")
+
+	records := capture.AllJSON()
+	if len(records) != 4 {
+		t.Fatalf("captured records = %d, want 4: %#v", len(records), records)
+	}
+	for i, want := range []string{"DEBUG", "INFO", "WARN", "ERROR"} {
+		if records[i]["level"] != want {
+			t.Fatalf("record %d level = %v, want %s: %#v", i, records[i]["level"], want, records[i])
+		}
+		request, ok := records[i]["request"].(map[string]any)
+		if !ok || request["id"] != "req-1" {
+			t.Fatalf("record %d request group = %#v, want id=req-1", i, records[i]["request"])
+		}
+	}
+}
+
 // DHF-TEST: keel/requirement-30
 func TestConfigPerRunDocDescribesImplementedBehavior(t *testing.T) {
 	file, err := parser.ParseFile(token.NewFileSet(), "logging.go", nil, parser.ParseComments)
