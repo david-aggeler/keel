@@ -1276,6 +1276,59 @@ process.exit(2);
     }
   });
 
+  // The bridge now emits per-test Mocha events keyed to vsix::test::* ids
+  // (requirement-94); the extension replays them onto the discovered per-test
+  // items verbatim, and one failing case isolates to its own id (ac-307).
+  //
+  // DHF-TEST: keel/requirement-94
+  test('vsix per-test run events replay onto discovered vsix::test items', () => {
+    const controller = vscode.tests.createTestController(`keelVSIXPerTest-${Date.now()}`, 'Keel VSIX Per Test');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-vsix-per-test-'));
+    const fileId = 'vsix::file::src/test/suite/tree.test.ts';
+    const alphaId = 'vsix::test::src/test/suite/tree.test.ts::alpha-case';
+    const betaId = 'vsix::test::src/test/suite/tree.test.ts::beta-case';
+    const tree = publishDiscovery(controller, root, {
+      version: 1,
+      workspace: root,
+      generated_at: new Date().toISOString(),
+      items: [
+        { id: 'vsix::root', label: 'd.2 Mocha (vsix)', kind: 'root', framework: 'vsix', runnable: true, profiles: ['run'] },
+        { id: fileId, parent_id: 'vsix::root', label: 'tree.test.ts', kind: 'file', framework: 'vsix', runnable: true, profiles: ['run'] },
+        { id: alphaId, parent_id: fileId, label: 'alpha case', kind: 'test', framework: 'vsix', runnable: false, profiles: [] },
+        { id: betaId, parent_id: fileId, label: 'beta case', kind: 'test', framework: 'vsix', runnable: false, profiles: [] }
+      ]
+    });
+    setCurrentTreeForTest(tree);
+
+    const terminal = new Map<string, string>();
+    const run = {
+      started() {},
+      passed(item: vscode.TestItem) { terminal.set(item.id, 'passed'); },
+      failed(item: vscode.TestItem) { terminal.set(item.id, 'failed'); },
+      errored(item: vscode.TestItem) { terminal.set(item.id, 'errored'); },
+      skipped(item: vscode.TestItem) { terminal.set(item.id, 'skipped'); },
+      appendOutput() {},
+      end() {}
+    };
+    try {
+      const selected = new Set([fileId]);
+      const resultIds = new Set<string>();
+      // The exact stream shape a bridge run now emits from the Mocha JSONL:
+      // serial per-test started→terminal events keyed to vsix::test ids.
+      applyRunEvent(run as unknown as vscode.TestRun, JSON.stringify(runEvent({ event: 'test_started', test_id: alphaId })), selected, resultIds);
+      applyRunEvent(run as unknown as vscode.TestRun, JSON.stringify(runEvent({ event: 'passed', test_id: alphaId, duration_ms: 5 })), selected, resultIds);
+      applyRunEvent(run as unknown as vscode.TestRun, JSON.stringify(runEvent({ event: 'test_started', test_id: betaId })), selected, resultIds);
+      applyRunEvent(run as unknown as vscode.TestRun, JSON.stringify(runEvent({ event: 'failed', test_id: betaId, message: 'boom' })), selected, resultIds);
+
+      assert.equal(terminal.get(alphaId), 'passed', `alpha ends green; terminal=${JSON.stringify([...terminal])}`);
+      assert.equal(terminal.get(betaId), 'failed', `one failing case isolates to its own id (ac-307); terminal=${JSON.stringify([...terminal])}`);
+    } finally {
+      setCurrentTreeForTest(undefined);
+      controller.dispose();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   // DHF-TEST: keel/requirement-42, keel/requirement-62, keel/requirement-65
   test('production bridge argv is accepted by the real keel-dev and keel-demo-dev binaries per verb', async function () {
     this.timeout(30_000);
