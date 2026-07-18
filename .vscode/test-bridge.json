@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "command": "/projects/keel/bin/keel-dev",
+  "command": "/projects/keel/worktrees/cr-121-mutex-at-rest-reconcile/bin/keel-dev",
   "args": [],
   "displayName": "Keel"
 }

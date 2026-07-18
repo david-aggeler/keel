@@ -414,6 +414,63 @@ func TestDiscoverDerivesDesiredStateGroupsFromProvider(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-95
+func TestDiscoveryServesReconcileNoResultCapabilityForExclusiveGroups(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{{
+		ID:       "demo::desired-state",
+		Label:    "B - Desired State",
+		Kind:     "group",
+		Runnable: false,
+		Profiles: []string{},
+	}}
+	calls := map[string]int{}
+	smallID := "demo::desired-state::dataset::small"
+	fullID := "demo::desired-state::dataset::full"
+	toolID := "demo::desired-state::tools::linter"
+	unknownID := "demo::desired-state::group::data-set::unknown"
+	setGroups := func(fullSatisfied bool) {
+		fake.desiredGroups = []testbridge.DesiredStateGroup{{
+			Label:             "Data Set",
+			Order:             20,
+			MutuallyExclusive: true,
+			Rows: []testbridge.DesiredStateRow{
+				probedCountingRow(calls, smallID, "app-db-small", "small", false, "small not active"),
+				probedCountingRow(calls, fullID, "app-db-full", "full", fullSatisfied, "full"),
+			},
+		}, {
+			Label: "Tools",
+			Order: 30,
+			Rows: []testbridge.DesiredStateRow{
+				probedCountingRow(calls, toolID, "linter", "installed", false, "linter missing"),
+			},
+		}}
+	}
+	discover := func() vscode.DiscoveryDocument {
+		var protocol bytes.Buffer
+		ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol})
+		if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "discover", "--format", "json"}); err != nil {
+			t.Fatalf("discover dispatch: %v", err)
+		}
+		var doc vscode.DiscoveryDocument
+		decodeJSON(t, &protocol, &doc)
+		return doc
+	}
+
+	setGroups(true) // full is the active concrete member
+	doc := discover()
+	if got, want := doc.Capabilities.ReconcileNoResultTestIDs, []string{smallID, unknownID}; !equalStrings(got, want) {
+		t.Fatalf("reconcile_no_result_test_ids with active concrete member = %v, want %v (non-active concrete + inactive Unknown; never the active member or non-exclusive rows)", got, want)
+	}
+
+	setGroups(false) // nothing satisfied: Unknown State is the active reset peer
+	doc = discover()
+	if got, want := doc.Capabilities.ReconcileNoResultTestIDs, []string{smallID, fullID}; !equalStrings(got, want) {
+		t.Fatalf("reconcile_no_result_test_ids with Unknown active = %v, want %v (both concrete members; never the active Unknown peer)", got, want)
+	}
+}
+
 // DHF-TEST: keel/requirement-88
 func TestExclusiveDesiredStateGroupsDeriveUnknownAndSingleActiveMember(t *testing.T) {
 	root := t.TempDir()

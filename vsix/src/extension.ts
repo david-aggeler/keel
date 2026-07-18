@@ -331,7 +331,13 @@ function refresh(controller: vscode.TestController): Promise<void> {
   return next;
 }
 
-// DHF-REQ: keel/requirement-88, keel/requirement-93
+// refreshDesiredStateAfterRun re-reads the selection's desired-state report
+// for the Test Results output and then refreshes discovery; the discovery
+// publish itself reconciles exclusive result icons via the bridge-computed
+// reconcile_no_result_test_ids capability (requirement-95, which superseded
+// requirement-93's post-run-only refreshMutexStates).
+//
+// DHF-REQ: keel/requirement-88, keel/requirement-95
 export async function refreshDesiredStateAfterRun(
   run: vscode.TestRun,
   controller: vscode.TestController,
@@ -345,43 +351,12 @@ export async function refreshDesiredStateAfterRun(
     const desiredState = await readDesiredState(workspaceRoot, [...selectedProtocolIds]);
     appendDesiredStateDocument(run, desiredState);
     await refreshNow(controller);
-    refreshMutexStates(controller, desiredState);
   });
   refreshChain = next.catch(() => undefined);
   try {
     await next;
   } catch (error) {
     appendRunOutput(run, `Failed to refresh desired state after ${currentAdapterConfig().displayName} test run: ${error instanceof Error ? error.message : String(error)}`, 'WARN');
-  }
-}
-
-// DHF-REQ: keel/requirement-93
-export function refreshMutexStates(controller: vscode.TestController, desiredState: DesiredStateDocument): void {
-  const currentTree = tree;
-  if (!currentTree) {
-    return;
-  }
-  const inactiveItems: vscode.TestItem[] = [];
-  for (const group of desiredState.groups ?? []) {
-    if (!group.mutually_exclusive) {
-      continue;
-    }
-    for (const row of group.rows) {
-      if (!row.run_id || row.active) {
-        continue;
-      }
-      const item = currentTree.itemsById.get(row.run_id);
-      if (item) {
-        inactiveItems.push(item);
-      }
-    }
-  }
-  if (inactiveItems.length === 0) {
-    return;
-  }
-  controller.invalidateTestResults(inactiveItems);
-  for (const item of inactiveItems) {
-    replacePublishedTestItem(controller, currentTree, item.id);
   }
 }
 
@@ -397,6 +372,7 @@ async function refreshNow(controller: vscode.TestController): Promise<void> {
   try {
     const discovery = await discoverTests(workspaceRoot);
     tree = publishDiscovery(controller, workspaceRoot, discovery);
+    applyReconcileNoResultCapability(controller, tree);
     output.appendLine(`Published ${discovery.items.length} Keel test items from ${workspaceRoot}.`);
     void externalRunMirror?.syncWorkspace();
   } catch (error) {
@@ -444,14 +420,24 @@ export function invalidateClearedResults(controller: vscode.TestController, clea
 // id's rendered result is dropped to no-result (invalidate + TestItem
 // replacement). Runs after every publishDiscovery so exclusive-group icons
 // reconcile at rest, post-run, and post-reload alike — with no VSIX
-// branching on mutually_exclusive (design_decision-5).
+// branching on the exclusivity wire flag (design_decision-5).
 //
 // DHF-REQ: keel/requirement-95
 export function applyReconcileNoResultCapability(controller: vscode.TestController, publishedTree: PublishedTree): void {
-  // Red under keel/change_request-121 (redlist vsix:req-95:at-rest-reconcile):
-  // the capability is ignored until the CR's implementation lands.
-  void controller;
-  void publishedTree;
+  const items: vscode.TestItem[] = [];
+  for (const id of publishedTree.capabilities.reconcile_no_result_test_ids ?? []) {
+    const item = publishedTree.itemsById.get(id);
+    if (item) {
+      items.push(item);
+    }
+  }
+  if (items.length === 0) {
+    return;
+  }
+  controller.invalidateTestResults(items);
+  for (const item of items) {
+    replacePublishedTestItem(controller, publishedTree, item.id);
+  }
 }
 
 async function runAdapterMaintenance(controller: vscode.TestController, ids: readonly string[]): Promise<void> {
@@ -993,7 +979,7 @@ export function applyRunEvent(
       // this leaves the item with NO result: it receives no terminal state and
       // its prior result is invalidated on the controller after the run
       // (keel/requirement-88, at-most-one-result). The VSIX applies this
-      // verbatim — no branching on the mutually_exclusive flag.
+      // verbatim — no branching on the exclusivity wire flag.
       const cleared: string[] = [];
       for (const item of resultItemsForRunEvent(items, event.test_id)) {
         if (shouldApplyResultToItem(item, selectedItemIds, resultItemIds, event.test_id)) {
