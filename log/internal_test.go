@@ -5,7 +5,10 @@ package log
 
 import (
 	"context"
+	"errors"
+	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +35,87 @@ func TestDiscard(t *testing.T) {
 		t.Fatal("Discard returned nil")
 	}
 	l.Info("goes nowhere", "k", "v") // must not panic
+}
+
+// DHF-TEST: keel/requirement-11
+func TestLoggerContextMethodsWithGroupAndCaptureAllJSON(t *testing.T) {
+	l, rc := newForTesting("svc")
+	ctx := context.Background()
+
+	grouped := l.WithGroup("request").With("id", "req-1")
+	grouped.DebugContext(ctx, "debug message")
+	grouped.InfoContext(ctx, "info message")
+	grouped.WarnContext(ctx, "warn message")
+	grouped.ErrorContext(ctx, "error message")
+
+	records := rc.AllJSON()
+	if len(records) != 4 {
+		t.Fatalf("AllJSON returned %d records, want 4: %#v", len(records), records)
+	}
+	levels := []string{"DEBUG", "INFO", "WARN", "ERROR"}
+	for i, level := range levels {
+		if records[i]["level"] != level {
+			t.Fatalf("record %d level = %v, want %s: %#v", i, records[i]["level"], level, records[i])
+		}
+		request, ok := records[i]["request"].(map[string]any)
+		if !ok || request["id"] != "req-1" {
+			t.Fatalf("record %d grouped attrs = %#v, want request.id", i, records[i]["request"])
+		}
+	}
+
+	rc.Reset()
+	if got := rc.AllJSON(); len(got) != 0 {
+		t.Fatalf("AllJSON after Reset = %#v, want empty", got)
+	}
+}
+
+// DHF-TEST: keel/requirement-11
+func TestSparseFieldValueAndRedactValueCoverStructuredKinds(t *testing.T) {
+	when := time.Date(2026, 7, 18, 20, 0, 0, 123, time.UTC)
+	group := slog.GroupValue(
+		slog.String("token", "Bearer secret-token"),
+		slog.Duration("elapsed", 250*time.Millisecond),
+		slog.Time("when", when),
+		slog.Uint64("count", 7),
+	)
+
+	sparse := sparseFieldValue(group).(map[string]any)
+	if sparse["token"] != "[REDACTED]" {
+		t.Fatalf("sparse token = %#v, want redacted", sparse["token"])
+	}
+	if sparse["elapsed"] != "250ms" || sparse["when"] != when.Format(time.RFC3339Nano) || sparse["count"] != uint64(7) {
+		t.Fatalf("sparse structured fields = %#v", sparse)
+	}
+
+	redacted := redactValue("credentials", group).Group()
+	if got := redacted[0].Value.String(); got != "[REDACTED]" {
+		t.Fatalf("redacted group token = %q, want redacted", got)
+	}
+	if got := redactValue("api_token", slog.StringValue("plain-secret")).String(); got != "[REDACTED]" {
+		t.Fatalf("sensitive key redaction = %q, want [REDACTED]", got)
+	}
+	if got := sparseFieldValue(slog.AnyValue(errors.New("Bearer secret-token"))); got != "Bearer [REDACTED]" {
+		t.Fatalf("sparse Any error = %#v, want redacted", got)
+	}
+}
+
+// DHF-TEST: keel/requirement-11, keel/requirement-20
+func TestSparseAIHandlerWithGroupNestsAttrsAndIgnoresEmptyGroup(t *testing.T) {
+	var out strings.Builder
+	base := newSparseAIHandler(&out, slog.LevelDebug)
+	if got := base.WithGroup(""); got != base {
+		t.Fatal("WithGroup empty should return the same sparse handler")
+	}
+	grouped := base.WithGroup("request").WithAttrs([]slog.Attr{slog.String("id", "req-1")})
+	rec := slog.NewRecord(time.Now(), slog.LevelInfo, "handled", 0)
+	rec.AddAttrs(slog.String("event_type", "request_done"))
+	if err := grouped.Handle(context.Background(), rec); err != nil {
+		t.Fatalf("Handle grouped sparse record: %v", err)
+	}
+	rendered := out.String()
+	if !strings.Contains(rendered, `"event":"request_done"`) || !strings.Contains(rendered, `"id":"req-1"`) {
+		t.Fatalf("grouped sparse output = %s", rendered)
+	}
 }
 
 // DHF-TEST: keel/requirement-2
@@ -125,6 +209,54 @@ func TestHeaderSectionFieldsNilLogger(t *testing.T) {
 	logger.Emit("event")
 	logger.LogBuildIdentity("v1", "c")
 }
+
+// DHF-TEST: keel/requirement-11, keel/requirement-29
+func TestLoggerLifecycleHelpersCoverNilAndFileBranches(t *testing.T) {
+	var logger *Logger
+	if logger.TextLogPath() != "" || logger.JSONLLogPath() != "" || logger.RunLogPath() != "" || logger.RunLogLine() != 0 {
+		t.Fatal("nil logger accessors should return zero values")
+	}
+
+	var closed []string
+	closeAll([]io.Closer{
+		ioCloserFunc(func() error {
+			closed = append(closed, "first")
+			return nil
+		}),
+		ioCloserFunc(func() error {
+			closed = append(closed, "second")
+			return nil
+		}),
+	})
+	if strings.Join(closed, ",") != "second,first" {
+		t.Fatalf("closeAll order = %v, want reverse registration order", closed)
+	}
+
+	var jsonClosed bool
+	if err := (&jsonFileHandler{}).Close(); err != nil {
+		t.Fatalf("nil jsonFileHandler close = %v, want nil", err)
+	}
+	if err := (&jsonFileHandler{close: func() error {
+		jsonClosed = true
+		return nil
+	}}).Close(); err != nil || !jsonClosed {
+		t.Fatalf("jsonFileHandler close = %v closed=%v, want nil and called", err, jsonClosed)
+	}
+
+	f, err := os.CreateTemp(t.TempDir(), "regular")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	t.Setenv("NO_COLOR", "")
+	if colorEnabled(f, false, false) {
+		t.Fatal("regular file should not enable color without force")
+	}
+}
+
+type ioCloserFunc func() error
+
+func (f ioCloserFunc) Close() error { return f() }
 
 func TestHumanAndJSONFileHandlerLifecycle(t *testing.T) {
 	dir := t.TempDir()

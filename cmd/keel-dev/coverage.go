@@ -17,7 +17,9 @@ import (
 // coverageFloorPercent is the ci gate's total-statement-coverage floor
 // (keel/ac-37). Raising it is a one-constant change; the owner's stated target
 // is ~90% — ratchet as the suite grows.
-const coverageFloorPercent = 85.0
+//
+// DHF-REQ: keel/requirement-11
+const coverageFloorPercent = 90.0
 
 // runTestWithCoverage is the ci test step: it runs the full suite with a
 // coverage profile, surfaces the per-package results live through keel/log,

@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -160,6 +162,90 @@ func TestKeelDemoUsesSharedCLIForUsageErrors(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-11, keel/requirement-26, keel/requirement-28, keel/requirement-57
+func TestRunDirectHelpBranchesAndUsageError(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		code int
+		want []string
+	}{
+		{name: "root help flag", args: []string{"--help"}, code: 0, want: []string{"keel-demo runs the log and exec showcase.", "workflow"}},
+		{name: "help command nested", args: []string{"help", "workflow"}, code: 0, want: []string{"workflow commands:", "inspect", "replay"}},
+		{name: "help all", args: []string{"--help-all"}, code: 0, want: []string{"workflow inspect commands:", "workflow replay commands:"}},
+		{name: "usage error", args: []string{"--bad-flag"}, code: 2, want: []string{"keel-demo failed", `unknown command "--bad-flag"`, "usage: keel-demo"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out, code := captureRunOutput(t, func() int { return run(tc.args) })
+			if code != tc.code {
+				t.Fatalf("run(%v) exit = %d, want %d\noutput:\n%s", tc.args, code, tc.code, out)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(out, want) {
+					t.Fatalf("run(%v) output missing %q\n%s", tc.args, want, out)
+				}
+			}
+		})
+	}
+}
+
+// DHF-TEST: keel/requirement-11, keel/requirement-28
+func TestRenderHelpDirectMachineModesEmitHelpEvent(t *testing.T) {
+	tree := commandTree()
+	for _, tc := range []struct {
+		name string
+		mode cli.Mode
+	}{
+		{name: "ai", mode: cli.ModeAI},
+		{name: "json", mode: cli.ModeJSON},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, code := captureRunOutput(t, func() int {
+				return renderHelp(tree, tc.mode, []string{"workflow"})
+			})
+			if code != 0 {
+				t.Fatalf("renderHelp exit = %d, want 0\n%s", code, out)
+			}
+			for _, want := range []string{"keel-demo help", "keel-demo workflow", "inspect", "replay"} {
+				if !strings.Contains(out, want) {
+					t.Fatalf("renderHelp(%s) missing %q\n%s", tc.name, want, out)
+				}
+			}
+			if tc.mode == cli.ModeJSON {
+				assertEveryLineIsJSON(t, out)
+			}
+			if tc.mode == cli.ModeAI {
+				assertSparseAIEvents(t, out)
+			}
+		})
+	}
+}
+
+// DHF-TEST: keel/requirement-11, keel/requirement-26, keel/requirement-57
+func TestRunDirectDefaultShowcaseAndHelpAllMachineMode(t *testing.T) {
+	t.Chdir(t.TempDir())
+	out, code := captureRunOutput(t, func() int { return run(nil) })
+	if code != 4 {
+		t.Fatalf("run(nil) exit = %d, want structured showcase failure 4\n%s", code, out)
+	}
+	for _, want := range []string{"keel-demo showcase", "demo_success", "demo_failed", "[REDACTED]"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("run(nil) output missing %q\n%s", want, out)
+		}
+	}
+
+	for _, mode := range []cli.Mode{cli.ModeAI, cli.ModeJSON} {
+		out, code := captureRunOutput(t, func() int { return renderAllHelp(commandTree(), mode) })
+		if code != 0 {
+			t.Fatalf("renderAllHelp(%s) exit = %d, want 0\n%s", mode, code, out)
+		}
+		if !strings.Contains(out, "keel-demo help-all") || !strings.Contains(out, "workflow replay commands:") {
+			t.Fatalf("renderAllHelp(%s) missing full help event\n%s", mode, out)
+		}
+	}
+}
+
 func TestExitCodeMapping(t *testing.T) {
 	var out bytes.Buffer
 	logger := testLogger(t, "ai", &out)
@@ -168,6 +254,20 @@ func TestExitCodeMapping(t *testing.T) {
 	}
 	if code := exitCodeFor(logger, errors.New("plain failure")); code != 1 {
 		t.Fatalf("exitCodeFor(generic) = %d, want 1", code)
+	}
+	if code := exitCodeFor(logger, &logging.OperationalError{Task: "demo"}); code != 1 {
+		t.Fatalf("exitCodeFor(operational zero exit) = %d, want 1", code)
+	}
+	if got := consoleForSharedMode(cli.Mode("bogus")); got != logging.ConsolePlain {
+		t.Fatalf("consoleForSharedMode(bogus) = %v, want plain", got)
+	}
+	t.Chdir(t.TempDir())
+	out.Reset()
+	rendered, code := captureRunOutput(t, func() int {
+		return exitCodeFor(nil, cli.NewUsageError("bad args"))
+	})
+	if code != 2 || !strings.Contains(rendered, "keel-demo failed") {
+		t.Fatalf("exitCodeFor(nil usage) = code %d out %q, want usage failure through fallback logger", code, rendered)
 	}
 }
 
@@ -195,6 +295,35 @@ func TestExitCodeForRedactsUsageErrorBeforeInjectedHandlers(t *testing.T) {
 	if !strings.Contains(rendered, "Bearer [REDACTED]") {
 		t.Fatalf("usage error output missing redaction marker:\n%s", rendered)
 	}
+}
+
+func captureRunOutput(t *testing.T, fn func() int) (string, int) {
+	t.Helper()
+	oldStdout, oldStderr := os.Stdout, os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout, os.Stderr = w, w
+	defer func() {
+		os.Stdout, os.Stderr = oldStdout, oldStderr
+	}()
+
+	done := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		done <- buf.String()
+	}()
+	code := fn()
+	if err := w.Close(); err != nil {
+		t.Fatalf("close pipe writer: %v", err)
+	}
+	out := <-done
+	if err := r.Close(); err != nil {
+		t.Fatalf("close pipe reader: %v", err)
+	}
+	return out, code
 }
 
 func runDemo(t *testing.T, args ...string) (string, int) {
