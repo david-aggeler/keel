@@ -36,6 +36,65 @@ func TestFindModuleRoot(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-11, keel/requirement-57
+func TestRunDirectVersionHelpAndNoCommandBranches(t *testing.T) {
+	oldVersion := version
+	version = "v1.2.3"
+	t.Cleanup(func() { version = oldVersion })
+
+	stdout, stderr := captureProcessStreams(t, func() {
+		if code := run([]string{"--version"}); code != 0 {
+			t.Fatalf("run --version exit = %d, want 0", code)
+		}
+	})
+	if strings.TrimSpace(stdout) != "v1.2.3" || stderr != "" {
+		t.Fatalf("run --version stdout=%q stderr=%q", stdout, stderr)
+	}
+
+	stdout, stderr = captureProcessStreams(t, func() {
+		if code := run([]string{"--help-all"}); code != 0 {
+			t.Fatalf("run --help-all exit = %d, want 0", code)
+		}
+	})
+	if stdout != "" || !strings.Contains(stderr, "test-bridge tests run") {
+		t.Fatalf("run --help-all stdout=%q stderr=%q, want help on stderr", stdout, stderr)
+	}
+
+	stdout, stderr = captureProcessStreams(t, func() {
+		if code := run(nil); code != 2 {
+			t.Fatalf("run nil exit = %d, want 2", code)
+		}
+	})
+	if stdout != "" || !strings.Contains(stderr, "Usage:") {
+		t.Fatalf("run nil stdout=%q stderr=%q, want usage on stderr", stdout, stderr)
+	}
+}
+
+// DHF-TEST: keel/requirement-11
+func TestRunDirectCIDispatchesThroughLoggerAndGate(t *testing.T) {
+	callsFile := stubTools(t, false, false)
+	root := moduleFixture(t)
+	t.Chdir(root)
+
+	stdout, stderr := captureProcessStreams(t, func() {
+		if code := run([]string{"--no-header", "ci"}); code != 0 {
+			t.Fatalf("run ci exit = %d, want 0\ncalls:\n%s", code, calls(t, callsFile))
+		}
+	})
+	if !strings.Contains(stdout, "ci gate green") {
+		t.Fatalf("run ci stdout missing success log:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("run ci stderr = %q, want empty", stderr)
+	}
+	got := calls(t, callsFile)
+	for _, want := range []string{"go build ./...", "go test ./...", "go tool cover"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("run ci calls missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestLintNoStdlibLog(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
@@ -182,7 +241,7 @@ exit 0`)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	err := runTestWithCoverage(context.Background(), discardLogger(), t.TempDir())
-	if err == nil || !strings.Contains(err.Error(), "below the 85.0% floor") {
+	if err == nil || !strings.Contains(err.Error(), "below the 90.0% floor") {
 		t.Fatalf("want coverage-floor failure, got %v", err)
 	}
 }

@@ -41,6 +41,64 @@ func TestVitestReportResultMapping(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-11, keel/requirement-23
+func TestVitestFailureMessageFallsBackThroughSpecificSources(t *testing.T) {
+	tests := []struct {
+		name   string
+		report VitestJSONReport
+		want   string
+	}{
+		{
+			name: "failed assertion full name",
+			report: VitestJSONReport{TestResults: []VitestTestResult{{
+				AssertionResults: []VitestAssertionResult{{Status: "failed", FullName: "suite fails clearly"}},
+			}}},
+			want: "suite fails clearly",
+		},
+		{
+			name: "file message",
+			report: VitestJSONReport{TestResults: []VitestTestResult{{
+				Message:          "file load failed",
+				AssertionResults: []VitestAssertionResult{{Status: "passed", FullName: "ignored"}},
+			}}},
+			want: "file load failed",
+		},
+		{
+			name:   "generic",
+			report: VitestJSONReport{},
+			want:   "Vitest failed",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := VitestFailureMessage(tc.report); got != tc.want {
+				t.Fatalf("VitestFailureMessage = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// DHF-TEST: keel/requirement-11, keel/requirement-23
+func TestVitestReportResultSkippedAndPassedBranches(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		id     string
+		report VitestJSONReport
+		event  string
+	}{
+		{name: "skipped", id: "vitest::file::pending.test.ts", report: VitestJSONReport{NumTotalTests: 2, NumPendingTests: 2}, event: "skipped"},
+		{name: "passed", id: "vitest::file::ok.test.ts", report: VitestJSONReport{Success: true, NumTotalTests: 1}, event: "passed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var events []RunEvent
+			EmitVitestReportResult(tc.id, tc.report, func(event RunEvent) {
+				events = append(events, event)
+			}, time.Now())
+			assertRunEvent(t, events, tc.event, tc.id)
+		})
+	}
+}
+
 // DHF-TEST: keel/requirement-23
 func TestVitestReportDetailsMapToFileSuiteAndTestItems(t *testing.T) {
 	repo := t.TempDir()

@@ -90,6 +90,41 @@ func TestUpgradeTestBridgeConfigMigratesPreservesUserValuesAndIsIdempotent(t *te
 	}
 }
 
+// DHF-TEST: keel/requirement-11, keel/requirement-40, keel/requirement-65
+func TestUpgradeTestBridgeConfigMigratesVersionOneDefaultsAndRejectsMissingVersion(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".vscode", "test-bridge.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"version":1}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := UpgradeTestBridgeConfig(root)
+	if err != nil {
+		t.Fatalf("upgrade v1 config: %v", err)
+	}
+	if !res.Changed || res.FromVersion != 1 || res.ToVersion != CurrentConfigVersion {
+		t.Fatalf("v1 upgrade result = %+v, want changed 1 -> current", res)
+	}
+	cfg, err := ReadTestBridgeConfig(root)
+	if err != nil {
+		t.Fatalf("read upgraded v1 config: %v", err)
+	}
+	if cfg.Command != DefaultTestBridgeConfig().Command || cfg.DisplayName != DefaultTestBridgeConfig().DisplayName {
+		t.Fatalf("v1 defaults = %+v, want default command/displayName", cfg)
+	}
+
+	if err := os.WriteFile(path, []byte(`{"command":"bin/legacy"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = UpgradeTestBridgeConfig(root)
+	if err == nil || !strings.Contains(err.Error(), "missing or unsupported") {
+		t.Fatalf("missing version upgrade error = %v, want unsupported-version error", err)
+	}
+}
+
 // DHF-TEST: keel/requirement-40
 func TestUpgradeTestBridgeConfigRefusesNewerVersionWithoutWriting(t *testing.T) {
 	root := t.TempDir()
@@ -137,6 +172,59 @@ func TestInitTestBridgeConfigWritesDefaultTemplate(t *testing.T) {
 	}
 	if len(cfg.Args) != 0 {
 		t.Fatalf("default args = %#v, want launcher-only empty args", cfg.Args)
+	}
+}
+
+// DHF-TEST: keel/requirement-11, keel/requirement-40
+func TestInitTestBridgeConfigPreservesExistingConfigAndReportsNoChange(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".vscode", "test-bridge.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	existing := []byte(`{"version":3,"command":"bin/custom","args":[],"displayName":"Custom"}` + "\n")
+	if err := os.WriteFile(path, existing, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := InitTestBridgeConfig(root)
+	if err != nil {
+		t.Fatalf("init existing config: %v", err)
+	}
+	if res.Changed || res.FromVersion != CurrentConfigVersion || res.ToVersion != CurrentConfigVersion {
+		t.Fatalf("existing init result = %+v, want no change at current version", res)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, existing) {
+		t.Fatalf("InitTestBridgeConfig rewrote existing config:\n%s", after)
+	}
+}
+
+// DHF-TEST: keel/requirement-11, keel/requirement-40
+func TestReadAndInitTestBridgeConfigRejectMalformedAndProtocolArgs(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".vscode", "test-bridge.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{bad json\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadTestBridgeConfig(root); err == nil || !strings.Contains(err.Error(), "parse test bridge config") {
+		t.Fatalf("ReadTestBridgeConfig malformed err = %v, want parse failure", err)
+	}
+	if _, err := InitTestBridgeConfig(root); err == nil || !strings.Contains(err.Error(), "parse test bridge config") {
+		t.Fatalf("InitTestBridgeConfig malformed err = %v, want parse failure", err)
+	}
+
+	if err := os.WriteFile(path, []byte(`{"version":3,"command":"bin/tool","args":["vscode","config"],"displayName":"Tool"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadTestBridgeConfig(root); err == nil || !strings.Contains(err.Error(), "launcher-only") {
+		t.Fatalf("ReadTestBridgeConfig protocol args err = %v, want launcher-only refusal", err)
 	}
 }
 

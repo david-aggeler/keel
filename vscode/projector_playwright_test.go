@@ -93,6 +93,96 @@ func TestPlaywrightReportResultFailsOnTopLevelErrors(t *testing.T) {
 	assertNoRunEvent(t, events, "passed", "playwright::project::e2e-mock")
 }
 
+// DHF-TEST: keel/requirement-11, keel/requirement-23
+func TestPlaywrightReportResultSkippedRunErrorFallbackAndArtifactKinds(t *testing.T) {
+	t.Run("all skipped", func(t *testing.T) {
+		var events []RunEvent
+		EmitPlaywrightReportResult(t.TempDir(), "playwright::project::e2e", "e2e", PlaywrightJSONReport{
+			Stats: PlaywrightStats{Expected: 0, Skipped: 2, Unexpected: 0},
+		}, nil, func(event RunEvent) {
+			events = append(events, event)
+		}, time.Now())
+		skipped := assertRunEvent(t, events, "skipped", "playwright::project::e2e")
+		if !strings.Contains(skipped.Message, "all selected tests skipped") {
+			t.Fatalf("skipped message = %q", skipped.Message)
+		}
+	})
+
+	t.Run("run error fallback", func(t *testing.T) {
+		var events []RunEvent
+		EmitPlaywrightReportResult(t.TempDir(), "playwright::project::e2e", "e2e", PlaywrightJSONReport{
+			Stats: PlaywrightStats{Unexpected: 1},
+		}, errors.New("playwright exited 1"), func(event RunEvent) {
+			events = append(events, event)
+		}, time.Now())
+		failed := assertRunEvent(t, events, "failed", "playwright::project::e2e")
+		if failed.Message != "playwright exited 1" {
+			t.Fatalf("failed message = %q, want run error fallback", failed.Message)
+		}
+	})
+
+	kinds := map[string]PlaywrightAttachment{
+		"video":  {Name: "movie", Path: "movie.webm", ContentType: "video/webm"},
+		"report": {Name: "html", Path: "report.html", ContentType: "text/html"},
+		"other":  {Name: "log", Path: "stdout.txt", ContentType: "text/plain"},
+	}
+	for want, attachment := range kinds {
+		if got := playwrightArtifactKind(attachment); got != want {
+			t.Fatalf("playwrightArtifactKind(%+v) = %q, want %q", attachment, got, want)
+		}
+	}
+}
+
+// DHF-TEST: keel/requirement-11, keel/requirement-23
+func TestPlaywrightReportResultOutputsPassingAndReportFileErrors(t *testing.T) {
+	repo := t.TempDir()
+	var events []RunEvent
+	EmitPlaywrightReportResult(repo, "playwright::project::e2e", "e2e", PlaywrightJSONReport{
+		Stats: PlaywrightStats{Expected: 1},
+		Suites: []PlaywrightSuite{{
+			Specs: []PlaywrightSpec{{
+				Title: "passes",
+				Tests: []PlaywrightTest{{
+					ProjectName: "e2e",
+					Results: []PlaywrightResult{{
+						Status:   "passed",
+						Duration: 33,
+						Stdout:   []PlaywrightOutputEntry{{Text: "stdout line\n"}},
+						Stderr:   []PlaywrightOutputEntry{{Text: "stderr line\r\n"}, {Text: "   "}},
+						Attachments: []PlaywrightAttachment{
+							{Name: "empty"},
+							{Name: "report", Path: filepath.Join(repo, "report.html"), ContentType: "text/html"},
+						},
+					}},
+				}},
+			}},
+		}},
+	}, nil, func(event RunEvent) {
+		events = append(events, event)
+	}, time.Now())
+
+	assertRunEvent(t, events, "output", "playwright::project::e2e")
+	report := assertRunEventWithArtifactName(t, events, "playwright::project::e2e", "report")
+	if report.Artifact == nil || report.Artifact.Kind != "report" {
+		t.Fatalf("report artifact = %+v, want report kind", report.Artifact)
+	}
+	passed := assertRunEvent(t, events, "passed", "playwright::project::e2e")
+	if passed.DurationMS != 33 {
+		t.Fatalf("passed duration = %d, want summed result duration", passed.DurationMS)
+	}
+
+	if err := EmitPlaywrightReportDetailsFromFile(repo, "e2e", "", func(RunEvent) {}); err == nil || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("empty report path err = %v, want missing path", err)
+	}
+	badPath := filepath.Join(repo, "bad.json")
+	if err := os.WriteFile(badPath, []byte("{bad"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := EmitPlaywrightReportDetailsFromFile(repo, "e2e", badPath, func(RunEvent) {}); err == nil {
+		t.Fatal("bad Playwright report JSON returned nil error")
+	}
+}
+
 // DHF-TEST: keel/requirement-23
 func TestPlaywrightReportDetailsMapToProjectFileAndTestItems(t *testing.T) {
 	repo := t.TempDir()

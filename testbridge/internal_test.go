@@ -196,6 +196,80 @@ func TestPrivateHelpersCoverDefaultsAndErrors(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-11, keel/requirement-87
+func TestDesiredStateReportContextAndBridgeMaintenanceBranches(t *testing.T) {
+	if DesiredStateReportRequested(context.Background()) {
+		t.Fatal("plain context reported desired-state document mode")
+	}
+	if !DesiredStateReportRequested(withDesiredStateReport(context.Background())) {
+		t.Fatal("withDesiredStateReport context did not report desired-state document mode")
+	}
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Dir(RunLockPath(root)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(RunLockPath(root), []byte(`{"pid":1,"created_at":"2026-07-18T00:00:00Z","ids":["x"],"token":"t"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bridge := maintenanceBridge{internalBridge: newInternalBridge(root)}
+	var events []vscode.RunEvent
+	writer := func(event vscode.RunEvent) { events = append(events, event) }
+
+	code, err := runBridgeMaintenance(context.Background(), &bridge, root, "run-1", MaintenanceUnlockID, writer)
+	if err != nil || code != 0 {
+		t.Fatalf("unlock maintenance = code %d err %v, want success", code, err)
+	}
+	if _, err := os.Stat(RunLockPath(root)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unlock did not remove run lock, stat err = %v", err)
+	}
+	code, err = runBridgeMaintenance(context.Background(), &bridge, root, "run-1", MaintenanceClearStateID, writer)
+	if err != nil || code != 0 || !bridge.cleared {
+		t.Fatalf("clear-state maintenance = code %d err %v cleared=%v, want success", code, err, bridge.cleared)
+	}
+	code, err = runBridgeMaintenance(context.Background(), newInternalBridge(root), root, "run-1", MaintenanceClearStateID, writer)
+	if err == nil || code != 1 || !strings.Contains(err.Error(), "does not implement clear-state") {
+		t.Fatalf("clear-state without provider = code %d err %v, want provider error", code, err)
+	}
+	code, err = runBridgeMaintenance(context.Background(), &bridge, root, "run-1", "keel::maintenance::bogus", writer)
+	if err == nil || code != 2 || !strings.Contains(err.Error(), "unknown bridge maintenance id") {
+		t.Fatalf("unknown maintenance = code %d err %v, want usage error", code, err)
+	}
+	if !eventsContain(events, "test_started", MaintenanceUnlockID) || !eventsContain(events, "passed", MaintenanceUnlockID) {
+		t.Fatalf("maintenance events = %+v, want unlock start/pass", events)
+	}
+}
+
+// DHF-TEST: keel/requirement-11, keel/requirement-92
+func TestPruneCompletedRunStreamsKeepsNewestCompletedAndActive(t *testing.T) {
+	runDir := t.TempDir()
+	writeRunStream(t, runDir, "old.jsonl", "run_finished", time.Unix(10, 0).UTC())
+	writeRunStream(t, runDir, "middle.jsonl", "run_finished", time.Unix(20, 0).UTC())
+	writeRunStream(t, runDir, "new.jsonl", "run_finished", time.Unix(30, 0).UTC())
+	writeRunStream(t, runDir, "active.jsonl", "passed", time.Unix(40, 0).UTC())
+	if err := os.WriteFile(filepath.Join(runDir, "notes.txt"), []byte("ignore"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := pruneCompletedRunStreams(runDir, 2); err != nil {
+		t.Fatalf("pruneCompletedRunStreams: %v", err)
+	}
+	for _, want := range []string{"middle.jsonl", "new.jsonl", "active.jsonl", "notes.txt"} {
+		if _, err := os.Stat(filepath.Join(runDir, want)); err != nil {
+			t.Fatalf("%s missing after prune: %v", want, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "old.jsonl")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old completed stream stat = %v, want removed", err)
+	}
+	if err := pruneCompletedRunStreams(runDir, 0); err != nil {
+		t.Fatalf("prune keep=0: %v", err)
+	}
+	if err := pruneCompletedRunStreams(filepath.Join(runDir, "missing"), 1); err == nil {
+		t.Fatal("prune missing dir returned nil, want read error")
+	}
+}
+
 func TestConfigErrorBranches(t *testing.T) {
 	root := t.TempDir()
 	template := vscode.TestBridgeConfig{Version: vscode.CurrentConfigVersion, Command: "bin/demo", Args: []string{}, DisplayName: "Demo"}
@@ -228,8 +302,197 @@ func TestConfigErrorBranches(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-11, keel/requirement-58, keel/requirement-60
+func TestValidateDocumentRejectsProtocolEdgeCases(t *testing.T) {
+	now := time.Now().UTC()
+	cases := []struct {
+		name string
+		doc  any
+		want string
+	}{
+		{
+			name: "unsupported",
+			doc:  struct{}{},
+			want: "unsupported protocol document",
+		},
+		{
+			name: "discovery invalid item profile",
+			doc: vscode.DiscoveryDocument{
+				Version:     1,
+				Workspace:   "workspace",
+				ModulePath:  "example.com/mod",
+				GeneratedAt: now,
+				Items: []vscode.TestItem{{
+					ID:       "demo::test::one",
+					Label:    "one",
+					Kind:     "test",
+					Profiles: []string{"bogus"},
+				}},
+			},
+			want: "invalid profile",
+		},
+		{
+			name: "desired duplicate run id",
+			doc: vscode.DesiredStateDocument{
+				Version:     3,
+				Workspace:   "workspace",
+				GeneratedAt: now,
+				Devtool:     vscode.DevtoolMetadata{Name: "tool", Version: "v1"},
+				Groups: []vscode.DesiredStateGroup{{
+					Label: "group",
+					Rows: []vscode.DesiredState{
+						validDesiredState("row-a", "shared"),
+						validDesiredState("row-b", "shared"),
+					},
+				}},
+			},
+			want: "run ids must be unique",
+		},
+		{
+			name: "desired invalid row kind",
+			doc: desiredStateDoc(now, vscode.DesiredState{
+				Resource: "row-kind",
+				Kind:     "nonsense",
+				Desired:  "available",
+				Current:  "missing",
+				Status:   "blocked",
+				Action:   "manual_setup_required",
+			}),
+			want: "invalid kind",
+		},
+		{
+			name: "desired invalid row status",
+			doc: desiredStateDoc(now, vscode.DesiredState{
+				Resource: "row-status",
+				Kind:     "tool",
+				Desired:  "available",
+				Current:  "missing",
+				Status:   "unknown",
+				Action:   "manual_setup_required",
+			}),
+			want: "invalid status",
+		},
+		{
+			name: "desired invalid row action",
+			doc: desiredStateDoc(now, vscode.DesiredState{
+				Resource: "row-action",
+				Kind:     "tool",
+				Desired:  "available",
+				Current:  "missing",
+				Status:   "blocked",
+				Action:   "wait",
+			}),
+			want: "invalid action",
+		},
+		{
+			name: "run event invalid source",
+			doc:  vscode.RunEvent{Version: 1, Event: "passed", Time: now, Source: "cli"},
+			want: "invalid source",
+		},
+		{
+			name: "run event negative duration",
+			doc:  vscode.RunEvent{Version: 1, Event: "passed", Time: now, DurationMS: -1},
+			want: "negative duration_ms",
+		},
+		{
+			name: "run event artifact kind",
+			doc: vscode.RunEvent{
+				Version:  1,
+				Event:    "artifact",
+				Time:     now,
+				TestID:   "demo::test::one",
+				Artifact: &vscode.RunArtifact{Name: "bad", URI: "file:///tmp/bad", Kind: "binary"},
+			},
+			want: "artifact has invalid kind",
+		},
+		{
+			name: "run lock token",
+			doc:  vscode.RunLockFile{PID: 1, CreatedAt: now.Format(time.RFC3339Nano), IDs: []string{"demo::test::one"}},
+			want: "token is required",
+		},
+		{
+			name: "run lock created time",
+			doc:  vscode.RunLockFile{PID: 1, CreatedAt: "not-time", IDs: []string{"demo::test::one"}, Token: "token"},
+			want: "created_at",
+		},
+		{
+			name: "run lock empty id",
+			doc:  vscode.RunLockFile{PID: 1, CreatedAt: now.Format(time.RFC3339Nano), IDs: []string{""}, Token: "token"},
+			want: "empty id",
+		},
+		{
+			name: "config protocol args",
+			doc:  vscode.TestBridgeConfig{Version: vscode.CurrentConfigVersion, Command: "bin/tool", DisplayName: "Tool", Args: []string{"test-bridge", "tests"}},
+			want: "launcher-only",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateDocument(tc.doc)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("ValidateDocument err = %v, want containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func desiredStateDoc(now time.Time, rows ...vscode.DesiredState) vscode.DesiredStateDocument {
+	return vscode.DesiredStateDocument{
+		Version:     3,
+		Workspace:   "workspace",
+		GeneratedAt: now,
+		Devtool:     vscode.DevtoolMetadata{Name: "tool", Version: "v1"},
+		Groups: []vscode.DesiredStateGroup{{
+			Label: "group",
+			Rows:  rows,
+		}},
+	}
+}
+
+func validDesiredState(resource, runID string) vscode.DesiredState {
+	return vscode.DesiredState{
+		Resource: resource,
+		Kind:     "tool",
+		Desired:  "available",
+		Current:  "available",
+		Status:   "satisfied",
+		Action:   "reuse",
+		RunID:    runID,
+	}
+}
+
 type internalBridge struct {
 	root string
+}
+
+type maintenanceBridge struct {
+	internalBridge
+	cleared bool
+}
+
+func (b *maintenanceBridge) ClearState(context.Context, RunRequest, vscode.RunEventWriter) (int, error) {
+	b.cleared = true
+	return 0, nil
+}
+
+func eventsContain(events []vscode.RunEvent, event, testID string) bool {
+	for _, candidate := range events {
+		if candidate.Event == event && candidate.TestID == testID {
+			return true
+		}
+	}
+	return false
+}
+
+func writeRunStream(t *testing.T, dir, name, event string, when time.Time) {
+	t.Helper()
+	line, err := vscode.MarshalRunEventJSONL(vscode.RunEvent{Event: event, Time: when})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), line, 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func newInternalBridge(root string) internalBridge {

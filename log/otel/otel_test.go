@@ -88,3 +88,21 @@ func TestHandlerExportsResourceAndActiveSpanCorrelation(t *testing.T) {
 		t.Fatalf("deployment.environment = %q (ok=%v), want test", environment.AsString(), ok)
 	}
 }
+
+// DHF-TEST: keel/requirement-11, keel/requirement-22
+func TestNewHandlerBuildsDefaultHTTPExporterWithOptions(t *testing.T) {
+	handler, shutdown, err := logotel.NewHandler(context.Background(), logotel.Config{
+		Endpoint: "http://127.0.0.1:4318",
+		Insecure: true,
+		Headers:  map[string]string{"x-test": "1"},
+	})
+	if err != nil {
+		t.Fatalf("NewHandler with HTTP exporter options: %v", err)
+	}
+	if handler == nil || shutdown == nil {
+		t.Fatalf("NewHandler returned handler=%v shutdown nil=%v", handler, shutdown == nil)
+	}
+	if err := shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+}
