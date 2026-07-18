@@ -2,7 +2,7 @@
 name: automated-change-request
 description: "Executor-portable autonomous tail of the change-request lifecycle for keel — prepare, dev, review, merge, verify, salvage — written so a non-resident linear executor (e.g. codex) can run each verb in a fresh session with no project memory. Use when the user says: '/automated-change-request', 'run the automated tail', 'dev this CR headless', 'codex dev', 'codex review', 'codex merge', 'verify this tail', 'autonomous dev/review/merge/verify/salvage', 'drive this approved CR to closed', 'salvage this tail', 'prepare this issue', 'promote issue to CR', 'run-prepare'"
 allowed-tools: mcp__gold__get_change_request, mcp__gold__create_change_request, mcp__gold__update_change_request, mcp__gold__search_change_request, mcp__gold__get_requirement, mcp__gold__get_template_for, mcp__gold__get_dev_defaults, mcp__gold__list_dev_defaults, mcp__gold__create_formal_review, mcp__gold__create_issue, mcp__gold__create_action_item, mcp__gold__create_issue_fix, mcp__gold__list_issue_fix, mcp__gold__update_issue, mcp__gold__get_issue, mcp__gold__admin_list_product_versions, mcp__gold__list_inbound_refs
-x-openbrain-source: automated-change-request/v5
+x-openbrain-source: automated-change-request/v6
 x-openbrain-content-source-hash: sha256:ad03cb5627305098667e308adf1c8b6b7e3be561380a1a75b950b5001c8cbb57
 x-openbrain-content-hash: sha256:ba5864ee2fddb6ef19d60920a301c6699a7f53ce8e2721941bca678e859a7f99
 ---
