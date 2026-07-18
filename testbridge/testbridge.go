@@ -1616,7 +1616,15 @@ func runtimeNow(rt Runtime) time.Time {
 	return time.Now().UTC()
 }
 
-// DHF-REQ: keel/requirement-58, keel/requirement-67
+// RunLockTokenEnv carries the lock holder's token to descendant processes.
+// The run verb exports it after acquisition; a nested tests-run whose
+// environment token matches the on-disk lock token runs inside the ancestor's
+// critical section instead of being refused (requirement-96). The on-disk lock
+// stays the single source of truth — the env var is only the capability handed
+// down the process tree, never authoritative on its own.
+const RunLockTokenEnv = "KEEL_TESTBRIDGE_RUN_LOCK_TOKEN"
+
+// DHF-REQ: keel/requirement-58, keel/requirement-67, keel/requirement-96
 func acquireRunLock(root string, ids []string, token string) (func() error, error) {
 	runDir := filepath.Join(root, ".devtools", "vscode-runs")
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
@@ -1626,6 +1634,12 @@ func acquireRunLock(root string, ids []string, token string) (func() error, erro
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
+			if heldByAncestorRun(path) {
+				// Reentrant descent (requirement-96): the lock belongs to an
+				// ancestor run that exported its token. Proceed without
+				// acquiring; only the ancestor releases.
+				return func() error { return nil }, nil
+			}
 			return nil, fmt.Errorf("keel/testbridge: run lock already exists at %s", path)
 		}
 		return nil, fmt.Errorf("keel/testbridge: create run lock: %w", err)
@@ -1650,7 +1664,19 @@ func acquireRunLock(root string, ids []string, token string) (func() error, erro
 		}
 		return nil, closeErr
 	}
+	// Export the token so descendant processes inherit the critical section
+	// (requirement-96). The release closure restores the prior environment.
+	prevToken, hadToken := os.LookupEnv(RunLockTokenEnv)
+	if err := os.Setenv(RunLockTokenEnv, token); err != nil {
+		_ = os.Remove(path)
+		return nil, fmt.Errorf("keel/testbridge: export run lock token: %w", err)
+	}
 	return func() error {
+		if hadToken {
+			_ = os.Setenv(RunLockTokenEnv, prevToken)
+		} else {
+			_ = os.Unsetenv(RunLockTokenEnv)
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
@@ -1667,6 +1693,28 @@ func acquireRunLock(root string, ids []string, token string) (func() error, erro
 		}
 		return os.Remove(path)
 	}, nil
+}
+
+// heldByAncestorRun reports whether the existing lock at path was written by an
+// ancestor run whose token this process inherited via RunLockTokenEnv. An
+// absent env token, an unreadable or corrupt lock file, or a token mismatch all
+// answer false, so the caller falls through to the refusal path (fail-closed).
+//
+// DHF-REQ: keel/requirement-96
+func heldByAncestorRun(path string) bool {
+	envToken := os.Getenv(RunLockTokenEnv)
+	if envToken == "" {
+		return false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var current vscode.RunLockFile
+	if err := json.Unmarshal(data, &current); err != nil {
+		return false
+	}
+	return current.Token != "" && current.Token == envToken
 }
 
 // RunLockPath returns the package-owned cross-run lock path.
