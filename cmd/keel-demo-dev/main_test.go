@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,40 @@ import (
 	"github.com/david-aggeler/keel/testbridge"
 	"github.com/david-aggeler/keel/vscode"
 )
+
+// DHF-TEST: keel/requirement-11, keel/requirement-62
+func TestRunDirectVersionHelpConfigAndUsageBranches(t *testing.T) {
+	versionOut, code := captureDemoDevOutput(t, func() int { return run([]string{"--version"}) })
+	if code != 0 || strings.TrimSpace(versionOut) != demoVersion {
+		t.Fatalf("run --version = code %d out %q, want demo version", code, versionOut)
+	}
+	helpOut, code := captureDemoDevOutput(t, func() int { return run([]string{"--help-all"}) })
+	if code != 0 || !strings.Contains(helpOut, "test-bridge tests run") {
+		t.Fatalf("run --help-all = code %d out %q, want command tree", code, helpOut)
+	}
+	topicOut, code := captureDemoDevOutput(t, func() int { return run([]string{"help", "test-bridge"}) })
+	if code != 0 || !strings.Contains(topicOut, "test-bridge commands:") {
+		t.Fatalf("run help test-bridge = code %d out %q, want topic help", code, topicOut)
+	}
+	badOut, code := captureDemoDevOutput(t, func() int { return run([]string{"--bad"}) })
+	if code != 2 || !strings.Contains(badOut, "unknown command") {
+		t.Fatalf("run --bad = code %d out %q, want usage error", code, badOut)
+	}
+
+	root := t.TempDir()
+	t.Chdir(root)
+	configOut, code := captureDemoDevOutput(t, func() int { return run([]string{"test-bridge", "config", "init"}) })
+	if code != 0 {
+		t.Fatalf("run config init = code %d out %q, want success", code, configOut)
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".vscode", "test-bridge.json"))
+	if err != nil {
+		t.Fatalf("read direct initialized config: %v", err)
+	}
+	if !strings.Contains(string(data), "Keel Demo Dev") {
+		t.Fatalf("direct initialized config = %s", data)
+	}
+}
 
 // DHF-TEST: keel/requirement-62, keel/requirement-74, keel/requirement-75, keel/requirement-76, keel/requirement-83, keel/requirement-87
 func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
@@ -390,6 +425,144 @@ func TestRunEntrypointRoutesProtocolHelpVersionAndErrors(t *testing.T) {
 	if cfg.Command != filepath.Join("bin", executableName()) || cfg.DisplayName != "Keel Demo Dev" {
 		t.Fatalf("config template = %+v", cfg)
 	}
+}
+
+// DHF-TEST: keel/requirement-11, keel/requirement-87, keel/requirement-98
+func TestDemoBridgeDirectMaintenanceMutatesWorkspaceState(t *testing.T) {
+	root := t.TempDir()
+	stateDir := filepath.Join(root, ".devtools", "keel-demo-dev")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "stale"), []byte("state"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var events []vscode.RunEvent
+	emit := func(ev vscode.RunEvent) { events = append(events, ev) }
+	bridge := demoBridge{}
+	code, err := bridge.ClearState(context.Background(), testbridge.RunRequest{Root: root}, emit)
+	if err != nil || code != 0 {
+		t.Fatalf("ClearState = code %d err %v, want success", code, err)
+	}
+	if _, err := os.Stat(stateDir); !os.IsNotExist(err) {
+		t.Fatalf("ClearState left state dir present, stat err = %v", err)
+	}
+
+	code, err = selectDemoDataSet(root, idDataSetFull, demoDataSetFull, "selected full", emit)
+	if err != nil || code != 0 {
+		t.Fatalf("selectDemoDataSet = code %d err %v, want success", code, err)
+	}
+	if got := currentDemoDataSet(root); got != demoDataSetFull {
+		t.Fatalf("currentDemoDataSet = %q, want %q", got, demoDataSetFull)
+	}
+	assertEventSeen(t, events, "test_started", idDataSetFull, "")
+	assertEventSeen(t, events, "passed", idDataSetFull, "selected full")
+
+	code, err = bridge.ResetExclusiveGroup(context.Background(), testbridge.ExclusiveResetRequest{
+		Root:       root,
+		RunID:      "reset-row",
+		GroupLabel: "app-db data set",
+	}, emit)
+	if err != nil || code != 0 {
+		t.Fatalf("ResetExclusiveGroup = code %d err %v, want success", code, err)
+	}
+	if got := currentDemoDataSet(root); got != "" {
+		t.Fatalf("currentDemoDataSet after reset = %q, want empty", got)
+	}
+	assertEventSeen(t, events, "output", "reset-row", "cleared active app-db data set")
+
+	var logger nopProcessLogger
+	logger.Debug("debug")
+	logger.Info("info")
+	logger.InfoContext(context.Background(), "info context")
+	logger.Error("error")
+}
+
+// DHF-TEST: keel/requirement-11, keel/requirement-62, keel/requirement-87
+func TestDemoBridgeRunOneDirectMaintenanceAndFakeBranches(t *testing.T) {
+	root := t.TempDir()
+	bridge := demoBridge{}
+	var events []vscode.RunEvent
+	emit := func(event vscode.RunEvent) { events = append(events, event) }
+
+	code, err := bridge.runOne(context.Background(), root, idDetectLanes, emit)
+	if err != nil || code != 0 {
+		t.Fatalf("runOne detect lanes = code %d err %v, want success", code, err)
+	}
+	if _, err := os.Stat(demoLanesPath(root)); err != nil {
+		t.Fatalf("detect lanes did not write file: %v", err)
+	}
+	assertEventSeen(t, events, "passed", idDetectLanes, "wrote .vscode/test-lanes.json")
+
+	code, err = bridge.runOne(context.Background(), root, idBlockBadLane, emit)
+	if err != nil || code != 0 {
+		t.Fatalf("runOne block lane = code %d err %v, want success", code, err)
+	}
+	if blocked, err := blockedLane(root); err != nil || blocked != idLaneGoFail {
+		t.Fatalf("blockedLane = %q err %v, want %q", blocked, err, idLaneGoFail)
+	}
+	code, err = bridge.runOne(context.Background(), root, idUnblockBadLane, emit)
+	if err != nil || code != 0 {
+		t.Fatalf("runOne unblock lane = code %d err %v, want success", code, err)
+	}
+	if blocked, err := blockedLane(root); err != nil || blocked != "" {
+		t.Fatalf("blockedLane after unblock = %q err %v, want empty", blocked, err)
+	}
+	code, err = bridge.runOne(context.Background(), root, idLaneFakeSmoke, emit)
+	if err != nil || code != 0 {
+		t.Fatalf("runOne fake smoke = code %d err %v, want success", code, err)
+	}
+	assertEventSeen(t, events, "test_started", idLaneFakeSmoke, "")
+	assertEventSeen(t, events, "output", idLaneFakeSmoke, "fake provisioning preview")
+	assertEventSeen(t, events, "passed", idLaneFakeSmoke, "fake provisioning preview rendered")
+
+	code, err = bridge.runOne(context.Background(), root, "unknown::id", emit)
+	if err == nil || code != 1 || !strings.Contains(err.Error(), "unknown demo test id") {
+		t.Fatalf("runOne unknown = code %d err %v, want unknown id error", code, err)
+	}
+}
+
+func assertEventSeen(t *testing.T, events []vscode.RunEvent, event, testID, message string) {
+	t.Helper()
+	for _, ev := range events {
+		if ev.Event != event || ev.TestID != testID {
+			continue
+		}
+		if message == "" || strings.Contains(ev.Message, message) {
+			return
+		}
+	}
+	t.Fatalf("missing event=%q testID=%q message containing %q in %+v", event, testID, message, events)
+}
+
+func captureDemoDevOutput(t *testing.T, fn func() int) (string, int) {
+	t.Helper()
+	oldStdout, oldStderr := os.Stdout, os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout, os.Stderr = w, w
+	defer func() {
+		os.Stdout, os.Stderr = oldStdout, oldStderr
+	}()
+
+	done := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		done <- buf.String()
+	}()
+	code := fn()
+	if err := w.Close(); err != nil {
+		t.Fatalf("close pipe writer: %v", err)
+	}
+	out := <-done
+	if err := r.Close(); err != nil {
+		t.Fatalf("close pipe reader: %v", err)
+	}
+	return out, code
 }
 
 func buildDemoDev(t *testing.T) string {

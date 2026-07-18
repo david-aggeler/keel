@@ -61,6 +61,19 @@ func TestCaptureRecordsJSONThroughStandardNew(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-11, keel/requirement-56
+func TestCaptureWithGroupNestsFutureAttributes(t *testing.T) {
+	capture := logtest.NewCapture()
+	grouped := slog.New(capture.WithGroup("request")).With("id", "req-1")
+	grouped.Info("handled")
+
+	last := capture.LastJSON()
+	request, ok := last["request"].(map[string]any)
+	if !ok || request["id"] != "req-1" {
+		t.Fatalf("request group = %#v in record %#v, want id=req-1", last["request"], last)
+	}
+}
+
 // DHF-TEST: keel/requirement-56
 func TestCaptureOnlyConfigDoesNotWriteConsoleAndStillRedacts(t *testing.T) {
 	var console bytes.Buffer

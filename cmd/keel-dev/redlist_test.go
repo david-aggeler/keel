@@ -86,3 +86,26 @@ func TestKnownRedManifestAllowsEmptyTargetState(t *testing.T) {
 		t.Fatalf("empty target manifest returned %d entries, want 0", len(entries))
 	}
 }
+
+// DHF-TEST: keel/requirement-11, keel/requirement-69, keel/requirement-70, keel/requirement-71, keel/requirement-72
+func TestExpectedRedManifestRejectsInvalidEntries(t *testing.T) {
+	valid := expectedRedEntry{ID: "go::test::pkg::TestRed", Requirement: "keel/requirement-11", FixingCR: "keel/change_request-126", Reason: "known red"}
+	for _, tc := range []struct {
+		name     string
+		manifest expectedRedManifest
+		want     string
+	}{
+		{name: "version", manifest: expectedRedManifest{Version: 2}, want: "version"},
+		{name: "blank", manifest: expectedRedManifest{Version: 1, Entries: []expectedRedEntry{{ID: "x"}}}, want: "blank field"},
+		{name: "duplicate", manifest: expectedRedManifest{Version: 1, Entries: []expectedRedEntry{valid, valid}}, want: "duplicate"},
+		{name: "requirement", manifest: expectedRedManifest{Version: 1, Entries: []expectedRedEntry{{ID: "x", Requirement: "openbrain/requirement-1", FixingCR: "keel/change_request-126", Reason: "bad req"}}}, want: "requirement"},
+		{name: "fixing cr", manifest: expectedRedManifest{Version: 1, Entries: []expectedRedEntry{{ID: "x", Requirement: "keel/requirement-11", FixingCR: "keel/issue-1", Reason: "bad cr"}}}, want: "fixing_cr"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := validateExpectedRedManifest(tc.manifest)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("validateExpectedRedManifest err = %v, want containing %q", err, tc.want)
+			}
+		})
+	}
+}
