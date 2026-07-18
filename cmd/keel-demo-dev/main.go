@@ -506,6 +506,18 @@ func currentDemoDataSet(root string) string {
 	}
 }
 
+// ResetExclusiveGroup deactivates the active app-db data set so the next
+// derivation yields the Unknown State reset peer as the sole active row.
+//
+// DHF-REQ: keel/requirement-98
+func (b demoBridge) ResetExclusiveGroup(_ context.Context, req testbridge.ExclusiveResetRequest, emit vscode.RunEventWriter) (int, error) {
+	if err := os.Remove(demoDataSetPath(req.Root)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return 1, err
+	}
+	emit(vscode.RunEvent{Event: "output", TestID: req.RunID, Message: "cleared active app-db data set (" + req.GroupLabel + ")"})
+	return 0, nil
+}
+
 func selectDemoDataSet(root, id, value, message string, emit vscode.RunEventWriter) (int, error) {
 	if err := os.MkdirAll(filepath.Dir(demoDataSetPath(root)), 0o755); err != nil {
 		return 1, err

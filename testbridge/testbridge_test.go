@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -2693,4 +2694,252 @@ func TestEncodeDocumentOwnsCanonicalProtocolJSON(t *testing.T) {
 	if err := testbridge.EncodeDocument(nil, doc); err != nil {
 		t.Fatalf("EncodeDocument(nil): %v", err)
 	}
+}
+
+type resetterBridge struct {
+	*fakeBridge
+	resetRequests []testbridge.ExclusiveResetRequest
+	resetExit     int
+	resetErr      error
+}
+
+func (r *resetterBridge) ResetExclusiveGroup(_ context.Context, req testbridge.ExclusiveResetRequest, emit vscode.RunEventWriter) (int, error) {
+	r.resetRequests = append(r.resetRequests, req)
+	emit(vscode.RunEvent{Event: "output", TestID: req.RunID, Message: "resetting " + req.GroupLabel})
+	return r.resetExit, r.resetErr
+}
+
+// DHF-TEST: keel/requirement-98
+func TestUnknownRunDispatchesConsumerResetHook(t *testing.T) {
+	newResetFixture := func(root string) *resetterBridge {
+		fake := newFakeBridge(root)
+		fake.extraItems = []vscode.TestItem{{
+			ID:       "demo::desired-state",
+			Label:    "B - Desired State",
+			Kind:     "group",
+			Runnable: false,
+			Profiles: []string{},
+		}}
+		fake.desiredGroups = []testbridge.DesiredStateGroup{{
+			Label:             "Data Set",
+			Order:             20,
+			MutuallyExclusive: true,
+			Rows: []testbridge.DesiredStateRow{
+				probedRow("demo::desired-state::dataset::small", "app-db-small", "fixture-data", "small", "small", true, "small active", false, true),
+				probedRow("demo::desired-state::dataset::full", "app-db-full", "fixture-data", "full", "small", false, "full inactive", false, false),
+			},
+		}}
+		return &resetterBridge{fakeBridge: fake}
+	}
+	unknownID := "demo::desired-state::group::data-set::unknown"
+	smallID := "demo::desired-state::dataset::small"
+	fullID := "demo::desired-state::dataset::full"
+
+	root := t.TempDir()
+	bridge := newResetFixture(root)
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return "run-reset-ok" }})
+	if err := testbridge.CommandSpec(bridge).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", unknownID}); err != nil {
+		t.Fatalf("run Unknown dispatch with reset hook: %v\n%s", err, protocol.String())
+	}
+	if len(bridge.resetRequests) != 1 {
+		t.Fatalf("reset hook calls = %d, want exactly 1", len(bridge.resetRequests))
+	}
+	if req := bridge.resetRequests[0]; req.GroupLabel != "Data Set" || req.RunID != unknownID || req.Root != root {
+		t.Fatalf("reset request = %+v, want group label/run id/root of the owning exclusive group", req)
+	}
+	events := decodeEvents(t, protocol.String())
+	if !eventsContain(events, "passed", unknownID, "reset exclusive group Data Set") ||
+		!eventMessageContainsAll(events, "cleared", smallID, smallID, unknownID) ||
+		!eventMessageContainsAll(events, "cleared", fullID, fullID, unknownID) {
+		t.Fatalf("reset events = %+v, want reset pass and sibling clears", events)
+	}
+
+	failRoot := t.TempDir()
+	failing := newResetFixture(failRoot)
+	failing.resetExit = 1
+	protocol.Reset()
+	failCtx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: failRoot, Protocol: &protocol, RunID: func() string { return "run-reset-fail" }})
+	if err := testbridge.CommandSpec(failing).Dispatch(failCtx, []string{"test-bridge", "tests", "run", "--id", unknownID}); err == nil {
+		t.Fatalf("run Unknown dispatch with failing reset hook: err = nil, want non-nil\n%s", protocol.String())
+	}
+	events = decodeEvents(t, protocol.String())
+	if !eventsContain(events, "failed", unknownID, "exclusive group reset exited 1") {
+		t.Fatalf("failing reset events = %+v, want failed Unknown event", events)
+	}
+	if eventMessageContainsAll(events, "cleared", smallID, smallID, unknownID) {
+		t.Fatalf("failing reset must not clear siblings: %+v", events)
+	}
+}
+
+const (
+	lifecycleSmallID   = "demo::desired-state::dataset::small"
+	lifecycleFullID    = "demo::desired-state::dataset::full"
+	lifecycleUnknownID = "demo::desired-state::group::data-set::unknown"
+)
+
+type lifecycleBridge struct {
+	*fakeBridge
+	state      string
+	resetCalls int
+}
+
+func (l *lifecycleBridge) group() testbridge.DesiredStateGroup {
+	row := func(id, resource, want string) testbridge.DesiredStateRow {
+		return testbridge.DesiredStateRow{
+			RunID:    id,
+			Resource: resource,
+			Kind:     "fixture-data",
+			Desired:  want,
+			Owned:    true,
+			Active:   l.state == want,
+			Probe: func(context.Context, testbridge.DesiredStateProbeRequest) testbridge.DesiredStateProbeResult {
+				current := l.state
+				if current == "" {
+					current = "none"
+				}
+				return testbridge.DesiredStateProbeResult{Current: current, Satisfied: l.state == want, Message: resource}
+			},
+		}
+	}
+	return testbridge.DesiredStateGroup{
+		Label:             "Data Set",
+		Order:             20,
+		MutuallyExclusive: true,
+		Rows: []testbridge.DesiredStateRow{
+			row(lifecycleSmallID, "app-db-small", "small"),
+			row(lifecycleFullID, "app-db-full", "full"),
+		},
+	}
+}
+
+// DesiredState mirrors the reference consumer: member-only selections get an
+// empty declaration so activation routes through the consumer Run.
+func (l *lifecycleBridge) DesiredState(_ context.Context, ids []string) (testbridge.DesiredStateDeclaration, error) {
+	memberOnly := len(ids) > 0
+	for _, id := range ids {
+		if id != lifecycleSmallID && id != lifecycleFullID {
+			memberOnly = false
+			break
+		}
+	}
+	if memberOnly {
+		return testbridge.DesiredStateDeclaration{}, nil
+	}
+	return testbridge.DesiredStateDeclaration{Groups: []testbridge.DesiredStateGroup{l.group()}}, nil
+}
+
+func (l *lifecycleBridge) Run(_ context.Context, req testbridge.RunRequest, emit vscode.RunEventWriter) (int, error) {
+	for _, id := range req.IDs {
+		switch id {
+		case lifecycleSmallID:
+			l.state = "small"
+		case lifecycleFullID:
+			l.state = "full"
+		}
+		emit(vscode.RunEvent{Event: "test_started", TestID: id})
+		emit(vscode.RunEvent{Event: "passed", TestID: id})
+	}
+	return 0, nil
+}
+
+func (l *lifecycleBridge) ResetExclusiveGroup(_ context.Context, req testbridge.ExclusiveResetRequest, emit vscode.RunEventWriter) (int, error) {
+	l.resetCalls++
+	l.state = ""
+	emit(vscode.RunEvent{Event: "output", TestID: req.RunID, Message: "cleared " + req.GroupLabel})
+	return 0, nil
+}
+
+// TestMutexLifecycleGuard walks activate A -> switch to B -> reset via Unknown
+// and asserts the DERIVED active member plus the reconcile_results stamps
+// after every step. This is the derivation-level guard whose absence let the
+// cosmetic Unknown reset ship (keel/issue-90): every prior mutex test asserted
+// emitted events or rendered stamps, never the post-run derived state.
+//
+// DHF-TEST: keel/requirement-98
+func TestMutexLifecycleGuard(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{{
+		ID:       "demo::desired-state",
+		Label:    "B - Desired State",
+		Kind:     "group",
+		Runnable: false,
+		Profiles: []string{},
+	}}
+	bridge := &lifecycleBridge{fakeBridge: fake}
+
+	step := 0
+	dispatch := func(args ...string) string {
+		step++
+		var protocol bytes.Buffer
+		runID := fmt.Sprintf("run-lifecycle-%d", step)
+		ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return runID }})
+		if err := testbridge.CommandSpec(bridge).Dispatch(ctx, append([]string{"test-bridge", "tests"}, args...)); err != nil {
+			t.Fatalf("step %d dispatch %v: %v\n%s", step, args, err, protocol.String())
+		}
+		return protocol.String()
+	}
+
+	assertDerived := func(label, wantActiveResource string, wantStamps map[string]string) {
+		t.Helper()
+		var discovery vscode.DiscoveryDocument
+		decodeJSON(t, dispatchRaw(t, bridge, root, "discover"), &discovery)
+		gotStamps := map[string]string{}
+		for _, entry := range discovery.Capabilities.ReconcileResults {
+			gotStamps[entry.TestID] = entry.State
+		}
+		if len(gotStamps) != len(wantStamps) {
+			t.Fatalf("%s: reconcile_results = %v, want %v", label, gotStamps, wantStamps)
+		}
+		for id, state := range wantStamps {
+			if gotStamps[id] != state {
+				t.Fatalf("%s: reconcile_results[%s] = %q, want %q (all: %v)", label, id, gotStamps[id], state, gotStamps)
+			}
+		}
+		var desired vscode.DesiredStateDocument
+		decodeJSON(t, dispatchRaw(t, bridge, root, "desired-state"), &desired)
+		group := desiredStateGroupByLabel(t, desired.Groups, "Data Set")
+		activeResources := []string{}
+		for _, row := range group.Rows {
+			if row.Active {
+				activeResources = append(activeResources, row.Resource)
+			}
+		}
+		if len(activeResources) != 1 || activeResources[0] != wantActiveResource {
+			t.Fatalf("%s: derived active rows = %v, want exactly [%s]", label, activeResources, wantActiveResource)
+		}
+	}
+
+	assertDerived("initial reset state", "Unknown State", map[string]string{
+		lifecycleSmallID: "skipped", lifecycleFullID: "skipped", lifecycleUnknownID: "passed",
+	})
+
+	dispatch("run", "--id", lifecycleSmallID)
+	assertDerived("after activating small", "app-db-small", map[string]string{
+		lifecycleSmallID: "passed", lifecycleFullID: "skipped", lifecycleUnknownID: "skipped",
+	})
+
+	dispatch("run", "--id", lifecycleFullID)
+	assertDerived("after switching to full", "app-db-full", map[string]string{
+		lifecycleSmallID: "skipped", lifecycleFullID: "passed", lifecycleUnknownID: "skipped",
+	})
+
+	dispatch("run", "--id", lifecycleUnknownID)
+	if bridge.resetCalls != 1 {
+		t.Fatalf("reset hook calls after Unknown run = %d, want 1", bridge.resetCalls)
+	}
+	assertDerived("after Unknown reset", "Unknown State", map[string]string{
+		lifecycleSmallID: "skipped", lifecycleFullID: "skipped", lifecycleUnknownID: "passed",
+	})
+}
+
+func dispatchRaw(t *testing.T, bridge testbridge.Bridge, root, verb string) *bytes.Buffer {
+	t.Helper()
+	protocol := &bytes.Buffer{}
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: protocol})
+	if err := testbridge.CommandSpec(bridge).Dispatch(ctx, []string{"test-bridge", "tests", verb, "--format", "json"}); err != nil {
+		t.Fatalf("%s dispatch: %v", verb, err)
+	}
+	return protocol
 }
