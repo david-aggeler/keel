@@ -440,6 +440,28 @@ export function applyReconcileNoResultCapability(controller: vscode.TestControll
   }
 }
 
+// applyReconcileResultsCapability replays the bridge-computed
+// reconcile_results discovery capability verbatim: one non-persisted,
+// focus-preserving TestRun stamps each served entry (passed | skipped) and
+// ends. Overwriting is the only rendering mechanism proven live — it beats
+// persistence-restored results by construction, where result REMOVAL
+// (invalidate, TestItem replacement) provably cannot. An in-session
+// signature guard keeps unchanged lists from re-stamping on every watcher
+// tick; a window reload resets the guard so the first refresh re-stamps.
+// No branching on the exclusivity wire flag (design_decision-5).
+//
+// DHF-REQ: keel/requirement-97
+export function applyReconcileResultsCapability(controller: vscode.TestController, publishedTree: PublishedTree): void {
+  // Red under keel/change_request-123 (redlist vsix:req-97:reconcile-replay):
+  // the capability is ignored until the CR's implementation lands.
+  void controller;
+  void publishedTree;
+}
+
+// resetReconcileSignatureForTest clears the in-session reconcile signature
+// guard. Production never calls this; specs use it to isolate cases.
+export function resetReconcileSignatureForTest(): void {}
+
 async function runAdapterMaintenance(controller: vscode.TestController, ids: readonly string[]): Promise<void> {
   const workspaceRoot = getWorkspaceRoot();
   const adapter = currentAdapterConfig();

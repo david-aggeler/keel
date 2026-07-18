@@ -20,6 +20,21 @@ export interface DiscoveryCapabilities {
    * DHF-REQ: keel/requirement-95
    */
   reconcile_no_result_test_ids?: string[];
+  /**
+   * Bridge-computed rendered truth for exclusive desired-state rows: one
+   * stamp per row with a run id (active row passed, every other row
+   * skipped). The VSIX replays the entries verbatim through one
+   * non-persisted TestRun per refresh, overwriting stale results —
+   * including results restored from persistence after a window reload.
+   * DHF-REQ: keel/requirement-97
+   */
+  reconcile_results?: ReconcileResult[];
+}
+
+export interface ReconcileResult {
+  test_id: string;
+  state: 'passed' | 'skipped';
+  message?: string;
 }
 
 export interface DiscoveryItem {

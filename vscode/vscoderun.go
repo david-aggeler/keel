@@ -93,6 +93,24 @@ type DiscoveryCapabilities struct {
 	// rows whose derived active is false. Consumers apply it verbatim.
 	// DHF-REQ: keel/requirement-95
 	ReconcileNoResultTestIDs []string `json:"reconcile_no_result_test_ids,omitempty"`
+	// ReconcileResults is the bridge-computed rendered truth for
+	// mutually-exclusive desired-state rows: one stamp per row with a run
+	// id (active row passed, every other row skipped). Consumers replay
+	// the entries verbatim through a non-persisted test run on every
+	// discovery refresh, overwriting stale (including persistence-restored)
+	// results.
+	// DHF-REQ: keel/requirement-97
+	ReconcileResults []ReconcileResult `json:"reconcile_results,omitempty"`
+}
+
+// ReconcileResult is one bridge-computed rendered-state stamp for a
+// mutually-exclusive desired-state row.
+//
+// DHF-REQ: keel/requirement-97
+type ReconcileResult struct {
+	TestID  string `json:"test_id"`
+	State   string `json:"state"`
+	Message string `json:"message,omitempty"`
 }
 
 // TestItem is one node in the discovered VS Code test tree.

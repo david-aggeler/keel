@@ -4,9 +4,9 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { applyReconcileNoResultCapability, applyRunEvent, invalidateClearedResults, setCurrentTreeForTest } from '../../extension';
+import { applyReconcileNoResultCapability, applyReconcileResultsCapability, applyRunEvent, invalidateClearedResults, resetReconcileSignatureForTest, setCurrentTreeForTest } from '../../extension';
 import { configRelativePath, currentConfigVersion, discoverTests, runTests } from '../../bridgeAdapter';
-import { DiscoveryDocument, DiscoveryItem, RunEvent } from '../../protocol';
+import { DiscoveryDocument, DiscoveryItem, ReconcileResult, RunEvent } from '../../protocol';
 import { publishDiscovery } from '../../tree';
 
 suite('Keel Test Bridge expected-red specs', () => {
@@ -425,6 +425,125 @@ suite('Keel Test Bridge expected-red specs', () => {
         assert.ok(controller.items.get(groupId), 'the exclusive group parent must survive the reconcile');
         assert.equal(reconcileRuns, 0, 'the at-rest reconcile must not create a TestRun');
       } finally {
+        setCurrentTreeForTest(undefined);
+        controller.dispose();
+      }
+    });
+  });
+
+  // req-97: verbatim reconcile replay — the bridge-served reconcile_results
+  // entries are stamped through EXACTLY ONE non-persisted, focus-preserving
+  // TestRun per refresh apply, one-to-one and in order; an unchanged list
+  // does not re-stamp (signature guard); a changed list stamps again.
+  // Behavioral contract only — the object-identity proxy was falsified by
+  // owner live validation (persisted results re-associate by id, F14);
+  // rendered efficacy is proven by the owner (ac-322).
+  //
+  // DHF-TEST: keel/requirement-97
+  test('req-97 reconcile replay stamps served states through one non-persisted run', async () => {
+    await expectKnownRed('vsix:req-97:reconcile-replay', () => {
+      const controller = vscode.tests.createTestController(`keelReq97Replay-${Date.now()}`, 'Keel Req 97 replay');
+      const groupId = 'demo::desired-state::dataset';
+      const fullId = 'demo::desired-state::dataset::full';
+      const smallId = 'demo::desired-state::dataset::small';
+      const unknownId = 'demo::desired-state::dataset::unknown';
+      const ghostId = 'demo::desired-state::dataset::ghost';
+      const discovery = (reconcile: ReconcileResult[]): DiscoveryDocument => ({
+        version: 1,
+        workspace: 'req-97-replay',
+        generated_at: new Date().toISOString(),
+        capabilities: { reconcile_results: reconcile },
+        items: [
+          { id: groupId, label: 'app-db data set', kind: 'group', runnable: false, profiles: [] },
+          { id: fullId, parent_id: groupId, label: 'full', kind: 'test', runnable: true, profiles: ['run'] },
+          { id: smallId, parent_id: groupId, label: 'small', kind: 'test', runnable: true, profiles: ['run'] },
+          { id: unknownId, parent_id: groupId, label: 'Unknown State', kind: 'test', runnable: true, profiles: ['run'] }
+        ]
+      });
+      interface ObservedRun {
+        name: string | undefined;
+        persisted: boolean;
+        preserveFocus: boolean;
+        includeIds: string[];
+        stamps: Array<[string, string]>;
+        ended: boolean;
+      }
+      const observed: ObservedRun[] = [];
+      const originalCreateTestRun = controller.createTestRun.bind(controller);
+      controller.createTestRun = ((request: vscode.TestRunRequest, name?: string, persist?: boolean) => {
+        const run = originalCreateTestRun(request, name, persist);
+        const record: ObservedRun = {
+          name,
+          persisted: run.isPersisted,
+          preserveFocus: request.preserveFocus,
+          includeIds: (request.include ?? []).map((item) => item.id),
+          stamps: [],
+          ended: false
+        };
+        observed.push(record);
+        const originalPassed = run.passed.bind(run);
+        const originalSkipped = run.skipped.bind(run);
+        const originalEnd = run.end.bind(run);
+        run.passed = (item: vscode.TestItem, duration?: number) => {
+          record.stamps.push([item.id, 'passed']);
+          originalPassed(item, duration);
+        };
+        run.skipped = (item: vscode.TestItem) => {
+          record.stamps.push([item.id, 'skipped']);
+          originalSkipped(item);
+        };
+        run.end = () => {
+          record.ended = true;
+          originalEnd();
+        };
+        return run;
+      }) as typeof controller.createTestRun;
+
+      try {
+        resetReconcileSignatureForTest();
+        const served: ReconcileResult[] = [
+          { test_id: fullId, state: 'passed', message: 'app-db-full is active' },
+          { test_id: smallId, state: 'skipped', message: 'not active (app-db-full is active)' },
+          { test_id: unknownId, state: 'skipped', message: 'not active (app-db-full is active)' },
+          { test_id: ghostId, state: 'skipped', message: 'not in the tree; must be ignored' }
+        ];
+        const tree = publishDiscovery(controller, os.tmpdir(), discovery(served));
+        setCurrentTreeForTest(tree);
+
+        applyReconcileResultsCapability(controller, tree);
+        assert.equal(observed.length, 1, 'exactly one reconcile TestRun is created for a served list');
+        const first = observed[0];
+        assert.equal(first.name, 'desired-state reconcile', 'the reconcile run is named for the Test Results panel');
+        assert.equal(first.persisted, false, 'the reconcile run must not persist (persist=false)');
+        assert.equal(first.preserveFocus, true, 'the reconcile run must not steal focus');
+        assert.deepEqual(first.stamps, [
+          [fullId, 'passed'],
+          [smallId, 'skipped'],
+          [unknownId, 'skipped']
+        ], 'stamps replay the served entries verbatim, in order, restricted to tree items');
+        assert.deepEqual(first.includeIds.sort(), [fullId, smallId, unknownId].sort(), 'the run request includes exactly the stamped items');
+        assert.ok(first.ended, 'the reconcile run is ended in the same apply');
+
+        applyReconcileResultsCapability(controller, tree);
+        assert.equal(observed.length, 1, 'an unchanged served list must not re-stamp (signature guard)');
+
+        const flipped: ReconcileResult[] = [
+          { test_id: fullId, state: 'skipped', message: 'not active (app-db-small is active)' },
+          { test_id: smallId, state: 'passed', message: 'app-db-small is active' },
+          { test_id: unknownId, state: 'skipped', message: 'not active (app-db-small is active)' }
+        ];
+        const refreshed = publishDiscovery(controller, os.tmpdir(), discovery(flipped));
+        setCurrentTreeForTest(refreshed);
+        applyReconcileResultsCapability(controller, refreshed);
+        assert.equal(observed.length, 2, 'a changed served list stamps again');
+        assert.deepEqual(observed[1].stamps, [
+          [fullId, 'skipped'],
+          [smallId, 'passed'],
+          [unknownId, 'skipped']
+        ], 'the second run replays the flipped states verbatim');
+      } finally {
+        controller.createTestRun = originalCreateTestRun;
+        resetReconcileSignatureForTest();
         setCurrentTreeForTest(undefined);
         controller.dispose();
       }
