@@ -414,8 +414,8 @@ func TestDiscoverDerivesDesiredStateGroupsFromProvider(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-95
-func TestDiscoveryServesReconcileNoResultCapabilityForExclusiveGroups(t *testing.T) {
+// DHF-TEST: keel/requirement-97
+func TestDiscoveryServesReconcileResultsForExclusiveGroups(t *testing.T) {
 	root := t.TempDir()
 	fake := newFakeBridge(root)
 	fake.extraItems = []vscode.TestItem{{
@@ -460,15 +460,37 @@ func TestDiscoveryServesReconcileNoResultCapabilityForExclusiveGroups(t *testing
 
 	setGroups(true) // full is the active concrete member
 	doc := discover()
-	if got, want := doc.Capabilities.ReconcileNoResultTestIDs, []string{smallID, unknownID}; !equalStrings(got, want) {
-		t.Fatalf("reconcile_no_result_test_ids with active concrete member = %v, want %v (non-active concrete + inactive Unknown; never the active member or non-exclusive rows)", got, want)
+	want := []vscode.ReconcileResult{
+		{TestID: smallID, State: "skipped", Message: "not active (app-db-full is active)"},
+		{TestID: fullID, State: "passed", Message: "app-db-full is active"},
+		{TestID: unknownID, State: "skipped", Message: "not active (app-db-full is active)"},
+	}
+	if got := doc.Capabilities.ReconcileResults; !equalReconcileResults(got, want) {
+		t.Fatalf("reconcile_results with active concrete member = %+v, want %+v (active passed, all others skipped incl. inactive Unknown; no non-exclusive rows)", got, want)
 	}
 
 	setGroups(false) // nothing satisfied: Unknown State is the active reset peer
 	doc = discover()
-	if got, want := doc.Capabilities.ReconcileNoResultTestIDs, []string{smallID, fullID}; !equalStrings(got, want) {
-		t.Fatalf("reconcile_no_result_test_ids with Unknown active = %v, want %v (both concrete members; never the active Unknown peer)", got, want)
+	want = []vscode.ReconcileResult{
+		{TestID: smallID, State: "skipped", Message: "not active (Unknown State is active)"},
+		{TestID: fullID, State: "skipped", Message: "not active (Unknown State is active)"},
+		{TestID: unknownID, State: "passed", Message: "Unknown State is active"},
 	}
+	if got := doc.Capabilities.ReconcileResults; !equalReconcileResults(got, want) {
+		t.Fatalf("reconcile_results with Unknown active = %+v, want %+v (Unknown passed, both concrete members skipped)", got, want)
+	}
+}
+
+func equalReconcileResults(got, want []vscode.ReconcileResult) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // DHF-TEST: keel/requirement-88

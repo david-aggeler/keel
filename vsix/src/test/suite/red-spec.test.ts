@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { applyReconcileNoResultCapability, applyReconcileResultsCapability, applyRunEvent, invalidateClearedResults, resetReconcileSignatureForTest, setCurrentTreeForTest } from '../../extension';
+import { applyReconcileResultsCapability, applyRunEvent, invalidateClearedResults, resetReconcileSignatureForTest, setCurrentTreeForTest } from '../../extension';
 import { configRelativePath, currentConfigVersion, discoverTests, runTests } from '../../bridgeAdapter';
 import { DiscoveryDocument, DiscoveryItem, ReconcileResult, RunEvent } from '../../protocol';
 import { publishDiscovery } from '../../tree';
@@ -339,91 +339,6 @@ suite('Keel Test Bridge expected-red specs', () => {
         assert.strictEqual(smallAfter, smallBefore,
           'the newly-active member small must be retained in place (not rebuilt) when a sibling is deactivated');
         assert.ok(controller.items.get(groupId), 'the exclusive group parent must survive the switch');
-      } finally {
-        setCurrentTreeForTest(undefined);
-        controller.dispose();
-      }
-    });
-  });
-
-  // req-95: at-rest reconcile — a stale green on a non-active exclusive
-  // member must drop on a plain discovery refresh that serves
-  // capabilities.reconcile_no_result_test_ids, with NO activation run and
-  // no reconcile-created TestRun. cr-114's spec proved only the activation
-  // switch; this proves the at-rest path (keel/issue-89, rca-3 root #1).
-  // Observable proxy: TestItem object identity — VS Code exposes no result
-  // readback (docs/mutex/vscode-object-model.md F1/F13).
-  //
-  // DHF-TEST: keel/requirement-95
-  test('req-95 at-rest refresh drops a stale green without an activation run', async () => {
-    await expectKnownRed('vsix:req-95:at-rest-reconcile', () => {
-      const controller = vscode.tests.createTestController(`keelReq95AtRest-${Date.now()}`, 'Keel Req 95 at rest');
-      const groupId = 'demo::desired-state::dataset';
-      const fullId = 'demo::desired-state::dataset::full';
-      const smallId = 'demo::desired-state::dataset::small';
-      const unknownId = 'demo::desired-state::dataset::unknown';
-      const discovery = (capabilities?: DiscoveryDocument['capabilities']): DiscoveryDocument => ({
-        version: 1,
-        workspace: 'req-95-at-rest',
-        generated_at: new Date().toISOString(),
-        capabilities,
-        items: [
-          { id: groupId, label: 'app-db data set', kind: 'group', runnable: false, profiles: [] },
-          { id: fullId, parent_id: groupId, label: 'full', kind: 'test', runnable: true, profiles: ['run'] },
-          { id: smallId, parent_id: groupId, label: 'small', kind: 'test', runnable: true, profiles: ['run'] },
-          { id: unknownId, parent_id: groupId, label: 'Unknown State', kind: 'test', runnable: true, profiles: ['run'] }
-        ]
-      });
-      try {
-        const tree = publishDiscovery(controller, os.tmpdir(), discovery());
-        setCurrentTreeForTest(tree);
-        const memberOnController = (id: string): vscode.TestItem | undefined =>
-          controller.items.get(groupId)?.children.get(id);
-
-        // A real run stamps the green that later goes stale (restored after
-        // a window reload, or the environment drifted out-of-band).
-        const fullItem = tree.itemsById.get(fullId);
-        assert.ok(fullItem, 'full item is discovered');
-        const run = controller.createTestRun(new vscode.TestRunRequest([fullItem]));
-        applyRunEvent(run, JSON.stringify(runEvent({ event: 'passed', test_id: fullId })), new Set([fullId]), new Set());
-        run.end();
-        const fullBefore = memberOnController(fullId);
-        const smallBefore = memberOnController(smallId);
-        const unknownBefore = memberOnController(unknownId);
-        assert.ok(fullBefore && smallBefore && unknownBefore, 'all members are present after the run');
-
-        // At-rest refresh: the bridge now derives small as the active
-        // member; full and Unknown State must render no result. No run of
-        // any kind happens.
-        const refreshed = publishDiscovery(controller, os.tmpdir(), discovery({
-          reconcile_no_result_test_ids: [fullId, unknownId]
-        }));
-        setCurrentTreeForTest(refreshed);
-        assert.deepEqual(
-          refreshed.capabilities.reconcile_no_result_test_ids,
-          [fullId, unknownId],
-          'the published tree carries the capability verbatim'
-        );
-        let reconcileRuns = 0;
-        const originalCreateTestRun = controller.createTestRun.bind(controller);
-        controller.createTestRun = ((request: vscode.TestRunRequest, name?: string, persist?: boolean) => {
-          reconcileRuns += 1;
-          return originalCreateTestRun(request, name, persist);
-        }) as typeof controller.createTestRun;
-        try {
-          applyReconcileNoResultCapability(controller, refreshed);
-        } finally {
-          controller.createTestRun = originalCreateTestRun;
-        }
-
-        assert.notStrictEqual(memberOnController(fullId), fullBefore,
-          'the stale-green non-active member must be rebuilt so its rendered result drops at rest');
-        assert.notStrictEqual(memberOnController(unknownId), unknownBefore,
-          'the inactive Unknown State peer listed by the bridge must be rebuilt too');
-        assert.strictEqual(memberOnController(smallId), smallBefore,
-          'the active member must be retained in place');
-        assert.ok(controller.items.get(groupId), 'the exclusive group parent must survive the reconcile');
-        assert.equal(reconcileRuns, 0, 'the at-rest reconcile must not create a TestRun');
       } finally {
         setCurrentTreeForTest(undefined);
         controller.dispose();

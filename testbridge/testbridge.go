@@ -342,12 +342,12 @@ func deriveDesiredStateDiscovery(ctx context.Context, bridge Bridge, doc vscode.
 		return doc, nil
 	}
 	rt := runtimeOrDefault(ctx, bridge)
-	items, noResultIDs, err := desiredStateDeclarationDiscoveryItems(ctx, runtimeRoot(rt, bridge), parent.ID, desiredState.Groups)
+	items, reconcile, err := desiredStateDeclarationDiscoveryItems(ctx, runtimeRoot(rt, bridge), parent.ID, desiredState.Groups)
 	if err != nil {
 		return vscode.DiscoveryDocument{}, err
 	}
 	doc.Items = append(doc.Items, items...)
-	doc.Capabilities.ReconcileNoResultTestIDs = noResultIDs
+	doc.Capabilities.ReconcileResults = reconcile
 	if err := validateUniqueDiscoveryItemIDs(doc.Items); err != nil {
 		return vscode.DiscoveryDocument{}, err
 	}
@@ -411,17 +411,18 @@ func desiredStateDiagnosticItem(parentID string, err error) vscode.TestItem {
 }
 
 // desiredStateDeclarationDiscoveryItems derives the B-group discovery items
-// and, alongside them, the bridge-computed reconcile_no_result_test_ids
-// capability content: the run ids of mutually-exclusive rows (including the
-// synthetic Unknown State peer) whose derived active is false. Consumers
-// drop exactly those rendered results on every refresh.
+// and, alongside them, the bridge-computed reconcile_results capability
+// content: one rendered-state stamp per mutually-exclusive row with a run
+// id — the derived-active row passed, every other row (including the
+// synthetic Unknown State peer) skipped. Consumers replay exactly those
+// stamps on every refresh, overwriting stale rendered results.
 //
-// DHF-REQ: keel/requirement-75, keel/requirement-83, keel/requirement-88, keel/requirement-95
-func desiredStateDeclarationDiscoveryItems(ctx context.Context, root, parentID string, groups []DesiredStateGroup) ([]vscode.TestItem, []string, error) {
+// DHF-REQ: keel/requirement-75, keel/requirement-83, keel/requirement-88, keel/requirement-97
+func desiredStateDeclarationDiscoveryItems(ctx context.Context, root, parentID string, groups []DesiredStateGroup) ([]vscode.TestItem, []vscode.ReconcileResult, error) {
 	groups = append([]DesiredStateGroup(nil), groups...)
 	sort.SliceStable(groups, func(i, j int) bool { return groups[i].Order < groups[j].Order })
 	items := make([]vscode.TestItem, 0)
-	var noResultIDs []string
+	var reconcile []vscode.ReconcileResult
 	for _, group := range groups {
 		groupID := parentID + "::group::" + stableIDSegment(group.Label)
 		derivedRows, err := deriveDesiredStateGroupRows(ctx, root, parentID, group)
@@ -446,12 +447,51 @@ func desiredStateDeclarationDiscoveryItems(ctx context.Context, root, parentID s
 		items = append(items, groupItem)
 		for rowIndex, row := range derivedRows {
 			items = append(items, desiredStateDeclarationDiscoveryItem(groupID, groupItem.SortText, rowIndex+1, row.Declaration, row.State))
-			if group.MutuallyExclusive && row.State.RunID != "" && !row.State.Active {
-				noResultIDs = append(noResultIDs, row.State.RunID)
-			}
+		}
+		if group.MutuallyExclusive {
+			reconcile = append(reconcile, exclusiveGroupReconcileResults(derivedRows)...)
 		}
 	}
-	return items, noResultIDs, nil
+	return items, reconcile, nil
+}
+
+// exclusiveGroupReconcileResults renders one stamp per runnable row of an
+// exclusive group: the derived-active row passed, every other row skipped,
+// each message naming the active member.
+//
+// DHF-REQ: keel/requirement-97
+func exclusiveGroupReconcileResults(derivedRows []derivedDesiredStateRow) []vscode.ReconcileResult {
+	activeResource := ""
+	for _, row := range derivedRows {
+		if row.State.Active {
+			activeResource = row.State.Resource
+			break
+		}
+	}
+	results := make([]vscode.ReconcileResult, 0, len(derivedRows))
+	for _, row := range derivedRows {
+		if row.State.RunID == "" {
+			continue
+		}
+		if row.State.Active {
+			results = append(results, vscode.ReconcileResult{
+				TestID:  row.State.RunID,
+				State:   "passed",
+				Message: row.State.Resource + " is active",
+			})
+			continue
+		}
+		message := "not active"
+		if activeResource != "" {
+			message = "not active (" + activeResource + " is active)"
+		}
+		results = append(results, vscode.ReconcileResult{
+			TestID:  row.State.RunID,
+			State:   "skipped",
+			Message: message,
+		})
+	}
+	return results
 }
 
 func desiredStateGroupHasRunnableRows(group DesiredStateGroup) bool {

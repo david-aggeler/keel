@@ -7,7 +7,7 @@ import * as vscode from 'vscode';
 import { adapterConfig, configRelativePath, currentConfigVersion, defaultAdapterConfig, defaultConfigTemplate, discoverTests, readDesiredState, readAdapterConfig, runTests, upgradeConfig } from './bridgeAdapter';
 import { ExternalRunMirror, ExternalRunStateSnapshot, setExternalRunStaleMsForTest } from './externalRunMirror';
 import { publishDiscovery, PublishedTree, replacePublishedTestItem } from './tree';
-import { DesiredState, DesiredStateGroup, RunEvent, DesiredStateDocument } from './protocol';
+import { DesiredState, DesiredStateGroup, ReconcileResult, RunEvent, DesiredStateDocument } from './protocol';
 
 let tree: PublishedTree | undefined;
 let output: vscode.OutputChannel;
@@ -131,6 +131,7 @@ export function deactivate(): void {
   tree = undefined;
   testControllerForRunProfile = undefined;
   testRunProfileForRunProfile = undefined;
+  lastReconcileSignature = undefined;
   finishActiveRun();
 }
 
@@ -333,11 +334,11 @@ function refresh(controller: vscode.TestController): Promise<void> {
 
 // refreshDesiredStateAfterRun re-reads the selection's desired-state report
 // for the Test Results output and then refreshes discovery; the discovery
-// publish itself reconciles exclusive result icons via the bridge-computed
-// reconcile_no_result_test_ids capability (requirement-95, which superseded
-// requirement-93's post-run-only refreshMutexStates).
+// publish itself reconciles exclusive result icons by replaying the
+// bridge-computed reconcile_results capability (requirement-97, which
+// superseded requirement-95's falsified no-result mechanism).
 //
-// DHF-REQ: keel/requirement-88, keel/requirement-95
+// DHF-REQ: keel/requirement-88, keel/requirement-97
 export async function refreshDesiredStateAfterRun(
   run: vscode.TestRun,
   controller: vscode.TestController,
@@ -372,7 +373,7 @@ async function refreshNow(controller: vscode.TestController): Promise<void> {
   try {
     const discovery = await discoverTests(workspaceRoot);
     tree = publishDiscovery(controller, workspaceRoot, discovery);
-    applyReconcileNoResultCapability(controller, tree);
+    applyReconcileResultsCapability(controller, tree);
     output.appendLine(`Published ${discovery.items.length} Keel test items from ${workspaceRoot}.`);
     void externalRunMirror?.syncWorkspace();
   } catch (error) {
@@ -415,52 +416,59 @@ export function invalidateClearedResults(controller: vscode.TestController, clea
   }
 }
 
-// applyReconcileNoResultCapability applies the bridge-computed
-// reconcile_no_result_test_ids discovery capability verbatim: every listed
-// id's rendered result is dropped to no-result (invalidate + TestItem
-// replacement). Runs after every publishDiscovery so exclusive-group icons
-// reconcile at rest, post-run, and post-reload alike — with no VSIX
-// branching on the exclusivity wire flag (design_decision-5).
-//
-// DHF-REQ: keel/requirement-95
-export function applyReconcileNoResultCapability(controller: vscode.TestController, publishedTree: PublishedTree): void {
-  const items: vscode.TestItem[] = [];
-  for (const id of publishedTree.capabilities.reconcile_no_result_test_ids ?? []) {
-    const item = publishedTree.itemsById.get(id);
-    if (item) {
-      items.push(item);
-    }
-  }
-  if (items.length === 0) {
-    return;
-  }
-  controller.invalidateTestResults(items);
-  for (const item of items) {
-    replacePublishedTestItem(controller, publishedTree, item.id);
-  }
-}
+// lastReconcileSignature is the in-session guard for the reconcile replay:
+// an unchanged served list is not re-stamped on every watcher tick. A
+// window reload starts a fresh session (undefined), so the first refresh
+// after a reload always stamps — exactly when persistence-restored stale
+// icons need overwriting.
+let lastReconcileSignature: string | undefined;
 
 // applyReconcileResultsCapability replays the bridge-computed
 // reconcile_results discovery capability verbatim: one non-persisted,
 // focus-preserving TestRun stamps each served entry (passed | skipped) and
 // ends. Overwriting is the only rendering mechanism proven live — it beats
 // persistence-restored results by construction, where result REMOVAL
-// (invalidate, TestItem replacement) provably cannot. An in-session
-// signature guard keeps unchanged lists from re-stamping on every watcher
-// tick; a window reload resets the guard so the first refresh re-stamps.
-// No branching on the exclusivity wire flag (design_decision-5).
+// (invalidate, TestItem replacement) provably cannot: VS Code re-associates
+// persisted results to new TestItems by id (docs/mutex/vscode-object-model.md
+// F14). No branching on the exclusivity wire flag (design_decision-5).
 //
 // DHF-REQ: keel/requirement-97
 export function applyReconcileResultsCapability(controller: vscode.TestController, publishedTree: PublishedTree): void {
-  // Red under keel/change_request-123 (redlist vsix:req-97:reconcile-replay):
-  // the capability is ignored until the CR's implementation lands.
-  void controller;
-  void publishedTree;
+  const applicable: Array<{ entry: ReconcileResult; item: vscode.TestItem }> = [];
+  for (const entry of publishedTree.capabilities.reconcile_results ?? []) {
+    const item = publishedTree.itemsById.get(entry.test_id);
+    if (item) {
+      applicable.push({ entry, item });
+    }
+  }
+  if (applicable.length === 0) {
+    return;
+  }
+  const signature = JSON.stringify(applicable.map(({ entry }) => [entry.test_id, entry.state]));
+  if (signature === lastReconcileSignature) {
+    return;
+  }
+  lastReconcileSignature = signature;
+  const request = new vscode.TestRunRequest(applicable.map(({ item }) => item), undefined, undefined, undefined, true);
+  const run = controller.createTestRun(request, 'desired-state reconcile', false);
+  for (const { entry, item } of applicable) {
+    if (entry.message) {
+      run.appendOutput(`${entry.message}\r\n`, undefined, item);
+    }
+    if (entry.state === 'passed') {
+      run.passed(item);
+    } else {
+      run.skipped(item);
+    }
+  }
+  run.end();
 }
 
 // resetReconcileSignatureForTest clears the in-session reconcile signature
 // guard. Production never calls this; specs use it to isolate cases.
-export function resetReconcileSignatureForTest(): void {}
+export function resetReconcileSignatureForTest(): void {
+  lastReconcileSignature = undefined;
+}
 
 async function runAdapterMaintenance(controller: vscode.TestController, ids: readonly string[]): Promise<void> {
   const workspaceRoot = getWorkspaceRoot();
