@@ -89,6 +89,15 @@ func validateDiscovery(doc vscode.DiscoveryDocument) error {
 			}
 		}
 	}
+	// DHF-REQ: keel/requirement-97
+	for _, entry := range doc.Capabilities.ReconcileResults {
+		if entry.TestID == "" {
+			return fmt.Errorf("keel/testbridge: reconcile_results entry missing test_id")
+		}
+		if !in(entry.State, "passed", "skipped") {
+			return fmt.Errorf("keel/testbridge: reconcile_results entry %q has invalid state %q", entry.TestID, entry.State)
+		}
+	}
 	return nil
 }
 

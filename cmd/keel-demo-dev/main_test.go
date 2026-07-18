@@ -207,8 +207,7 @@ func TestKeelDemoDevDesiredStateRowsAreRunnable(t *testing.T) {
 	assertRunEvent(t, events, "passed", "keel-demo-dev::desired-state::docker-env", "provision_demo_environment")
 	assertRunEvent(t, events, "passed", "keel-demo-dev::desired-state::dataset::small", "reuse_small_data_set")
 
-	beforeReset, err := os.ReadFile(demoDataSetPath(root))
-	if err != nil {
+	if _, err := os.ReadFile(demoDataSetPath(root)); err != nil {
 		t.Fatalf("read selected data set before Unknown reset: %v", err)
 	}
 	unknownID := exclusiveUnknownID(t, root)
@@ -216,13 +215,25 @@ func TestKeelDemoDevDesiredStateRowsAreRunnable(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("Unknown reset row exit = %d, want 0\n%s", code, out)
 	}
-	assertRunEvent(t, decodeRunEvents(t, out), "passed", unknownID, "selected Unknown State")
-	afterReset, err := os.ReadFile(demoDataSetPath(root))
-	if err != nil {
-		t.Fatalf("read selected data set after Unknown reset: %v", err)
+	// DHF-REQ: keel/requirement-98 — the Unknown run performs a REAL reset:
+	// the consumer hook clears the active data set...
+	assertRunEvent(t, decodeRunEvents(t, out), "passed", unknownID, "reset exclusive group")
+	if _, err := os.Stat(demoDataSetPath(root)); !os.IsNotExist(err) {
+		t.Fatalf("Unknown reset must remove the active data-set state, stat err = %v", err)
 	}
-	if !bytes.Equal(afterReset, beforeReset) {
-		t.Fatalf("Unknown reset mutated data-set state: before %q after %q", beforeReset, afterReset)
+	// ...and the derivation-level guard: after the reset, Unknown State is the
+	// sole active member of the app-db group (the assertion whose absence let
+	// the cosmetic reset ship — keel/issue-90).
+	resetStateOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "desired-state", "--format", "json")
+	if code != 0 {
+		t.Fatalf("post-reset desired-state exit = %d, want 0\n%s", code, resetStateOut)
+	}
+	var afterResetState vscode.DesiredStateDocument
+	decodeJSON(t, resetStateOut, &afterResetState)
+	assertExclusiveDataSetGroupActive(t, afterResetState.Groups, "Unknown State")
+	out, code = runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::desired-state::dataset::small")
+	if code != 0 {
+		t.Fatalf("re-activate small after Unknown reset exit = %d, want 0\n%s", code, out)
 	}
 
 	out, code = runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel::desired-state::group::test-preconditions")

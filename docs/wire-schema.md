@@ -44,7 +44,12 @@ classDiagram
         +bool neutral_parent_rollups
         -List~string~ clear_results_test_ids
         -List~string~ clear_state_test_ids
-        -List~string~ reconcile_no_result_test_ids
+        -List~reconcile_result~ reconcile_results
+    }
+    class reconcile_result {
+        +string test_id
+        +string state
+        -string message
     }
     class test_item {
         +string id
@@ -69,13 +74,14 @@ classDiagram
         +int end_column
     }
     discovery "1" --> "1" capabilities : capabilities
+    capabilities "1" --> "0..*" reconcile_result : reconcile_results
     discovery "1" --> "0..*" test_item : items
     test_item "1" --> "0..1" range : range
 ```
 
 - `test_item.kind` — root, lane, package, file, suite, test, project, group, maintenance
 - `test_item.profiles` — run, debug, coverage
-- `capabilities.reconcile_no_result_test_ids` — bridge-computed authority for exclusive desired-state rendering: ids whose rendered result the consumer drops to no-result on **every** discovery refresh (rows with derived `active = false`, incl. the inactive Unknown State peer). Applied verbatim — no consumer branching on `mutually_exclusive` (requirement-95, supersedes requirement-93's post-run-only reconcile)
+- `capabilities.reconcile_results` — bridge-computed rendered truth for exclusive desired-state rows: one stamp per row with a run id — the derived-active row `state: passed`, every other row (incl. the Unknown State peer) `state: skipped` (closed enum). The consumer replays the entries verbatim through one non-persisted TestRun per discovery refresh, **overwriting** stale results (incl. persistence-restored ones after a window reload) — no consumer branching on `mutually_exclusive` (requirement-97; replaced the never-released `reconcile_no_result_test_ids` after its removal mechanism was falsified on a live editor)
 
 ---
 

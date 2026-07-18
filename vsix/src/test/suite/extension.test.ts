@@ -574,11 +574,11 @@ function discovery() {
     version: 1,
     workspace: process.cwd(),
     generated_at: now(),
-    capabilities: { reconcile_no_result_test_ids: [
+    capabilities: { reconcile_results: [
       'demo::desired-state::dataset::small',
       'demo::desired-state::dataset::full',
       'demo::desired-state::dataset::unknown'
-    ].filter((id) => id !== active) },
+    ].map((id) => ({ test_id: id, state: id === active ? 'passed' : 'skipped', message: id === active ? 'active' : 'not active' })) },
     items: [
       { id: 'demo::desired-state::dataset', label: 'Data Set', kind: 'group', runnable: false, profiles: [], limitations: ['mutually_exclusive=true'] },
       { id: 'demo::desired-state::dataset::small', parent_id: 'demo::desired-state::dataset', label: 'small', kind: 'test', runnable: true, profiles: ['run'], limitations: ['active=' + (active === 'demo::desired-state::dataset::small')] },
@@ -656,46 +656,58 @@ process.exit(2);
       const originalUnknown = initialTree.itemsById.get('demo::desired-state::dataset::unknown');
       assert.ok(originalSmall && originalFull && originalUnknown, 'exclusive group members should be published');
 
-      const spyTarget = controller as vscode.TestController & { invalidateTestResults: (items?: vscode.TestItem | readonly vscode.TestItem[]) => void };
-      const originalInvalidate = spyTarget.invalidateTestResults.bind(controller);
-      const invalidated: string[] = [];
-      spyTarget.invalidateTestResults = (items?: vscode.TestItem | readonly vscode.TestItem[]) => {
-        if (Array.isArray(items)) {
-          invalidated.push(...items.map((item) => item.id));
-        } else if (items) {
-          invalidated.push((items as vscode.TestItem).id);
+      interface ReconcileRunRecord { persisted: boolean; stamps: Array<[string, string]> }
+      const reconcileRuns: ReconcileRunRecord[] = [];
+      const originalCreateTestRun = controller.createTestRun.bind(controller);
+      controller.createTestRun = ((request: vscode.TestRunRequest, name?: string, persist?: boolean) => {
+        const run = originalCreateTestRun(request, name, persist);
+        if (name !== 'desired-state reconcile') {
+          return run;
         }
-        originalInvalidate(items as never);
-      };
+        const record: ReconcileRunRecord = { persisted: run.isPersisted, stamps: [] };
+        reconcileRuns.push(record);
+        const originalPassed = run.passed.bind(run);
+        const originalSkipped = run.skipped.bind(run);
+        run.passed = (item: vscode.TestItem, duration?: number) => {
+          record.stamps.push([item.id, 'passed']);
+          originalPassed(item, duration);
+        };
+        run.skipped = (item: vscode.TestItem) => {
+          record.stamps.push([item.id, 'skipped']);
+          originalSkipped(item);
+        };
+        return run;
+      }) as typeof controller.createTestRun;
 
       try {
         await runProfileHandlerForTest('demo::desired-state::dataset::full');
       } finally {
-        spyTarget.invalidateTestResults = originalInvalidate;
+        controller.createTestRun = originalCreateTestRun;
       }
 
       const refreshedTree = currentTree();
       assert.ok(refreshedTree, 'post-run discovery refresh should leave a published tree');
-      // Pre-run, small is the active member, so only the post-run discovery
-      // refresh (serving the updated reconcile_no_result_test_ids) can have
-      // invalidated it — proving the reconcile fired after run_finished.
-      assert.ok(
-        invalidated.includes('demo::desired-state::dataset::small'),
-        'the post-run discovery refresh invalidates the newly non-active member'
-      );
-      assert.notEqual(refreshedTree.itemsById.get('demo::desired-state::dataset::small'), originalSmall, 'non-active sibling is replaced, proving its prior result is dropped');
-      assert.notEqual(refreshedTree.itemsById.get('demo::desired-state::dataset::unknown'), originalUnknown, 'non-active reset peer is replaced, proving its prior result is dropped');
-      // full was non-active during the pre-run refresh, so the at-rest
-      // reconcile legitimately replaced it once back then; from the moment
-      // it became the active member its TestItem identity is retained.
+      // Pre-run, small was active; the run activates full, and the post-run
+      // discovery refresh replays the flipped bridge-served states through a
+      // non-persisted reconcile run — proving the stamp reconcile fired.
+      const lastReconcile = reconcileRuns[reconcileRuns.length - 1];
+      assert.ok(lastReconcile, 'a desired-state reconcile run fires on the post-run refresh');
+      assert.equal(lastReconcile.persisted, false, 'the reconcile run is non-persisted');
+      assert.deepEqual([...lastReconcile.stamps].sort(), [
+        ['demo::desired-state::dataset::full', 'passed'],
+        ['demo::desired-state::dataset::small', 'skipped'],
+        ['demo::desired-state::dataset::unknown', 'skipped']
+      ], 'the post-run reconcile stamps the newly active member passed and all peers skipped');
+      // The stamp mechanism overwrites results instead of replacing items, so
+      // every member keeps its TestItem identity (requirement-70 default).
+      assert.equal(refreshedTree.itemsById.get('demo::desired-state::dataset::small'), originalSmall, 'members keep their TestItem identity — reconcile stamps, it does not rebuild');
+      assert.equal(refreshedTree.itemsById.get('demo::desired-state::dataset::unknown'), originalUnknown, 'the Unknown peer keeps its TestItem identity');
       const fullAfterRun = refreshedTree.itemsById.get('demo::desired-state::dataset::full');
-      assert.ok(fullAfterRun, 'active member is published after the run');
+      assert.equal(fullAfterRun, originalFull, 'the active member keeps its TestItem identity');
 
       await vscode.commands.executeCommand('keel.tests.refresh');
       const afterExplicitRefresh = currentTree();
       assert.ok(afterExplicitRefresh, 'explicit discovery refresh should leave a published tree');
-      assert.notEqual(afterExplicitRefresh.itemsById.get('demo::desired-state::dataset::small'), originalSmall, 'non-active sibling remains replaced after a later discovery refresh');
-      assert.notEqual(afterExplicitRefresh.itemsById.get('demo::desired-state::dataset::unknown'), originalUnknown, 'non-active reset peer remains replaced after a later discovery refresh');
       assert.equal(afterExplicitRefresh.itemsById.get('demo::desired-state::dataset::full'), fullAfterRun, 'active member keeps its TestItem identity across an at-rest refresh');
     } finally {
       if (previousDevWorkspace === undefined) {
@@ -707,12 +719,12 @@ process.exit(2);
     }
   });
 
-  // ac-311 (requirement-95 / design_decision-5): the VSIX applies bridge
+  // ac-311 (requirement-97 / design_decision-5): the VSIX applies bridge
   // decisions verbatim and must not branch on the mutually_exclusive wire
   // flag. Allowed occurrences in production sources: the protocol.ts type
   // declaration and the display passthrough in formatDesiredStateGroup.
   //
-  // DHF-TEST: keel/requirement-95
+  // DHF-TEST: keel/requirement-97
   test('production sources do not branch on mutually_exclusive', () => {
     const srcDir = path.resolve(__dirname, '../../../src');
     const allowed = new Map([['protocol.ts', 1], ['extension.ts', 1]]);
