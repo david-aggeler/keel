@@ -851,7 +851,7 @@ func bridgeLockExempt(bridge Bridge, ids []string) bool {
 	return ok && locker.LockExemptRun(ids)
 }
 
-// DHF-REQ: keel/requirement-75, keel/requirement-88
+// DHF-REQ: keel/requirement-75, keel/requirement-88, keel/requirement-98
 func runDesiredStateSelections(ctx context.Context, bridge Bridge, requests []runResolution, writer vscode.RunEventWriter) (int, []runResolution, error) {
 	ids := runResolutionIDs(requests)
 	declared, err := bridge.DesiredState(ctx, ids)
@@ -866,7 +866,16 @@ func runDesiredStateSelections(ctx context.Context, bridge Bridge, requests []ru
 		id := request.Request.ID
 		if isExclusiveUnknownRunID(id) {
 			writer(vscode.RunEvent{Event: "test_started", TestID: id})
-			writer(vscode.RunEvent{Event: "passed", TestID: id, Message: "selected Unknown State without running consumer reconcile"})
+			resetExit, resetErr := runExclusiveGroupReset(ctx, bridge, declared, id, runtimeRoot(rt, bridge), writer)
+			if resetErr != nil {
+				writer(vscode.RunEvent{Event: "failed", TestID: id, Message: resetErr.Error()})
+				return 1, remaining, resetErr
+			}
+			if resetExit != 0 {
+				writer(vscode.RunEvent{Event: "failed", TestID: id, Message: fmt.Sprintf("exclusive group reset exited %d", resetExit)})
+				exitCode = 1
+				continue
+			}
 			emitExclusiveDesiredStateSiblingClears(request.ExclusiveSiblingIDs, id, writer)
 			continue
 		}
@@ -892,6 +901,59 @@ func runDesiredStateSelections(ctx context.Context, bridge Bridge, requests []ru
 		return exitCode, remaining, fmt.Errorf("desired-state row failed")
 	}
 	return exitCode, remaining, nil
+}
+
+// ExclusiveResetRequest identifies the mutually-exclusive desired-state group
+// whose synthesized Unknown State reset peer was run.
+type ExclusiveResetRequest struct {
+	GroupLabel string
+	RunID      string
+	Root       string
+}
+
+// ExclusiveResetProvider is an optional consumer interface: deactivate
+// whatever makes a member of the named mutually-exclusive group derive
+// active, so the next derivation yields the Unknown State reset peer as the
+// sole active row. Consumers that do not implement it keep the pass-through
+// behavior with an explicit "group reset not supported" message.
+//
+// DHF-REQ: keel/requirement-98
+type ExclusiveResetProvider interface {
+	ResetExclusiveGroup(context.Context, ExclusiveResetRequest, vscode.RunEventWriter) (int, error)
+}
+
+// runExclusiveGroupReset dispatches the consumer reset hook for the exclusive
+// group owning unknownID and emits the terminal passed event on success.
+//
+// DHF-REQ: keel/requirement-98
+func runExclusiveGroupReset(ctx context.Context, bridge Bridge, declared DesiredStateDeclaration, unknownID, root string, writer vscode.RunEventWriter) (int, error) {
+	resetter, ok := bridge.(ExclusiveResetProvider)
+	if !ok {
+		writer(vscode.RunEvent{Event: "passed", TestID: unknownID, Message: "selected Unknown State; group reset not supported by this devtool"})
+		return 0, nil
+	}
+	label, ok := exclusiveGroupLabelForUnknownRunID(declared, unknownID)
+	if !ok {
+		return 0, fmt.Errorf("keel/testbridge: no mutually-exclusive group owns unknown id %q", unknownID)
+	}
+	exit, err := resetter.ResetExclusiveGroup(ctx, ExclusiveResetRequest{GroupLabel: label, RunID: unknownID, Root: root}, writer)
+	if err != nil || exit != 0 {
+		return exit, err
+	}
+	writer(vscode.RunEvent{Event: "passed", TestID: unknownID, Message: "reset exclusive group " + label})
+	return 0, nil
+}
+
+// exclusiveGroupLabelForUnknownRunID matches a synthesized unknown run id back
+// to its declared exclusive group via the stable label segment, independent of
+// which parent id (discovery B-parent or desired-state root) minted the id.
+func exclusiveGroupLabelForUnknownRunID(declared DesiredStateDeclaration, unknownID string) (string, bool) {
+	for _, group := range declared.Groups {
+		if group.MutuallyExclusive && strings.HasSuffix(unknownID, "::group::"+stableIDSegment(group.Label)+"::unknown") {
+			return group.Label, true
+		}
+	}
+	return "", false
 }
 
 // emitExclusiveDesiredStateSiblingClears emits a bridge-owned "cleared" event

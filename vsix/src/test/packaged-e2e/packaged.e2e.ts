@@ -86,6 +86,15 @@ suite('packaged VSIX e2e lane', () => {
     await runAndRead(workspaceRoot, api, 'keel-demo-dev::desired-state::dataset::empty');
     await vscode.commands.executeCommand('keel.tests.refresh');
     assertOneActiveDataSet(requireTree(api), 'keel-demo-dev::desired-state::dataset::empty');
+
+    // requirement-98 (issue-90): running the Unknown State reset peer must
+    // deactivate the environment-level active member — after refresh the
+    // Unknown row is the sole derived-active member of the app-db group.
+    // This is the mutex lifecycle guard step whose absence let the cosmetic
+    // reset ship green.
+    await runAndRead(workspaceRoot, api, 'keel::desired-state::group::app-db-data-set::unknown');
+    await vscode.commands.executeCommand('keel.tests.refresh');
+    assertOneActiveDataSet(requireTree(api), 'keel::desired-state::group::app-db-data-set::unknown');
   });
 });
 
