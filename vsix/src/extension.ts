@@ -439,6 +439,21 @@ export function invalidateClearedResults(controller: vscode.TestController, clea
   }
 }
 
+// applyReconcileNoResultCapability applies the bridge-computed
+// reconcile_no_result_test_ids discovery capability verbatim: every listed
+// id's rendered result is dropped to no-result (invalidate + TestItem
+// replacement). Runs after every publishDiscovery so exclusive-group icons
+// reconcile at rest, post-run, and post-reload alike — with no VSIX
+// branching on mutually_exclusive (design_decision-5).
+//
+// DHF-REQ: keel/requirement-95
+export function applyReconcileNoResultCapability(controller: vscode.TestController, publishedTree: PublishedTree): void {
+  // Red under keel/change_request-121 (redlist vsix:req-95:at-rest-reconcile):
+  // the capability is ignored until the CR's implementation lands.
+  void controller;
+  void publishedTree;
+}
+
 async function runAdapterMaintenance(controller: vscode.TestController, ids: readonly string[]): Promise<void> {
   const workspaceRoot = getWorkspaceRoot();
   const adapter = currentAdapterConfig();

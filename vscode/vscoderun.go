@@ -87,6 +87,12 @@ type DiscoveryCapabilities struct {
 	NeutralParentRollups      bool     `json:"neutral_parent_rollups"`
 	ClearResultsTestIDs       []string `json:"clear_results_test_ids,omitempty"`
 	ClearStateTestIDs         []string `json:"clear_state_test_ids,omitempty"`
+	// ReconcileNoResultTestIDs lists test ids whose rendered Test Explorer
+	// result must be dropped to no-result on every discovery refresh —
+	// the bridge-computed authority for mutually-exclusive desired-state
+	// rows whose derived active is false. Consumers apply it verbatim.
+	// DHF-REQ: keel/requirement-95
+	ReconcileNoResultTestIDs []string `json:"reconcile_no_result_test_ids,omitempty"`
 }
 
 // TestItem is one node in the discovered VS Code test tree.
