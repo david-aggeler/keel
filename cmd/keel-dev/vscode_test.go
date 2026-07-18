@@ -1120,7 +1120,7 @@ func TestVSCodeDiscoveryEmitsLaneCoversAndVSIXFileItems(t *testing.T) {
 		}
 	}
 	writeFile(t, root, filepath.Join("log", "logging_test.go"), "package log\n\nimport \"testing\"\n\nfunc TestLog(t *testing.T) {}\n")
-	writeFile(t, root, filepath.Join("vsix", "src", "test", "suite", "extension.test.ts"), "suite('x', () => {});\n")
+	writeFile(t, root, filepath.Join("vsix", "src", "test", "suite", "extension.test.ts"), "suite('x', () => {\n  test('alpha case', () => {});\n});\n")
 	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{
   "version": 1,
   "lanes": [
@@ -1173,6 +1173,11 @@ func TestVSCodeDiscoveryEmitsLaneCoversAndVSIXFileItems(t *testing.T) {
 	if !strings.Contains(strings.Join(ui.Limitations, " "), "V10") || !discoveryHasAlias(doc, "keel::lane::ui::covers", "vsix::file::src/test/suite/extension.test.ts") {
 		t.Fatalf("ui lane limitations/covers = %+v items=%+v", ui.Limitations, doc.Items)
 	}
+	// requirement-94 (ac-308): the vsix-member covers expands file→test.
+	vsixFileAliasID := "keel::lane::ui::covers::" + StableIDSegment("vsix::file::src/test/suite/extension.test.ts")
+	if !discoveryHasAlias(doc, vsixFileAliasID, "vsix::test::src/test/suite/extension.test.ts::alpha-case") {
+		t.Fatalf("ui covers should nest the vsix test alias under its file alias: %+v", doc.Items)
+	}
 }
 
 // DHF-TEST: keel/requirement-54
@@ -1194,7 +1199,7 @@ func TestVSCodeFileLaneRunPassesVSIXFileFilter(t *testing.T) {
 	stub(t, bin, callsFile, "go", "exit 0")
 	stub(t, bin, callsFile, "pnpm", `
 case "$*" in
-  "--dir "*"/vsix run test:headless -- src/test/suite/extension.test.ts src/test/suite/tree.test.ts")
+  "--dir "*"/vsix run test:headless:json -- src/test/suite/extension.test.ts src/test/suite/tree.test.ts")
     exit 0
     ;;
   *)
@@ -1208,7 +1213,7 @@ esac`)
 	if err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), "keel::lane::ui"); err != nil {
 		t.Fatalf("ui lane run: %v\nprotocol:\n%s\ncalls:\n%s", err, protocol.String(), calls(t, callsFile))
 	}
-	if got := calls(t, callsFile); !strings.Contains(got, "pnpm --dir "+filepath.Join(root, "vsix")+" run test:headless -- src/test/suite/extension.test.ts src/test/suite/tree.test.ts") {
+	if got := calls(t, callsFile); !strings.Contains(got, "pnpm --dir "+filepath.Join(root, "vsix")+" run test:headless:json -- src/test/suite/extension.test.ts src/test/suite/tree.test.ts") {
 		t.Fatalf("pnpm call missing exact vsix file filter:\n%s", got)
 	}
 }
@@ -1232,10 +1237,10 @@ func TestVSCodeRunDirectVSIXSelectionsUseSelectedIDAndFileFilter(t *testing.T) {
 	stub(t, bin, callsFile, "go", "exit 0")
 	stub(t, bin, callsFile, "pnpm", `
 case "$*" in
-  "--dir "*"/vsix run test:headless -- src/test/suite/extension.test.ts src/test/suite/tree.test.ts")
+  "--dir "*"/vsix run test:headless:json -- src/test/suite/extension.test.ts src/test/suite/tree.test.ts")
     exit 0
     ;;
-  "--dir "*"/vsix run test:headless -- src/test/suite/tree.test.ts")
+  "--dir "*"/vsix run test:headless:json -- src/test/suite/tree.test.ts")
     exit 0
     ;;
   *)
@@ -1251,11 +1256,11 @@ esac`)
 	}{
 		{
 			id:       "vsix::root",
-			wantCall: "pnpm --dir " + filepath.Join(root, "vsix") + " run test:headless -- src/test/suite/extension.test.ts src/test/suite/tree.test.ts",
+			wantCall: "pnpm --dir " + filepath.Join(root, "vsix") + " run test:headless:json -- src/test/suite/extension.test.ts src/test/suite/tree.test.ts",
 		},
 		{
 			id:       "vsix::file::src/test/suite/tree.test.ts",
-			wantCall: "pnpm --dir " + filepath.Join(root, "vsix") + " run test:headless -- src/test/suite/tree.test.ts",
+			wantCall: "pnpm --dir " + filepath.Join(root, "vsix") + " run test:headless:json -- src/test/suite/tree.test.ts",
 		},
 	}
 	for _, tc := range cases {
@@ -1446,7 +1451,7 @@ func TestVSCodeLaneEdgeCases(t *testing.T) {
 	}
 
 	t.Setenv("PATH", t.TempDir())
-	if err := runVSIXFileSelection(context.Background(), discardLogger(), root, []string{"src/test/suite/x.test.ts"}, procexec.DefaultMaxOutputBytes); err == nil || !strings.Contains(err.Error(), "pnpm") {
+	if err := runVSIXFileSelection(context.Background(), discardLogger(), root, []string{"src/test/suite/x.test.ts"}, procexec.DefaultMaxOutputBytes, nil); err == nil || !strings.Contains(err.Error(), "pnpm") {
 		t.Fatalf("missing pnpm err = %v", err)
 	}
 }
@@ -3053,4 +3058,163 @@ func captureProcessStreams(t *testing.T, fn func()) (string, string) {
 		t.Fatal(err)
 	}
 	return string(stdoutBytes), string(stderrBytes)
+}
+
+// DHF-TEST: keel/requirement-94
+func TestVSCodeDiscoveryEmitsVSIXTestItemsFromStaticScan(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	for _, dir := range []string{".vscode", filepath.Join("vsix", "src", "test", "suite")} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, root, filepath.Join("vsix", "src", "test", "suite", "extension.test.ts"), "suite('Keel Test Bridge', () => {\n"+
+		"  test('first static case', () => {});\n"+
+		"  test(\"second static case\", async function () {});\n"+
+		"  test(`dynamic ${'x'} title`, () => {});\n"+
+		"  test('duplicated title', () => {});\n"+
+		"  test('duplicated title', () => {});\n"+
+		"});\n")
+	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{"version":1,"lanes":[]}`+"\n")
+
+	built, err := buildVSCodeDiscovery(root)
+	if err != nil {
+		t.Fatalf("buildVSCodeDiscovery: %v", err)
+	}
+	var discover bytes.Buffer
+	if err := testbridge.EncodeDocument(&discover, built); err != nil {
+		t.Fatalf("encode protocol document: %v", err)
+	}
+	var doc vscode.DiscoveryDocument
+	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
+		t.Fatalf("discovery JSON: %v\n%s", err, discover.String())
+	}
+
+	const fileID = "vsix::file::src/test/suite/extension.test.ts"
+	for title, slug := range map[string]string{"first static case": "first-static-case", "second static case": "second-static-case"} {
+		item, ok := discoveryItemByID(doc, "vsix::test::src/test/suite/extension.test.ts::"+slug)
+		if !ok {
+			t.Fatalf("discovery missing vsix test item for %q: %+v", title, doc.Items)
+		}
+		if item.ParentID != fileID || item.Kind != "test" || item.Runnable || item.Label != title {
+			t.Fatalf("vsix test item shape = %+v, want kind=test parent=%s runnable=false label=verbatim title", item, fileID)
+		}
+	}
+	var testItems []string
+	for _, item := range doc.Items {
+		if strings.HasPrefix(item.ID, "vsix::test::") {
+			testItems = append(testItems, item.ID)
+		}
+	}
+	if len(testItems) != 2 {
+		t.Fatalf("vsix test items = %v, want exactly the two statically-resolvable unique titles (dynamic + duplicated omitted, fail-closed)", testItems)
+	}
+}
+
+// DHF-TEST: keel/requirement-94
+func TestVSCodeEmitMochaJSONLEventsKeysPerTestIDs(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	if err := os.MkdirAll(filepath.Join(root, "vsix", "src", "test", "suite"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join("vsix", "src", "test", "suite", "extension.test.ts"), "suite('s', () => {\n  test('alpha case', () => {});\n  test('beta case', () => {});\n});\n")
+
+	index := buildVSIXTestIndex(root)
+	compiled := filepath.Join(root, "vsix", "out", "test", "suite", "extension.test.js")
+	lines := []string{
+		`{"version":1,"event":"run_started","time":"t"}`,
+		`{"version":1,"event":"test_started","time":"t","title":"alpha case","file":"` + filepath.ToSlash(compiled) + `"}`,
+		`{"version":1,"event":"passed","time":"t","title":"alpha case","file":"` + filepath.ToSlash(compiled) + `","duration_ms":7}`,
+		`{"version":1,"event":"test_started","time":"t","title":"beta case"}`,
+		`{"version":1,"event":"failed","time":"t","title":"beta case","message":"boom"}`,
+		`{"version":1,"event":"passed","time":"t","title":"ghost case"}`,
+		`not-json`,
+		`{"version":1,"event":"run_finished","time":"t","passes":2,"failures":1}`,
+	}
+	var events []vscode.RunEvent
+	emitMochaJSONLEvents([]byte(strings.Join(lines, "\n")+"\n"), index, func(event vscode.RunEvent) {
+		events = append(events, event)
+	})
+
+	const alphaID = "vsix::test::src/test/suite/extension.test.ts::alpha-case"
+	const betaID = "vsix::test::src/test/suite/extension.test.ts::beta-case"
+	if !runEventsContain(events, "test_started", alphaID) || !runEventsContain(events, "passed", alphaID) {
+		t.Fatalf("alpha events missing (file-mapped resolution): %+v", events)
+	}
+	if !runEventsContain(events, "test_started", betaID) || !runEventsContain(events, "failed", betaID) {
+		t.Fatalf("beta events missing (unique-title fallback resolution): %+v", events)
+	}
+	for _, event := range events {
+		if event.Event == "run_started" || event.Event == "run_finished" {
+			t.Fatalf("reporter envelope must not be forwarded: %+v", event)
+		}
+		if strings.Contains(event.TestID, "ghost") {
+			t.Fatalf("unresolvable title must be dropped fail-closed: %+v", event)
+		}
+		if event.Event == "passed" && event.TestID == alphaID && event.DurationMS != 7 {
+			t.Fatalf("alpha passed duration = %d, want 7", event.DurationMS)
+		}
+		if event.Event == "failed" && event.TestID == betaID && event.Message != "boom" {
+			t.Fatalf("beta failed message = %q, want boom", event.Message)
+		}
+	}
+	if len(events) != 4 {
+		t.Fatalf("events = %+v, want exactly alpha started/passed + beta started/failed", events)
+	}
+}
+
+// DHF-TEST: keel/requirement-94
+func TestVSCodeRunDirectVSIXSelectionEmitsPerTestEventsFromMochaJSONL(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	for _, dir := range []string{".vscode", filepath.Join("vsix", "src", "test", "suite")} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, root, filepath.Join("vsix", "src", "test", "suite", "tree.test.ts"), "suite('s', () => {\n  test('alpha case', () => {});\n  test('beta case', () => {});\n});\n")
+	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{"version":1,"lanes":[]}`+"\n")
+
+	// A stale results file from a previous run must not leak into this run's
+	// stream: the stub below rewrites it, and the runner clears it up front.
+	if err := os.MkdirAll(filepath.Join(root, "vsix", ".vscode-test"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join("vsix", ".vscode-test", "results.jsonl"), `{"version":1,"event":"passed","time":"t","title":"stale case"}`+"\n")
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", "exit 0")
+	stub(t, bin, callsFile, "pnpm", `
+mkdir -p vsix/.vscode-test
+printf '%s\n' '{"version":1,"event":"test_started","time":"t","title":"alpha case"}' > vsix/.vscode-test/results.jsonl
+printf '%s\n' '{"version":1,"event":"passed","time":"t","title":"alpha case","duration_ms":5}' >> vsix/.vscode-test/results.jsonl
+printf '%s\n' '{"version":1,"event":"passed","time":"t","title":"beta case"}' >> vsix/.vscode-test/results.jsonl
+exit 0`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	const selectedID = "vsix::file::src/test/suite/tree.test.ts"
+	var protocol bytes.Buffer
+	if err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), selectedID); err != nil {
+		t.Fatalf("vsix selection run: %v\nprotocol:\n%s\ncalls:\n%s", err, protocol.String(), calls(t, callsFile))
+	}
+	events := decodeRunEvents(t, protocol.String())
+	const alphaID = "vsix::test::src/test/suite/tree.test.ts::alpha-case"
+	const betaID = "vsix::test::src/test/suite/tree.test.ts::beta-case"
+	if !runEventsContain(events, "passed", alphaID) || !runEventsContain(events, "passed", betaID) {
+		t.Fatalf("per-test passed events missing: %+v", events)
+	}
+	if !runEventsContain(events, "passed", selectedID) {
+		t.Fatalf("selected file id must still settle: %+v", events)
+	}
+	for _, event := range events {
+		if strings.Contains(event.TestID, "stale") {
+			t.Fatalf("stale results.jsonl content leaked into the run stream: %+v", events)
+		}
+	}
 }

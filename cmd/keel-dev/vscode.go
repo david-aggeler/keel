@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"sort"
 	"strconv"
@@ -898,7 +899,13 @@ func (s lanesState) coverItems(eff effectiveLane) []vscode.TestItem {
 		}
 	}
 	for _, rel := range eff.directVSIXFiles {
-		addAlias(coversID, "vsix::file::"+filepath.ToSlash(rel), filepath.Base(rel), "file")
+		slashRel := filepath.ToSlash(rel)
+		fileAliasID := addAlias(coversID, "vsix::file::"+slashRel, filepath.Base(rel), "file")
+		// requirement-94 (ac-308): with vsix::test items discovered, a
+		// vsix-member lane's covers expands file→test like the Go tree.
+		for _, entry := range vsixFileTestEntries(filepath.Join(s.root, "vsix", filepath.FromSlash(rel))) {
+			addAlias(fileAliasID, vsixTestID(slashRel, entry.slug), entry.title, "test")
+		}
 	}
 	for _, rootID := range eff.directRootIDs {
 		switch rootID {
@@ -1410,8 +1417,80 @@ func discoverVSIXTestItems(root string) ([]vscode.TestItem, error) {
 			Profiles:          []string{"run"},
 			RequiredResources: []string{"pnpm"},
 		})
+		// Per-test children from a hermetic static scan (requirement-94):
+		// no node/pnpm at discovery time, mirroring the Go file→test nesting.
+		// The id tail is the title's stable segment — the wire schema forbids
+		// spaces in id segments — while the label carries the verbatim title.
+		for _, entry := range vsixFileTestEntries(filepath.Join(root, "vsix", filepath.FromSlash(rel))) {
+			items = append(items, vscode.TestItem{
+				ID:          vsixTestID(rel, entry.slug),
+				ParentID:    "vsix::file::" + rel,
+				Label:       entry.title,
+				Kind:        "test",
+				Framework:   "vsix",
+				Runner:      "mocha",
+				RunnerLabel: "Mocha",
+				URI:         filepath.ToSlash(filepath.Join("vsix", rel)),
+				Runnable:    false,
+				Profiles:    []string{},
+			})
+		}
 	}
 	return items, nil
+}
+
+// vsixTestTitlePattern statically matches Mocha test declarations whose title
+// is a plain string literal. Template literals, computed titles, and anything
+// else the scan cannot resolve are omitted from discovery (fail-closed,
+// CR-120 decision); the run stream still surfaces such cases if the Mocha
+// JSONL carries them under a resolvable title.
+var vsixTestTitlePattern = regexp.MustCompile(`(?m)^\s*test(?:\.only|\.skip)?\(\s*(?:'((?:\\.|[^'\\])*)'|"((?:\\.|[^"\\])*)")`)
+
+// vsixTestEntry is one statically-resolved Mocha case: the verbatim title
+// (label + JSONL match key) and its schema-safe id segment.
+type vsixTestEntry struct {
+	title string
+	slug  string
+}
+
+func vsixTestID(rel, slug string) string {
+	return "vsix::test::" + rel + "::" + slug
+}
+
+// vsixFileTestEntries returns the ordered, statically-resolvable Mocha test()
+// cases of one vsix test file. A title whose stable id segment collides with
+// another title's in the same file is ambiguous as a stable id and is dropped
+// entirely (fail-closed).
+//
+// DHF-REQ: keel/requirement-94
+func vsixFileTestEntries(path string) []vsixTestEntry {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	slugCounts := map[string]int{}
+	var ordered []vsixTestEntry
+	for _, match := range vsixTestTitlePattern.FindAllSubmatch(data, -1) {
+		title := string(match[1])
+		if title == "" {
+			title = string(match[2])
+		}
+		if title == "" {
+			continue
+		}
+		entry := vsixTestEntry{title: title, slug: StableIDSegment(title)}
+		if slugCounts[entry.slug] == 0 {
+			ordered = append(ordered, entry)
+		}
+		slugCounts[entry.slug]++
+	}
+	entries := ordered[:0]
+	for _, entry := range ordered {
+		if slugCounts[entry.slug] == 1 {
+			entries = append(entries, entry)
+		}
+	}
+	return entries
 }
 
 func goDiscoverySkipDir(path, name string) bool {
@@ -1746,24 +1825,157 @@ func runVSCodeFileLane(ctx context.Context, logger *slog.Logger, root, laneID, r
 		}
 	}
 	if len(eff.vsixFiles) > 0 {
-		if err := runVSIXFileSelection(ctx, logger, root, eff.vsixFiles, maxOutputBytes); err != nil {
+		if err := runVSIXFileSelection(ctx, logger, root, eff.vsixFiles, maxOutputBytes, writer); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// DHF-REQ: keel/requirement-54
-func runVSIXFileSelection(ctx context.Context, logger *slog.Logger, root string, files []string, maxOutputBytes int) error {
+// vsixMochaResultsRel is where the vsix test:headless:json script's Mocha
+// JSONL reporter writes per-test results, relative to the vsix directory
+// (KEEL_VSCODE_MOCHA_JSONL default pinned in vsix/package.json).
+const vsixMochaResultsRel = ".vscode-test/results.jsonl"
+
+// runVSIXFileSelection runs the vsix Mocha suite through the JSONL-reporter
+// script and replays the per-test results as run events (requirement-94).
+// The Mocha JSONL is the single source of per-test run truth; it is parsed
+// even when the suite exits red so the failing case's id is stamped.
+//
+// DHF-REQ: keel/requirement-54, keel/requirement-94
+func runVSIXFileSelection(ctx context.Context, logger *slog.Logger, root string, files []string, maxOutputBytes int, writer vscode.RunEventWriter) error {
 	if _, err := exec.LookPath("pnpm"); err != nil {
 		return fmt.Errorf("vscode run vsix files: required tool %q not found on PATH", "pnpm")
 	}
-	args := []string{"--dir", filepath.Join(root, "vsix"), "run", "test:headless", "--"}
-	args = append(args, files...)
-	if err := runStep(ctx, logger, root, step{name: "vscode:vsix-files", program: "pnpm", args: args, maxOutputBytes: maxOutputBytes}); err != nil {
-		return err
+	resultsPath := filepath.Join(root, "vsix", filepath.FromSlash(vsixMochaResultsRel))
+	if err := os.Remove(resultsPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("vscode run vsix files: clear stale mocha results: %w", err)
 	}
-	return nil
+	args := []string{"--dir", filepath.Join(root, "vsix"), "run", "test:headless:json", "--"}
+	args = append(args, files...)
+	runErr := runStep(ctx, logger, root, step{name: "vscode:vsix-files", program: "pnpm", args: args, maxOutputBytes: maxOutputBytes})
+	if writer != nil {
+		if raw, err := os.ReadFile(resultsPath); err == nil {
+			emitMochaJSONLEvents(raw, buildVSIXTestIndex(root), writer)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			logger.Warn("read mocha results", "path", resultsPath, "error", err.Error())
+		}
+	}
+	return runErr
+}
+
+// mochaJSONLEvent is one line of the vsix Mocha JSONL reporter stream
+// (vsix/test-jsonl-reporter.cjs).
+type mochaJSONLEvent struct {
+	Event      string `json:"event"`
+	Title      string `json:"title"`
+	File       string `json:"file"`
+	DurationMS int64  `json:"duration_ms"`
+	Message    string `json:"message"`
+}
+
+// vsixTestIndex resolves a Mocha JSONL event to its discovered vsix::test id.
+type vsixTestIndex struct {
+	byFileTitle map[string]map[string]string
+	byTitle     map[string][]string
+}
+
+// buildVSIXTestIndex derives the id index from the same static scan that
+// discovery serves, keyed by the verbatim Mocha title, so run events resolve
+// to exactly the discovered ids.
+func buildVSIXTestIndex(root string) vsixTestIndex {
+	index := vsixTestIndex{byFileTitle: map[string]map[string]string{}, byTitle: map[string][]string{}}
+	items, err := discoverVSIXTestItems(root)
+	if err != nil {
+		return index
+	}
+	for _, item := range items {
+		if !strings.HasPrefix(item.ID, "vsix::test::") {
+			continue
+		}
+		rel, ok := strings.CutPrefix(item.ParentID, "vsix::file::")
+		if !ok {
+			continue
+		}
+		if index.byFileTitle[rel] == nil {
+			index.byFileTitle[rel] = map[string]string{}
+		}
+		index.byFileTitle[rel][item.Label] = item.ID
+		index.byTitle[item.Label] = append(index.byTitle[item.Label], item.ID)
+	}
+	return index
+}
+
+// resolve maps a reporter event to a discovered vsix::test id. The compiled
+// out/**.js file path is mapped back to its src/**.ts source; when that
+// fails, a globally-unique title still resolves. Anything else is dropped
+// (fail-closed) — the raw line remains visible in the child output log.
+func (index vsixTestIndex) resolve(event mochaJSONLEvent) string {
+	if event.Title == "" {
+		return ""
+	}
+	if rel := vsixSourceRelFromCompiled(event.File); rel != "" {
+		if id, ok := index.byFileTitle[rel][event.Title]; ok {
+			return id
+		}
+	}
+	if ids := index.byTitle[event.Title]; len(ids) == 1 {
+		return ids[0]
+	}
+	return ""
+}
+
+// vsixSourceRelFromCompiled maps a compiled Mocha file path
+// (…/vsix/out/test/**.test.js) to its vsix-relative TypeScript source
+// (src/test/**.test.ts). Returns "" when the shape is not recognized.
+func vsixSourceRelFromCompiled(file string) string {
+	if file == "" {
+		return ""
+	}
+	slash := filepath.ToSlash(file)
+	_, rest, ok := strings.Cut(slash, "/out/")
+	if !ok {
+		rest, ok = strings.CutPrefix(slash, "out/")
+		if !ok {
+			return ""
+		}
+	}
+	if !strings.HasSuffix(rest, ".js") {
+		return ""
+	}
+	return "src/" + strings.TrimSuffix(rest, ".js") + ".ts"
+}
+
+// emitMochaJSONLEvents replays the per-test Mocha JSONL stream as run events
+// keyed to vsix::test ids — symmetric to emitLaneGoPackageEvents for Go.
+// The reporter's own run_started/run_finished envelope lines are skipped;
+// the bridge writes its own run envelope.
+//
+// DHF-REQ: keel/requirement-94
+func emitMochaJSONLEvents(raw []byte, index vsixTestIndex, writer vscode.RunEventWriter) {
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		var event mochaJSONLEvent
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			continue
+		}
+		switch event.Event {
+		case "test_started", "passed", "failed", "skipped":
+		default:
+			continue
+		}
+		id := index.resolve(event)
+		if id == "" {
+			continue
+		}
+		writer(vscode.RunEvent{
+			Event:      event.Event,
+			TestID:     id,
+			DurationMS: event.DurationMS,
+			Message:    event.Message,
+		})
+	}
 }
 
 // DHF-REQ: keel/requirement-91
@@ -1775,7 +1987,7 @@ func runVSCodeVSIXSelection(ctx context.Context, logger *slog.Logger, root, sele
 	if writer != nil {
 		writer(vscode.RunEvent{Event: "test_started", TestID: selectedID})
 	}
-	if err := runVSIXFileSelection(ctx, logger, root, files, maxOutputBytes); err != nil {
+	if err := runVSIXFileSelection(ctx, logger, root, files, maxOutputBytes, writer); err != nil {
 		if writer != nil {
 			writer(vscode.RunEvent{Event: "failed", TestID: selectedID, Message: err.Error()})
 		}
