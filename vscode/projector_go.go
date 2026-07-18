@@ -25,7 +25,7 @@ func GoRunEventTestID(selection GoSelection, event GoTestJSONEvent, selectedID, 
 	}
 	if selection.TestName == "" && event.Package != "" {
 		pkg := GoEventPackageRel(event.Package, modulePath)
-		if pkg != "" && selection.Kind == "package" {
+		if pkg != "" && (selection.Kind == "package" || selection.Kind == "root") {
 			return "go::pkg::" + filepath.ToSlash(pkg)
 		}
 	}
@@ -44,12 +44,14 @@ func OutputBelongsToGoSelection(selection GoSelection, event GoTestJSONEvent) bo
 }
 
 // GoJSONResultBelongsToSelection reports whether a `go test -json` result event
-// counts toward the given selection.
+// counts toward the given selection. Root and package selections own every
+// result their run produced — package-level and per-test alike — so that each
+// started descendant settles under its own id (requirement-71 AC 6).
 //
-// DHF-REQ: keel/requirement-23
+// DHF-REQ: keel/requirement-23, keel/requirement-71
 func GoJSONResultBelongsToSelection(selection GoSelection, event GoTestJSONEvent) bool {
-	if selection.Kind == "root" {
-		return event.Test == ""
+	if selection.Kind == "root" || selection.Kind == "package" {
+		return true
 	}
 	if selection.Kind == "file" {
 		return event.Test != "" && StringInSlice(selection.TestNames, event.Test)

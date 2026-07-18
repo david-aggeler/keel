@@ -221,11 +221,23 @@ func (keelTestBridge) Run(ctx context.Context, req testbridge.RunRequest, writer
 		return 1, fmt.Errorf("vscode lane blocked")
 	}
 	profile := newKeelWorkspaceProfile(root)
-	exitCode, err := runVSCodeLane(ctx, state.logger, root, laneID, req.RunID, profile.MaxOutputBytes(), writer)
+	// The run stream settles descendants under their own ids; the selected id's
+	// green comes from here only when the stream did not already settle it
+	// (requirement-71 AC 6: exactly one terminal event per id).
+	settled := false
+	observe := func(event vscode.RunEvent) {
+		if event.TestID == laneID && vscode.IsTerminalRunEvent(event.Event) {
+			settled = true
+		}
+		writer(event)
+	}
+	exitCode, err := runVSCodeLane(ctx, state.logger, root, laneID, req.RunID, profile.MaxOutputBytes(), observe)
 	if err != nil {
 		return exitCode, err
 	}
-	writer(vscode.RunEvent{Event: "passed", TestID: laneID})
+	if !settled {
+		writer(vscode.RunEvent{Event: "passed", TestID: laneID})
+	}
 	return exitCode, nil
 }
 

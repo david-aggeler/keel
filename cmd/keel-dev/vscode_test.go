@@ -2369,6 +2369,97 @@ exit 0`)
 	}
 }
 
+// DHF-TEST: keel/requirement-71
+func TestVSCodeRunGoRootSelectionSettlesEveryStartedIDExactlyOnce(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", `
+case "$1 $2" in
+  "test ./...")
+    printf '{"Action":"run","Package":"github.com/david-aggeler/keel/log","Test":"TestLog"}\n'
+    printf '{"Action":"pass","Package":"github.com/david-aggeler/keel/log","Test":"TestLog","Elapsed":0.01}\n'
+    printf '{"Action":"pass","Package":"github.com/david-aggeler/keel/log","Elapsed":0.02}\n'
+    printf '{"Action":"run","Package":"github.com/david-aggeler/keel/vscode","Test":"TestHelpers"}\n'
+    printf '{"Action":"pass","Package":"github.com/david-aggeler/keel/vscode","Test":"TestHelpers","Elapsed":0.01}\n'
+    printf '{"Action":"pass","Package":"github.com/david-aggeler/keel/vscode","Elapsed":0.02}\n'
+    ;;
+esac
+exit 0`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var protocol bytes.Buffer
+	if err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), "go::root"); err != nil {
+		t.Fatalf("go root run: %v\nprotocol:\n%s\ncalls:\n%s", err, protocol.String(), calls(t, callsFile))
+	}
+	events := decodeRunEvents(t, protocol.String())
+	started := map[string]int{}
+	terminal := map[string]int{}
+	for _, event := range events {
+		switch event.Event {
+		case "test_started":
+			started[event.TestID]++
+		case "passed", "failed", "skipped", "errored":
+			terminal[event.TestID]++
+		}
+	}
+	for id := range started {
+		if terminal[id] != 1 {
+			t.Fatalf("started id %q has %d terminal events, want exactly 1\nevents: %+v", id, terminal[id], events)
+		}
+	}
+	for _, id := range []string{"go::pkg::log", "go::pkg::vscode", "go::test::log::TestLog", "go::test::vscode::TestHelpers", "go::root"} {
+		if terminal[id] != 1 {
+			t.Fatalf("id %q has %d terminal events, want exactly 1\nevents: %+v", id, terminal[id], events)
+		}
+	}
+	for id, count := range terminal {
+		if count > 1 {
+			t.Fatalf("id %q settled %d times, want once\nevents: %+v", id, count, events)
+		}
+	}
+}
+
+// DHF-TEST: keel/requirement-71
+func TestVSCodeRunGoSingleTestSelectionSettlesSelectedIDExactlyOnce(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", `
+case "$1 $2" in
+  "test ./log")
+    printf '{"Action":"run","Package":"github.com/david-aggeler/keel/log","Test":"TestLog"}\n'
+    printf '{"Action":"pass","Package":"github.com/david-aggeler/keel/log","Test":"TestLog","Elapsed":0.01}\n'
+    printf '{"Action":"pass","Package":"github.com/david-aggeler/keel/log","Elapsed":0.02}\n'
+    ;;
+esac
+exit 0`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	const selectedID = "go::test::log::TestLog"
+	var protocol bytes.Buffer
+	if err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), selectedID); err != nil {
+		t.Fatalf("go single-test run: %v\nprotocol:\n%s\ncalls:\n%s", err, protocol.String(), calls(t, callsFile))
+	}
+	events := decodeRunEvents(t, protocol.String())
+	terminal := map[string]int{}
+	for _, event := range events {
+		switch event.Event {
+		case "passed", "failed", "skipped", "errored":
+			terminal[event.TestID]++
+		}
+	}
+	if terminal[selectedID] != 1 {
+		t.Fatalf("selected id settled %d times, want exactly once\nevents: %+v", terminal[selectedID], events)
+	}
+}
+
 // DHF-TEST: keel/requirement-49
 func TestVSCodeDiscoveryDoesNotRequireGoToolchain(t *testing.T) {
 	root := t.TempDir()
