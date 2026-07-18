@@ -1,11 +1,4 @@
 {
   "version": 1,
-  "entries": [
-    {
-      "id": "vsix:req-97:reconcile-replay",
-      "requirement": "keel/requirement-97",
-      "fixing_cr": "keel/change_request-123",
-      "reason": "applyReconcileResultsCapability is a stub: reconcile_results entries are not replayed through a non-persisted TestRun, so stale (incl. persistence-restored) exclusive-group icons are never overwritten (keel/issue-89 reopened; the CR-121 removal mechanism was falsified by owner live validation)."
-    }
-  ]
+  "entries": []
 }
