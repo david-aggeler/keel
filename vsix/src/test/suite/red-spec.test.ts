@@ -4,9 +4,9 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { applyReconcileNoResultCapability, applyRunEvent, invalidateClearedResults, setCurrentTreeForTest } from '../../extension';
+import { applyReconcileResultsCapability, applyRunEvent, invalidateClearedResults, resetReconcileSignatureForTest, setCurrentTreeForTest } from '../../extension';
 import { configRelativePath, currentConfigVersion, discoverTests, runTests } from '../../bridgeAdapter';
-import { DiscoveryDocument, DiscoveryItem, RunEvent } from '../../protocol';
+import { DiscoveryDocument, DiscoveryItem, ReconcileResult, RunEvent } from '../../protocol';
 import { publishDiscovery } from '../../tree';
 
 suite('Keel Test Bridge expected-red specs', () => {
@@ -346,27 +346,28 @@ suite('Keel Test Bridge expected-red specs', () => {
     });
   });
 
-  // req-95: at-rest reconcile — a stale green on a non-active exclusive
-  // member must drop on a plain discovery refresh that serves
-  // capabilities.reconcile_no_result_test_ids, with NO activation run and
-  // no reconcile-created TestRun. cr-114's spec proved only the activation
-  // switch; this proves the at-rest path (keel/issue-89, rca-3 root #1).
-  // Observable proxy: TestItem object identity — VS Code exposes no result
-  // readback (docs/mutex/vscode-object-model.md F1/F13).
+  // req-97: verbatim reconcile replay — the bridge-served reconcile_results
+  // entries are stamped through EXACTLY ONE non-persisted, focus-preserving
+  // TestRun per refresh apply, one-to-one and in order; an unchanged list
+  // does not re-stamp (signature guard); a changed list stamps again.
+  // Behavioral contract only — the object-identity proxy was falsified by
+  // owner live validation (persisted results re-associate by id, F14);
+  // rendered efficacy is proven by the owner (ac-322).
   //
-  // DHF-TEST: keel/requirement-95
-  test('req-95 at-rest refresh drops a stale green without an activation run', async () => {
-    await expectKnownRed('vsix:req-95:at-rest-reconcile', () => {
-      const controller = vscode.tests.createTestController(`keelReq95AtRest-${Date.now()}`, 'Keel Req 95 at rest');
+  // DHF-TEST: keel/requirement-97
+  test('req-97 reconcile replay stamps served states through one non-persisted run', async () => {
+    await expectKnownRed('vsix:req-97:reconcile-replay', () => {
+      const controller = vscode.tests.createTestController(`keelReq97Replay-${Date.now()}`, 'Keel Req 97 replay');
       const groupId = 'demo::desired-state::dataset';
       const fullId = 'demo::desired-state::dataset::full';
       const smallId = 'demo::desired-state::dataset::small';
       const unknownId = 'demo::desired-state::dataset::unknown';
-      const discovery = (capabilities?: DiscoveryDocument['capabilities']): DiscoveryDocument => ({
+      const ghostId = 'demo::desired-state::dataset::ghost';
+      const discovery = (reconcile: ReconcileResult[]): DiscoveryDocument => ({
         version: 1,
-        workspace: 'req-95-at-rest',
+        workspace: 'req-97-replay',
         generated_at: new Date().toISOString(),
-        capabilities,
+        capabilities: { reconcile_results: reconcile },
         items: [
           { id: groupId, label: 'app-db data set', kind: 'group', runnable: false, profiles: [] },
           { id: fullId, parent_id: groupId, label: 'full', kind: 'test', runnable: true, profiles: ['run'] },
@@ -374,57 +375,90 @@ suite('Keel Test Bridge expected-red specs', () => {
           { id: unknownId, parent_id: groupId, label: 'Unknown State', kind: 'test', runnable: true, profiles: ['run'] }
         ]
       });
+      interface ObservedRun {
+        name: string | undefined;
+        persisted: boolean;
+        preserveFocus: boolean;
+        includeIds: string[];
+        stamps: Array<[string, string]>;
+        ended: boolean;
+      }
+      const observed: ObservedRun[] = [];
+      const originalCreateTestRun = controller.createTestRun.bind(controller);
+      controller.createTestRun = ((request: vscode.TestRunRequest, name?: string, persist?: boolean) => {
+        const run = originalCreateTestRun(request, name, persist);
+        const record: ObservedRun = {
+          name,
+          persisted: run.isPersisted,
+          preserveFocus: request.preserveFocus,
+          includeIds: (request.include ?? []).map((item) => item.id),
+          stamps: [],
+          ended: false
+        };
+        observed.push(record);
+        const originalPassed = run.passed.bind(run);
+        const originalSkipped = run.skipped.bind(run);
+        const originalEnd = run.end.bind(run);
+        run.passed = (item: vscode.TestItem, duration?: number) => {
+          record.stamps.push([item.id, 'passed']);
+          originalPassed(item, duration);
+        };
+        run.skipped = (item: vscode.TestItem) => {
+          record.stamps.push([item.id, 'skipped']);
+          originalSkipped(item);
+        };
+        run.end = () => {
+          record.ended = true;
+          originalEnd();
+        };
+        return run;
+      }) as typeof controller.createTestRun;
+
       try {
-        const tree = publishDiscovery(controller, os.tmpdir(), discovery());
+        resetReconcileSignatureForTest();
+        const served: ReconcileResult[] = [
+          { test_id: fullId, state: 'passed', message: 'app-db-full is active' },
+          { test_id: smallId, state: 'skipped', message: 'not active (app-db-full is active)' },
+          { test_id: unknownId, state: 'skipped', message: 'not active (app-db-full is active)' },
+          { test_id: ghostId, state: 'skipped', message: 'not in the tree; must be ignored' }
+        ];
+        const tree = publishDiscovery(controller, os.tmpdir(), discovery(served));
         setCurrentTreeForTest(tree);
-        const memberOnController = (id: string): vscode.TestItem | undefined =>
-          controller.items.get(groupId)?.children.get(id);
 
-        // A real run stamps the green that later goes stale (restored after
-        // a window reload, or the environment drifted out-of-band).
-        const fullItem = tree.itemsById.get(fullId);
-        assert.ok(fullItem, 'full item is discovered');
-        const run = controller.createTestRun(new vscode.TestRunRequest([fullItem]));
-        applyRunEvent(run, JSON.stringify(runEvent({ event: 'passed', test_id: fullId })), new Set([fullId]), new Set());
-        run.end();
-        const fullBefore = memberOnController(fullId);
-        const smallBefore = memberOnController(smallId);
-        const unknownBefore = memberOnController(unknownId);
-        assert.ok(fullBefore && smallBefore && unknownBefore, 'all members are present after the run');
+        applyReconcileResultsCapability(controller, tree);
+        assert.equal(observed.length, 1, 'exactly one reconcile TestRun is created for a served list');
+        const first = observed[0];
+        assert.equal(first.name, 'desired-state reconcile', 'the reconcile run is named for the Test Results panel');
+        assert.equal(first.persisted, false, 'the reconcile run must not persist (persist=false)');
+        assert.equal(first.preserveFocus, true, 'the reconcile run must not steal focus');
+        assert.deepEqual(first.stamps, [
+          [fullId, 'passed'],
+          [smallId, 'skipped'],
+          [unknownId, 'skipped']
+        ], 'stamps replay the served entries verbatim, in order, restricted to tree items');
+        assert.deepEqual(first.includeIds.sort(), [fullId, smallId, unknownId].sort(), 'the run request includes exactly the stamped items');
+        assert.ok(first.ended, 'the reconcile run is ended in the same apply');
 
-        // At-rest refresh: the bridge now derives small as the active
-        // member; full and Unknown State must render no result. No run of
-        // any kind happens.
-        const refreshed = publishDiscovery(controller, os.tmpdir(), discovery({
-          reconcile_no_result_test_ids: [fullId, unknownId]
-        }));
+        applyReconcileResultsCapability(controller, tree);
+        assert.equal(observed.length, 1, 'an unchanged served list must not re-stamp (signature guard)');
+
+        const flipped: ReconcileResult[] = [
+          { test_id: fullId, state: 'skipped', message: 'not active (app-db-small is active)' },
+          { test_id: smallId, state: 'passed', message: 'app-db-small is active' },
+          { test_id: unknownId, state: 'skipped', message: 'not active (app-db-small is active)' }
+        ];
+        const refreshed = publishDiscovery(controller, os.tmpdir(), discovery(flipped));
         setCurrentTreeForTest(refreshed);
-        assert.deepEqual(
-          refreshed.capabilities.reconcile_no_result_test_ids,
-          [fullId, unknownId],
-          'the published tree carries the capability verbatim'
-        );
-        let reconcileRuns = 0;
-        const originalCreateTestRun = controller.createTestRun.bind(controller);
-        controller.createTestRun = ((request: vscode.TestRunRequest, name?: string, persist?: boolean) => {
-          reconcileRuns += 1;
-          return originalCreateTestRun(request, name, persist);
-        }) as typeof controller.createTestRun;
-        try {
-          applyReconcileNoResultCapability(controller, refreshed);
-        } finally {
-          controller.createTestRun = originalCreateTestRun;
-        }
-
-        assert.notStrictEqual(memberOnController(fullId), fullBefore,
-          'the stale-green non-active member must be rebuilt so its rendered result drops at rest');
-        assert.notStrictEqual(memberOnController(unknownId), unknownBefore,
-          'the inactive Unknown State peer listed by the bridge must be rebuilt too');
-        assert.strictEqual(memberOnController(smallId), smallBefore,
-          'the active member must be retained in place');
-        assert.ok(controller.items.get(groupId), 'the exclusive group parent must survive the reconcile');
-        assert.equal(reconcileRuns, 0, 'the at-rest reconcile must not create a TestRun');
+        applyReconcileResultsCapability(controller, refreshed);
+        assert.equal(observed.length, 2, 'a changed served list stamps again');
+        assert.deepEqual(observed[1].stamps, [
+          [fullId, 'skipped'],
+          [smallId, 'passed'],
+          [unknownId, 'skipped']
+        ], 'the second run replays the flipped states verbatim');
       } finally {
+        controller.createTestRun = originalCreateTestRun;
+        resetReconcileSignatureForTest();
         setCurrentTreeForTest(undefined);
         controller.dispose();
       }

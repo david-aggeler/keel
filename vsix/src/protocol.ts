@@ -14,12 +14,20 @@ export interface DiscoveryCapabilities {
   clear_results_test_ids?: string[];
   clear_state_test_ids?: string[];
   /**
-   * Bridge-computed authority for exclusive desired-state rendering: test
-   * ids whose rendered result must drop to no-result on every discovery
-   * refresh (derived active=false rows). Applied verbatim by the VSIX.
-   * DHF-REQ: keel/requirement-95
+   * Bridge-computed rendered truth for exclusive desired-state rows: one
+   * stamp per row with a run id (active row passed, every other row
+   * skipped). The VSIX replays the entries verbatim through one
+   * non-persisted TestRun per refresh, overwriting stale results —
+   * including results restored from persistence after a window reload.
+   * DHF-REQ: keel/requirement-97
    */
-  reconcile_no_result_test_ids?: string[];
+  reconcile_results?: ReconcileResult[];
+}
+
+export interface ReconcileResult {
+  test_id: string;
+  state: 'passed' | 'skipped';
+  message?: string;
 }
 
 export interface DiscoveryItem {

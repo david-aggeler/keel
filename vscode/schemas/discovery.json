@@ -63,13 +63,26 @@
           },
           "uniqueItems": true
         },
-        "reconcile_no_result_test_ids": {
+        "reconcile_results": {
           "type": "array",
           "items": {
-            "type": "string",
-            "minLength": 1
-          },
-          "uniqueItems": true
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["test_id", "state"],
+            "properties": {
+              "test_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "state": {
+                "enum": ["passed", "skipped"]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
         }
       }
     },
