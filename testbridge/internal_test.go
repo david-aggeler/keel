@@ -3,6 +3,8 @@ package testbridge
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 // DHF-TEST: keel/requirement-58
 func TestRunLockAcquireReleaseAndMismatch(t *testing.T) {
 	root := t.TempDir()
+	t.Setenv(RunLockTokenEnv, "") // deterministic baseline regardless of test order
 	release, err := acquireRunLock(root, []string{"demo::lane::fast"}, "token-1")
 	if err != nil {
 		t.Fatalf("acquire run lock: %v", err)
@@ -23,6 +26,9 @@ func TestRunLockAcquireReleaseAndMismatch(t *testing.T) {
 	if _, err := os.Stat(RunLockPath(root)); err != nil {
 		t.Fatalf("lock missing after acquire: %v", err)
 	}
+	// Simulate an unrelated process: no inherited ancestor token (the acquire
+	// above exported token-1 into this process's env; requirement-96).
+	t.Setenv(RunLockTokenEnv, "")
 	if _, err := acquireRunLock(root, []string{"demo::lane::fast"}, "token-2"); err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("second acquire err = %v, want already exists", err)
 	}
@@ -42,6 +48,86 @@ func TestRunLockAcquireReleaseAndMismatch(t *testing.T) {
 	}
 	if err := release(); err != nil {
 		t.Fatalf("release matching lock: %v", err)
+	}
+}
+
+// A descendant run whose inherited env token matches the on-disk lock token
+// proceeds without acquiring, its release is a no-op that leaves the ancestor's
+// lock in place, and the ancestor's release still removes the lock cleanly and
+// restores the prior environment.
+//
+// DHF-TEST: keel/requirement-96
+func TestRunLockReentrantForDescendantRuns(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv(RunLockTokenEnv, "") // pin a clean baseline; acquire overwrites it
+	release, err := acquireRunLock(root, []string{"vsix::root"}, "token-outer")
+	if err != nil {
+		t.Fatalf("outer acquire: %v", err)
+	}
+	if got := os.Getenv(RunLockTokenEnv); got != "token-outer" {
+		t.Fatalf("exported env token = %q, want token-outer", got)
+	}
+
+	nestedRelease, err := acquireRunLock(root, []string{"keel::maintenance::detect-lanes"}, "token-nested")
+	if err != nil {
+		t.Fatalf("nested acquire under matching ancestor token: %v", err)
+	}
+	if err := nestedRelease(); err != nil {
+		t.Fatalf("nested no-op release: %v", err)
+	}
+	data, err := os.ReadFile(RunLockPath(root))
+	if err != nil {
+		t.Fatalf("lock must survive the nested release: %v", err)
+	}
+	var current vscode.RunLockFile
+	if err := json.Unmarshal(data, &current); err != nil {
+		t.Fatalf("parse surviving lock: %v", err)
+	}
+	if current.Token != "token-outer" {
+		t.Fatalf("surviving lock token = %q, want token-outer", current.Token)
+	}
+
+	if err := release(); err != nil {
+		t.Fatalf("outer release after nested run: %v", err)
+	}
+	if _, err := os.Stat(RunLockPath(root)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("lock stat after outer release = %v, want not-exist", err)
+	}
+	if got := os.Getenv(RunLockTokenEnv); got != "" {
+		t.Fatalf("env token after outer release = %q, want restored empty baseline", got)
+	}
+}
+
+// Mismatched and unreadable lock state stays refused: the reentrant path only
+// opens for an exact token match (fail-closed).
+//
+// DHF-TEST: keel/requirement-96
+func TestRunLockMismatchedOrCorruptTokenStillRefused(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv(RunLockTokenEnv, "") // deterministic baseline regardless of test order
+	release, err := acquireRunLock(root, []string{"demo::lane::fast"}, "token-1")
+	if err != nil {
+		t.Fatalf("acquire run lock: %v", err)
+	}
+
+	t.Setenv(RunLockTokenEnv, "token-elsewhere")
+	if _, err := acquireRunLock(root, []string{"demo::lane::fast"}, "token-2"); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("mismatched-token acquire err = %v, want already exists", err)
+	}
+
+	if err := os.WriteFile(RunLockPath(root), []byte("{corrupt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(RunLockTokenEnv, "token-1")
+	if _, err := acquireRunLock(root, []string{"demo::lane::fast"}, "token-2"); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("corrupt-lock acquire err = %v, want already exists", err)
+	}
+
+	if err := os.Remove(RunLockPath(root)); err != nil {
+		t.Fatal(err)
+	}
+	if err := release(); err != nil {
+		t.Fatalf("release with lock already gone: %v", err)
 	}
 }
 

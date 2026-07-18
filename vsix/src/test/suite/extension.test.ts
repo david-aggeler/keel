@@ -1377,7 +1377,9 @@ process.exit(2);
     assert.equal(devDetect.code, 0);
     const runStreamRoot = devRoot;
     const runsDir = path.join(runStreamRoot, '.devtools', 'vscode-runs');
-    fs.rmSync(path.join(runsDir, 'run.lock'), { force: true });
+    // No run.lock cleanup here: under a bridge-launched run the parent keel-dev
+    // legitimately holds the lock and nested runs proceed via the inherited
+    // KEEL_TESTBRIDGE_RUN_LOCK_TOKEN (requirement-96, issue-88).
     const beforeRunStreams = new Set(listRunStreams(runsDir));
     try {
       const extension = vscode.extensions.getExtension('aggeler.keel-test-bridge');
