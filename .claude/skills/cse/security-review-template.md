@@ -154,7 +154,7 @@ _(populated in Step 6)_
 
 _(populated in Step 6)_
 
-> The Vela MVP cybersecurity floor. Anything `Gap` is an MVP blocker.
+> The keel MVP cybersecurity floor. Anything `Gap` is an MVP blocker.
 
 | # | Baseline Item | State | Evidence | Closing Mitigation(s) |
 |---|--------------|-------|----------|----------------------|
@@ -165,7 +165,7 @@ _(populated in Step 6)_
 | 5 | Structured JSON logging | - | - | - |
 | 6 | Revocable tokens (with documented revocation path) | - | - | - |
 | 7 | Secrets in a secret store (not env / config / source) | - | - | - |
-| 8 | Appliance config API authenticated | - | - | - |
+| 8 | Device- or agent-facing API authenticated | - | - | - |
 
 ---
 

@@ -2,9 +2,9 @@
 name: materialization-probe
 description: "Permanent smoke-test skill for the OpenBrain materialize pipeline: placeholder substitution (variant A), direct-text passthrough (variant B), and content-hash stamping. Seeded in_development; materialized only via the advanced-token dev path. Use when the user says: '/materialization-probe', 'materialization smoke test'"
 allowed-tools: Read
-x-openbrain-source: materialization-probe/v1
+x-openbrain-source: materialization-probe/v2
 x-openbrain-content-source-hash: sha256:c64ab44afbf4969b89f831aa9a5f0160738fe93c2203837ffdad3a06c4736527
-x-openbrain-content-hash: sha256:8f7024dbef553bc831e5295d21e0d3424ab41f17979b65f89fe3a958e9514638
+x-openbrain-content-hash: sha256:bd51682122fd3c090d5b9ff354e73a691fc6d0cce92524d71830959a7b094111
 ---
 
 # Materialization Probe

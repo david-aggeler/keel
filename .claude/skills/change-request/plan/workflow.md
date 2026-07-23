@@ -25,11 +25,11 @@ Do not re-ask decisions the owner already confirmed in `create`. An answer alrea
 
 **2. Requirement validation**
 
-For each ref in `acceptance_criteria`, call `get_requirement` and review the statement against codebase reality:
+Resolve the requirement list kind-aware (SKILL.md § acceptance contract). For each ref, `get_requirement` and review its **statement and acceptance criteria** against codebase reality:
 
 - If the requirement is accurate: no change.
 - If the requirement conflicts with what the codebase already does: call `update_requirement` to correct the statement and GWT atoms. Add a row to the Decisions table noting the change.
-- If a new requirement emerges from the architectural review: apply the search-first rule (`search_requirement`), then `create_requirement` and add the ref to `acceptance_criteria`.
+- If a new requirement emerges from the architectural review: apply the search-first rule (`search_requirement`), then `create_requirement`. For `kind: feature`, add the ref to the CR's `requirements`; for `kind: fix`, add it to the parent issue's `related_requirements` (keep the CR's `requirements` empty).
 
 **3. Owner confirmation batch**
 
@@ -60,25 +60,9 @@ These are hard gates on the `draft → approved` transition. If either fails, **
 stamp `approved`: fix the record in place, or — when the gap needs an owner decision —
 leave the unit in `draft` and report what is missing.
 
-- **Template conformance.** Call `get_template_for type=change_request` and compare the
-  unit's `details` body against the template's prescribed structure. Every section the
-  server-side template requires (the 4-section body: motivation/context, proposed
-  change, Decisions table, acceptance criteria) must be **present and filled** — no
-  missing section and no leftover template stub/placeholder text. A CR whose body does
-  not match the template stored on the MCP server is not approvable; reshape the body to
-  conform before stamping.
-- **Comprehensive acceptance criteria.** The unit must carry acceptance criteria that
-  are comprehensive, not token. Confirm that:
-  - `acceptance_criteria` is non-empty and every ref resolves (validated in step 2);
-  - the criteria collectively cover the proposed change — every behavioral claim in the
-    body maps to a requirement/GWT atom a reviewer could objectively check;
-  - material paths are not missing (error/edge behavior, observability, and the unit's
-    own discipline/golden test where the plan calls for one).
-
-  If the criteria are thin or miss a material behavior, add the missing requirement
-  (`search_requirement` → `create_requirement`, append the ref to `acceptance_criteria`)
-  before approving. A CR with absent or superficial acceptance criteria must not be
-  approved.
+- **Template conformance.** `get_template_for type=change_request`; the `details` body must fill every required section (Context / Scope / Decisions / References) — no missing section, no leftover stub.
+- **Kind shape.** `kind` set and consistent: `feature` — parent not an issue, `requirements` non-empty; `fix` — parent an issue, `requirements` empty. Frozen at `approved`, so correct it now.
+- **Comprehensive acceptance criteria.** Against the kind-resolved list from step 2, confirm the requirements **and their acceptance criteria** cover the change: list non-empty and every ref resolves; every behavioral claim in the body maps to a requirement's AC (GWT atom / `ac` record) a reviewer can objectively check; material paths (error/edge, observability, the unit's own discipline/golden test) present. If thin, add the missing requirement/AC (`search_requirement` → `create_requirement`; append to the CR's `requirements` for a feature or the parent issue's `related_requirements` for a fix) before approving.
 - **New DTO definition of done.** If the unit adds or registers a DTO type, the
   plan must explicitly cover requirement-723: released authoring template in the
   catalog, HELIX01 IncludedTypes entry at the schema version, data-movement
@@ -94,7 +78,7 @@ On owner confirmation (with the dependency-corrected `auto_merge`), call `update
 - `executor`: confirmed value
 - `merge_gate`: confirmed tier
 - `auto_merge`: dependency-corrected flag (forced false if any open dependency exists; owner-confirmed flag otherwise)
-- `acceptance_criteria`: updated list (if any new refs were added)
+- `requirements`: updated list for `kind: feature` if any new refs were added (for `kind: fix` leave empty — new refs go on the parent issue's `related_requirements`)
 - `details`: updated body with revised Decisions table
 
 The unit is now queue-eligible for agent pickup if `executor=agent`.

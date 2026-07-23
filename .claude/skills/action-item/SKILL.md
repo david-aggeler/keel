@@ -4,9 +4,9 @@ description: "Near-zero-friction capture of durable follow-ups / things-to-remem
 allowed-tools: mcp__gold__create_action_item, mcp__gold__update_action_item, mcp__gold__list_action_item, mcp__gold__get_action_item, mcp__gold__search_action_item, mcp__gold__get_template_for
 targets_templates:
   - action_item-template
-x-openbrain-source: action-item/v1
+x-openbrain-source: action-item/v3
 x-openbrain-content-source-hash: sha256:1482eec7368ec02fffa6cffdd271cb7e9049759f211359819a87bb1e9e76e245
-x-openbrain-content-hash: sha256:f8cc44886dc0cdb5f575c82674f0ef3d2b9e823784c4b72eff236be6ef5fb150
+x-openbrain-content-hash: sha256:91dcf07112c21962fc742fa774c5af78474ee8c8ac7714ade61279a4a4a1a0cd
 ---
 
 # Action Item Skill

@@ -50,7 +50,7 @@ Sort by Cost/Benefit descending — the top of the list is what to do first.
 
 Items typed `R` are candidates for the **Architecture Feedback** section in Step 7. Examples:
 - "Move tenant ID enforcement out of per-handler code into middleware"
-- "Replace shared-secret appliance auth with cert-pinning bootstrap"
+- "Replace shared-secret node/agent auth with cert-pinning bootstrap"
 - "Make audit-log writes synchronous with the action they log (currently async; window for repudiation)"
 
 ---

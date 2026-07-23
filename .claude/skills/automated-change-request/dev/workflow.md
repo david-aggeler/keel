@@ -7,8 +7,10 @@ description: 'Implement an approved unit via a linear vertical-slice TDD loop, r
 
 **Transition:** `approved → in_progress` (on entry) → `implementation_review` (on a complete, green, non-empty-diff unit)
 
-**Goal:** Implement the unit's `acceptance_criteria` requirements with a vertical-slice
-TDD loop, **run linearly by one executor** — no subagent fan-out.
+**Goal:** Implement the unit's requirements **and their acceptance criteria** with a
+vertical-slice TDD loop, **run linearly by one executor** — no subagent fan-out.
+Resolve the requirement list kind-aware (see `../SKILL.md` § acceptance contract),
+then each requirement's ACs (its GWT atoms) — the ACs are what each slice's test proves.
 
 ## Executor contract (condensed — full text in `../SKILL.md`)
 
@@ -25,7 +27,8 @@ TDD loop, **run linearly by one executor** — no subagent fan-out.
 1. `get_change_request product=openbrain id=<id>`.
 2. Confirm `status == approved` **and** `executor == agent`. If either differs, **halt**
    and report the actual status/executor — this unit is not ready for autonomous `dev`.
-3. Collect the `acceptance_criteria` requirement refs (this is the slice list).
+3. Resolve the requirement refs kind-aware (see `../SKILL.md` § acceptance contract) —
+   this is the slice list; each slice proves that requirement's acceptance criteria.
 
 ## 2. Start — confirm the worktree, then claim the unit
 
@@ -67,7 +70,7 @@ it.**
 
    For each slice whose work is **already committed here** (test + implementation
    present and green), treat that requirement ref as **done** and skip it in the
-   slice loop below. Resume at the first `acceptance_criteria` ref that has no
+   slice loop below. Resume at the first resolved requirement ref that has no
    committed slice. Never re-write a test for an already-green slice (step 4b
    would wrongly see it pass before implementation) and never recommit work that
    is already on the branch. If every ref is already committed and green, skip to
@@ -76,7 +79,7 @@ it.**
 
 ## 3. Tracer bullet
 
-Run the **first** requirement ref in `acceptance_criteria` as one complete slice
+Run the **first** requirement ref in the resolved requirement list as one complete slice
 (steps 4a–4d below) end-to-end before continuing. Confirm the red→green→annotate→commit
 loop works on the simplest behavior first. If the tracer slice parks (step 4c), stop
 per step 5 — do not start the rest.
@@ -98,7 +101,7 @@ any test from the current slice is red):
 
 ### 4b. Red — write the failing test
 
-Write a test that verifies the GWT atom **against the public interface only**.
+Write a test that verifies the acceptance criterion (GWT atom) **against the public interface only** — the test traces to this AC.
 
 > **Information barrier (critical — this replaces the old tester/coder subagent split).**
 > When writing the test, use **only** the GWT atom and the public interface. Do **not**

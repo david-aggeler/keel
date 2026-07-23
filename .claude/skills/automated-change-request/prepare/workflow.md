@@ -13,10 +13,17 @@ whether an agent can implement it with no human context. If yes, stamp
 If human input is needed, stamp `executor: human`, write the open questions into the
 CR body, and leave the CR at `draft` — **never approve a CR that has open questions.**
 
+**Every CR `prepare` creates is `kind: fix`** — it promotes an `issue`, so the CR's
+`parent` is that issue and (by the server-enforced kind invariant, requirement-955)
+its `kind` is `fix` and its own `requirements` array MUST be empty. The acceptance
+contract for a fix CR is **the parent issue's `related_requirements`**, not a prose
+section in the CR body (see "Resolving the acceptance contract (kind-aware)" in
+`../SKILL.md`). Set `kind: fix` on every create; never populate the CR's `requirements`.
+
 Approval is also gated on two quality checks that mirror the human `plan` verb: the CR
-body must match the server-side `change_request` template, and it must carry
-comprehensive acceptance criteria. A CR that fails either gate is **handed back as
-`executor: human`** (Section 3B), never approved.
+body must match the server-side `change_request` template, and the **parent issue must
+carry comprehensive `related_requirements`** (each with acceptance criteria). A CR that
+fails either gate is **handed back as `executor: human`** (Section 3B), never approved.
 
 This is the **front half** of the autonomous loop. The back half
 (`dev → review → merge → verify`) is the rest of this skill and is driven separately
@@ -74,9 +81,13 @@ into the autonomous tail; a false `human` stamp only costs one human glance.
    - `product`: `<product>`
    - `title`: a concise CR title derived from the issue.
    - `summary`: one or two sentences of what changes.
-   - `details`: the full brief — motivation, proposed change, and an
-     `## Acceptance criteria` section an agent can implement and a reviewer can check.
+   - `details`: the full brief — the 4-section body (Context / Scope / Decisions /
+     References). The acceptance contract is the parent issue's `related_requirements`,
+     not a prose section here.
+   - `kind`: `fix` (required — the parent is an issue).
    - `parent`: `<product>/<issue-id>` (links the CR to its driving issue).
+   - `requirements`: omit / empty — a `fix` CR MUST NOT populate `requirements`
+     (server-rejected otherwise); the contract lives on the parent issue.
    - `executor`: `agent`
    - `affects_products`: `["<product>"]`
    - `created_by`: `claude`
@@ -87,17 +98,20 @@ into the autonomous tail; a false `human` stamp only costs one human glance.
    cannot ask, so a failed gate is not a block — it is a downgrade to Section 3B.
    - **Template conformance.** Call `get_template_for type=change_request` and compare
      the CR's `details` body against the template's prescribed structure. Every section
-     the template requires (motivation/context, proposed change, and an
-     `## Acceptance criteria` section) must be present and filled — no missing section
-     and no leftover placeholder. If the body does not match the server template,
-     **switch to Section 3B**: set `executor: human`, leave the CR at `draft`, and record
-     the structural gap as an open question.
-   - **Comprehensive acceptance criteria.** The `## Acceptance criteria` section must be
-     comprehensive, not token: it must cover the proposed change so a reviewer can
-     objectively check it (the behavior, the relevant error/edge paths, and any
-     discipline/golden test the change implies). If the criteria are absent or
-     superficial, **switch to Section 3B** with the gap recorded as an open question —
-     do not approve a thinly-specified unit.
+     the template requires (the 4-section body: Context / Scope / Decisions /
+     References) must be present and filled — no missing section and no leftover
+     placeholder. If the body does not match the server template, **switch to Section
+     3B**: set `executor: human`, leave the CR at `draft`, and record the structural
+     gap as an open question.
+   - **Comprehensive requirements on the parent issue.** For this `kind: fix` CR the
+     acceptance contract is the parent issue's `related_requirements`. Read the issue's
+     `related_requirements`; each must resolve and collectively cover the proposed
+     change so a reviewer can objectively check it (the behavior, the relevant
+     error/edge paths, and any discipline/golden test the change implies). If the issue
+     has no `related_requirements`, or they are absent/superficial, **switch to Section
+     3B** with the gap recorded as an open question — do not approve a unit whose
+     contract is thin. (A reviewed issue should already carry this contract from the
+     issue-review workflow; a gap here means the issue was under-specified.)
 4. Advance to approved — **sparse** write (only after both gates in step 3 pass):
    `update_change_request product=<product> id=<new-id>`
    `fields: { status: "approved", approver: "agent:prepare", approved_at: "<ISO8601 now>" }`.

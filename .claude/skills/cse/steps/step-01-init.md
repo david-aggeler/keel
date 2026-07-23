@@ -12,7 +12,8 @@
 ## CONTEXT BOUNDARIES
 
 - gold architecture tree is **required** — do not proceed without a product `architecture_description` root
-- OpenAPI and AsyncAPI specs are **required** — they're the actual contract callers depend on; the threat surface is undercounted without them
+- The product `interface_spec` tree is the **primary attack-surface enumeration input** — its surface register (root §2) IS the attack surface the `threat_model` §4 walks row by row. Read it (`list_interface_spec` / `get_interface_spec`, root + chapters) before enumerating any surface; a surface missing from the register is an unanalyzed one
+- Generated OpenAPI/AsyncAPI contracts, where they exist, are a **supplement** to the register — they give the operation shapes the register points at, not the surface list itself. They are resolved from the product's own repo root (via a product→repo mapping or an explicit root), never assumed to be cwd-relative
 - PRD and project-context are valuable but optional
 - Scope can be the full system or a named subsystem; clarify if ambiguous
 - The product `threat_model` record is the working review artifact; `failure_mode` rows are the durable threat register
@@ -33,33 +34,38 @@ Call `list_threat_model product=<slug>` and locate the active product threat mod
 - **Found without in-progress details** → load it as the current baseline and continue.
 - **Not found** → proceed with fresh initialization below.
 
-### 2. gold Architecture Discovery
+### 2. gold Architecture & Interface Discovery
 
 Call `list_architecture_description product=<slug>` and locate the active root record. Then call `get_architecture_description` for the root and every chapter listed by the root's `chapters` field, in order. This root plus ordered chapters is the gold architecture_description tree and is the only architecture input.
 
+Then call `list_interface_spec product=<slug>` and locate the active root record. Call `get_interface_spec` for the root and every chapter listed by its `chapters` field, in order. **The interface_spec's surface register (root §2) is the canonical attack-surface list** — the `threat_model` §4 walks it row by row. Read it before enumerating any surface.
+
 Do not search for or read local architecture files. Local architecture markdown is not canonical for this workflow.
 
-Discover and load optional interface/supporting documents from: `api/`, `docs/`
+The generated API contracts (OpenAPI/AsyncAPI) are a **supplement** to the interface_spec register — they carry the per-operation shapes the register points at. Resolve their paths from the product's own repo root (a product→repo mapping or an explicit root the user gives you), **not** from the current working directory — driving the review for one product from another directory otherwise resolves `api/*.yaml` against the wrong tree.
 
-| Document | Pattern | Required? |
-|----------|---------|-----------|
+| Document | Source | Required? |
+|----------|--------|-----------|
 | Architecture | gold `architecture_description` root + chapters | **Yes** — abort without it |
-| OpenAPI spec | `api/openapi.yaml` | **Yes** — every HTTP endpoint is part of the attack surface |
-| AsyncAPI spec | `api/asyncapi.yaml` | **Yes** — every event channel is part of the attack surface |
+| Interface spec | gold `interface_spec` root + chapters (the surface register) | **Yes** — the attack-surface enumeration input; warn-and-reduce if absent |
+| OpenAPI spec | product repo root `api/openapi.yaml` (supplement) | Recommended — operation shapes the register points at |
+| AsyncAPI spec | product repo root `api/asyncapi.yaml` (supplement) | Recommended — event-channel shapes the register points at |
 | PRD | `*prd*.md` | Recommended — context for what data matters |
 | Project Context | `**/project-context.md` | Recommended |
 | DFMEA (if exists) | `*dfmea*.md` | Optional — cross-reference reliability findings to avoid double-counting |
 | UX Design | `*ux-design*.md` | Optional |
 
-The API specs are the authoritative contract for what the system promises to callers and consumers. Load them fully — they're where authn/authz coverage gaps, error-code leakage, and unbounded inputs become visible. The architecture document alone won't surface those.
+The interface_spec register is the authoritative surface inventory; the generated specs fill in the operation-level shapes it points at. Load both — they're where authn/authz coverage gaps, error-code leakage, and unbounded inputs become visible. The architecture document alone won't surface those.
 
 If a DFMEA exists, load its risk register so you can cross-reference: failure modes Vera already mitigated should be acknowledged, not re-litigated. Sera's findings focus on **adversarial** paths; Vera's focus on **reliability** paths. Overlap exists (e.g., DoS) but the framing differs.
 
 **If the gold architecture root is not found:**
-> "I can't start the security review without a gold architecture_description root for this product. Please run `architecture-create` first so the architecture is authored in gold."
+> "I can't start the security review without a gold architecture_description root for this product. Please run `design-doc` (architecture) first so the architecture is authored in gold."
 > Stop. Do not proceed.
 
-**If OpenAPI or AsyncAPI specs are missing**, warn the user but offer to proceed with reduced coverage — the API/event surface findings will be marked "spec not loaded — review skipped" rather than guessed.
+**If the gold interface_spec root is missing**, warn the user: the attack surface can only be inferred from architecture §3/§5 and the raw specs, and will be under-enumerated. Offer to proceed with reduced coverage, or to author the interface_spec first with `design-doc` (interface spec).
+
+**If OpenAPI or AsyncAPI specs are missing**, warn the user but offer to proceed with reduced coverage — the per-operation shape findings will be marked "spec not loaded — review skipped" rather than guessed. The surface list itself still comes from the interface_spec register.
 
 ### 3. Confirm Inputs and Define Scope
 
@@ -68,20 +74,21 @@ Present what was found and ask one question:
 ```
 I found the following inputs:
 - Architecture:   gold architecture_description root [ref] ✓
-- OpenAPI spec:   [filename or "not found — HTTP API coverage will be limited"]
-- AsyncAPI spec:  [filename or "not found — event/message coverage will be limited"]
+- Interface spec: gold interface_spec root [ref or "not found — attack-surface coverage will be limited"]
+- OpenAPI spec:   [filename or "not found — HTTP operation shapes will be limited"]
+- AsyncAPI spec:  [filename or "not found — event/message shapes will be limited"]
 - DFMEA:          [filename or "not found — no reliability cross-reference"]
 - PRD:            [filename or "not found"]
 - Project Context:[filename or "not found"]
 
 Posture: MVP-baseline mode is [on/off]. [If on:]
-  Findings beyond Vela's MVP cybersecurity baseline (formal SBOM signing,
-  ISO 27001 / NIS2 / EU CRA / SOC 2 controls, etc.) will be parked in the
-  Deferred-to-Growth section, not in MVP findings.
+  Findings beyond keel's MVP cybersecurity baseline (formal SBOM
+  signing, ISO 27001 / NIS2 / EU CRA / SOC 2 controls, etc.) will be parked in
+  the Deferred-to-Growth section, not in MVP findings.
 
 Before I begin, one question: should I review the full system, or focus on
-a specific subsystem (e.g. just the appliance config API, just the
-hypervisor adapter)?
+a specific subsystem (e.g. just one exposed API surface, just one external
+adapter)?
 (Press Enter or type "full system" to review everything)
 ```
 
@@ -96,7 +103,8 @@ If no current threat_model exists, call `create_threat_model` for the product. I
 - MVP baseline mode
 - score thresholds
 - architecture_description root/chapter refs
-- loaded interface/support documents
+- interface_spec root/chapter refs (the surface register driving §4)
+- loaded supplementary specs/support documents
 - steps completed: `[1]`
 
 If full-compliance mode is on (mvp_baseline_mode = false), note in the threat_model details: "Full-compliance mode — regulatory items are scored alongside MVP findings."
@@ -110,6 +118,7 @@ Threat model: [threat_model ref]
 Scope: [user-confirmed scope]
 MVP-baseline mode: [on/off]
 Architecture loaded: gold architecture_description root [ref]
+Interface spec loaded: gold interface_spec root [ref or "not found"]
 API specs loaded: [openapi: yes/no, asyncapi: yes/no]
 DFMEA cross-reference: [yes/no]
 
@@ -125,6 +134,7 @@ Wait for `[C]`.
 
 ✅ Existing review detected and handed to step-02-continue correctly
 ✅ gold architecture tree loaded (or workflow aborted cleanly)
+✅ gold interface_spec register loaded (or warned-and-reduced) — the attack-surface enumeration input
 ✅ API spec status confirmed (loaded or warned-and-skipped)
 ✅ Scope confirmed with user
 ✅ Threat model created or updated with correct initialization details

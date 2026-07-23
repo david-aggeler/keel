@@ -6,9 +6,9 @@
 
 Spawn a generic subagent with this framing:
 
-> You are the tester for this slice. You will write a failing test that verifies the following behavior.
+> You are the tester for this slice. You will write a failing test that verifies the following acceptance criterion — the test traces to this AC.
 >
-> **GWT atom:** {gwt_atom}
+> **Acceptance criterion (GWT atom):** {gwt_atom}
 >
 > **Public interface:** {public_interface}
 >

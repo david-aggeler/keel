@@ -10,7 +10,7 @@ How plausible is the attack path **as designed today**, before any new mitigatio
 | L | Label | Meaning |
 |---|-------|---------|
 | 5 | Near-certain | Known attack pattern; trivial capability; direct surface. Documented in OWASP / CWE / public CVEs against this exact pattern. Will happen in production within months of launch. |
-| 4 | Likely | Common pattern; modest capability; surface is reachable. Will happen against any internet-exposed system; specific to Vela once anyone tries. |
+| 4 | Likely | Common pattern; modest capability; surface is reachable. Will happen against any internet-exposed system; specific to keel once anyone tries. |
 | 3 | Plausible | Reasonable capability or chained access required. Targeted attacker who knows what they're looking for. |
 | 2 | Unlikely | Significant capability needed (insider position, leaked secrets, novel exploit). Rare in non-targeted attacks. |
 | 1 | Implausible | Nation-state or pre-existing compromise of higher-value target. If they got here, you have larger problems. |
@@ -35,7 +35,7 @@ What's the worst-case consequence to confidentiality, integrity, availability, t
 
 ### Impact scoring tips
 
-- **Cross-tenant blast radius is almost always 4 or 5** in a multi-tenant system. Vela's tenants are the customer trust boundary; crossing it is severe by definition.
+- **Cross-tenant blast radius is almost always 4 or 5** in a multi-tenant system. Tenants (where the product is multi-tenant) are the customer trust boundary; crossing it is severe by definition.
 - **Audit-log integrity loss is at least 3** — even if no data was stolen, repudiation breaks accountability for everything else.
 - **Availability of a core function** (creating vApps, viewing inventory) is 3–4 depending on duration and scope. A degraded but working system is 2; a hard outage is 4.
 - **Recoverability matters.** A leak you can detect and rotate within an hour is lower-impact than a leak that cements a long-term foothold.

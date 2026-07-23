@@ -30,7 +30,9 @@ the Codex executor that produced dev/review/merge.
 2. Confirm `status == merged`. If it differs, halt and report the actual status.
 3. Confirm `code_change_ref` is present (the merge verb recorded the merge SHA). If
    absent, halt and report that there is no merge commit to verify.
-4. Read `parent`, `depends_on`, and collect `acceptance_criteria` requirement refs.
+4. Read `parent`, `depends_on`, and resolve the unit's requirements **and their
+   acceptance criteria** kind-aware (see `../SKILL.md` § acceptance contract). Below,
+   "acceptance ref" means a resolved requirement; audit the merged diff against its ACs.
 
 ## 2. Evidence collection
 

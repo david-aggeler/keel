@@ -17,14 +17,15 @@
 
 3. **Requirement extraction** — treat each acceptance criterion from the story as a behavior statement.
    Apply the search-first rule from `step-03-body-and-requirements.md`: search, then update or create.
-   Collect refs into `acceptance_criteria`.
+   Collect refs into the CR's `requirements` field.
 
-4. **Create the unit** — call `create_change_request` with:
+4. **Create the unit** — a story-converted unit is `kind: feature` (its parent is an epic). Call `create_change_request` with:
    - `title` and `summary` carried from the story
+   - `kind: feature`
    - `parent` set to the story's epic ref (if present)
    - `status: draft`
    - `details` body (the 4-section markdown)
-   - `acceptance_criteria` (requirement refs extracted above)
+   - `requirements` (requirement refs extracted above)
 
 5. **Mark the story superseded** — call `update_story` with:
    - `status: done` and `done_reason: superseded`

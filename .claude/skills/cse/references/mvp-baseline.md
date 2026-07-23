@@ -1,5 +1,5 @@
 <!-- markdownlint-disable MD033 MD036 MD034 MD040 MD026 MD032 MD012 MD024 MD028 MD031 MD025 MD041 -->
-# Vela MVP Cybersecurity Baseline
+# keel MVP Cybersecurity Baseline
 
 The floor. Every item below must be `Met` before construction is considered ready. Any `Gap` is an MVP blocker.
 
@@ -57,19 +57,19 @@ These are deliberately tight, testable controls — not framework-sized programs
 
 ### 7. Secrets in a secret store
 
-**What it means:** Every secret (DB credentials, signing keys, third-party API tokens, hypervisor admin creds) lives in a secret store, not in env files committed to git, not in `*.yaml` config.
+**What it means:** Every secret (DB credentials, signing keys, third-party API tokens, infrastructure-backend admin creds) lives in a secret store, not in env files committed to git, not in `*.yaml` config.
 
 **Testable:** `git grep` for secret-shaped strings turns up nothing. `printenv` on the running orchestrator shows references (paths, tokens to fetch) but not the actual secret values where avoidable.
 
 **Common gap:** Bootstrap chicken-and-egg: how does the orchestrator authenticate to the secret store? Answer that explicitly.
 
-### 8. Appliance config API authenticated
+### 8. Device- or agent-facing API authenticated
 
-**What it means:** The in-VM appliance agent authenticates back to the orchestrator with a credential that's not shared across appliances. Stolen credentials from one appliance don't impersonate another.
+**What it means:** An out-of-process agent authenticates back to the control plane with a credential that's not shared across nodes. Stolen credentials from one node don't impersonate another.
 
-**Testable:** Steal the credential from appliance A, try to call as appliance B → rejected.
+**Testable:** Steal the credential from node A, try to call as node B → rejected.
 
-**Common gap:** Shared secret baked into the appliance image. Every appliance has the same credential.
+**Common gap:** A shared secret baked into a distributed image. Every node has the same credential.
 
 ---
 

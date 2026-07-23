@@ -1,6 +1,6 @@
 # Step 01 — Slice Loop Setup
 
-**Goal:** For each requirement ref in `acceptance_criteria`, derive the GWT atom and public interface that will guide the tester subagent.
+**Goal:** For each requirement in the unit's acceptance contract (resolved kind-aware — see SKILL.md), derive its **acceptance criteria** (GWT atoms) and public interface to guide the tester subagent. The AC is the test oracle.
 
 ## Per-slice inputs
 
@@ -14,7 +14,7 @@ For each requirement ref:
 
 ## Slice ordering
 
-Process requirement refs in the order they appear in `acceptance_criteria`. The tracer bullet is the first ref.
+Process requirement refs in the order they appear in the resolved requirement list. The tracer bullet is the first ref.
 
 ## Invariant
 

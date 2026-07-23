@@ -7,7 +7,7 @@ description: 'Implement the unit via vertical-slice TDD. Use when the unit is ap
 
 **Transition:** `approved → in_progress`
 
-**Goal:** Implement the unit's `acceptance_criteria` requirements using a vertical-slice TDD loop. Each slice is one behavior, driven by two generic subagents (tester then coder).
+**Goal:** Implement the unit's requirements **and their acceptance criteria** via a vertical-slice TDD loop. Resolve the requirement list kind-aware (see SKILL.md § acceptance contract), then each requirement's ACs (its GWT atoms / `ac` records) — the ACs are what each slice's test proves. Each slice is one behavior, driven by two generic subagents (tester then coder).
 
 ## Execution
 
@@ -21,7 +21,7 @@ bash .claude/skills/change-request/scripts/worktree-up.sh cr <seq> <slug>
 
 **2. Tracer bullet**
 
-Before the full slice loop, run a tracer bullet: pick the simplest requirement ref from `acceptance_criteria` and complete one full slice (tester + coder + annotate) end-to-end. Confirm the loop works before continuing.
+Before the full slice loop, run a tracer bullet: pick the simplest requirement ref from the resolved requirement list and complete one full slice (tester + coder + annotate) end-to-end. Confirm the loop works before continuing.
 
 **3. Slice loop**
 
@@ -31,7 +31,7 @@ Read and follow:
 - `steps/step-02-two-actor.md` — symmetric two-actor per slice: generic tester subagent then generic coder subagent.
 - `steps/step-03-annotate.md` — annotate touched code and tests with DHF-REQ/DHF-TEST markers.
 
-Repeat for each requirement ref in `acceptance_criteria`. One slice = one behavior. Do not refactor while any test is red.
+Repeat for each requirement ref in the resolved requirement list. One slice = one behavior. Do not refactor while any test is red.
 
 **4. End of loop**
 

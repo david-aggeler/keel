@@ -5,7 +5,7 @@
 
 - 🎯 Surface only items that genuinely require an **architecture change** — not implementation details
 - 🤝 Frame feedback as a request to Winston, not an imposition
-- 📝 If MVP-baseline mode is on (the default for vela), offer to append findings directly to the architecture document
+- 📝 If MVP-baseline mode is on (the default for keel), offer to append findings directly to the architecture document
 - 🛑 Do NOT modify the architecture document without explicit user confirmation
 
 ## YOUR TASK
@@ -31,7 +31,7 @@ Skip mitigations that are pure implementation hygiene (e.g. "add `maxLength` to 
 
 Common groupings:
 - **Identity and authorization model** — tenant claims, default-deny, role boundaries, revocation
-- **Trust boundaries** — segmentation between tenant zones, control-plane vs data-plane, appliance trust bootstrap
+- **Trust boundaries** — segmentation between tenant zones, control-plane vs data-plane, node/agent trust bootstrap
 - **Audit and observability** — what gets logged, where, integrity of the log itself
 - **Secret and key management** — where secrets live, how they're rotated, what's encrypted at rest
 - **API surface design** — error-shape discipline, idempotency, rate-limit signals as a first-class contract concern
@@ -51,7 +51,7 @@ For each grouping, write:
 
 ### 4. Offer Writeback (if enabled)
 
-If MVP-baseline mode is on (the default for vela), ask:
+If MVP-baseline mode is on (the default for keel), ask:
 
 ```
 I have N architecture-feedback items.

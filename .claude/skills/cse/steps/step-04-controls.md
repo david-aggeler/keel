@@ -5,9 +5,9 @@
 
 - 🤖 Walk all four control areas autonomously — don't ask "should I check authentication next?"
 - 📜 Use `../references/control-checklists.md` as your scaffolding — every item gets a verdict
-- 📐 Compare findings against `../references/mvp-baseline.md` (the Vela MVP cybersecurity baseline)
+- 📐 Compare findings against `../references/mvp-baseline.md` (the keel MVP cybersecurity baseline)
 - 🎯 Each finding must name **what control is missing or weak**, **on what asset**, and **what testable state would close it**
-- 🚪 If MVP-baseline mode is on (the default for vela): items that go beyond the MVP baseline get marked `Deferred-to-Growth` here, not flagged as MVP gaps
+- 🚪 If MVP-baseline mode is on (the default for keel): items that go beyond the MVP baseline get marked `Deferred-to-Growth` here, not flagged as MVP gaps
 - 🛑 Do NOT enumerate threats or score risk in this step — Step 4 and Step 5 do that
 
 ## YOUR TASK
@@ -37,9 +37,9 @@ Mine the architecture and OpenAPI for: who proves identity, how, on which endpoi
 Focus signals:
 - Every OpenAPI operation should have a `security` requirement (or be explicitly anonymous and justified)
 - Default-deny middleware: is it described, or implied?
-- Revocation path: how does Vela invalidate a stolen token before its TTL expires?
+- Revocation path: how does keel invalidate a stolen token before its TTL expires?
 - Tenant scoping: can a token from tenant A read tenant B's resources?
-- Appliance config API: how does the in-VM agent authenticate back?
+- Device- or agent-facing API: how does the out-of-process agent authenticate back?
 
 ### B. API Contract Security
 
@@ -55,7 +55,7 @@ Focus signals:
 
 ### C. Audit Logging
 
-Vela's MVP baseline calls for a basic audit log: subject → object/type → CRUD verb. Walk the architecture for what gets logged, where, and how the logs are protected.
+keel's MVP baseline calls for a basic audit log: subject → object/type → CRUD verb. Walk the architecture for what gets logged, where, and how the logs are protected.
 
 Focus signals:
 - **Coverage**: are all CUD operations on customer-visible resources logged? Reads on sensitive resources?
@@ -72,7 +72,7 @@ Focus signals:
 - **Secret storage**: secrets in a secret store, not in env vars / config files / source
 - **Secret rotation**: a path exists to rotate, even if manual
 - **Key material at rest**: DB-stored secrets are encrypted; encryption keys themselves live in the secret store, not in DB
-- **Appliance trust bootstrap**: how does an appliance prove identity on first contact? (Common gap.)
+- **Node/agent trust bootstrap**: how does a node/agent prove identity on first contact? (Common gap.)
 
 ---
 

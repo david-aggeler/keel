@@ -13,13 +13,13 @@ The attacker presents themselves as someone (or some thing) they're not.
 - Stolen or replayed token usable beyond its intended scope
 - Missing tenant claim cross-check (token says tenant A; request body says tenant B)
 - Service-to-service trust based only on network position (no mTLS or signed transport)
-- Appliance bootstrapping with a shared secret that any compromised appliance image leaks
+- Node/agent bootstrapping with a shared secret that any compromised distributed image leaks
 - AsyncAPI events trusted on channel name alone, with no producer-identity assertion
 
-**Vela-specific seeds:**
+**Worked examples (illustrative):**
 - Any operation that takes `org_id` / `tenant_id` from the request body without checking against the JWT
 - Any internal API reachable from the same network as the public API
-- Any appliance-to-orchestrator call that authenticates with a static credential
+- Any agent-to-control-plane call that authenticates with a static credential
 
 ### T — Tampering with data
 
@@ -63,7 +63,7 @@ The attacker exhausts the component's resources or crashes it.
 
 **Common patterns:**
 - Unbounded inputs: arrays / strings without `maxItems` / `maxLength`
-- Unauthenticated expensive operations (anything that hits the DB, the hypervisor, or external APIs without a rate limit and an auth check first)
+- Unauthenticated expensive operations (anything that hits the DB, an external infrastructure backend, or external APIs without a rate limit and an auth check first)
 - Pagination without page-size caps
 - Recursive structures in JSON (zip-bomb-style nested objects)
 - Single-tenant exhaustion of a shared resource (one tenant DoSing the whole control plane)
@@ -80,16 +80,16 @@ An attacker who already has limited access expands it.
 - Role-up: read-only role can take a write action through a side door
 - Indirect privileged access: user who can edit a workflow that runs as a privileged service account
 - Path traversal in any field that becomes a file path
-- SSRF via URL inputs (Vela's hypervisor adapter, image-import flows, webhook callbacks)
+- SSRF via URL inputs (an external infrastructure-backend adapter, image-import flows, webhook callbacks)
 - Admin endpoints accessible without separate authn step (one token grants everything)
-- Appliance escape: code in a tenant VM influences orchestrator state (reverse trust flow)
+- Workload escape: code in an isolated workload influences control-plane state (reverse trust flow)
 
 ## Walking a Component
 
 For each component on the surface map, ask each of the six questions in order. Write what you find — including `none — [reason]`. Look at the **trust boundaries** that touch this component: most threats live at a boundary, not inside the component.
 
 A high-quality threat has all three:
-- **Attacker class** (anonymous internet, authed tenant user, compromised appliance, compromised dependency, etc.)
+- **Attacker class** (anonymous internet, authed tenant user, compromised node/agent, compromised dependency, etc.)
 - **Asset** (specific data, specific control, specific availability target)
 - **Path** (concrete request, concrete state, concrete sequence)
 

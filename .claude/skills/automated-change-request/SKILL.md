@@ -2,9 +2,9 @@
 name: automated-change-request
 description: "Executor-portable autonomous tail of the change-request lifecycle for keel — prepare, dev, review, merge, verify, salvage — written so a non-resident linear executor (e.g. codex) can run each verb in a fresh session with no project memory. Use when the user says: '/automated-change-request', 'run the automated tail', 'dev this CR headless', 'codex dev', 'codex review', 'codex merge', 'verify this tail', 'autonomous dev/review/merge/verify/salvage', 'drive this approved CR to closed', 'salvage this tail', 'prepare this issue', 'promote issue to CR', 'run-prepare'"
 allowed-tools: mcp__gold__get_change_request, mcp__gold__create_change_request, mcp__gold__update_change_request, mcp__gold__search_change_request, mcp__gold__get_requirement, mcp__gold__get_template_for, mcp__gold__get_dev_defaults, mcp__gold__list_dev_defaults, mcp__gold__create_formal_review, mcp__gold__create_issue, mcp__gold__create_action_item, mcp__gold__create_issue_fix, mcp__gold__list_issue_fix, mcp__gold__update_issue, mcp__gold__get_issue, mcp__gold__admin_list_product_versions, mcp__gold__list_inbound_refs
-x-openbrain-source: automated-change-request/v6
-x-openbrain-content-source-hash: sha256:ad03cb5627305098667e308adf1c8b6b7e3be561380a1a75b950b5001c8cbb57
-x-openbrain-content-hash: sha256:4cbfe7d930de92cdde56ce7f91d69fee6fd8bfc3db8fa28b9091f5cfeaaef7fe
+x-openbrain-source: automated-change-request/v8
+x-openbrain-content-source-hash: sha256:33b49c3cdf10db6ae6e1db2ac574f48f60cc99a9539afd7a5541eae1dc8a5b5f
+x-openbrain-content-hash: sha256:38ee89374a362757a331eca42ab3a8a8e96fc015a7d6f27ed765541ca98ae773
 ---
 
 # Automated Change Request
@@ -55,7 +55,7 @@ it names. Therefore:
 
 | Verb | Status transition | Summary |
 |---|---|---|
-| `prepare` | `issue (reviewed) → change_request (draft → approved \| draft)` | Front-half promotion: read a reviewed issue, create a draft change_request linked to it (`parent`), then branch on confidence — fully-specified → `executor: agent` + advance to `approved` (ready for `dev`); needs human input → `executor: human` + open questions in the body + leave at `draft` (hand-back). Pickup requires the issue at `status=reviewed`; never approves a CR with open questions, a body that does not match the server template, or absent/superficial acceptance criteria (any such gap hands back as `executor: human`). Driven by `openbrain-client run-prepare <issue-NNN>`. |
+| `prepare` | `issue (reviewed) → change_request (draft → approved \| draft)` | Front-half promotion: read a reviewed issue, create a draft change_request linked to it (`parent`), then branch on confidence — fully-specified → `executor: agent` + advance to `approved` (ready for `dev`); needs human input → `executor: human` + open questions in the body + leave at `draft` (hand-back). Creates a `kind: fix` CR (parent = the issue, `requirements` empty). Pickup requires the issue at `status=reviewed`; never approves a CR with open questions, a body that does not match the server template, or a parent issue whose `related_requirements` are absent/superficial (any such gap hands back as `executor: human`). Driven by `openbrain-client run-prepare <issue-NNN>`. |
 | `dev` | `approved → in_progress → implementation_review` | Vertical-slice TDD loop, run linearly: write `in_progress` on entry, then per slice write a failing test from the public interface + GWT atom only (red), implement to green, annotate DHF-REQ/DHF-TEST. 3-round green cap → park (leave at `in_progress`). Before declaring dev complete, run the unit's declared `merge_gate` command from `dev_defaults`; gate red means dev-not-done and must be fixed in-CR or parked. On a complete, green, non-empty-diff unit write `implementation_review`. |
 | `review` | `implementation_review → ready_to_merge \| in_progress` | Advisory DHF-REQ/DHF-TEST coverage report via inline `rg`; executor is the sole reviewer by default; re-run the unit's declared `merge_gate` for the reviewed HEAD. Sound unit + green gate → write `ready_to_merge`. Blocking findings or a red gate → record a `formal_review` (outcome `follow_up_required`) and write `in_progress` (routes back to dev). Never leave the status unchanged. |
 | `merge` | `ready_to_merge → merged \| in_progress` | Run the dependency guard + the `merge_gate` tier command from `dev_defaults`, then merge `cr-<seq>` into `main` via `.claude/skills/merge/scripts/merge-branch.sh` and record `code_change_ref`; write `merged`. A post-merge gate failure attributable to THIS change → revert main, record a `formal_review`, write `in_progress` (routes back to dev). A foreign/flaky failure or a merge conflict → HALT for a human (leave `ready_to_merge`). Merge ENDS at `merged`; it does NOT close or wrap up. |
@@ -63,6 +63,19 @@ it names. Therefore:
 | `salvage` | `in_progress → in_progress` or `approved` | Interrupted-run recovery analysis invoked only by run-tail's divergence detector: gather gold/branch evidence, run the mechanical build + package-test checks when dirty work exists, classify salvage/hand-back/reset/manual, and record the recommendation. Suggest-only by default; `--auto-salvage` may apply only the green salvage class. |
 
 Route to: `.claude/skills/automated-change-request/<verb>/workflow.md`
+
+## Resolving the acceptance contract (kind-aware)
+
+A unit's acceptance contract is its `requirement` refs **and each requirement's acceptance criteria** (its `acceptance_criteria` GWT atoms / linked `ac` records). **The ACs are the implement/verify oracle — tests trace to the ACs, not to the requirement.** On the CR the ref-array is `requirements` (there is no `acceptance_criteria` field on `change_request`). Where the refs live depends on `kind` — server invariant at every status (requirement-955/942, dd-30):
+
+| `kind` | `parent` | refs live in | chain |
+|---|---|---|---|
+| `feature` | epic, or none (never an issue) | CR `requirements` (non-empty) | cr → requirements → ac |
+| `fix` | an issue | parent issue `related_requirements` (CR `requirements` empty) | cr → issue → related_requirements → ac |
+
+Wherever a verb needs the unit's requirements (`dev` slice list, `review` coverage, `verify` fidelity): resolve the refs by `kind`, then each ref **to its acceptance criteria**, before iterating.
+
+`prepare` promotes a reviewed **issue**, so every CR it creates is `kind: fix` — set `kind: fix`, leave `requirements` empty; its contract is the parent issue's `related_requirements`. `kind` is required on every write and frozen at `approved`.
 
 ## Session boundary = verb
 

@@ -6,9 +6,9 @@ targets_templates:
   - test_case-template
   - test_run-template
   - test_strategy-template
-x-openbrain-source: tester/v2
+x-openbrain-source: tester/v3
 x-openbrain-content-source-hash: sha256:81979a289a7ade712e2e874c187485800526dbde19cc898e5e0e2664196f0993
-x-openbrain-content-hash: sha256:210e9b1f4caace61082a5ac6a2f7719d56b305dd17427b6301eb18a17bea5720
+x-openbrain-content-hash: sha256:2bb0b841556569d5bb268faaf622ff9bbddb0a06a5989538056d680c56f35550
 ---
 
 # Atticus — Test Engineer

@@ -12,7 +12,7 @@
 
 ## YOUR TASK
 
-For every component on the attack surface, enumerate concrete threats using STRIDE. Load `../references/stride.md` now — it has the category definitions, common patterns, and Vela-specific examples.
+For every component on the attack surface, enumerate concrete threats using STRIDE. Load `../references/stride.md` now — it has the category definitions, common patterns, and worked examples.
 
 For every concrete threat that survives this pass, create or update a `failure_mode` row whose `identified_in_review` points at the product `threat_model`. The threat_model remains the session anchor; the failure_mode rows are the durable threat register.
 
@@ -28,12 +28,12 @@ For each component on the surface map, walk these six questions:
 
 | Letter | Question |
 |---|---|
-| **S — Spoofing** | Can an attacker present themselves as a different identity (user, service, appliance, tenant) to this component? |
+| **S — Spoofing** | Can an attacker present themselves as a different identity (user, service, node/agent, tenant) to this component? |
 | **T — Tampering** | Can an attacker modify data in transit, at rest, in memory, or in the configuration that this component trusts? |
 | **R — Repudiation** | Can an actor (legitimate or hostile) take an action and later deny it because the audit log doesn't capture it? |
 | **I — Info Disclosure** | Can an attacker read data they shouldn't — through a response, a side channel, an error message, or a log? |
 | **D — Denial of Service** | Can an attacker exhaust the component's resources or crash it? Note: DoS that overlaps with Vera's reliability findings should cross-reference, not duplicate. |
-| **E — Elevation of Privilege** | Can an attacker who already has limited access expand it (cross-tenant, role-up, escape from appliance to host)? |
+| **E — Elevation of Privilege** | Can an attacker who already has limited access expand it (cross-tenant, role-up, escape from an isolated workload to the host)? |
 
 Not every category produces a meaningful threat for every component — but don't skip a category just because it seems unlikely. Write `none — [reason]` if a category genuinely doesn't apply.
 
@@ -61,7 +61,7 @@ If Vera's DFMEA was loaded in Step 1, scan its risk register for any failure mod
 
 For each threat, name:
 
-- **Attacker** — *who can do this and from where?* "Authenticated tenant user", "internet-anonymous attacker", "compromised appliance", "operator with read-only role", "compromised dependency (Proxmox / IdP)". Pick one — most threats have one obvious attacker class. If genuinely several, pick the most capable.
+- **Attacker** — *who can do this and from where?* "Authenticated tenant user", "internet-anonymous attacker", "compromised node/agent", "operator with read-only role", "compromised dependency (external infrastructure backend / IdP)". Pick one — most threats have one obvious attacker class. If genuinely several, pick the most capable.
 - **Asset** — *what gets harmed?* Customer data, audit log integrity, tenant isolation, availability of API X, secret material, control plane state.
 - **Path** — *how does the attack happen, in two sentences?* Concrete: "Attacker calls POST /vms with `org_id=other-tenant` in the request body. Server doesn't cross-check against the JWT's tenant claim, creates VM in target tenant's quota."
 

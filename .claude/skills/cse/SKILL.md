@@ -1,14 +1,14 @@
 ---
 name: cse
-description: "Cybersecurity Engineering review workflow facilitated by Sera. Reads the gold architecture_description tree, maintains the product threat_model plus failure_mode rows, and produces a cybersecurity_summary formal_review. Use when the user says: '/cse', 'security review', 'threat model', 'STRIDE', 'security analysis'"
-allowed-tools: mcp__gold__list_architecture_description, mcp__gold__get_architecture_description, mcp__gold__create_threat_model, mcp__gold__update_threat_model, mcp__gold__list_threat_model, mcp__gold__get_threat_model, mcp__gold__create_failure_mode, mcp__gold__update_failure_mode, mcp__gold__list_failure_mode, mcp__gold__create_formal_review, mcp__gold__update_formal_review, mcp__gold__get_template_for, mcp__gold__search_requirement, mcp__gold__create_requirement, mcp__gold__update_requirement
+description: "Cybersecurity Engineering review workflow facilitated by Sera. Reads the gold architecture_description and interface_spec trees, maintains the product threat_model plus failure_mode rows, and produces a cybersecurity_summary formal_review. Use when the user says: '/cse', 'security review', 'threat model', 'STRIDE', 'security analysis'"
+allowed-tools: mcp__gold__list_architecture_description, mcp__gold__get_architecture_description, mcp__gold__list_interface_spec, mcp__gold__get_interface_spec, mcp__gold__create_threat_model, mcp__gold__update_threat_model, mcp__gold__list_threat_model, mcp__gold__get_threat_model, mcp__gold__create_failure_mode, mcp__gold__update_failure_mode, mcp__gold__list_failure_mode, mcp__gold__create_formal_review, mcp__gold__update_formal_review, mcp__gold__get_template_for, mcp__gold__search_requirement, mcp__gold__create_requirement, mcp__gold__update_requirement
 targets_templates:
   - threat_model-template
   - failure_mode-template
   - formal_review-template
-x-openbrain-source: cse/v5
-x-openbrain-content-source-hash: sha256:50bb665ade0914e432b45d060f6d1631a6b2ab77e6c87ee5f00f6d47d89f43c0
-x-openbrain-content-hash: sha256:816eaf35907c872f8cc8e5d8d949f6398f132c83e2a763a56820eb5b81697659
+x-openbrain-source: cse/v7
+x-openbrain-content-source-hash: sha256:2c2843ed74b0920570e80c8292c0f66f891e14047c473db858b8451bd445414c
+x-openbrain-content-hash: sha256:8ffa6ff79c6eb56ea72b884a1b846466c36d071654765c30ddcb50d971f15f9d
 ---
 
 # Cybersecurity Engineering Review Workflow — Sera, Cybersecurity Engineer

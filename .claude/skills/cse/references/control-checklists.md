@@ -2,7 +2,7 @@
 
 Sera walks each of these four checklists in Step 3, producing a verdict per item: ✅ Present · ⚠️ Weak · ❌ Missing · 🔜 Deferred-to-Growth · ❓ Unclear. Each `❌`/`⚠️` row lists what would close it; each `❓` becomes an Open Item.
 
-The lists are deliberately concrete and Vela-shaped. They are *not* a CIS Benchmark or a NIST control catalog — they're the controls that map to the Vela MVP cybersecurity baseline plus the next ring of pragmatic security hygiene.
+The lists are deliberately concrete and product-shaped. They are *not* a CIS Benchmark or a NIST control catalog — they're the controls that map to the keel MVP cybersecurity baseline plus the next ring of pragmatic security hygiene.
 
 ---
 
@@ -17,7 +17,7 @@ The lists are deliberately concrete and Vela-shaped. They are *not* a CIS Benchm
 | A5 | Token revocation path exists and is documented | Step-by-step "kill this user's token in N minutes" — actually achievable |
 | A6 | Token TTL is bounded | TTL is documented; rotation cadence is documented; no infinite tokens |
 | A7 | Service-to-service auth uses something stronger than network position | mTLS, signed JWTs with short TTL, or cert pinning — not "it's on the internal network so it's fine" |
-| A8 | Appliance bootstrap authentication is per-appliance | Each appliance has its own credential / cert, not a shared image-baked secret |
+| A8 | Node/agent bootstrap authentication is per-node | Each node has its own credential / cert, not a shared image-baked secret |
 | A9 | Admin / dangerous actions require a separate credential or step-up | Either separate role with separate token, or interactive re-auth at the moment of action |
 | A10 | (Growth) MFA-claim enforcement at IdP | `amr` claim trusted; policy requires MFA for privileged ops — Deferred-to-Growth under MVP-baseline mode |
 
@@ -68,7 +68,7 @@ The lists are deliberately concrete and Vela-shaped. They are *not* a CIS Benchm
 | D5 | Secret-store access is itself authenticated | Bootstrap path is documented (chicken-and-egg has an answer) |
 | D6 | Secret rotation has a documented path | Even if manual; not "we never rotate" |
 | D7 | DB-stored secrets are encrypted at rest | And the encryption keys live in the secret store |
-| D8 | Appliance trust bootstrap is non-shared | Per-appliance credential (overlaps with A8 — score once, cite both) |
+| D8 | Node/agent trust bootstrap is non-shared | Per-node credential (overlaps with A8 — score once, cite both) |
 | D9 | Secrets are not in logs, error messages, or stack traces | Test path: deliberately include a secret-shaped value in an error and verify it's redacted |
 | D10 | Credential exposure path on compromise is documented | "If env file leaks, here's our recovery procedure" |
 

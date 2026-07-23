@@ -4,9 +4,9 @@ description: "Unit-of-implementation lifecycle for keel: create, plan, dev, revi
 allowed-tools: mcp__gold__create_change_request, mcp__gold__update_change_request, mcp__gold__list_change_request, mcp__gold__get_change_request, mcp__gold__search_change_request, mcp__gold__get_issue, mcp__gold__get_template_for, mcp__gold__list_glossary_term, mcp__gold__create_glossary_term, mcp__gold__update_glossary_term, mcp__gold__search_requirement, mcp__gold__create_requirement, mcp__gold__update_requirement, mcp__gold__get_dev_defaults, mcp__gold__list_dev_defaults, mcp__gold__create_dev_defaults, mcp__gold__create_issue_fix, mcp__gold__create_formal_review, mcp__gold__create_action_item, mcp__gold__list_task, mcp__gold__create_task, mcp__gold__update_task, mcp__gold__get_task
 targets_templates:
   - change_request-template
-x-openbrain-source: change-request/v9
-x-openbrain-content-source-hash: sha256:d41cb492a06fdb5760882153ab6e597d9c68a4f51866ea07d5adfd9d4fc5d170
-x-openbrain-content-hash: sha256:75c24f965d41414aa40e9fe8316b1ee0531b986b97b3db813861e2c02b65052b
+x-openbrain-source: change-request/v12
+x-openbrain-content-source-hash: sha256:8731ffa20922e992fe118f5277b7ccdb538a19f5c8b8dbb4b1f853ccbe0adf13
+x-openbrain-content-hash: sha256:faf1960b63db601c630b5c42711311ce090ce805b08385cfb8248ecae6f22b02
 ---
 
 # Change Request
@@ -18,7 +18,7 @@ Dispatcher for all unit-of-implementation operations. One unit = one session.
 | Verb | Status transition | Summary |
 |---|---|---|
 | `create` | → `draft` | Elicit context, run the front-loaded batch interview, emit the 4-section body, extract requirements; **issue-parent CRs gate on the issue being `reviewed`**; includes convert-on-pickup mode for backlog stories |
-| `plan` | `draft → approved` | Architect brief (exception-only KDs), validate requirements against codebase, **pre-approval gates (body matches the server template + comprehensive acceptance criteria)**, stamp `executor`/`merge_gate`/`auto_merge` at owner confirmation |
+| `plan` | `draft → approved` | Architect brief (exception-only KDs), validate requirements against codebase, **pre-approval gates (body matches the server template + comprehensive, kind-correct requirements)**, stamp `executor`/`merge_gate`/`auto_merge` at owner confirmation |
 | `dev` | `approved → in_progress` | Vertical-slice TDD loop: symmetric two-actor per slice (tester + coder subagents), DHF-REQ/DHF-TEST annotation per slice |
 | `review` | `in_progress → implementation_review → ready_to_merge` | Advisory DHF-REQ/DHF-TEST coverage report via inline `rg`; produce `formal_review` records; mark reviewed units ready to merge |
 | `close` | `ready_to_merge → merged → closed` | Two-half gate: merge half records `code_change_ref`; gate half runs `merge_gate` tier commands from `dev_defaults`, creates `issue_fix` rows when `parent` is an issue |
@@ -26,6 +26,17 @@ Dispatcher for all unit-of-implementation operations. One unit = one session.
 | `correct` | any non-closed | Structured change: classify → edit at source of truth; micro-reconfirm post-`approved` rows; on `closed` → halt "reopen first" |
 
 Route to: `.claude/skills/change-request/<verb>/workflow.md`
+
+## Resolving the acceptance contract (kind-aware)
+
+A unit's acceptance contract is its `requirement` refs **and each requirement's acceptance criteria** — the requirement's `acceptance_criteria` GWT atoms and/or linked `ac` records. **The ACs are the implement/verify oracle, not the requirement itself.** On the CR the ref-array is `requirements` (formerly `acceptance_criteria`; that field is gone). Where the refs live depends on `kind` — server invariant at every status (requirement-955/942, dd-30):
+
+| `kind` | `parent` | refs live in | chain |
+|---|---|---|---|
+| `feature` | epic, or none (never an issue) | CR `requirements` (non-empty) | cr → requirements → ac |
+| `fix` | an issue | parent issue `related_requirements` (CR `requirements` empty) | cr → issue → related_requirements → ac |
+
+Resolve the ref list by `kind`, then resolve each ref **to its acceptance criteria**, before iterating. `create`/`plan`/`dev`/`review` all consume this. `kind` is required on every write and frozen at `approved`.
 
 ## State and verb map
 

@@ -13,13 +13,13 @@ description: 'Check DHF annotation coverage and produce formal review records. U
 
 **1. Load the unit**
 
-Call `get_change_request` and collect the `acceptance_criteria` requirement refs.
+Resolve the unit's requirements **and their acceptance criteria** kind-aware (see SKILL.md § acceptance contract): `feature` — the CR's `requirements`; `fix` — `get_issue` on `parent`, its `related_requirements`. Coverage is checked against the requirements; the tests trace to their ACs.
 
 Call `update_change_request status=implementation_review` before starting review work.
 
 **2. Advisory coverage report**
 
-For each requirement ref in `acceptance_criteria`:
+For each resolved requirement (and its acceptance criteria):
 
 - Run inline: `rg "DHF-REQ: {product}/requirement-{id}"` to find implementing code markers.
 - Run inline: `rg "DHF-TEST: {product}/requirement-{id}"` to find test markers.

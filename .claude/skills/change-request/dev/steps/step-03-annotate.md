@@ -28,7 +28,7 @@ One line can carry multiple refs (comma-separated) when a single unit implements
 
 ## Retest flow
 
-The markers enable targeted retest: when a requirement changes, `rg "DHF-REQ: {product}/requirement-{id}"` identifies the exact implementing code, and `rg "DHF-TEST: {product}/requirement-{id}"` identifies the exact test set. The `review` verb checks annotation coverage against `acceptance_criteria` refs.
+The markers enable targeted retest: when a requirement or its acceptance criteria change, `rg "DHF-REQ: {product}/requirement-{id}"` finds the implementing code and `rg "DHF-TEST: {product}/requirement-{id}"` finds the tests that prove its ACs. The `review` verb checks coverage against the unit's resolved requirements and their ACs (kind-aware — see SKILL.md).
 
 ## After annotation
 

@@ -27,11 +27,13 @@ record. Run linearly, no fan-out.
 1. `get_change_request product=openbrain id=<id>`.
 2. Confirm `status == implementation_review`. If it differs, **halt** and report the
    actual status — the unit is not ready for `review`.
-3. Collect the `acceptance_criteria` requirement refs.
+3. Resolve the requirements **and their acceptance criteria** kind-aware (see
+   `../SKILL.md` § acceptance contract). Coverage is checked against the requirements;
+   the tests trace to their ACs.
 
 ## 2. Advisory coverage report
 
-For each requirement ref in `acceptance_criteria`, run the two searches **and record
+For each resolved requirement (and its acceptance criteria), run the two searches **and record
 their actual results** (do not assume coverage you did not see):
 
 - `rg "DHF-REQ: openbrain/requirement-<id>"` — implementing-code markers.

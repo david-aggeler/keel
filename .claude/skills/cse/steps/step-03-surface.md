@@ -4,10 +4,10 @@
 ## MANDATORY EXECUTION RULES
 
 - 🤖 Generate the surface map **autonomously** — don't ask the user component-by-component
-- 🌐 Map every externally reachable entry point: HTTP endpoints, AMQP channels, CLI/UI, appliance config API
+- 🌐 Map every externally reachable entry point: HTTP endpoints, AMQP channels, CLI/UI, device- or agent-facing API
 - 🔒 Mark every **trust boundary** — wherever a request crosses from a less-trusted zone to a more-trusted one
 - 🗺️ Capture **identities and roles** — who can call what, with what credential
-- 📦 Capture **external dependencies** — every system Vela trusts (Proxmox, IdP, AMQP broker, DB, secret store, DNS resolver)
+- 📦 Capture **external dependencies** — every system keel trusts (external infrastructure backend, IdP, AMQP broker, DB, secret store, DNS resolver)
 - 🛑 Do NOT enumerate threats yet — that's Step 4. Right now you're just naming the surface.
 
 ## YOUR TASK
@@ -25,8 +25,8 @@ For every component in the architecture, record:
 | Field | Notes |
 |---|---|
 | Name | Use the architecture doc's name verbatim |
-| Type | service / database / queue / external system / appliance / CLI |
-| Trust zone | where it sits (public, DMZ, internal, appliance, external-third-party) |
+| Type | service / database / queue / external system / node-agent / CLI |
+| Trust zone | where it sits (public, DMZ, internal, node-agent, external-third-party) |
 | Reachable from | which other components or external actors can call it |
 | Exposes | HTTP endpoints / AMQP channels / CLI / file system / none |
 
@@ -36,8 +36,8 @@ A trust boundary is a line where you'd want a control (authn, authz, validation,
 - Internet → public HTTP API
 - Public HTTP API → internal services
 - Tenant A → Tenant B (multi-tenant boundary)
-- Vela orchestrator → appliance config API
-- Vela orchestrator → Proxmox / hypervisor adapter
+- keel control plane → device- or agent-facing API
+- keel control plane → external compute/infrastructure backend adapter
 - Operator → audit log (read boundary)
 - Application → secret store
 - Application → database
@@ -58,23 +58,23 @@ For each, record: source → sink, what data, what trust boundaries crossed.
 |---|---|---|---|
 | End user (human) | tenant operator | IdP → token | full or scoped CRUD per role |
 | Service account | machine principal | mTLS / API key / OIDC client-credentials | scoped tasks |
-| Appliance | the in-VM config agent | shared secret / cert pinning | read its own config |
-| Internal service-to-service | between Vela components | mTLS / network-layer trust | internal API |
+| Node/agent | an out-of-process config agent | shared secret / cert pinning | read its own config |
+| Internal service-to-service | between keel components | mTLS / network-layer trust | internal API |
 
 Be honest if anything in this table is not yet decided — mark it `TBD` and surface it as an Open Item rather than guessing.
 
 ### E. External dependencies (the supply chain you trust)
 
-Each row should answer: "If this system is compromised or misbehaves, what can it do to Vela?"
+Each row should answer: "If this system is compromised or misbehaves, what can it do to keel?"
 
 | Dependency | Trust assumption | Failure-of-trust impact |
 |---|---|---|
-| Proxmox / hypervisor | Vela controls the cluster API | full compromise of all VMs in scope |
+| External compute/infrastructure backend | keel controls the backend's management API | full compromise of all workloads in scope |
 | IdP | Issues tokens we honour | impersonate any user / arbitrary role |
 | AMQP broker | Delivers events with integrity | inject events, replay, observe |
 | Database | Stores authoritative state | full data breach + tamper |
 | Secret store | Holds credentials | full secret breach |
-| DNS resolver | Names resolve correctly | redirect Vela traffic to attacker |
+| DNS resolver | Names resolve correctly | redirect keel traffic to attacker |
 
 ---
 
@@ -115,7 +115,7 @@ Wait for `[C]`.
 
 ## FAILURE MODES
 
-❌ Listing only the components Vela owns and skipping the external deps
+❌ Listing only the components keel owns and skipping the external deps
 ❌ Conflating "service-to-service" links with trust boundaries (or vice versa)
 ❌ Filling in `TBD` identity decisions with plausible-sounding guesses
 ❌ Generating threats in this step
