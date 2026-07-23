@@ -38,6 +38,15 @@ func run(argv []string) int {
 		// DHF-REQ: keel/requirement-57
 		return renderAllHelp(tree, mode)
 	}
+	if cfg.HelpJSON {
+		// DHF-REQ: keel/requirement-100 — structured inventory on stdout,
+		// path- and mode-independent, exit 0.
+		if err := tree.RenderHelpJSON(os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "keel-demo: "+err.Error())
+			return 1
+		}
+		return 0
+	}
 	if len(words) > 0 && words[0] == "help" {
 		return renderHelp(tree, mode, words[1:])
 	}
@@ -69,6 +78,7 @@ func commandTree() *cli.CommandSpec {
 			GlobalFlags: []cli.FlagSpec{
 				{Name: "mode", Value: "human|ai|json", Default: "human", Short: "Console mode."},
 				{Name: "help-all", Short: "Print root help plus every command topic and exit."},
+				{Name: "help-json", Short: "Print the full command tree as a JSON inventory and exit."},
 			},
 			ModeHelp: []string{
 				"human renders plain console output.",

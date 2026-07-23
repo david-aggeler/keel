@@ -127,6 +127,36 @@ func TestKeelDemoHelpAllRendersFullCommandTreeAndExitsZero(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-100
+func TestKeelDemoHelpJSONEmitsFullInventoryPathAndModeIndependent(t *testing.T) {
+	// Bare --help-json establishes the full inventory element count.
+	bareOut, bareCode := runDemo(t, "--help-json")
+	if bareCode != 0 {
+		t.Fatalf("keel-demo --help-json exit = %d, want 0\noutput:\n%s", bareCode, bareOut)
+	}
+	var bare []map[string]any
+	if err := json.Unmarshal([]byte(bareOut), &bare); err != nil {
+		t.Fatalf("keel-demo --help-json stdout is not a JSON array: %v\n%s", err, bareOut)
+	}
+	if len(bare) == 0 {
+		t.Fatalf("keel-demo --help-json emitted an empty inventory")
+	}
+
+	// A trailing command path plus a machine --mode must not scope or suppress
+	// the inventory: same element count, still on stdout, still exit 0.
+	scopedOut, scopedCode := runDemo(t, "--help-json", "workflow", "inspect", "--mode", "ai")
+	if scopedCode != 0 {
+		t.Fatalf("keel-demo --help-json workflow inspect --mode ai exit = %d, want 0\noutput:\n%s", scopedCode, scopedOut)
+	}
+	var scoped []map[string]any
+	if err := json.Unmarshal([]byte(scopedOut), &scoped); err != nil {
+		t.Fatalf("keel-demo --help-json <path> --mode ai stdout is not a JSON array: %v\n%s", err, scopedOut)
+	}
+	if len(scoped) != len(bare) {
+		t.Fatalf("path/mode-scoped inventory count = %d, want %d (full inventory)\n%s", len(scoped), len(bare), scopedOut)
+	}
+}
+
 // DHF-TEST: keel/requirement-26
 func TestRunShowcaseDirectReturnsStructuredFailure(t *testing.T) {
 	var out bytes.Buffer
