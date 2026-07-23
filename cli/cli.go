@@ -344,8 +344,89 @@ func (c *CommandSpec) match(path []string) (*CommandSpec, []string, []string) {
 	return node, matched, path
 }
 
+// GlobalFlagSpecs returns the canonical help rows for the shared global flags
+// ParseGlobalConfig parses. keel owns these names and descriptions so root help
+// cannot drift from the parser; a consumer's Config.GlobalFlags contributes only
+// its own additional binary-specific globals. The order mirrors ParseGlobalConfig.
+//
+// DHF-REQ: keel/requirement-101
+func GlobalFlagSpecs() []FlagSpec {
+	return []FlagSpec{
+		{Name: "mode", Value: "human|ai|json", Default: "human", Short: "Select the console output protocol."},
+		{Name: "verbose", Short: "Include debug-level console detail."},
+		{Name: "no-header", Short: "Suppress the run header for machine protocol consumers."},
+		{Name: "help", Short: "Print generated help and exit."},
+		{Name: "help-all", Short: "Print root help plus every command topic and exit."},
+		{Name: "help-json", Short: "Print the full command tree as a JSON inventory and exit."},
+		{Name: "version", Short: "Print version and exit."},
+	}
+}
+
+// ModeHelpLines returns the canonical --mode ai|json output-mode description keel
+// owns. RenderRootHelp emits these lines so the mode protocol is documented once
+// from keel; a consumer's Config.ModeHelp contributes only additional
+// binary-specific lines (for example, where it writes structured logs).
+//
+// DHF-REQ: keel/requirement-101
+func ModeHelpLines() []string {
+	return []string{
+		"human renders plain console output.",
+		"ai emits sparse AI-readable records.",
+		"json emits full JSON log records.",
+	}
+}
+
+// mergeGlobalFlags returns keel's canonical global flag rows followed by any
+// consumer-supplied globals that are not keel-owned. A consumer entry re-listing
+// a keel-owned flag name is de-duped (rendered once, from keel) for back-compat.
+//
+// DHF-REQ: keel/requirement-101
+func mergeGlobalFlags(extra []FlagSpec) []FlagSpec {
+	canonical := GlobalFlagSpecs()
+	owned := make(map[string]bool, len(canonical))
+	for _, f := range canonical {
+		owned[f.Name] = true
+	}
+	merged := append([]FlagSpec{}, canonical...)
+	for _, f := range extra {
+		if owned[f.Name] {
+			continue
+		}
+		merged = append(merged, f)
+	}
+	return merged
+}
+
+// mergeModeHelp returns keel's canonical output-mode lines followed by any
+// consumer-supplied lines not already present, so the mode protocol is described
+// once from keel and legacy consumer duplicates do not double-render.
+//
+// DHF-REQ: keel/requirement-101
+func mergeModeHelp(extra []string) []string {
+	canonical := ModeHelpLines()
+	seen := make(map[string]bool, len(canonical))
+	for _, line := range canonical {
+		seen[line] = true
+	}
+	merged := append([]string{}, canonical...)
+	for _, line := range extra {
+		if seen[line] {
+			continue
+		}
+		seen[line] = true
+		merged = append(merged, line)
+	}
+	return merged
+}
+
 // RenderRootHelp writes generated root help from Config, global flags,
-// first-level command summaries, output-mode prose, and trailing guidance.
+// first-level command summaries, output-mode prose, and trailing guidance. The
+// global flag rows and the --mode ai|json output-mode description are keel-owned
+// (GlobalFlagSpecs, ModeHelpLines); Config.GlobalFlags and Config.ModeHelp are
+// additive — consumer-only extras rendered after keel's canonical entries, with
+// any keel-owned re-declarations de-duped.
+//
+// DHF-REQ: keel/requirement-101
 func (c *CommandSpec) RenderRootHelp(w io.Writer) {
 	c.InheritConfig()
 	if c.Config.RootSummary != "" {
@@ -358,20 +439,20 @@ func (c *CommandSpec) RenderRootHelp(w io.Writer) {
 			fmt.Fprintf(w, "  %s\n", line)
 		}
 	}
-	if len(c.Config.GlobalFlags) > 0 {
+	if globals := mergeGlobalFlags(c.Config.GlobalFlags); len(globals) > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Global flags:")
-		PrintFlagRows(w, c.Config.GlobalFlags)
+		PrintFlagRows(w, globals)
 	}
 	if len(c.Subcommands) > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Commands:")
 		PrintCommandRows(w, c.Subcommands)
 	}
-	if len(c.Config.ModeHelp) > 0 {
+	if modeHelp := mergeModeHelp(c.Config.ModeHelp); len(modeHelp) > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Output mode:")
-		for _, line := range c.Config.ModeHelp {
+		for _, line := range modeHelp {
 			fmt.Fprintf(w, "  %s\n", line)
 		}
 	}

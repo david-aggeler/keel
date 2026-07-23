@@ -75,16 +75,9 @@ func commandTree() *cli.CommandSpec {
 			Usage:        "keel-demo [--mode human|ai|json]",
 			HelpUsage:    "keel-demo help [command]",
 			CommandUsage: "keel-demo <command> --help",
-			GlobalFlags: []cli.FlagSpec{
-				{Name: "mode", Value: "human|ai|json", Default: "human", Short: "Console mode."},
-				{Name: "help-all", Short: "Print root help plus every command topic and exit."},
-				{Name: "help-json", Short: "Print the full command tree as a JSON inventory and exit."},
-			},
-			ModeHelp: []string{
-				"human renders plain console output.",
-				"ai emits sparse AI-readable records.",
-				"json emits full JSON log records.",
-			},
+			// keel/cli owns and renders the shared global flags and the --mode
+			// output-mode description (keel/requirement-101); keel-demo declares no
+			// additional globals, so GlobalFlags/ModeHelp are left empty.
 			Trailing: "Workflow subcommands: workflow inspect, workflow replay. Run keel-demo help workflow for nested command details.",
 		},
 		Subcommands: []*cli.CommandSpec{
