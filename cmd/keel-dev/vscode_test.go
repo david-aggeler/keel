@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -3495,7 +3496,10 @@ func TestVSCodeRunRefusesExistingLockAndReleasesOwnLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	lockPath := filepath.Join(runDir, "run.lock")
-	existing := `{"pid":12345,"created_at":"2026-07-11T00:00:00Z","ids":["keel::lane::test-fast"],"token":"foreign"}`
+	// A live foreign holder (this process's own PID) is still refused under the
+	// steal-if-dead reclaim (keel/requirement-102, ac-365): only a dead-PID lock
+	// is reclaimed, so the fixture must record a live PID to exercise refusal.
+	existing := fmt.Sprintf(`{"pid":%d,"created_at":"2026-07-11T00:00:00Z","ids":["keel::lane::test-fast"],"token":"foreign"}`, os.Getpid())
 	if err := os.WriteFile(lockPath, []byte(existing), 0o644); err != nil {
 		t.Fatal(err)
 	}
