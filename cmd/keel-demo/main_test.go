@@ -157,6 +157,26 @@ func TestKeelDemoHelpJSONEmitsFullInventoryPathAndModeIndependent(t *testing.T) 
 	}
 }
 
+// DHF-TEST: keel/requirement-100
+func TestKeelDemoHelpJSONReportsWriteFailure(t *testing.T) {
+	// A closed stdout makes the JSON encode write fail; run must surface it as
+	// exit 1 rather than a silent success.
+	closed, err := os.CreateTemp(t.TempDir(), "closed-stdout")
+	if err != nil {
+		t.Fatalf("temp file: %v", err)
+	}
+	if err := closed.Close(); err != nil {
+		t.Fatalf("close temp file: %v", err)
+	}
+	oldStdout, oldStderr := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = closed, closed
+	defer func() { os.Stdout, os.Stderr = oldStdout, oldStderr }()
+
+	if code := run([]string{"--help-json"}); code != 1 {
+		t.Fatalf("run --help-json with closed stdout exit = %d, want 1", code)
+	}
+}
+
 // DHF-TEST: keel/requirement-26
 func TestRunShowcaseDirectReturnsStructuredFailure(t *testing.T) {
 	var out bytes.Buffer
