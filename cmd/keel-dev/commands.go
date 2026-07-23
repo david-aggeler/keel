@@ -54,6 +54,7 @@ func commandTree() *cli.CommandSpec {
 				{Name: "no-header", Short: "Suppress the run header for machine protocol consumers."},
 				{Name: "verbose", Short: "Include debug-level detail."},
 				{Name: "help-all", Short: "Print root help plus every command topic and exit."},
+				{Name: "help-json", Short: "Print the full command tree as a JSON inventory and exit."},
 				{Name: "version", Short: "Print version and exit."},
 			},
 			ModeHelp: []string{
