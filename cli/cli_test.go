@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -239,6 +240,127 @@ func assertBefore(t *testing.T, text, earlier, later string) {
 	laterAt := strings.Index(text, later)
 	if earlierAt < 0 || laterAt < 0 || earlierAt >= laterAt {
 		t.Fatalf("expected %q before %q in:\n%s", earlier, later, text)
+	}
+}
+
+// DHF-TEST: keel/requirement-100
+func TestParseGlobalConfigRecognizesHelpJSONPositionIndependently(t *testing.T) {
+	cfg, rest, err := ParseGlobalConfig([]string{"ci", "--help-json", "--mode", "ai", "extra"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.HelpJSON {
+		t.Fatalf("HelpJSON = false, want true")
+	}
+	if cfg.Mode != ModeAI {
+		t.Fatalf("Mode = %q, want %q", cfg.Mode, ModeAI)
+	}
+	if strings.Join(rest, " ") != "ci extra" {
+		t.Fatalf("rest = %q, want ci extra (--help-json consumed, not left in command words)", strings.Join(rest, " "))
+	}
+}
+
+// helpJSONElement mirrors the documented element shape of RenderHelpJSON output
+// so tests can decode and assert against it without inspecting the renderer's
+// internals.
+type helpJSONElement struct {
+	Path    string `json:"path"`
+	Summary string `json:"summary"`
+	Usage   string `json:"usage"`
+	Flags   []struct {
+		Name        string `json:"name"`
+		Value       string `json:"value"`
+		Default     string `json:"default"`
+		Description string `json:"description"`
+	} `json:"flags"`
+}
+
+// DHF-TEST: keel/requirement-100
+func TestRenderHelpJSONEmitsFlatArrayOneElementPerCommand(t *testing.T) {
+	root := &CommandSpec{
+		Name: "tool",
+		Config: Config{
+			Program:      "tool",
+			Usage:        "tool <command>",
+			HelpUsage:    "tool help [command]",
+			CommandUsage: "tool <command> --help",
+		},
+		Subcommands: []*CommandSpec{
+			{
+				Name:  "parent",
+				Short: "Parent command.",
+				Subcommands: []*CommandSpec{
+					{Name: "beta", Use: "parent beta", Short: "Second.", Flags: []FlagSpec{{Name: "flag", Value: "n", Default: "1", Short: "Declared flag."}}},
+					{Name: "alpha", Use: "parent alpha", Short: "First."},
+				},
+			},
+			{Name: "status", Use: "status", Short: "Show status."},
+		},
+	}
+	// Commands across all depths (root is the program, not a command): parent,
+	// parent beta, parent alpha, status => 4.
+	const wantCount = 4
+
+	var buf bytes.Buffer
+	if err := root.RenderHelpJSON(&buf); err != nil {
+		t.Fatalf("RenderHelpJSON: %v", err)
+	}
+
+	var elems []helpJSONElement
+	if err := json.Unmarshal(buf.Bytes(), &elems); err != nil {
+		t.Fatalf("output is not a valid JSON array: %v\n%s", err, buf.String())
+	}
+	if len(elems) != wantCount {
+		t.Fatalf("element count = %d, want %d\n%s", len(elems), wantCount, buf.String())
+	}
+
+	// Also assert the raw shape has the flags key as an array for every element
+	// (a nil slice would marshal to null, not []).
+	var rawElems []map[string]json.RawMessage
+	if err := json.Unmarshal(buf.Bytes(), &rawElems); err != nil {
+		t.Fatalf("output is not an array of objects: %v", err)
+	}
+	seen := map[string]bool{}
+	for i, e := range elems {
+		if e.Path == "" {
+			t.Fatalf("element %d has empty path\n%s", i, buf.String())
+		}
+		if seen[e.Path] {
+			t.Fatalf("path %q appears more than once", e.Path)
+		}
+		seen[e.Path] = true
+		for _, key := range []string{"path", "summary", "usage", "flags"} {
+			if _, ok := rawElems[i][key]; !ok {
+				t.Fatalf("element %d missing key %q\n%s", i, key, buf.String())
+			}
+		}
+		if !strings.HasPrefix(strings.TrimSpace(string(rawElems[i]["flags"])), "[") {
+			t.Fatalf("element %d flags is not a JSON array: %s", i, rawElems[i]["flags"])
+		}
+	}
+
+	// One element carries the declared flag with all four flag subfields.
+	var beta *helpJSONElement
+	for i := range elems {
+		if elems[i].Path == "parent beta" {
+			beta = &elems[i]
+		}
+	}
+	if beta == nil {
+		t.Fatalf("expected an element with path %q\n%s", "parent beta", buf.String())
+	}
+	if len(beta.Flags) != 1 || beta.Flags[0].Name != "flag" || beta.Flags[0].Value != "n" ||
+		beta.Flags[0].Default != "1" || beta.Flags[0].Description != "Declared flag." {
+		t.Fatalf("parent beta flags = %+v, want one {flag,n,1,Declared flag.}", beta.Flags)
+	}
+
+	// Determinism: byte-identical across repeated renders.
+	var second bytes.Buffer
+	if err := root.RenderHelpJSON(&second); err != nil {
+		t.Fatalf("RenderHelpJSON (second): %v", err)
+	}
+	if buf.String() != second.String() {
+		t.Fatalf("RenderHelpJSON not deterministic:\nfirst:\n%s\nsecond:\n%s", buf.String(), second.String())
 	}
 }
 

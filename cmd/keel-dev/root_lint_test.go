@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -67,6 +68,61 @@ func TestRunDirectVersionHelpAndNoCommandBranches(t *testing.T) {
 	})
 	if stdout != "" || !strings.Contains(stderr, "Usage:") {
 		t.Fatalf("run nil stdout=%q stderr=%q, want usage on stderr", stdout, stderr)
+	}
+}
+
+// DHF-TEST: keel/requirement-100
+func TestRunHelpJSONEmitsFullInventoryToStdoutPathAndModeIndependent(t *testing.T) {
+	// Bare --help-json: full inventory on stdout, exit 0.
+	bareStdout, bareStderr := captureProcessStreams(t, func() {
+		if code := run([]string{"--help-json"}); code != 0 {
+			t.Fatalf("run --help-json exit != 0")
+		}
+	})
+	if bareStderr != "" {
+		t.Fatalf("run --help-json wrote to stderr: %q", bareStderr)
+	}
+	var bare []map[string]any
+	if err := json.Unmarshal([]byte(bareStdout), &bare); err != nil {
+		t.Fatalf("run --help-json stdout is not a JSON array: %v\n%s", err, bareStdout)
+	}
+	if len(bare) == 0 {
+		t.Fatalf("run --help-json emitted an empty inventory")
+	}
+
+	// Trailing command path plus machine --mode: identical inventory count,
+	// still on stdout, still exit 0.
+	scopedStdout, _ := captureProcessStreams(t, func() {
+		if code := run([]string{"--help-json", "ci", "--mode", "ai"}); code != 0 {
+			t.Fatalf("run --help-json ci --mode ai exit != 0")
+		}
+	})
+	var scoped []map[string]any
+	if err := json.Unmarshal([]byte(scopedStdout), &scoped); err != nil {
+		t.Fatalf("run --help-json ci --mode ai stdout is not a JSON array: %v\n%s", err, scopedStdout)
+	}
+	if len(scoped) != len(bare) {
+		t.Fatalf("path/mode-scoped inventory count = %d, want %d (full inventory)", len(scoped), len(bare))
+	}
+}
+
+// DHF-TEST: keel/requirement-100
+func TestRunHelpJSONReportsWriteFailure(t *testing.T) {
+	// A closed stdout makes the JSON encode write fail; run must surface it as
+	// exit 1 rather than a silent success.
+	closed, err := os.CreateTemp(t.TempDir(), "closed-stdout")
+	if err != nil {
+		t.Fatalf("temp file: %v", err)
+	}
+	if err := closed.Close(); err != nil {
+		t.Fatalf("close temp file: %v", err)
+	}
+	oldStdout, oldStderr := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = closed, closed
+	defer func() { os.Stdout, os.Stderr = oldStdout, oldStderr }()
+
+	if code := run([]string{"--help-json"}); code != 1 {
+		t.Fatalf("run --help-json with closed stdout exit = %d, want 1", code)
 	}
 }
 

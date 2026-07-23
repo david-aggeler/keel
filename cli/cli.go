@@ -26,6 +26,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"sort"
@@ -61,6 +62,10 @@ type RuntimeConfig struct {
 	Help bool
 	// HelpAll requests the full generated help tree instead of command execution.
 	HelpAll bool
+	// HelpJSON requests the structured JSON command inventory instead of command
+	// execution. It is mode- and path-independent: the whole command tree is
+	// always emitted regardless of any trailing command path or output mode.
+	HelpJSON bool
 	// Version requests version output instead of command execution.
 	Version bool
 }
@@ -165,8 +170,8 @@ func (e UsageError) ExitCode() int { return 2 }
 
 // ParseGlobalConfig parses shared position-independent global flags and returns
 // the non-global command words. It accepts --mode, -v/--verbose, --no-header,
-// -h/--help, --help-all, and --version wherever they appear in argv, leaving
-// command and positional words in their original relative order.
+// -h/--help, --help-all, --help-json, and --version wherever they appear in
+// argv, leaving command and positional words in their original relative order.
 //
 // DHF-REQ: keel/requirement-57
 func ParseGlobalConfig(argv []string) (RuntimeConfig, []string, error) {
@@ -193,6 +198,9 @@ func ParseGlobalConfig(argv []string) (RuntimeConfig, []string, error) {
 			cfg.Help = true
 		case "--help-all":
 			cfg.HelpAll = true
+		case "--help-json":
+			// DHF-REQ: keel/requirement-100
+			cfg.HelpJSON = true
 		case "--version":
 			cfg.Version = true
 		default:
@@ -413,6 +421,65 @@ func (c *CommandSpec) renderAllCommandHelp(w io.Writer, path []string) {
 		fmt.Fprintln(w)
 		childPath := append(append([]string{}, path...), child.Name)
 		child.renderAllCommandHelp(w, childPath)
+	}
+}
+
+// helpJSONFlag is the JSON element shape for one flag row in the structured
+// help inventory.
+type helpJSONFlag struct {
+	Name        string `json:"name"`
+	Value       string `json:"value"`
+	Default     string `json:"default"`
+	Description string `json:"description"`
+}
+
+// helpJSONCommand is the JSON element shape for one command in the structured
+// help inventory. Flags is always a (possibly empty) array, never null.
+type helpJSONCommand struct {
+	Path    string         `json:"path"`
+	Summary string         `json:"summary"`
+	Usage   string         `json:"usage"`
+	Flags   []helpJSONFlag `json:"flags"`
+}
+
+// RenderHelpJSON writes a single JSON array describing every command in the
+// tree exactly once, depth-first in declaration order. The root node is the
+// program shell, not a command, so it is not emitted; each element carries a
+// non-empty space-joined command path plus that command's summary, usage, and
+// flags. The CommandSpec tree is the single source — this is a pure traversal
+// and marshal with no second help model. Output is deterministic across calls.
+//
+// DHF-REQ: keel/requirement-100
+func (c *CommandSpec) RenderHelpJSON(w io.Writer) error {
+	c.InheritConfig()
+	commands := []helpJSONCommand{}
+	for _, child := range c.Subcommands {
+		child.appendHelpJSON(&commands, []string{child.Name})
+	}
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(commands)
+}
+
+func (c *CommandSpec) appendHelpJSON(out *[]helpJSONCommand, path []string) {
+	flags := make([]helpJSONFlag, 0, len(c.Flags))
+	for _, f := range c.Flags {
+		flags = append(flags, helpJSONFlag{
+			Name:        f.Name,
+			Value:       f.Value,
+			Default:     f.Default,
+			Description: f.Short,
+		})
+	}
+	*out = append(*out, helpJSONCommand{
+		Path:    strings.Join(path, " "),
+		Summary: c.Short,
+		Usage:   strings.TrimPrefix(c.Usage(path), "usage: "),
+		Flags:   flags,
+	})
+	for _, child := range c.Subcommands {
+		childPath := append(append([]string{}, path...), child.Name)
+		child.appendHelpJSON(out, childPath)
 	}
 }
 

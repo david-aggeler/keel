@@ -55,6 +55,15 @@ func run(argv []string) int {
 		tree.RenderAllHelp(os.Stderr)
 		return 0
 	}
+	if cfg.HelpJSON {
+		// DHF-REQ: keel/requirement-100 — structured inventory on stdout,
+		// path- and mode-independent, exit 0.
+		if err := tree.RenderHelpJSON(os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "keel-dev: "+err.Error())
+			return 1
+		}
+		return 0
+	}
 	if cfg.Help && len(words) == 0 {
 		printUsage(tree)
 		return 0
