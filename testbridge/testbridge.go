@@ -133,7 +133,13 @@ const (
 )
 
 // Runner executes a selected run and emits run events through the package-owned
-// writer.
+// writer. RunRequest.IDs may carry more than one selection when the bridge
+// batches an editor multi-select or Run All (see runRemainingSelections): a
+// conforming Run executes EVERY requested id — not a single representative —
+// stopping at the first failing selection and returning its non-zero exit, so
+// no member is silently unexecuted with exit 0 (keel/requirement-99). The
+// reference consumer keel-demo-dev honors this; keel-dev's keelTestBridge.Run
+// now iterates the same way (keel/issue-92).
 type Runner interface {
 	Run(context.Context, RunRequest, vscode.RunEventWriter) (int, error)
 }
