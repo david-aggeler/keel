@@ -49,19 +49,9 @@ func commandTree() *cli.CommandSpec {
 			Usage:        "keel-dev [--mode human|ai|json] [--no-header] [-v|--verbose] <command> [args]",
 			HelpUsage:    "keel-dev help [command]",
 			CommandUsage: "keel-dev <command> --help",
-			GlobalFlags: []cli.FlagSpec{
-				{Name: "mode", Value: "human|ai|json", Default: "human", Short: "Console mode."},
-				{Name: "no-header", Short: "Suppress the run header for machine protocol consumers."},
-				{Name: "verbose", Short: "Include debug-level detail."},
-				{Name: "help-all", Short: "Print root help plus every command topic and exit."},
-				{Name: "help-json", Short: "Print the full command tree as a JSON inventory and exit."},
-				{Name: "version", Short: "Print version and exit."},
-			},
-			ModeHelp: []string{
-				"human renders plain console output.",
-				"ai emits sparse AI-readable records.",
-				"json emits full JSON log records.",
-			},
+			// keel/cli owns and renders the shared global flags and the --mode
+			// output-mode description (keel/requirement-101); keel-dev declares no
+			// additional globals, so GlobalFlags/ModeHelp are left empty.
 			Trailing: "Run keel-dev help <command> for command details.",
 		},
 		Subcommands: []*cli.CommandSpec{

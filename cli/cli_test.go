@@ -477,3 +477,168 @@ func TestUsageErrorAndGlobalParseErrors(t *testing.T) {
 		t.Fatalf("ParseMode(HUMAN) = %q, %v", mode, err)
 	}
 }
+
+// globalFlagsSection returns the text of the "Global flags:" paragraph of
+// rendered root help, so tests can assert on the flag table without matching
+// flag names that also appear in the usage line or output-mode prose. It reads
+// only public RenderRootHelp output.
+func globalFlagsSection(t *testing.T, help string) string {
+	t.Helper()
+	for _, para := range strings.Split(help, "\n\n") {
+		if strings.HasPrefix(para, "Global flags:") {
+			return para
+		}
+	}
+	t.Fatalf("root help has no \"Global flags:\" section:\n%s", help)
+	return ""
+}
+
+// outputModeSection returns the text of the "Output mode:" paragraph of
+// rendered root help, or "" when absent.
+func outputModeSection(help string) string {
+	for _, para := range strings.Split(help, "\n\n") {
+		if strings.HasPrefix(para, "Output mode:") {
+			return para
+		}
+	}
+	return ""
+}
+
+// DHF-TEST: keel/requirement-101
+//
+// ac-362: a Config whose GlobalFlags contributes only binary-specific globals
+// (no keel-owned flags) still renders every flag ParseGlobalConfig parses
+// exactly once, sourced from keel, plus the consumer's own globals.
+func TestRenderRootHelpRendersKeelOwnedGlobalFlagsWithoutConsumerRedeclaration(t *testing.T) {
+	root := &CommandSpec{
+		Name: "tool",
+		Config: Config{
+			Program:      "tool",
+			Usage:        "tool <command> [args]",
+			HelpUsage:    "tool help [command]",
+			CommandUsage: "tool <command> --help",
+			// Only a binary-specific global; the consumer declares none of
+			// keel's parsed flags.
+			GlobalFlags: []FlagSpec{
+				{Name: "target", Value: "path", Short: "Repository root to operate on."},
+			},
+		},
+		Subcommands: []*CommandSpec{
+			{Name: "ci", Use: "ci", Short: "Run the gate."},
+		},
+	}
+
+	var help bytes.Buffer
+	root.RenderRootHelp(&help)
+	section := globalFlagsSection(t, help.String())
+
+	// Every global flag ParseGlobalConfig parses appears exactly once, keel-owned.
+	for _, name := range []string{"--mode", "--verbose", "--no-header", "--help", "--help-all", "--help-json", "--version"} {
+		// A flag row is "  --name\n" (no value) or "  --name <value>\n"; count
+		// both forms so name-prefix aliases (--help vs --help-all) don't collide.
+		rowPrefix := "  " + name
+		if got := strings.Count(section, rowPrefix+" ") + strings.Count(section, rowPrefix+"\n"); got != 1 {
+			t.Fatalf("global flag row %q appears %d times, want exactly 1:\n%s", name, got, section)
+		}
+	}
+	// The consumer's own binary-specific global still renders.
+	if !strings.Contains(section, "  --target path") {
+		t.Fatalf("consumer global --target missing from Global flags section:\n%s", section)
+	}
+}
+
+// DHF-TEST: keel/requirement-101
+//
+// ac-363: a Config supplying no ModeHelp still documents --mode exactly once and
+// the --mode ai|json output-mode description is the keel-owned canonical text.
+func TestRenderRootHelpDocumentsModeOnceFromKeelText(t *testing.T) {
+	root := &CommandSpec{
+		Name: "tool",
+		Config: Config{
+			Program:      "tool",
+			Usage:        "tool <command> [args]",
+			HelpUsage:    "tool help [command]",
+			CommandUsage: "tool <command> --help",
+			// No ModeHelp, no GlobalFlags: everything mode-related must come
+			// from keel.
+		},
+		Subcommands: []*CommandSpec{
+			{Name: "ci", Use: "ci", Short: "Run the gate."},
+		},
+	}
+
+	var help bytes.Buffer
+	root.RenderRootHelp(&help)
+
+	// --mode is documented exactly once as a flag row (no duplicate row).
+	section := globalFlagsSection(t, help.String())
+	if got := strings.Count(section, "  --mode"); got != 1 {
+		t.Fatalf("--mode flag row appears %d times, want exactly 1:\n%s", got, section)
+	}
+
+	// The output-mode description is present and keel-owned, even with no
+	// consumer ModeHelp.
+	mode := outputModeSection(help.String())
+	if mode == "" {
+		t.Fatalf("root help has no keel-owned \"Output mode:\" section:\n%s", help.String())
+	}
+	for _, want := range []string{
+		"ai emits sparse AI-readable records.",
+		"json emits full JSON log records.",
+	} {
+		if !strings.Contains(mode, want) {
+			t.Fatalf("keel-owned Output mode text missing %q:\n%s", want, mode)
+		}
+	}
+}
+
+// DHF-TEST: keel/requirement-101
+//
+// Back-compat: a consumer that still re-declares a keel-owned flag or a keel
+// mode line is de-duped (rendered once, keel-owned), while genuinely additional
+// consumer entries are additive.
+func TestRenderRootHelpDeDupesConsumerReDeclaredKeelFlagsAndAppendsExtras(t *testing.T) {
+	root := &CommandSpec{
+		Name: "tool",
+		Config: Config{
+			Program:      "tool",
+			Usage:        "tool <command> [args]",
+			HelpUsage:    "tool help [command]",
+			CommandUsage: "tool <command> --help",
+			GlobalFlags: []FlagSpec{
+				// Legacy re-declaration of a keel-owned flag: must not double-render.
+				{Name: "mode", Value: "human|ai|json", Default: "human", Short: "Console mode."},
+				// A genuinely binary-specific global: additive.
+				{Name: "target", Value: "path", Short: "Repository root to operate on."},
+			},
+			ModeHelp: []string{
+				// Legacy duplicate of a keel canonical mode line: de-duped.
+				"ai emits sparse AI-readable records.",
+				// A binary-specific fact: additive.
+				"Structured logs are written under .logs/.",
+			},
+		},
+		Subcommands: []*CommandSpec{
+			{Name: "ci", Use: "ci", Short: "Run the gate."},
+		},
+	}
+
+	var help bytes.Buffer
+	root.RenderRootHelp(&help)
+	section := globalFlagsSection(t, help.String())
+
+	if got := strings.Count(section, "  --mode"); got != 1 {
+		t.Fatalf("re-declared --mode rendered %d times, want exactly 1:\n%s", got, section)
+	}
+	if !strings.Contains(section, "  --target path") {
+		t.Fatalf("additive consumer global --target missing:\n%s", section)
+	}
+
+	mode := outputModeSection(help.String())
+	if got := strings.Count(mode, "ai emits sparse AI-readable records."); got != 1 {
+		t.Fatalf("duplicate mode line rendered %d times, want exactly 1:\n%s", got, mode)
+	}
+	if !strings.Contains(mode, "Structured logs are written under .logs/.") {
+		t.Fatalf("additive consumer mode line missing:\n%s", mode)
+	}
+}
