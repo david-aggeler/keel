@@ -93,6 +93,7 @@ readback
 recentlog
 redactstring
 redlist
+reentrancy
 reltype
 rollup
 Rollups

@@ -15,8 +15,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/david-aggeler/keel/cli"
@@ -816,7 +818,7 @@ func handleRun(bridge Bridge) cli.Handler {
 		exitCode := 1
 		writer(vscode.RunEvent{Event: "run_started", Live: boolPtr(true), Requested: runResolutionRequests(requests)})
 		if !bridgeLockExempt(bridge, ids) {
-			releaseLock, err := acquireRunLock(runtimeRoot(rt, bridge), ids, runID)
+			releaseLock, err := acquireRunLock(runtimeRoot(rt, bridge), ids, runID, rt.Log)
 			if err != nil {
 				writer(vscode.RunEvent{Event: "errored", Message: err.Error()})
 				writer(vscode.RunEvent{Event: "run_finished", ExitCode: &exitCode})
@@ -1630,8 +1632,8 @@ func runtimeNow(rt Runtime) time.Time {
 // down the process tree, never authoritative on its own.
 const RunLockTokenEnv = "KEEL_TESTBRIDGE_RUN_LOCK_TOKEN"
 
-// DHF-REQ: keel/requirement-58, keel/requirement-67, keel/requirement-96
-func acquireRunLock(root string, ids []string, token string) (func() error, error) {
+// DHF-REQ: keel/requirement-58, keel/requirement-67, keel/requirement-96, keel/requirement-102
+func acquireRunLock(root string, ids []string, token string, logger *slog.Logger) (func() error, error) {
 	runDir := filepath.Join(root, ".devtools", "vscode-runs")
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		return nil, err
@@ -1639,16 +1641,27 @@ func acquireRunLock(root string, ids []string, token string) (func() error, erro
 	path := RunLockPath(root)
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
-		if errors.Is(err, os.ErrExist) {
-			if heldByAncestorRun(path) {
-				// Reentrant descent (requirement-96): the lock belongs to an
-				// ancestor run that exported its token. Proceed without
-				// acquiring; only the ancestor releases.
-				return func() error { return nil }, nil
-			}
-			return nil, fmt.Errorf("keel/testbridge: run lock already exists at %s", path)
+		if !errors.Is(err, os.ErrExist) {
+			return nil, fmt.Errorf("keel/testbridge: create run lock: %w", err)
 		}
-		return nil, fmt.Errorf("keel/testbridge: create run lock: %w", err)
+		// Collision branch order (requirement-102): ancestor-token
+		// reentrancy → dead-PID reclaim → refuse.
+		if heldByAncestorRun(path) {
+			// Reentrant descent (requirement-96): the lock belongs to an
+			// ancestor run that exported its token. Proceed without
+			// acquiring; only the ancestor releases. Ancestor reentrancy
+			// wins even if the recorded PID is dead — the token match is
+			// evaluated before liveness.
+			return func() error { return nil }, nil
+		}
+		// Steal-if-dead (requirement-102): reclaim a lock whose recorded
+		// owner is gone; a live foreign holder is still refused. On success
+		// file is an open handle to a freshly re-created lock — fall through
+		// to stamp our own lock into it.
+		file, err = reclaimDeadLock(path, logger)
+		if err != nil {
+			return nil, err
+		}
 	}
 	lock := vscode.RunLockFile{
 		PID:       os.Getpid(),
@@ -1721,6 +1734,75 @@ func heldByAncestorRun(path string) bool {
 		return false
 	}
 	return current.Token != "" && current.Token == envToken
+}
+
+// reclaimDeadLock decides the fate of an existing lock that is not held by a
+// reentrant ancestor. When the recorded PID is a live process — or liveness
+// is uncertain (EPERM), the lock is unreadable/corrupt, or no sane PID is
+// recorded — it returns the standard refusal, preserving cross-run
+// serialization for genuine concurrent runs (requirement-58, ac-365). When
+// the recorded PID is provably dead it removes the stale lock, re-creates it
+// O_EXCL, logs a WARN naming the stolen dead PID, and returns the open handle
+// for acquireRunLock to stamp (ac-364). Losing the race to re-create (a live
+// run beat us to it) also refuses.
+//
+// DHF-REQ: keel/requirement-102
+func reclaimDeadLock(path string, logger *slog.Logger) (*os.File, error) {
+	refuse := func() (*os.File, error) {
+		return nil, fmt.Errorf("keel/testbridge: run lock already exists at %s", path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return refuse()
+	}
+	var current vscode.RunLockFile
+	if err := json.Unmarshal(data, &current); err != nil {
+		return refuse()
+	}
+	if current.PID <= 0 || processAlive(current.PID) {
+		return refuse()
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("keel/testbridge: reclaim stale run lock at %s: %w", path, err)
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		// A live run re-created the lock between our remove and re-open.
+		return refuse()
+	}
+	if logger != nil {
+		logger.Warn("keel/testbridge: reclaimed run lock from dead process", "path", path, "dead_pid", current.PID)
+	}
+	return file, nil
+}
+
+// processAlive reports whether pid refers to a live process using a signal-0
+// probe (kill -0 semantics): ESRCH ⇒ dead, EPERM ⇒ a process exists that we
+// may not signal ⇒ treat as alive (never steal), any other error ⇒
+// fail-closed to alive. On Windows, where signal-0 is unsupported, every
+// recorded holder is treated as alive so steal-if-dead narrows to unix.
+//
+// DHF-REQ: keel/requirement-102
+func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return true
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	switch err := proc.Signal(syscall.Signal(0)); {
+	case err == nil:
+		return true
+	case errors.Is(err, os.ErrProcessDone), errors.Is(err, syscall.ESRCH):
+		return false
+	default:
+		// EPERM (alive but not ours) and any unexpected error fail closed.
+		return true
+	}
 }
 
 // RunLockPath returns the package-owned cross-run lock path.

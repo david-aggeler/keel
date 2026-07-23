@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,7 +20,7 @@ import (
 func TestRunLockAcquireReleaseAndMismatch(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv(RunLockTokenEnv, "") // deterministic baseline regardless of test order
-	release, err := acquireRunLock(root, []string{"demo::lane::fast"}, "token-1")
+	release, err := acquireRunLock(root, []string{"demo::lane::fast"}, "token-1", nil)
 	if err != nil {
 		t.Fatalf("acquire run lock: %v", err)
 	}
@@ -29,7 +30,7 @@ func TestRunLockAcquireReleaseAndMismatch(t *testing.T) {
 	// Simulate an unrelated process: no inherited ancestor token (the acquire
 	// above exported token-1 into this process's env; requirement-96).
 	t.Setenv(RunLockTokenEnv, "")
-	if _, err := acquireRunLock(root, []string{"demo::lane::fast"}, "token-2"); err == nil || !strings.Contains(err.Error(), "already exists") {
+	if _, err := acquireRunLock(root, []string{"demo::lane::fast"}, "token-2", nil); err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("second acquire err = %v, want already exists", err)
 	}
 	if err := os.WriteFile(RunLockPath(root), []byte(`{"pid":1,"created_at":"2026-07-13T00:00:00Z","ids":["x"],"token":"other"}`+"\n"), 0o644); err != nil {
@@ -42,7 +43,7 @@ func TestRunLockAcquireReleaseAndMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	release, err = acquireRunLock(root, []string{"demo::lane::fast"}, "token-3")
+	release, err = acquireRunLock(root, []string{"demo::lane::fast"}, "token-3", nil)
 	if err != nil {
 		t.Fatalf("reacquire run lock: %v", err)
 	}
@@ -60,7 +61,7 @@ func TestRunLockAcquireReleaseAndMismatch(t *testing.T) {
 func TestRunLockReentrantForDescendantRuns(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv(RunLockTokenEnv, "") // pin a clean baseline; acquire overwrites it
-	release, err := acquireRunLock(root, []string{"vsix::root"}, "token-outer")
+	release, err := acquireRunLock(root, []string{"vsix::root"}, "token-outer", nil)
 	if err != nil {
 		t.Fatalf("outer acquire: %v", err)
 	}
@@ -68,7 +69,7 @@ func TestRunLockReentrantForDescendantRuns(t *testing.T) {
 		t.Fatalf("exported env token = %q, want token-outer", got)
 	}
 
-	nestedRelease, err := acquireRunLock(root, []string{"keel::maintenance::detect-lanes"}, "token-nested")
+	nestedRelease, err := acquireRunLock(root, []string{"keel::maintenance::detect-lanes"}, "token-nested", nil)
 	if err != nil {
 		t.Fatalf("nested acquire under matching ancestor token: %v", err)
 	}
@@ -105,13 +106,13 @@ func TestRunLockReentrantForDescendantRuns(t *testing.T) {
 func TestRunLockMismatchedOrCorruptTokenStillRefused(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv(RunLockTokenEnv, "") // deterministic baseline regardless of test order
-	release, err := acquireRunLock(root, []string{"demo::lane::fast"}, "token-1")
+	release, err := acquireRunLock(root, []string{"demo::lane::fast"}, "token-1", nil)
 	if err != nil {
 		t.Fatalf("acquire run lock: %v", err)
 	}
 
 	t.Setenv(RunLockTokenEnv, "token-elsewhere")
-	if _, err := acquireRunLock(root, []string{"demo::lane::fast"}, "token-2"); err == nil || !strings.Contains(err.Error(), "already exists") {
+	if _, err := acquireRunLock(root, []string{"demo::lane::fast"}, "token-2", nil); err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("mismatched-token acquire err = %v, want already exists", err)
 	}
 
@@ -119,7 +120,7 @@ func TestRunLockMismatchedOrCorruptTokenStillRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv(RunLockTokenEnv, "token-1")
-	if _, err := acquireRunLock(root, []string{"demo::lane::fast"}, "token-2"); err == nil || !strings.Contains(err.Error(), "already exists") {
+	if _, err := acquireRunLock(root, []string{"demo::lane::fast"}, "token-2", nil); err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("corrupt-lock acquire err = %v, want already exists", err)
 	}
 
@@ -129,6 +130,161 @@ func TestRunLockMismatchedOrCorruptTokenStillRefused(t *testing.T) {
 	if err := release(); err != nil {
 		t.Fatalf("release with lock already gone: %v", err)
 	}
+}
+
+// A pre-existing run.lock whose recorded PID is dead and whose token matches no
+// reentrant ancestor is reclaimed: the stale lock is removed, a fresh lock is
+// stamped with this process's identity, a WARN naming the stolen dead PID is
+// emitted, and acquisition proceeds without a "run lock already exists" error.
+//
+// DHF-TEST: keel/requirement-102
+func TestRunLockReclaimsDeadPIDLockAndWarns(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv(RunLockTokenEnv, "") // no inherited ancestor token
+	if err := os.MkdirAll(filepath.Dir(RunLockPath(root)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dead := deadPID(t)
+	writeLockFile(t, root, vscode.RunLockFile{
+		PID:       dead,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		IDs:       []string{"demo::lane::fast"},
+		Token:     "stale-token",
+	})
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	release, err := acquireRunLock(root, []string{"demo::lane::fast"}, "fresh-token", logger)
+	if err != nil {
+		t.Fatalf("acquire over dead-PID lock err = %v, want reclaim", err)
+	}
+	current := readLockFile(t, root)
+	if current.Token != "fresh-token" || current.PID != os.Getpid() {
+		t.Fatalf("reclaimed lock = %+v, want token fresh-token and pid %d", current, os.Getpid())
+	}
+	if !strings.Contains(logs.String(), "level=WARN") ||
+		!strings.Contains(logs.String(), "reclaimed run lock") ||
+		!strings.Contains(logs.String(), "dead") {
+		t.Fatalf("logs = %q, want a WARN naming the stolen dead-PID lock", logs.String())
+	}
+	if err := release(); err != nil {
+		t.Fatalf("release reclaimed lock: %v", err)
+	}
+	if _, err := os.Stat(RunLockPath(root)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("lock stat after release = %v, want removed", err)
+	}
+}
+
+// A pre-existing run.lock whose recorded PID is a live process (and whose token
+// matches no ancestor) keeps the hard refusal: cross-run serialization
+// (requirement-58) is preserved, the live holder's lock is left untouched, and
+// no reclaim WARN is emitted.
+//
+// DHF-TEST: keel/requirement-102
+func TestRunLockRefusesLiveForeignHolder(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv(RunLockTokenEnv, "") // no inherited ancestor token
+	if err := os.MkdirAll(filepath.Dir(RunLockPath(root)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// os.Getpid() is unquestionably alive: a live foreign holder.
+	writeLockFile(t, root, vscode.RunLockFile{
+		PID:       os.Getpid(),
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		IDs:       []string{"demo::lane::fast"},
+		Token:     "live-token",
+	})
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	if _, err := acquireRunLock(root, []string{"demo::lane::fast"}, "fresh-token", logger); err == nil ||
+		!strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("acquire over live holder err = %v, want already exists", err)
+	}
+	if current := readLockFile(t, root); current.Token != "live-token" {
+		t.Fatalf("live lock token = %q, want live-token (untouched)", current.Token)
+	}
+	if strings.Contains(logs.String(), "reclaimed") {
+		t.Fatalf("unexpected reclaim WARN for a live holder: %q", logs.String())
+	}
+}
+
+// When the on-disk lock token matches a reentrant ancestor (requirement-96) but
+// its recorded PID happens to be dead, the ancestor-reentrancy branch still
+// wins over dead-PID reclaim: the run proceeds lock-free, the ancestor lock is
+// left intact (never removed), and no reclaim WARN is emitted — confirming the
+// branch order ancestor-token → dead-PID reclaim → refuse.
+//
+// DHF-TEST: keel/requirement-102
+func TestRunLockAncestorTokenWinsOverDeadPID(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Dir(RunLockPath(root)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dead := deadPID(t)
+	writeLockFile(t, root, vscode.RunLockFile{
+		PID:       dead,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		IDs:       []string{"vsix::root"},
+		Token:     "ancestor-token",
+	})
+	t.Setenv(RunLockTokenEnv, "ancestor-token")
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	release, err := acquireRunLock(root, []string{"keel::maintenance::detect-lanes"}, "nested-token", logger)
+	if err != nil {
+		t.Fatalf("nested acquire under dead ancestor token err = %v, want reentrant proceed", err)
+	}
+	if current := readLockFile(t, root); current.Token != "ancestor-token" || current.PID != dead {
+		t.Fatalf("ancestor lock = %+v, want unchanged ancestor-token and dead pid %d", current, dead)
+	}
+	if strings.Contains(logs.String(), "reclaimed") {
+		t.Fatalf("ancestor reentrancy must not reclaim: %q", logs.String())
+	}
+	if err := release(); err != nil {
+		t.Fatalf("nested no-op release: %v", err)
+	}
+	if _, err := os.Stat(RunLockPath(root)); err != nil {
+		t.Fatalf("ancestor lock removed by nested release: %v", err)
+	}
+}
+
+// deadPID spawns this test binary with a no-match run filter, reaps it, and
+// returns its (now dead) PID — a hermetic, self-contained way to obtain a PID
+// that is provably not a live process.
+func deadPID(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start helper process for dead PID: %v", err)
+	}
+	_ = cmd.Wait()
+	return cmd.Process.Pid
+}
+
+func writeLockFile(t *testing.T, root string, lock vscode.RunLockFile) {
+	t.Helper()
+	data, err := json.Marshal(lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(RunLockPath(root), append(data, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readLockFile(t *testing.T, root string) vscode.RunLockFile {
+	t.Helper()
+	data, err := os.ReadFile(RunLockPath(root))
+	if err != nil {
+		t.Fatalf("read run lock: %v", err)
+	}
+	var lock vscode.RunLockFile
+	if err := json.Unmarshal(data, &lock); err != nil {
+		t.Fatalf("parse run lock: %v", err)
+	}
+	return lock
 }
 
 // DHF-TEST: keel/requirement-58
@@ -191,7 +347,7 @@ func TestPrivateHelpersCoverDefaultsAndErrors(t *testing.T) {
 	if _, _, err := newRunWriter(Runtime{Root: fileRoot}, Workspace{Root: fileRoot}, "run-1"); err == nil {
 		t.Fatal("newRunWriter with file root returned nil, want mkdir error")
 	}
-	if _, err := acquireRunLock(fileRoot, []string{"x"}, "t"); err == nil {
+	if _, err := acquireRunLock(fileRoot, []string{"x"}, "t", nil); err == nil {
 		t.Fatal("acquireRunLock with file root returned nil, want mkdir error")
 	}
 }
