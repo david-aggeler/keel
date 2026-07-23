@@ -2463,6 +2463,184 @@ exit 0`)
 	}
 }
 
+// twoPackagePassStubGo stubs a `go` that answers a `go test ./log` and a
+// `go test ./exec` package run with a green -json stream for each, so a batched
+// run request carrying both package ids can be driven through the canonical
+// test-bridge dispatch.
+func twoPackagePassStubGo(t *testing.T, bin, callsFile string) {
+	t.Helper()
+	stub(t, bin, callsFile, "go", `
+case "$1 $2" in
+  "test ./log")
+    printf '{"Action":"run","Package":"github.com/david-aggeler/keel/log","Test":"TestLog"}\n'
+    printf '{"Action":"pass","Package":"github.com/david-aggeler/keel/log","Test":"TestLog","Elapsed":0.01}\n'
+    printf '{"Action":"pass","Package":"github.com/david-aggeler/keel/log","Elapsed":0.02}\n'
+    ;;
+  "test ./exec")
+    printf '{"Action":"run","Package":"github.com/david-aggeler/keel/exec","Test":"TestExec"}\n'
+    printf '{"Action":"pass","Package":"github.com/david-aggeler/keel/exec","Test":"TestExec","Elapsed":0.01}\n'
+    printf '{"Action":"pass","Package":"github.com/david-aggeler/keel/exec","Elapsed":0.02}\n'
+    ;;
+esac
+exit 0`)
+}
+
+// DHF-TEST: keel/requirement-99
+func TestVSCodeRunBatchIteratesEveryRequestedIDWithParity(t *testing.T) {
+	// ac-328: a two-id batch driven through the canonical test-bridge dispatch
+	// executes BOTH selections (stub-go call evidence) and settles BOTH, pinning
+	// that keelTestBridge.Run iterates RunRequest.IDs like keel-demo-dev does —
+	// rather than collapsing the batch to a single representative selection.
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	twoPackagePassStubGo(t, bin, callsFile)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var protocol bytes.Buffer
+	if err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), "go::pkg::log", "go::pkg::exec"); err != nil {
+		t.Fatalf("two-package batch run: %v\nprotocol:\n%s\ncalls:\n%s", err, protocol.String(), calls(t, callsFile))
+	}
+
+	callLog := calls(t, callsFile)
+	if !strings.Contains(callLog, "test ./log") {
+		t.Fatalf("stub-go call log missing `go test ./log` invocation:\n%s", callLog)
+	}
+	if !strings.Contains(callLog, "test ./exec") {
+		t.Fatalf("stub-go call log missing `go test ./exec` invocation (batch collapsed to one selection):\n%s", callLog)
+	}
+
+	events := decodeRunEvents(t, protocol.String())
+	terminal := map[string]int{}
+	for _, event := range events {
+		switch event.Event {
+		case "passed", "failed", "skipped", "errored":
+			terminal[event.TestID]++
+		}
+	}
+	for _, id := range []string{"go::pkg::log", "go::pkg::exec"} {
+		if terminal[id] != 1 {
+			t.Fatalf("selection id %q settled %d times, want exactly 1\nevents: %+v", id, terminal[id], events)
+		}
+	}
+}
+
+// DHF-TEST: keel/requirement-99, keel/requirement-71
+func TestVSCodeRunBatchSettlesEveryStartedIDExactlyOnceAcrossUnion(t *testing.T) {
+	// ac-326: on a green multi-id batch the run stream contains execution
+	// evidence and a terminal event for EVERY requested id's subtree, and the
+	// requirement-71 AC-6 settle invariant (every started id settles exactly
+	// once) holds across the union of both selections.
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	twoPackagePassStubGo(t, bin, callsFile)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var protocol bytes.Buffer
+	if err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), "go::pkg::log", "go::pkg::exec"); err != nil {
+		t.Fatalf("two-package batch run: %v\nprotocol:\n%s\ncalls:\n%s", err, protocol.String(), calls(t, callsFile))
+	}
+
+	events := decodeRunEvents(t, protocol.String())
+	started := map[string]int{}
+	terminal := map[string]int{}
+	for _, event := range events {
+		switch event.Event {
+		case "test_started":
+			started[event.TestID]++
+		case "passed", "failed", "skipped", "errored":
+			terminal[event.TestID]++
+		}
+	}
+	// Every started id in the union settles exactly once (requirement-71 AC-6).
+	for id := range started {
+		if terminal[id] != 1 {
+			t.Fatalf("started id %q has %d terminal events, want exactly 1\nevents: %+v", id, terminal[id], events)
+		}
+	}
+	// Both selection subtrees carry execution evidence and a terminal event.
+	for _, id := range []string{"go::pkg::log", "go::test::log::TestLog", "go::pkg::exec", "go::test::exec::TestExec"} {
+		if started[id] == 0 && terminal[id] == 0 {
+			t.Fatalf("union missing subtree id %q\nevents: %+v", id, events)
+		}
+		if terminal[id] != 1 {
+			t.Fatalf("id %q settled %d times, want exactly 1\nevents: %+v", id, terminal[id], events)
+		}
+	}
+}
+
+// DHF-TEST: keel/requirement-99
+func TestVSCodeRunBatchFailingMemberExitsNonZeroPreservingPriorTerminals(t *testing.T) {
+	// ac-327: when a member of a multi-id batch fails, its events are attributed
+	// to its own ids, previously-executed selections keep their terminals, and
+	// the run exits non-zero — no requested selection is silently unexecuted
+	// with exit 0.
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", `
+case "$1 $2" in
+  "test ./log")
+    printf '{"Action":"run","Package":"github.com/david-aggeler/keel/log","Test":"TestLog"}\n'
+    printf '{"Action":"pass","Package":"github.com/david-aggeler/keel/log","Test":"TestLog","Elapsed":0.01}\n'
+    printf '{"Action":"pass","Package":"github.com/david-aggeler/keel/log","Elapsed":0.02}\n'
+    exit 0
+    ;;
+  "test ./exec")
+    printf '{"Action":"run","Package":"github.com/david-aggeler/keel/exec","Test":"TestExec"}\n'
+    printf '{"Action":"fail","Package":"github.com/david-aggeler/keel/exec","Test":"TestExec","Elapsed":0.01}\n'
+    printf '{"Action":"fail","Package":"github.com/david-aggeler/keel/exec","Elapsed":0.02}\n'
+    exit 1
+    ;;
+esac
+exit 0`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var protocol bytes.Buffer
+	// The dispatch surfaces the failing member as a non-nil error / non-zero exit.
+	err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), "go::pkg::log", "go::pkg::exec")
+	events := decodeRunEvents(t, protocol.String())
+
+	// The passing selection that ran first keeps its terminal.
+	if got := terminalEventFor(events, "go::pkg::log"); got != "passed" {
+		t.Fatalf("prior selection go::pkg::log terminal = %q, want passed (must survive a later member's failure)\nevents: %+v", got, events)
+	}
+	// The failing member's events are attributed to its own id.
+	if got := terminalEventFor(events, "go::pkg::exec"); got != "failed" {
+		t.Fatalf("failing selection go::pkg::exec terminal = %q, want failed attribution\nevents: %+v", got, events)
+	}
+	// The run exits non-zero — the failure is not silently dropped as exit 0.
+	finished := events[len(events)-1]
+	if finished.Event != "run_finished" || finished.ExitCode == nil || *finished.ExitCode == 0 {
+		t.Fatalf("terminal event = %+v (err=%v), want run_finished with non-zero exit", finished, err)
+	}
+}
+
+// terminalEventFor returns the last terminal event name recorded for id, or ""
+// when id never settled.
+func terminalEventFor(events []vscode.RunEvent, id string) string {
+	got := ""
+	for _, event := range events {
+		switch event.Event {
+		case "passed", "failed", "skipped", "errored":
+			if event.TestID == id {
+				got = event.Event
+			}
+		}
+	}
+	return got
+}
+
 // DHF-TEST: keel/requirement-49
 func TestVSCodeDiscoveryDoesNotRequireGoToolchain(t *testing.T) {
 	root := t.TempDir()
@@ -3030,12 +3208,6 @@ func TestVSCodeArgumentAndProfileEdges(t *testing.T) {
 	}
 	if err := rejectUnsupportedFormat([]string{"--format", "xml"}); err == nil {
 		t.Fatal("rejectUnsupportedFormat should reject xml")
-	}
-	if got := laneForIDs([]string{"go::root", vscodeLaneTestFast}); got != vscodeLaneTestFast {
-		t.Fatalf("laneForIDs = %q, want %q", got, vscodeLaneTestFast)
-	}
-	if got := laneForIDs([]string{"go::root"}); got != "go::root" {
-		t.Fatalf("laneForIDs fallback = %q", got)
 	}
 
 	root := t.TempDir()

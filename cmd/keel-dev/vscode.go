@@ -209,34 +209,56 @@ func (keelTestBridge) DesiredState(ctx context.Context, ids []string) (testbridg
 	return buildVSCodeDesiredStateDeclaration(stateFrom(ctx).root, ids)
 }
 
-// DHF-REQ: keel/requirement-63
+// DHF-REQ: keel/requirement-63, keel/requirement-99
 func (keelTestBridge) Run(ctx context.Context, req testbridge.RunRequest, writer vscode.RunEventWriter) (int, error) {
 	state := stateFrom(ctx)
 	root := req.Root
 	if root == "" {
 		root = state.root
 	}
-	laneID := laneForIDs(req.IDs)
-	if ready := vscode.NewEngine(newKeelWorkspaceProfile(root)).Prepare(ctx, laneID, req.IDs, writer); !ready {
+	// requirement-99: a batched RunRequest.IDs carries multiple independent
+	// selections (an editor multi-select or Run All). Execute EVERY requested id
+	// under its own id — not a single representative — matching the reference
+	// consumer keel-demo-dev. Selections run in request order; the first failing
+	// selection stops the batch and returns its exit code, so no member is
+	// silently unexecuted with exit 0 (issue-92). Earlier selections keep the
+	// terminals they already emitted.
+	profile := newKeelWorkspaceProfile(root)
+	engine := vscode.NewEngine(profile)
+	for _, id := range req.IDs {
+		exitCode, err := runVSCodeSelection(ctx, state, engine, profile, root, id, req.RunID, writer)
+		if err != nil || exitCode != 0 {
+			return exitCode, err
+		}
+	}
+	return 0, nil
+}
+
+// runVSCodeSelection prepares and executes one selection id, settling it under
+// its own id. It is the per-id unit keelTestBridge.Run iterates over so every id
+// in a batched RunRequest is honored (requirement-99).
+//
+// DHF-REQ: keel/requirement-63, keel/requirement-99
+func runVSCodeSelection(ctx context.Context, state runState, engine *vscode.Engine, profile keelWorkspaceProfile, root, id, runID string, writer vscode.RunEventWriter) (int, error) {
+	if ready := engine.Prepare(ctx, id, []string{id}, writer); !ready {
 		return 1, fmt.Errorf("vscode lane blocked")
 	}
-	profile := newKeelWorkspaceProfile(root)
 	// The run stream settles descendants under their own ids; the selected id's
 	// green comes from here only when the stream did not already settle it
 	// (requirement-71 AC 6: exactly one terminal event per id).
 	settled := false
 	observe := func(event vscode.RunEvent) {
-		if event.TestID == laneID && vscode.IsTerminalRunEvent(event.Event) {
+		if event.TestID == id && vscode.IsTerminalRunEvent(event.Event) {
 			settled = true
 		}
 		writer(event)
 	}
-	exitCode, err := runVSCodeLane(ctx, state.logger, root, laneID, req.RunID, profile.MaxOutputBytes(), observe)
+	exitCode, err := runVSCodeLane(ctx, state.logger, root, id, runID, profile.MaxOutputBytes(), observe)
 	if err != nil {
 		return exitCode, err
 	}
 	if !settled {
-		writer(vscode.RunEvent{Event: "passed", TestID: laneID})
+		writer(vscode.RunEvent{Event: "passed", TestID: id})
 	}
 	return exitCode, nil
 }
@@ -2252,15 +2274,6 @@ func parseVSCodeIDs(args []string, allowEmpty bool) ([]string, error) {
 func rejectUnsupportedFormat(args []string) error {
 	_, err := parseVSCodeIDs(args, true)
 	return err
-}
-
-func laneForIDs(ids []string) string {
-	for _, id := range ids {
-		if strings.HasPrefix(id, "keel::lane::") {
-			return id
-		}
-	}
-	return ids[0]
 }
 
 type keelWorkspaceProfile struct {
