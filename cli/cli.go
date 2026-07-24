@@ -113,6 +113,8 @@ type CommandSpec struct {
 	Long string
 	// Args describes positional arguments when Use is not supplied.
 	Args string
+	// Group is an optional generated-help grouping label.
+	Group string
 	// Flags are command-specific flags rendered in command help.
 	Flags []FlagSpec
 	// Positionals describes the accepted positional operand arity.
@@ -744,7 +746,7 @@ func (c *CommandSpec) RenderRootHelp(w io.Writer) {
 	if len(c.Subcommands) > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Commands:")
-		PrintCommandRows(w, c.Subcommands)
+		PrintGroupedCommandRows(w, c.Subcommands)
 	}
 	if modeHelp := mergeModeHelp(c.Config.ModeHelp); len(modeHelp) > 0 {
 		fmt.Fprintln(w)
@@ -815,6 +817,7 @@ type helpJSONFlag struct {
 // help inventory. Flags is always a (possibly empty) array, never null.
 type helpJSONCommand struct {
 	Path    string         `json:"path"`
+	Group   string         `json:"group"`
 	Summary string         `json:"summary"`
 	Usage   string         `json:"usage"`
 	Flags   []helpJSONFlag `json:"flags"`
@@ -851,6 +854,7 @@ func (c *CommandSpec) appendHelpJSON(out *[]helpJSONCommand, path []string) {
 	}
 	*out = append(*out, helpJSONCommand{
 		Path:    strings.Join(path, " "),
+		Group:   commandGroup(c),
 		Summary: c.Short,
 		Usage:   strings.TrimPrefix(c.Usage(path), "usage: "),
 		Flags:   flags,
@@ -884,7 +888,7 @@ func (c *CommandSpec) RenderCommandHelp(w io.Writer, path []string) {
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Subcommands:")
-	RenderSubcommandHelp(w, path, c.Subcommands, 0)
+	PrintGroupedCommandRows(w, c.Subcommands)
 }
 
 // RenderSubcommandHelp writes a nested subcommand listing below parent. Rows
@@ -918,6 +922,67 @@ func PrintCommandRows(w io.Writer, commands []*CommandSpec) {
 	for _, cmd := range commands {
 		fmt.Fprintf(w, "  %-*s  %s\n", width, cmd.Name, cmd.Short)
 	}
+}
+
+// PrintGroupedCommandRows writes command summary rows under group headings.
+// Group order and command order within each group follow declaration order.
+//
+// DHF-REQ: keel/requirement-105
+func PrintGroupedCommandRows(w io.Writer, commands []*CommandSpec) {
+	groups := groupCommands(commands)
+	width := commandNameWidth(commands)
+	for _, group := range groups {
+		fmt.Fprintf(w, "%s:\n", group.name)
+		PrintIndentedCommandRows(w, group.commands, 2, width)
+	}
+}
+
+func PrintIndentedCommandRows(w io.Writer, commands []*CommandSpec, indent, width int) {
+	if width == 0 {
+		width = commandNameWidth(commands)
+	}
+	prefix := strings.Repeat(" ", indent)
+	for _, cmd := range commands {
+		fmt.Fprintf(w, "%s%-*s  %s\n", prefix, width, cmd.Name, cmd.Short)
+	}
+}
+
+func commandNameWidth(commands []*CommandSpec) int {
+	width := 0
+	for _, cmd := range commands {
+		if len(cmd.Name) > width {
+			width = len(cmd.Name)
+		}
+	}
+	return width
+}
+
+type commandGroupRows struct {
+	name     string
+	commands []*CommandSpec
+}
+
+func groupCommands(commands []*CommandSpec) []commandGroupRows {
+	var groups []commandGroupRows
+	index := map[string]int{}
+	for _, cmd := range commands {
+		name := commandGroup(cmd)
+		at, ok := index[name]
+		if !ok {
+			index[name] = len(groups)
+			groups = append(groups, commandGroupRows{name: name})
+			at = len(groups) - 1
+		}
+		groups[at].commands = append(groups[at].commands, cmd)
+	}
+	return groups
+}
+
+func commandGroup(cmd *CommandSpec) string {
+	if cmd.Group != "" {
+		return cmd.Group
+	}
+	return "Other"
 }
 
 // PrintFlagRows writes flag help rows using the package's shared two-line flag
