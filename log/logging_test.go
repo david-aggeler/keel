@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	logging "github.com/david-aggeler/keel/log"
 )
@@ -1401,6 +1402,133 @@ func TestConsoleOutput_LevelThresholdAndColorGating(t *testing.T) {
 	noColorLogger.Error("plain error")
 	if got := noColor.String(); strings.Contains(got, "\x1b[") {
 		t.Fatalf("NO_COLOR did not disable ANSI color: %q", got)
+	}
+}
+
+// DHF-TEST: keel/requirement-103
+func TestConsolePlainColorsAttributeKeysAndValuesByKind(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	const (
+		ansiGreen   = "\x1b[32m"
+		ansiYellow  = "\x1b[33m"
+		ansiMagenta = "\x1b[35m"
+		ansiCyan    = "\x1b[36m"
+		ansiReset   = "\x1b[0m"
+	)
+
+	var colored bytes.Buffer
+	colorLogger := mustNewLogger(t, logging.Config{
+		Console:          logging.ConsolePlain,
+		Service:          "cli",
+		ConsoleVerbosity: slog.LevelDebug,
+		Writer:           &colored,
+		ForceColor:       true,
+	})
+	colorLogger.Info("attrs",
+		"addr", ":8080",
+		"i", int64(3),
+		"u", uint64(4),
+		"f", 5.5,
+		"ok", true,
+		"took", 1200*time.Millisecond,
+		"service", "gateway",
+		"group", slog.GroupValue(slog.String("inner", "x")),
+	)
+	got := colored.String()
+	for _, want := range []string{
+		ansiCyan + "addr" + ansiReset + "=:8080",
+		ansiCyan + "i" + ansiReset + "=" + ansiYellow + "3" + ansiReset,
+		ansiCyan + "u" + ansiReset + "=" + ansiYellow + "4" + ansiReset,
+		ansiCyan + "f" + ansiReset + "=" + ansiYellow + "5.5" + ansiReset,
+		ansiCyan + "ok" + ansiReset + "=" + ansiMagenta + "true" + ansiReset,
+		ansiCyan + "took" + ansiReset + "=" + ansiGreen + "1.2s" + ansiReset,
+		ansiCyan + "service" + ansiReset + "=gateway",
+		ansiCyan + "group" + ansiReset + "={inner=x}",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("colored ConsolePlain output missing %q in %q", want, got)
+		}
+	}
+	for _, forbidden := range []string{
+		ansiYellow + "gateway" + ansiReset,
+		ansiMagenta + "gateway" + ansiReset,
+		ansiGreen + "gateway" + ansiReset,
+		ansiYellow + "{inner=x}" + ansiReset,
+		ansiMagenta + "{inner=x}" + ansiReset,
+		ansiGreen + "{inner=x}" + ansiReset,
+	} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("ConsolePlain colored a string/group value with %q in %q", forbidden, got)
+		}
+	}
+
+	var plain bytes.Buffer
+	plainLogger := mustNewLogger(t, logging.Config{
+		Console:          logging.ConsolePlain,
+		Service:          "cli",
+		ConsoleVerbosity: slog.LevelDebug,
+		Writer:           &plain,
+		ForceColor:       true,
+		DisableColor:     true,
+	})
+	plainLogger.Info("attrs", "addr", ":8080", "i", int64(3), "ok", true, "took", 1200*time.Millisecond)
+	if got := plain.String(); strings.Contains(got, "\x1b") {
+		t.Fatalf("disabled ConsolePlain output contains ANSI escape: %q", got)
+	}
+	if got := strings.TrimSpace(plain.String()); !regexp.MustCompile(`^\d{2}:\d{2}:\d{2} INFO  attrs service=cli addr=:8080 i=3 ok=true took=1.2s$`).MatchString(got) {
+		t.Fatalf("disabled ConsolePlain output changed baseline format: %q", got)
+	}
+}
+
+// DHF-TEST: keel/requirement-103
+func TestAttributeColoringDoesNotAffectNonPlainConsoleOrFileSinks(t *testing.T) {
+	t.Setenv("NO_COLOR", "")
+	attrs := []any{"i", int64(3), "u", uint64(4), "f", 5.5, "ok", true, "took", 1200 * time.Millisecond, "service", "gateway"}
+
+	for _, console := range []logging.Console{logging.ConsoleSparseAI, logging.ConsoleJSON} {
+		var buf bytes.Buffer
+		logger := mustNewLogger(t, logging.Config{
+			Console:          console,
+			Service:          "cli",
+			ConsoleVerbosity: slog.LevelDebug,
+			Writer:           &buf,
+			ForceColor:       true,
+		})
+		logger.Info("attrs", attrs...)
+		if got := buf.String(); strings.Contains(got, "\x1b") {
+			t.Fatalf("%s console output contains ANSI escape: %q", console, got)
+		}
+	}
+
+	var console bytes.Buffer
+	dir := t.TempDir()
+	logger := mustNewLogger(t, logging.Config{
+		Console:          logging.ConsolePlain,
+		Service:          "cli",
+		ConsoleVerbosity: slog.LevelDebug,
+		FileVerbosity:    slog.LevelDebug,
+		Writer:           &console,
+		TextDir:          dir,
+		JSONLDir:         dir,
+		ForceColor:       true,
+	})
+	logger.Info("attrs", attrs...)
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	textBytes, err := os.ReadFile(logger.TextLogPath())
+	if err != nil {
+		t.Fatalf("read text log: %v", err)
+	}
+	if strings.Contains(string(textBytes), "\x1b") {
+		t.Fatalf("text sink contains ANSI escape: %q", string(textBytes))
+	}
+	jsonlBytes, err := os.ReadFile(logger.JSONLLogPath())
+	if err != nil {
+		t.Fatalf("read jsonl log: %v", err)
+	}
+	if strings.Contains(string(jsonlBytes), "\x1b") {
+		t.Fatalf("JSONL sink contains ANSI escape: %q", string(jsonlBytes))
 	}
 }
 
