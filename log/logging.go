@@ -700,7 +700,7 @@ func (h *consoleHandler) Enabled(_ context.Context, level slog.Level) bool {
 	return level >= min
 }
 
-// DHF-REQ: openbrain/requirement-151, openbrain/requirement-152, keel/requirement-20
+// DHF-REQ: openbrain/requirement-151, openbrain/requirement-152, keel/requirement-20, keel/requirement-103
 func (h *consoleHandler) Handle(_ context.Context, r slog.Record) error {
 	boundAttrs := slicesClone(h.attrs)
 	recordAttrs := make([]slog.Attr, 0, r.NumAttrs())
@@ -729,9 +729,9 @@ func (h *consoleHandler) Handle(_ context.Context, r slog.Record) error {
 			continue
 		}
 		b.WriteByte(' ')
-		b.WriteString(key)
+		writeConsoleAttrKey(&b, key, h.color)
 		b.WriteByte('=')
-		b.WriteString(formatConsoleValue(attr.Value))
+		b.WriteString(formatConsoleValueColor(attr.Value, h.color))
 	}
 	for _, attr := range recordAttrs {
 		attr = replaceForOpenBrain(h.groups, attr)
@@ -740,9 +740,9 @@ func (h *consoleHandler) Handle(_ context.Context, r slog.Record) error {
 			continue
 		}
 		b.WriteByte(' ')
-		b.WriteString(key)
+		writeConsoleAttrKey(&b, key, h.color)
 		b.WriteByte('=')
-		b.WriteString(formatConsoleValue(attr.Value))
+		b.WriteString(formatConsoleValueColor(attr.Value, h.color))
 	}
 	b.WriteByte('\n')
 
@@ -953,6 +953,17 @@ func writeConsoleLevel(b *strings.Builder, level slog.Level, color bool) {
 	}
 }
 
+// DHF-REQ: keel/requirement-103
+func writeConsoleAttrKey(b *strings.Builder, key string, color bool) {
+	if color {
+		b.WriteString("\x1b[36m")
+	}
+	b.WriteString(key)
+	if color {
+		b.WriteString("\x1b[0m")
+	}
+}
+
 func levelColor(level slog.Level) string {
 	switch {
 	case level >= slog.LevelError:
@@ -1005,6 +1016,25 @@ func formatConsoleValue(v slog.Value) string {
 		return "{" + strings.Join(parts, " ") + "}"
 	default:
 		return redactString(fmt.Sprint(v.Any()))
+	}
+}
+
+// DHF-REQ: keel/requirement-103
+func formatConsoleValueColor(v slog.Value, color bool) string {
+	out := formatConsoleValue(v)
+	if !color {
+		return out
+	}
+	v = v.Resolve()
+	switch v.Kind() {
+	case slog.KindInt64, slog.KindUint64, slog.KindFloat64:
+		return "\x1b[33m" + out + "\x1b[0m"
+	case slog.KindBool:
+		return "\x1b[35m" + out + "\x1b[0m"
+	case slog.KindDuration:
+		return "\x1b[32m" + out + "\x1b[0m"
+	default:
+		return out
 	}
 }
 

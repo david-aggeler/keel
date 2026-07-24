@@ -143,6 +143,7 @@ func TestConsoleMessageProgressDetailHook(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-103
 func TestFormatConsoleValueKinds(t *testing.T) {
 	l, rc := newConsoleForTesting("svc")
 	when := time.Date(2026, 7, 7, 12, 0, 0, 0, time.UTC)
