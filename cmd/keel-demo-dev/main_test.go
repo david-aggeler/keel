@@ -16,7 +16,7 @@ import (
 	"github.com/david-aggeler/keel/vscode"
 )
 
-// DHF-TEST: keel/requirement-11, keel/requirement-62
+// DHF-TEST: keel/requirement-11, keel/requirement-62, keel/requirement-100
 func TestRunDirectVersionHelpConfigAndUsageBranches(t *testing.T) {
 	versionOut, code := captureDemoDevOutput(t, func() int { return run([]string{"--version"}) })
 	if code != 0 || strings.TrimSpace(versionOut) != demoVersion {
@@ -25,6 +25,13 @@ func TestRunDirectVersionHelpConfigAndUsageBranches(t *testing.T) {
 	helpOut, code := captureDemoDevOutput(t, func() int { return run([]string{"--help-all"}) })
 	if code != 0 || !strings.Contains(helpOut, "test-bridge run") {
 		t.Fatalf("run --help-all = code %d out %q, want command tree", code, helpOut)
+	}
+	helpJSONOut, code := captureDemoDevOutput(t, func() int {
+		return run([]string{"--help-json", "test-bridge", "run", "--mode", "ai"})
+	})
+	helpJSONCount := assertHelpJSONInventory(t, helpJSONOut)
+	if code != 0 || helpJSONCount == 0 {
+		t.Fatalf("run --help-json test-bridge run --mode ai = code %d out %q, want JSON inventory", code, helpJSONOut)
 	}
 	topicOut, code := captureDemoDevOutput(t, func() int { return run([]string{"help", "test-bridge"}) })
 	if code != 0 || !strings.Contains(topicOut, "test-bridge commands:") {
@@ -411,6 +418,7 @@ func TestDemoBridgeCommandSpecCoversProviderAndRunPaths(t *testing.T) {
 	assertRunEvent(t, decodeRunEvents(t, runOut), "failed", idLaneGoFail, "real Go test failed")
 }
 
+// DHF-TEST: keel/requirement-100
 func TestRunEntrypointRoutesProtocolHelpVersionAndErrors(t *testing.T) {
 	root := t.TempDir()
 
@@ -430,6 +438,19 @@ func TestRunEntrypointRoutesProtocolHelpVersionAndErrors(t *testing.T) {
 	_, stderr, code = captureRun(t, root, "--help-all")
 	if code != 0 || !strings.Contains(stderr, "test-bridge") {
 		t.Fatalf("--help-all = code %d stderr %q, want command help", code, stderr)
+	}
+
+	stdout, stderr, code = captureRun(t, root, "--help-json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("--help-json = code %d stderr %q, want stdout inventory and no stderr", code, stderr)
+	}
+	bareCount := assertHelpJSONInventory(t, stdout)
+	stdout, stderr, code = captureRun(t, root, "--help-json", "test-bridge", "run", "--mode", "ai")
+	if code != 0 || stderr != "" {
+		t.Fatalf("--help-json test-bridge run --mode ai = code %d stderr %q, want stdout inventory and no stderr", code, stderr)
+	}
+	if scopedCount := assertHelpJSONInventory(t, stdout); scopedCount != bareCount {
+		t.Fatalf("path/mode-scoped inventory count = %d, want %d", scopedCount, bareCount)
 	}
 
 	_, stderr, code = captureRun(t, root, "help", "test-bridge")
@@ -677,6 +698,34 @@ func decodeJSON(t *testing.T, raw string, out any) {
 	if err := json.Unmarshal([]byte(raw), out); err != nil {
 		t.Fatalf("decode JSON: %v\n%s", err, raw)
 	}
+}
+
+func assertHelpJSONInventory(t *testing.T, raw string) int {
+	t.Helper()
+	var inventory []struct {
+		Path    string `json:"path"`
+		Summary string `json:"summary"`
+		Usage   string `json:"usage"`
+		Flags   []struct {
+			Name        string `json:"name"`
+			Value       string `json:"value"`
+			Default     string `json:"default"`
+			Description string `json:"description"`
+		} `json:"flags"`
+	}
+	decodeJSON(t, raw, &inventory)
+	if len(inventory) == 0 {
+		t.Fatalf("--help-json emitted an empty inventory")
+	}
+	for _, command := range inventory {
+		if command.Path == "" {
+			t.Fatalf("--help-json command has empty path: %+v", command)
+		}
+		if command.Summary == "" || command.Usage == "" || command.Flags == nil {
+			t.Fatalf("--help-json command missing required fields: %+v", command)
+		}
+	}
+	return len(inventory)
 }
 
 func assertItem(t *testing.T, items []vscode.TestItem, id, kind string, runnable bool) vscode.TestItem {
