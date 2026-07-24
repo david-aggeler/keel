@@ -214,12 +214,13 @@ function readVSIXVersion(): string {
   return manifest.version ?? '';
 }
 
+// DHF-REQ: keel/requirement-110
 function releasedVersion(raw: string): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed || trimmed === 'dev' || trimmed === 'unknown') {
     return undefined;
   }
-  const match = /^v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/.exec(trimmed);
+  const match = /^v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\+[0-9A-Za-z.-]+)?$/.exec(trimmed);
   return match?.[1];
 }
 
