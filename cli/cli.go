@@ -611,6 +611,9 @@ func (c *CommandSpec) validateTree(path []string, root bool) error {
 		return err
 	}
 	for _, child := range c.Subcommands {
+		if child == nil {
+			return fmt.Errorf("command %q declares a nil child command", commandPath(path, c.Name))
+		}
 		childPath := append(append([]string{}, path...), child.Name)
 		if err := child.validateTree(childPath, false); err != nil {
 			return err

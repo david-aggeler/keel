@@ -114,4 +114,32 @@ func TestValidateTreeRejectsMixedHandlerAndChildren(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-106
+func TestValidateTreeRejectsNilChildWithoutPanicking(t *testing.T) {
+	root := &CommandSpec{
+		Name: "tool",
+		Subcommands: []*CommandSpec{
+			{
+				Name: "admin",
+				Subcommands: []*CommandSpec{
+					{Name: "status", Handler: noopHandler},
+					nil,
+				},
+			},
+			{Name: "run", Handler: noopHandler},
+		},
+	}
+
+	err := root.ValidateTree()
+	if err == nil {
+		t.Fatal("ValidateTree accepted a tree with a nil child command")
+	}
+	if !strings.Contains(err.Error(), "nil child") {
+		t.Fatalf("nil-child error = %q, want it to name the nil child", err.Error())
+	}
+	if !strings.Contains(err.Error(), "admin") {
+		t.Fatalf("nil-child error = %q, want the offending parent named", err.Error())
+	}
+}
+
 func noopHandler(context.Context, []string) error { return nil }
