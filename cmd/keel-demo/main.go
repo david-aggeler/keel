@@ -26,6 +26,10 @@ func main() {
 
 func run(argv []string) int {
 	tree := commandTree()
+	if err := tree.ValidateTree(); err != nil {
+		fmt.Fprintln(os.Stderr, "keel-demo: "+err.Error())
+		return 1
+	}
 	cfg, words, err := cli.ParseGlobalConfig(argv)
 	mode := cfg.Mode
 	if err != nil {
@@ -65,8 +69,10 @@ func run(argv []string) int {
 	return exitCodeFor(logger, tree.Dispatch(context.Background(), words))
 }
 
-// DHF-REQ: keel/requirement-28, keel/requirement-57
+// DHF-REQ: keel/requirement-28, keel/requirement-57, keel/requirement-108
 func commandTree() *cli.CommandSpec {
+	var inspectFormat string
+	var replaySpeed string
 	tree := &cli.CommandSpec{
 		Name: "keel-demo",
 		Config: cli.Config{
@@ -85,14 +91,48 @@ func commandTree() *cli.CommandSpec {
 				Name:  "workflow",
 				Short: "Parent command with nested help.",
 				Subcommands: []*cli.CommandSpec{
-					{Name: "inspect", Use: "workflow inspect", Short: "Preview a captured run tree."},
-					{Name: "replay", Use: "workflow replay", Short: "Replay a saved demo transcript."},
+					{
+						Name:        "inspect",
+						Use:         "workflow inspect [--format text|json] <run-id>",
+						Short:       "Preview a captured run tree.",
+						Positionals: []cli.PositionalSpec{{Name: "run-id", Min: 1, Max: 1}},
+						Flags: []cli.FlagSpec{
+							{Name: "format", Value: "text|json", Default: "text", Enum: []string{"text", "json"}, Short: "Preview format.", StringTarget: &inspectFormat},
+						},
+						Handler: handleWorkflowInspect(&inspectFormat),
+					},
+					{
+						Name:        "replay",
+						Use:         "workflow replay [--speed normal|fast] <transcript>",
+						Short:       "Replay a saved demo transcript.",
+						Positionals: []cli.PositionalSpec{{Name: "transcript", Min: 1, Max: 1}},
+						Flags: []cli.FlagSpec{
+							{Name: "speed", Value: "normal|fast", Default: "normal", Enum: []string{"normal", "fast"}, Short: "Replay pacing.", StringTarget: &replaySpeed},
+						},
+						Handler: handleWorkflowReplay(&replaySpeed),
+					},
 				},
 			},
 		},
 	}
 	tree.InheritConfig()
 	return tree
+}
+
+// DHF-REQ: keel/requirement-108
+func handleWorkflowInspect(format *string) cli.Handler {
+	return func(_ context.Context, args []string) error {
+		fmt.Fprintf(os.Stdout, "workflow inspect run_id=%s format=%s\n", args[0], *format)
+		return nil
+	}
+}
+
+// DHF-REQ: keel/requirement-108
+func handleWorkflowReplay(speed *string) cli.Handler {
+	return func(_ context.Context, args []string) error {
+		fmt.Fprintf(os.Stdout, "workflow replay transcript=%s speed=%s\n", args[0], *speed)
+		return nil
+	}
 }
 
 // DHF-REQ: keel/requirement-28
