@@ -250,10 +250,10 @@ suite('Keel Test Bridge config contract', () => {
     }
   });
 
-  // DHF-TEST: keel/requirement-64, keel/requirement-66
+  // DHF-TEST: keel/requirement-64, keel/requirement-66, keel/requirement-110
   test('adapter fails loud on released VSIX and devtool version skew before discovery', async function () {
     const manifest = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../../package.json'), 'utf8')) as { version: string };
-    for (const devtoolVersion of ['v0.0.0']) {
+    for (const [devtoolVersion, expectedDisplay] of [['v0.0.0', 'v0.0.0'], ['0.0.0+deadbeef', 'v0.0.0']]) {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-version-skew-'));
       const fake = path.join(root, 'fake-devtool.js');
       fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
@@ -274,7 +274,7 @@ suite('Keel Test Bridge config contract', () => {
             const message = err instanceof Error ? err.message : String(err);
             assert.match(message, /version skew/i);
             assert.match(message, new RegExp(`VSIX v?${manifest.version.replaceAll('.', '\\.')}`));
-            assert.match(message, new RegExp(`devtool ${devtoolVersion.replaceAll('.', '\\.')}`));
+            assert.match(message, new RegExp(`devtool ${expectedDisplay.replaceAll('.', '\\.')}`));
             assert.doesNotMatch(message, /unknown flag|usage|parse/i);
             return true;
           }

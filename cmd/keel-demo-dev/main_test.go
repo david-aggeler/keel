@@ -18,9 +18,10 @@ import (
 
 // DHF-TEST: keel/requirement-11, keel/requirement-62, keel/requirement-100
 func TestRunDirectVersionHelpConfigAndUsageBranches(t *testing.T) {
+	wantVersion := rootVersionSemver(t)
 	versionOut, code := captureDemoDevOutput(t, func() int { return run([]string{"--version"}) })
-	if code != 0 || strings.TrimSpace(versionOut) != demoVersion {
-		t.Fatalf("run --version = code %d out %q, want demo version", code, versionOut)
+	if got := strings.TrimSpace(versionOut); code != 0 || !strings.HasPrefix(got, wantVersion) {
+		t.Fatalf("run --version = code %d out %q, want version prefix %q", code, versionOut, wantVersion)
 	}
 	helpOut, code := captureDemoDevOutput(t, func() int { return run([]string{"--help-all"}) })
 	if code != 0 || !strings.Contains(helpOut, "test-bridge run") {
@@ -431,8 +432,8 @@ func TestRunEntrypointRoutesProtocolHelpVersionAndErrors(t *testing.T) {
 	assertItem(t, discovery.Items, idMaintenance, "group", false)
 
 	stdout, _, code = captureRun(t, root, "--version")
-	if code != 0 || strings.TrimSpace(stdout) != demoVersion {
-		t.Fatalf("--version = code %d stdout %q, want 0 %q", code, stdout, demoVersion)
+	if got, wantVersion := strings.TrimSpace(stdout), rootVersionSemver(t); code != 0 || !strings.HasPrefix(got, wantVersion) {
+		t.Fatalf("--version = code %d stdout %q, want version prefix %q", code, stdout, wantVersion)
 	}
 
 	_, stderr, code = captureRun(t, root, "--help-all")

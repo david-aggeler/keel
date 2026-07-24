@@ -13,12 +13,11 @@ import (
 	"os"
 	"strings"
 
+	keel "github.com/david-aggeler/keel"
 	"github.com/david-aggeler/keel/cli"
 	procexec "github.com/david-aggeler/keel/exec"
 	logging "github.com/david-aggeler/keel/log"
 )
-
-const version = "demo"
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -39,8 +38,8 @@ func run(argv []string) int {
 		return 2
 	}
 	if cfg.Version {
-		// DHF-REQ: keel/requirement-109
-		fmt.Fprintln(os.Stdout, version)
+		// DHF-REQ: keel/requirement-109, keel/requirement-110
+		fmt.Fprintln(os.Stdout, versionString())
 		return 0
 	}
 	if cfg.HelpAll {
@@ -213,7 +212,7 @@ func consoleForSharedMode(mode cli.Mode) logging.Console {
 
 // DHF-REQ: keel/requirement-26
 func runShowcase(ctx context.Context, logger *logging.Logger, mode string) error {
-	logger.Header("keel-demo showcase", version)
+	logger.Header("keel-demo showcase", versionString())
 	logger.Section("presentation surfaces")
 	logger.Field("mode", mode)
 	logger.Fields([]logging.FieldRow{
@@ -261,6 +260,11 @@ func runShowcase(ctx context.Context, logger *logging.Logger, mode string) error
 	}
 	logger.Event("demo_failed", "structured failure", slog.Any("err", opErr))
 	return opErr
+}
+
+// DHF-REQ: keel/requirement-110
+func versionString() string {
+	return keel.Version()
 }
 
 func exitCodeFor(logger *logging.Logger, err error) int {

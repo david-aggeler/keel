@@ -80,10 +80,3 @@ func handleVerify(ctx context.Context, args []string) error {
 	state := stateFrom(ctx)
 	return runVerify(ctx, state.logger, args[0])
 }
-
-func versionString() string {
-	if version == "" {
-		return "dev"
-	}
-	return version
-}
