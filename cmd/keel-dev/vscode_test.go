@@ -115,7 +115,7 @@ func TestCanonicalTestBridgeRunUsesPackageOwnedDispatch(t *testing.T) {
 	}
 
 	var protocol bytes.Buffer
-	err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "tests", "run", "--id", vscodeLaneLint})
+	err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "run", "--id", vscodeLaneLint})
 	if err == nil || !strings.Contains(err.Error(), "keel/testbridge: run lock already exists") {
 		t.Fatalf("canonical run err = %v, want package-owned run lock refusal", err)
 	}
@@ -138,7 +138,7 @@ func TestCanonicalTestBridgeRunEventsUseResolvedWorkspace(t *testing.T) {
 	}
 
 	var desiredStateOut bytes.Buffer
-	if err := commandTree().Dispatch(contextWithVSCodeTestState(root, &desiredStateOut), []string{"test-bridge", "tests", "desired-state", "--format", "json", "--id", vscodeLaneLint}); err != nil {
+	if err := commandTree().Dispatch(contextWithVSCodeTestState(root, &desiredStateOut), []string{"test-bridge", "desired-state", "--format", "json", "--id", vscodeLaneLint}); err != nil {
 		t.Fatalf("canonical desired-state: %v", err)
 	}
 	var desiredState vscode.DesiredStateDocument
@@ -147,7 +147,7 @@ func TestCanonicalTestBridgeRunEventsUseResolvedWorkspace(t *testing.T) {
 	}
 
 	var protocol bytes.Buffer
-	err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "tests", "run", "--id", vscodeLaneLint})
+	err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "run", "--id", vscodeLaneLint})
 	if err == nil || !strings.Contains(err.Error(), "keel/testbridge: run lock already exists") {
 		t.Fatalf("canonical run err = %v, want package-owned run lock refusal", err)
 	}
@@ -179,11 +179,11 @@ func TestCanonicalBridgeSurfaceHasNoVSCodeOrLanesVerbs(t *testing.T) {
 	}
 	got := commandLeafUses(testBridge)
 	want := []string{
-		"test-bridge config init",
-		"test-bridge config upgrade",
-		"test-bridge tests discover [--format json]",
-		"test-bridge tests desired-state [--format json] [--id test-id]",
-		"test-bridge tests run [--dry-run] --id test-id",
+		"test-bridge config-init",
+		"test-bridge config-upgrade",
+		"test-bridge discover [--format json]",
+		"test-bridge desired-state [--format json] [--id test-id]",
+		"test-bridge run [--dry-run] --id test-id",
 	}
 	if !stringSlicesEqual(got, want) {
 		t.Fatalf("test-bridge leaves = %#v, want %#v", got, want)
@@ -215,7 +215,7 @@ func TestDetectLanesProducesFileBackedLaneTree(t *testing.T) {
 	}
 
 	var protocol bytes.Buffer
-	if err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "tests", "run", "--id", vscodeMaintenanceDetectLanes}); err != nil {
+	if err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "run", "--id", vscodeMaintenanceDetectLanes}); err != nil {
 		t.Fatalf("detect lanes maintenance run: %v\n%s", err, protocol.String())
 	}
 	if !runEventsContain(decodeRunEvents(t, protocol.String()), "passed", vscodeMaintenanceDetectLanes) {
@@ -392,10 +392,10 @@ func TestVSCodeBridgeDocsPinCanonicalTestBridgeArgv(t *testing.T) {
 	}
 	text := string(body)
 	for _, want := range []string{
-		"go run ./cmd/keel-dev test-bridge tests discover --format json",
-		"go run ./cmd/keel-dev test-bridge tests desired-state --format json --id keel::lane::test-fast",
-		"go run ./cmd/keel-dev test-bridge tests run --id keel::lane::test-fast",
-		"go run ./cmd/keel-dev test-bridge config upgrade",
+		"go run ./cmd/keel-dev test-bridge discover --format json",
+		"go run ./cmd/keel-dev test-bridge desired-state --format json --id keel::lane::test-fast",
+		"go run ./cmd/keel-dev test-bridge run --id keel::lane::test-fast",
+		"go run ./cmd/keel-dev test-bridge config-upgrade",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("docs/vscode-bridge.md missing canonical argv %q", want)
@@ -433,25 +433,25 @@ func contextWithVSCodeTestState(root string, protocol io.Writer) context.Context
 }
 
 func dispatchTestBridgeConfigInit(ctx context.Context) error {
-	return commandTree().Dispatch(ctx, []string{"test-bridge", "config", "init"})
+	return commandTree().Dispatch(ctx, []string{"test-bridge", "config-init"})
 }
 
 func dispatchTestBridgeConfigUpgrade(ctx context.Context) error {
-	return commandTree().Dispatch(ctx, []string{"test-bridge", "config", "upgrade"})
+	return commandTree().Dispatch(ctx, []string{"test-bridge", "config-upgrade"})
 }
 
 func dispatchTestBridgeDiscover(ctx context.Context, args ...string) error {
-	canonical := append([]string{"test-bridge", "tests", "discover"}, args...)
+	canonical := append([]string{"test-bridge", "discover"}, args...)
 	return commandTree().Dispatch(ctx, canonical)
 }
 
 func dispatchTestBridgeDesiredState(ctx context.Context, args ...string) error {
-	canonical := append([]string{"test-bridge", "tests", "desired-state"}, args...)
+	canonical := append([]string{"test-bridge", "desired-state"}, args...)
 	return commandTree().Dispatch(ctx, canonical)
 }
 
 func dispatchTestBridgeRun(ctx context.Context, ids ...string) error {
-	canonical := []string{"test-bridge", "tests", "run"}
+	canonical := []string{"test-bridge", "run"}
 	for _, id := range ids {
 		canonical = append(canonical, "--id", id)
 	}
@@ -530,7 +530,7 @@ func TestVSCodeDiscoveryEmitsStructuredOrderedTree(t *testing.T) {
 	writeFile(t, root, filepath.Join("log", "logging_test.go"), "package log\n\nimport \"testing\"\n\nfunc TestLog(t *testing.T) {}\n")
 
 	var discover bytes.Buffer
-	if err := commandTree().Dispatch(contextWithVSCodeTestState(root, &discover), []string{"test-bridge", "tests", "discover", "--format", "json"}); err != nil {
+	if err := commandTree().Dispatch(contextWithVSCodeTestState(root, &discover), []string{"test-bridge", "discover", "--format", "json"}); err != nil {
 		t.Fatalf("canonical discover: %v", err)
 	}
 	var doc vscode.DiscoveryDocument
@@ -619,7 +619,7 @@ func TestKeelDevDesiredStateRowsAreRunnableThroughCanonicalBridge(t *testing.T) 
 	writeFile(t, root, "go.sum", "")
 
 	var discover bytes.Buffer
-	if err := commandTree().Dispatch(contextWithVSCodeTestState(root, &discover), []string{"test-bridge", "tests", "discover", "--format", "json"}); err != nil {
+	if err := commandTree().Dispatch(contextWithVSCodeTestState(root, &discover), []string{"test-bridge", "discover", "--format", "json"}); err != nil {
 		t.Fatalf("canonical discover: %v", err)
 	}
 	var doc vscode.DiscoveryDocument
@@ -641,7 +641,7 @@ func TestKeelDevDesiredStateRowsAreRunnableThroughCanonicalBridge(t *testing.T) 
 	}
 
 	var protocol bytes.Buffer
-	if err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "tests", "run", "--id", "keel::desired-state::keel-module-root"}); err != nil {
+	if err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "run", "--id", "keel::desired-state::keel-module-root"}); err != nil {
 		t.Fatalf("satisfied desired-state row run: %v\nprotocol:\n%s", err, protocol.String())
 	}
 	if events := decodeRunEvents(t, protocol.String()); !runEventsContain(events, "passed", "keel::desired-state::keel-module-root") {
@@ -650,7 +650,7 @@ func TestKeelDevDesiredStateRowsAreRunnableThroughCanonicalBridge(t *testing.T) 
 
 	t.Setenv("PATH", t.TempDir())
 	protocol.Reset()
-	err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "tests", "run", "--id", "keel::desired-state::go-toolchain"})
+	err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "run", "--id", "keel::desired-state::go-toolchain"})
 	if err == nil {
 		t.Fatal("blocked desired-state row returned nil error; want failing run")
 	}
@@ -668,7 +668,7 @@ func TestKeelModuleRootDesiredStateProbeReadsGoMod(t *testing.T) {
 	root := t.TempDir()
 
 	var protocol bytes.Buffer
-	err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "tests", "run", "--id", vscodeDesiredStateModuleRoot})
+	err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "run", "--id", vscodeDesiredStateModuleRoot})
 	if err == nil {
 		t.Fatal("module-root row without go.mod returned nil error; want failing run")
 	}
@@ -678,7 +678,7 @@ func TestKeelModuleRootDesiredStateProbeReadsGoMod(t *testing.T) {
 
 	writeFile(t, root, "go.mod", "module example.com/not-keel\n\ngo 1.25\n")
 	protocol.Reset()
-	err = commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "tests", "run", "--id", vscodeDesiredStateModuleRoot})
+	err = commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "run", "--id", vscodeDesiredStateModuleRoot})
 	if err == nil {
 		t.Fatal("module-root row with wrong module path returned nil error; want failing run")
 	}
@@ -688,7 +688,7 @@ func TestKeelModuleRootDesiredStateProbeReadsGoMod(t *testing.T) {
 
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	protocol.Reset()
-	if err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "tests", "run", "--id", vscodeDesiredStateModuleRoot}); err != nil {
+	if err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "run", "--id", vscodeDesiredStateModuleRoot}); err != nil {
 		t.Fatalf("module-root row with matching go.mod: %v\n%s", err, protocol.String())
 	}
 	if got := protocol.String(); !runEventsContain(decodeRunEvents(t, got), "passed", vscodeDesiredStateModuleRoot) || !strings.Contains(got, modulePath) {
@@ -710,7 +710,7 @@ func TestStubBinariesDesiredStateProbeBuildsStubPackages(t *testing.T) {
 	writeFile(t, root, filepath.Join("exec", "claude", "doc.go"), "package claude\n")
 
 	var protocol bytes.Buffer
-	if err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "tests", "run", "--id", vscodeDesiredStateStubBinaries}); err != nil {
+	if err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "run", "--id", vscodeDesiredStateStubBinaries}); err != nil {
 		t.Fatalf("stub-binaries row with buildable packages: %v\n%s", err, protocol.String())
 	}
 	if got := protocol.String(); !runEventsContain(decodeRunEvents(t, got), "passed", vscodeDesiredStateStubBinaries) {
@@ -719,7 +719,7 @@ func TestStubBinariesDesiredStateProbeBuildsStubPackages(t *testing.T) {
 
 	protocol.Reset()
 	if err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{
-		"test-bridge", "tests", "run",
+		"test-bridge", "run",
 		"--id", vscodeDesiredStateModuleRoot,
 		"--id", vscodeDesiredStateStubBinaries,
 	}); err != nil {
@@ -732,7 +732,7 @@ func TestStubBinariesDesiredStateProbeBuildsStubPackages(t *testing.T) {
 
 	writeFile(t, root, filepath.Join("exec", "codex", "broken.go"), "package codex\n\nfunc broken(\n")
 	protocol.Reset()
-	err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "tests", "run", "--id", vscodeDesiredStateStubBinaries})
+	err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "run", "--id", vscodeDesiredStateStubBinaries})
 	if err == nil {
 		t.Fatal("stub-binaries row with invalid package returned nil error; want failing run")
 	}
@@ -3463,7 +3463,7 @@ func TestVSCodeRunKeepsStdoutProtocolAndConsoleOnStderr(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
 	stdout, stderr := captureProcessStreams(t, func() {
-		if code := run([]string{"--no-header", "-v", "test-bridge", "tests", "run", "--id", "keel::lane::test-fast"}); code == 0 {
+		if code := run([]string{"--no-header", "-v", "test-bridge", "run", "--id", "keel::lane::test-fast"}); code == 0 {
 			t.Fatal("blocked test-bridge run exit = 0, want non-zero")
 		}
 	})

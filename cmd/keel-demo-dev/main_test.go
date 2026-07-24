@@ -23,7 +23,7 @@ func TestRunDirectVersionHelpConfigAndUsageBranches(t *testing.T) {
 		t.Fatalf("run --version = code %d out %q, want demo version", code, versionOut)
 	}
 	helpOut, code := captureDemoDevOutput(t, func() int { return run([]string{"--help-all"}) })
-	if code != 0 || !strings.Contains(helpOut, "test-bridge tests run") {
+	if code != 0 || !strings.Contains(helpOut, "test-bridge run") {
 		t.Fatalf("run --help-all = code %d out %q, want command tree", code, helpOut)
 	}
 	topicOut, code := captureDemoDevOutput(t, func() int { return run([]string{"help", "test-bridge"}) })
@@ -37,7 +37,7 @@ func TestRunDirectVersionHelpConfigAndUsageBranches(t *testing.T) {
 
 	root := t.TempDir()
 	t.Chdir(root)
-	configOut, code := captureDemoDevOutput(t, func() int { return run([]string{"test-bridge", "config", "init"}) })
+	configOut, code := captureDemoDevOutput(t, func() int { return run([]string{"test-bridge", "config-init"}) })
 	if code != 0 {
 		t.Fatalf("run config init = code %d out %q, want success", code, configOut)
 	}
@@ -55,7 +55,7 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	exe := buildDemoDev(t)
 	root := t.TempDir()
 
-	discoveryOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "discover", "--format", "json")
+	discoveryOut, code := runDemoDev(t, root, exe, "test-bridge", "discover", "--format", "json")
 	if code != 0 {
 		t.Fatalf("discover exit = %d, want 0\n%s", code, discoveryOut)
 	}
@@ -85,13 +85,13 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	}
 	assertMissingItem(t, discovery.Items, "keel-demo-dev::lane::go-pass")
 
-	detectOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", idDetectLanes)
+	detectOut, code := runDemoDev(t, root, exe, "test-bridge", "run", "--id", idDetectLanes)
 	if code != 0 {
 		t.Fatalf("detect-lanes maintenance exit = %d, want 0\n%s", code, detectOut)
 	}
 	assertRunEvent(t, decodeRunEvents(t, detectOut), "passed", idDetectLanes, "wrote .vscode/test-lanes.json")
 	assertDemoLanesFile(t, root)
-	discoveryOut, code = runDemoDev(t, root, exe, "test-bridge", "tests", "discover", "--format", "json")
+	discoveryOut, code = runDemoDev(t, root, exe, "test-bridge", "discover", "--format", "json")
 	if code != 0 {
 		t.Fatalf("post-detect discover exit = %d, want 0\n%s", code, discoveryOut)
 	}
@@ -113,7 +113,7 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 		}
 	}
 
-	desiredStateOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "desired-state", "--format", "json", "--id", "keel-demo-dev::lane::fake-smoke")
+	desiredStateOut, code := runDemoDev(t, root, exe, "test-bridge", "desired-state", "--format", "json", "--id", "keel-demo-dev::lane::fake-smoke")
 	if code != 0 {
 		t.Fatalf("desired-state exit = %d, want 0\n%s", code, desiredStateOut)
 	}
@@ -126,7 +126,7 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	assertDesiredState(t, desiredState.Groups, "service-c", "running", "running", "verified")
 	assertExclusiveDataSetGroup(t, desiredState.Groups)
 
-	failOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::lane::go-fail")
+	failOut, code := runDemoDev(t, root, exe, "test-bridge", "run", "--id", "keel-demo-dev::lane::go-fail")
 	if code == 0 {
 		t.Fatalf("go-fail lane exit = 0, want non-zero\n%s", failOut)
 	}
@@ -134,18 +134,18 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	assertRunEvent(t, events, "failed", "keel-demo-dev::lane::go-fail", "real Go test failed")
 	assertRunFinished(t, events, 1)
 
-	blockOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::maintenance::block-bad-lane")
+	blockOut, code := runDemoDev(t, root, exe, "test-bridge", "run", "--id", "keel-demo-dev::maintenance::block-bad-lane")
 	if code != 0 {
 		t.Fatalf("block maintenance exit = %d, want 0\n%s", code, blockOut)
 	}
-	blockedOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::lane::go-fail")
+	blockedOut, code := runDemoDev(t, root, exe, "test-bridge", "run", "--id", "keel-demo-dev::lane::go-fail")
 	if code == 0 {
 		t.Fatalf("blocked go-fail lane exit = 0, want non-zero\n%s", blockedOut)
 	}
 	events = decodeRunEvents(t, blockedOut)
 	assertRunEvent(t, events, "failed", "keel-demo-dev::lane::go-fail", "lane blocked")
 
-	clearStateOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", testbridge.MaintenanceClearStateID)
+	clearStateOut, code := runDemoDev(t, root, exe, "test-bridge", "run", "--id", testbridge.MaintenanceClearStateID)
 	if code != 0 {
 		t.Fatalf("clear-state maintenance exit = %d, want 0\n%s", code, clearStateOut)
 	}
@@ -155,18 +155,18 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	if blocked, err := blockedLane(root); err != nil || blocked != "" {
 		t.Fatalf("clear-state blocked lane = %q err=%v, want empty", blocked, err)
 	}
-	unblockedFailOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::lane::go-fail")
+	unblockedFailOut, code := runDemoDev(t, root, exe, "test-bridge", "run", "--id", "keel-demo-dev::lane::go-fail")
 	if code == 0 {
 		t.Fatalf("post-clear go-fail lane exit = 0, want non-zero\n%s", unblockedFailOut)
 	}
 	assertRunEvent(t, decodeRunEvents(t, unblockedFailOut), "failed", "keel-demo-dev::lane::go-fail", "real Go test failed")
 
-	unblockOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::maintenance::unblock-bad-lane")
+	unblockOut, code := runDemoDev(t, root, exe, "test-bridge", "run", "--id", "keel-demo-dev::maintenance::unblock-bad-lane")
 	if code != 0 {
 		t.Fatalf("unblock maintenance exit = %d, want 0\n%s", code, unblockOut)
 	}
 
-	configOut, code := runDemoDev(t, root, exe, "test-bridge", "config", "init")
+	configOut, code := runDemoDev(t, root, exe, "test-bridge", "config-init")
 	if code != 0 {
 		t.Fatalf("config init exit = %d, want 0\n%s", code, configOut)
 	}
@@ -183,7 +183,7 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 func TestKeelDemoDevDesiredStateRowsAreRunnable(t *testing.T) {
 	exe := buildDemoDev(t)
 	root := t.TempDir()
-	detectOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", idDetectLanes)
+	detectOut, code := runDemoDev(t, root, exe, "test-bridge", "run", "--id", idDetectLanes)
 	if code != 0 {
 		t.Fatalf("detect-lanes maintenance exit = %d, want 0\n%s", code, detectOut)
 	}
@@ -198,7 +198,7 @@ func TestKeelDemoDevDesiredStateRowsAreRunnable(t *testing.T) {
 		{id: "keel-demo-dev::desired-state::dataset::small", code: 0, event: "passed", message: "reuse_small_data_set"},
 		{id: "keel-demo-dev::desired-state::dataset::empty", code: 0, event: "passed", message: "select_empty_stopped_data_set"},
 	}
-	selectedStateOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "desired-state", "--format", "json", "--id", idDataSetSmall)
+	selectedStateOut, code := runDemoDev(t, root, exe, "test-bridge", "desired-state", "--format", "json", "--id", idDataSetSmall)
 	if code != 0 {
 		t.Fatalf("selected data-set desired-state exit = %d, want 0\n%s", code, selectedStateOut)
 	}
@@ -207,7 +207,7 @@ func TestKeelDemoDevDesiredStateRowsAreRunnable(t *testing.T) {
 	assertExclusiveDataSetGroupActive(t, selectedState.Groups, "Unknown State")
 
 	for _, tc := range cases {
-		out, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", tc.id)
+		out, code := runDemoDev(t, root, exe, "test-bridge", "run", "--id", tc.id)
 		if code != tc.code {
 			t.Fatalf("desired-state row %s exit = %d, want %d\n%s", tc.id, code, tc.code, out)
 		}
@@ -216,7 +216,7 @@ func TestKeelDemoDevDesiredStateRowsAreRunnable(t *testing.T) {
 		if tc.id == idDataSetSmall {
 			assertRunEvent(t, events, "cleared", idDataSetEmpty, "deactivated by exclusive desired-state selection")
 			assertRunEvent(t, events, "cleared", idDataSetFull, "deactivated by exclusive desired-state selection")
-			selectedStateOut, code = runDemoDev(t, root, exe, "test-bridge", "tests", "desired-state", "--format", "json", "--id", idDataSetSmall)
+			selectedStateOut, code = runDemoDev(t, root, exe, "test-bridge", "desired-state", "--format", "json", "--id", idDataSetSmall)
 			if code != 0 {
 				t.Fatalf("post-run selected data-set desired-state exit = %d, want 0\n%s", code, selectedStateOut)
 			}
@@ -225,13 +225,13 @@ func TestKeelDemoDevDesiredStateRowsAreRunnable(t *testing.T) {
 		}
 	}
 
-	out, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::desired-state::dataset::small")
+	out, code := runDemoDev(t, root, exe, "test-bridge", "run", "--id", "keel-demo-dev::desired-state::dataset::small")
 	if code != 0 {
 		t.Fatalf("reset data-set small exit = %d, want 0\n%s", code, out)
 	}
 
 	out, code = runDemoDev(t, root, exe,
-		"test-bridge", "tests", "run",
+		"test-bridge", "run",
 		"--id", "keel-demo-dev::desired-state::docker-env",
 		"--id", "keel-demo-dev::desired-state::dataset::small",
 	)
@@ -246,7 +246,7 @@ func TestKeelDemoDevDesiredStateRowsAreRunnable(t *testing.T) {
 		t.Fatalf("read selected data set before Unknown reset: %v", err)
 	}
 	unknownID := exclusiveUnknownID(t, root)
-	out, code = runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", unknownID)
+	out, code = runDemoDev(t, root, exe, "test-bridge", "run", "--id", unknownID)
 	if code != 0 {
 		t.Fatalf("Unknown reset row exit = %d, want 0\n%s", code, out)
 	}
@@ -259,19 +259,19 @@ func TestKeelDemoDevDesiredStateRowsAreRunnable(t *testing.T) {
 	// ...and the derivation-level guard: after the reset, Unknown State is the
 	// sole active member of the app-db group (the assertion whose absence let
 	// the cosmetic reset ship — keel/issue-90).
-	resetStateOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "desired-state", "--format", "json")
+	resetStateOut, code := runDemoDev(t, root, exe, "test-bridge", "desired-state", "--format", "json")
 	if code != 0 {
 		t.Fatalf("post-reset desired-state exit = %d, want 0\n%s", code, resetStateOut)
 	}
 	var afterResetState vscode.DesiredStateDocument
 	decodeJSON(t, resetStateOut, &afterResetState)
 	assertExclusiveDataSetGroupActive(t, afterResetState.Groups, "Unknown State")
-	out, code = runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::desired-state::dataset::small")
+	out, code = runDemoDev(t, root, exe, "test-bridge", "run", "--id", "keel-demo-dev::desired-state::dataset::small")
 	if code != 0 {
 		t.Fatalf("re-activate small after Unknown reset exit = %d, want 0\n%s", code, out)
 	}
 
-	out, code = runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel::desired-state::group::test-preconditions")
+	out, code = runDemoDev(t, root, exe, "test-bridge", "run", "--id", "keel::desired-state::group::test-preconditions")
 	if code != 0 {
 		t.Fatalf("desired-state group exit = %d, want 0\n%s", code, out)
 	}
@@ -281,17 +281,17 @@ func TestKeelDemoDevDesiredStateRowsAreRunnable(t *testing.T) {
 	if err := os.Remove(demoReadyPath(root, "docker-env")); err != nil {
 		t.Fatal(err)
 	}
-	out, code = runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::desired-state::docker-env")
+	out, code = runDemoDev(t, root, exe, "test-bridge", "run", "--id", "keel-demo-dev::desired-state::docker-env")
 	if code == 0 {
 		t.Fatalf("broken docker-env row exit = 0, want non-zero\n%s", out)
 	}
 	assertRunEvent(t, decodeRunEvents(t, out), "failed", "keel-demo-dev::desired-state::docker-env", "provision_demo_environment")
 
-	detectOut, code = runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", idDetectLanes)
+	detectOut, code = runDemoDev(t, root, exe, "test-bridge", "run", "--id", idDetectLanes)
 	if code != 0 {
 		t.Fatalf("repair detect-lanes exit = %d, want 0\n%s", code, detectOut)
 	}
-	out, code = runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::desired-state::docker-env")
+	out, code = runDemoDev(t, root, exe, "test-bridge", "run", "--id", "keel-demo-dev::desired-state::docker-env")
 	if code != 0 {
 		t.Fatalf("repaired docker-env row exit = %d, want 0\n%s", code, out)
 	}
@@ -303,7 +303,7 @@ func TestKeelDemoDevUnblockMaintenanceIsIdempotent(t *testing.T) {
 	exe := buildDemoDev(t)
 	root := t.TempDir()
 
-	unblockOut, code := runDemoDev(t, root, exe, "test-bridge", "tests", "run", "--id", "keel-demo-dev::maintenance::unblock-bad-lane")
+	unblockOut, code := runDemoDev(t, root, exe, "test-bridge", "run", "--id", "keel-demo-dev::maintenance::unblock-bad-lane")
 	if code != 0 {
 		t.Fatalf("clean-workspace unblock maintenance exit = %d, want 0\n%s", code, unblockOut)
 	}
@@ -316,7 +316,7 @@ func TestKeelDemoDevUnblockMaintenanceIsIdempotent(t *testing.T) {
 func TestDemoBridgeCommandSpecCoversProviderAndRunPaths(t *testing.T) {
 	root := t.TempDir()
 
-	discoveryOut, err := dispatchDemoBridge(t, root, "test-bridge", "tests", "discover", "--format", "json")
+	discoveryOut, err := dispatchDemoBridge(t, root, "test-bridge", "discover", "--format", "json")
 	if err != nil {
 		t.Fatalf("discover dispatch: %v", err)
 	}
@@ -324,17 +324,17 @@ func TestDemoBridgeCommandSpecCoversProviderAndRunPaths(t *testing.T) {
 	decodeJSON(t, discoveryOut, &discovery)
 	assertMissingItem(t, discovery.Items, idLaneFakeSmoke)
 
-	if _, err := dispatchDemoBridge(t, root, "test-bridge", "tests", "run", "--id", idDetectLanes); err != nil {
+	if _, err := dispatchDemoBridge(t, root, "test-bridge", "run", "--id", idDetectLanes); err != nil {
 		t.Fatalf("detect-lanes dispatch: %v", err)
 	}
-	discoveryOut, err = dispatchDemoBridge(t, root, "test-bridge", "tests", "discover", "--format", "json")
+	discoveryOut, err = dispatchDemoBridge(t, root, "test-bridge", "discover", "--format", "json")
 	if err != nil {
 		t.Fatalf("post-detect discover dispatch: %v", err)
 	}
 	decodeJSON(t, discoveryOut, &discovery)
 	assertItem(t, discovery.Items, idLaneFakeSmoke, "lane", true)
 
-	desiredStateOut, err := dispatchDemoBridge(t, root, "test-bridge", "tests", "desired-state", "--format", "json", "--id", idLaneFakeSmoke)
+	desiredStateOut, err := dispatchDemoBridge(t, root, "test-bridge", "desired-state", "--format", "json", "--id", idLaneFakeSmoke)
 	if err != nil {
 		t.Fatalf("desired-state dispatch: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestDemoBridgeCommandSpecCoversProviderAndRunPaths(t *testing.T) {
 	decodeJSON(t, desiredStateOut, &desiredState)
 	assertDesiredState(t, desiredState.Groups, "postgres", "present+seeded", "present+seeded", "verified")
 
-	defaultDesiredStateOut, err := dispatchDemoBridge(t, root, "test-bridge", "tests", "desired-state", "--format", "json")
+	defaultDesiredStateOut, err := dispatchDemoBridge(t, root, "test-bridge", "desired-state", "--format", "json")
 	if err != nil {
 		t.Fatalf("default desired-state dispatch: %v", err)
 	}
@@ -354,31 +354,31 @@ func TestDemoBridgeCommandSpecCoversProviderAndRunPaths(t *testing.T) {
 	assertDesiredState(t, defaultDesiredState.Groups, "docker-env", "ready", "ready", "verified")
 	assertExclusiveDataSetGroup(t, defaultDesiredState.Groups)
 
-	runOut, err := dispatchDemoBridge(t, root, "test-bridge", "tests", "run", "--id", idLaneFakeSmoke)
+	runOut, err := dispatchDemoBridge(t, root, "test-bridge", "run", "--id", idLaneFakeSmoke)
 	if err != nil {
 		t.Fatalf("fake smoke run dispatch: %v", err)
 	}
 	assertRunFinished(t, decodeRunEvents(t, runOut), 0)
 
-	runOut, err = dispatchDemoBridge(t, root, "test-bridge", "tests", "run", "--id", idLaneGoPass)
+	runOut, err = dispatchDemoBridge(t, root, "test-bridge", "run", "--id", idLaneGoPass)
 	if err != nil {
 		t.Fatalf("go pass run dispatch: %v", err)
 	}
 	assertRunEvent(t, decodeRunEvents(t, runOut), "passed", idLaneGoPass, "real Go test passed")
 
-	if _, err = dispatchDemoBridge(t, root, "test-bridge", "tests", "run", "--id", idBlockBadLane); err != nil {
+	if _, err = dispatchDemoBridge(t, root, "test-bridge", "run", "--id", idBlockBadLane); err != nil {
 		t.Fatalf("block maintenance dispatch: %v", err)
 	}
-	runOut, err = dispatchDemoBridge(t, root, "test-bridge", "tests", "run", "--id", idLaneGoFail)
+	runOut, err = dispatchDemoBridge(t, root, "test-bridge", "run", "--id", idLaneGoFail)
 	if err == nil {
 		t.Fatalf("blocked failing lane dispatch succeeded, want RunError")
 	}
 	assertRunEvent(t, decodeRunEvents(t, runOut), "failed", idLaneGoFail, "lane blocked")
 
-	if _, err = dispatchDemoBridge(t, root, "test-bridge", "tests", "run", "--id", idUnblockBadLane); err != nil {
+	if _, err = dispatchDemoBridge(t, root, "test-bridge", "run", "--id", idUnblockBadLane); err != nil {
 		t.Fatalf("unblock maintenance dispatch: %v", err)
 	}
-	runOut, err = dispatchDemoBridge(t, root, "test-bridge", "tests", "run", "--id", idLaneGoFail)
+	runOut, err = dispatchDemoBridge(t, root, "test-bridge", "run", "--id", idLaneGoFail)
 	if err == nil {
 		t.Fatalf("failing lane dispatch succeeded, want RunError")
 	}
@@ -388,7 +388,7 @@ func TestDemoBridgeCommandSpecCoversProviderAndRunPaths(t *testing.T) {
 func TestRunEntrypointRoutesProtocolHelpVersionAndErrors(t *testing.T) {
 	root := t.TempDir()
 
-	stdout, stderr, code := captureRun(t, root, "test-bridge", "tests", "discover", "--format", "json")
+	stdout, stderr, code := captureRun(t, root, "test-bridge", "discover", "--format", "json")
 	if code != 0 {
 		t.Fatalf("discover exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
@@ -416,7 +416,7 @@ func TestRunEntrypointRoutesProtocolHelpVersionAndErrors(t *testing.T) {
 		t.Fatalf("bad flag = code %d stderr %q, want usage error", code, stderr)
 	}
 
-	_, stderr, code = captureRun(t, root, "test-bridge", "tests", "run", "--id", "keel-demo-dev::lane::missing")
+	_, stderr, code = captureRun(t, root, "test-bridge", "run", "--id", "keel-demo-dev::lane::missing")
 	if code != 1 || !strings.Contains(stderr, "unknown demo test id") {
 		t.Fatalf("unknown run id = code %d stderr %q, want runtime error", code, stderr)
 	}
@@ -776,7 +776,7 @@ func assertExclusiveDataSetGroupActive(t *testing.T, groups []vscode.DesiredStat
 
 func exclusiveUnknownID(t *testing.T, root string) string {
 	t.Helper()
-	out, err := dispatchDemoBridge(t, root, "test-bridge", "tests", "discover", "--format", "json")
+	out, err := dispatchDemoBridge(t, root, "test-bridge", "discover", "--format", "json")
 	if err != nil {
 		t.Fatalf("discover for Unknown ID: %v", err)
 	}

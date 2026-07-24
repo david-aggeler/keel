@@ -59,7 +59,7 @@ type runLogLocator interface {
 // the in-process checks. Each external tool is presence/version-verified before
 // it runs (keel/ac-42) so a missing or drifted tool fails loud.
 //
-// DHF-REQ: keel/requirement-10, keel/requirement-11, keel/requirement-12
+// DHF-REQ: keel/requirement-10, keel/requirement-11, keel/requirement-12, keel/requirement-107
 func ciSteps(ctx context.Context, logger *slog.Logger, dir string) []step {
 	// Shell scripts are enumerated up front so shellcheck/shfmt receive explicit
 	// paths (no shell is involved to expand a glob). Sorted for stable output.
@@ -91,6 +91,9 @@ func ciSteps(ctx context.Context, logger *slog.Logger, dir string) []step {
 	}
 
 	steps := []step{
+		{name: "command-tree", fn: func(context.Context, *slog.Logger, string) error {
+			return commandTree().ValidateTree()
+		}},
 		gofmtStep,
 		{name: "build", program: "go", args: []string{"build", "./..."}},
 		{name: "vet", program: "go", args: []string{"vet", "./..."}},
