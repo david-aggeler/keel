@@ -159,9 +159,13 @@ type FlagSpec struct {
 // PositionalSpec describes a named positional operand group. Min and Max define
 // the accepted arity; Max < 0 means unbounded.
 type PositionalSpec struct {
+	// Name identifies the operand in usage diagnostics.
 	Name string
-	Min  int
-	Max  int
+	// Min is the minimum accepted count for this operand group.
+	Min int
+	// Max is the maximum accepted count for this operand group; Max < 0 is
+	// unbounded.
+	Max int
 }
 
 // UsageError reports invalid CLI usage. Consumers should present its diagnostic
@@ -442,7 +446,7 @@ func (c *CommandSpec) parseShortFlags(arg string, remaining []string, index *int
 			seen[flag.Name] = true
 			continue
 		}
-		if pos != len(body)-1 {
+		if len(body) > 1 {
 			return false, nil, UsageError{Err: fmt.Errorf("flag -%s requires a separate value", alias)}
 		}
 		if *index+1 >= len(remaining) {
@@ -933,11 +937,11 @@ func PrintGroupedCommandRows(w io.Writer, commands []*CommandSpec) {
 	width := commandNameWidth(commands)
 	for _, group := range groups {
 		fmt.Fprintf(w, "%s:\n", group.name)
-		PrintIndentedCommandRows(w, group.commands, 2, width)
+		printIndentedCommandRows(w, group.commands, 2, width)
 	}
 }
 
-func PrintIndentedCommandRows(w io.Writer, commands []*CommandSpec, indent, width int) {
+func printIndentedCommandRows(w io.Writer, commands []*CommandSpec, indent, width int) {
 	if width == 0 {
 		width = commandNameWidth(commands)
 	}

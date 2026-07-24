@@ -157,6 +157,105 @@ func TestDispatchRejectsEnumAndRequiredFlagViolations(t *testing.T) {
 }
 
 // DHF-TEST: keel/requirement-104
+func TestDispatchParsesBoolValuesAndRepeatableStringLists(t *testing.T) {
+	var dryRun bool
+	var tags []string
+	var got string
+	root := parserTestRoot(&CommandSpec{
+		Name: "run",
+		Use:  "run",
+		Flags: []FlagSpec{
+			{Name: "dry-run", BoolTarget: &dryRun},
+			{Name: "tag", Value: "name", Repeatable: true, StringSliceTarget: &tags},
+		},
+		Handler: func(_ context.Context, args []string) error {
+			got = "dry-run=" + boolText(dryRun) + " tags=" + strings.Join(tags, ",") + " args=" + strings.Join(args, " ")
+			return nil
+		},
+	})
+
+	if err := root.Dispatch(context.Background(), []string{"run", "--dry-run=false", "--tag", "one", "--tag=two", "operand"}); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if got != "dry-run=false tags=one,two args=operand" {
+		t.Fatalf("captured = %q", got)
+	}
+}
+
+// DHF-TEST: keel/requirement-104
+func TestDispatchReportsFlagParserEdgeCases(t *testing.T) {
+	var mode string
+	root := parserTestRoot(&CommandSpec{
+		Name: "run",
+		Use:  "run",
+		Flags: []FlagSpec{
+			{Name: "mode", Alias: "m", StringTarget: &mode},
+			{Name: "debug", Alias: "d", BoolTarget: new(bool)},
+			{Name: "legacy"},
+		},
+		Handler: func(context.Context, []string) error { return nil },
+	})
+
+	for _, tt := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "missing long value", args: []string{"run", "--mode"}, want: "--mode requires a value"},
+		{name: "missing short value", args: []string{"run", "-m"}, want: "-m requires a value"},
+		{name: "string flag inside bundle", args: []string{"run", "-dm"}, want: "flag -m requires a separate value"},
+		{name: "unknown short", args: []string{"run", "-x"}, want: `unknown flag "-x"`},
+		{name: "invalid bool value", args: []string{"run", "--debug=maybe"}, want: `invalid bool flag value "maybe"`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := root.Dispatch(context.Background(), tt.args)
+			var usage UsageError
+			if !errors.As(err, &usage) {
+				t.Fatalf("Dispatch(%q) = %v (%T), want UsageError", strings.Join(tt.args, " "), err, err)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error %q missing %q", err.Error(), tt.want)
+			}
+		})
+	}
+
+	var got []string
+	root.Subcommands[0].Handler = func(_ context.Context, args []string) error {
+		got = append([]string{}, args...)
+		return nil
+	}
+	if err := root.Dispatch(context.Background(), []string{"run", "--legacy", "operand"}); err != nil {
+		t.Fatalf("help-only flag passthrough: %v", err)
+	}
+	if strings.Join(got, " ") != "--legacy operand" {
+		t.Fatalf("handler args = %q, want help-only flag passthrough", strings.Join(got, " "))
+	}
+}
+
+// DHF-TEST: keel/requirement-104
+func TestDispatchValidatesMinimumAndRangePositionals(t *testing.T) {
+	root := parserTestRoot(&CommandSpec{
+		Name:        "copy",
+		Use:         "copy <src> [dst]",
+		Positionals: []PositionalSpec{{Name: "path", Min: 1, Max: 2}},
+		Handler:     func(context.Context, []string) error { return nil },
+	})
+	if err := root.Dispatch(context.Background(), []string{"copy", "a", "b"}); err != nil {
+		t.Fatalf("range positionals: %v", err)
+	}
+	err := root.Dispatch(context.Background(), []string{"copy", "a", "b", "c"})
+	if err == nil || !strings.Contains(err.Error(), "1-2 path") {
+		t.Fatalf("range arity error = %v, want range text", err)
+	}
+
+	root.Subcommands[0].Positionals = []PositionalSpec{{Name: "path", Min: 1, Max: -1}}
+	err = root.Dispatch(context.Background(), []string{"copy"})
+	if err == nil || !strings.Contains(err.Error(), "at least 1 path") {
+		t.Fatalf("minimum arity error = %v, want minimum text", err)
+	}
+}
+
+// DHF-TEST: keel/requirement-104
 func TestValidateTreeRejectsCommandGlobalFlagCollisions(t *testing.T) {
 	root := parserTestRoot(&CommandSpec{
 		Name: "run",
