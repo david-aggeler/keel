@@ -284,6 +284,55 @@ func TestValidateTreeRejectsCommandGlobalFlagCollisions(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-104
+// A second Dispatch on the same tree must not inherit typed flag values bound by
+// an earlier Dispatch: defaults are re-applied and repeatable slices are reset
+// before each parse, so bound targets carry only the current invocation's values.
+func TestDispatchDoesNotLeakFlagValuesAcrossCalls(t *testing.T) {
+	var name string
+	var dry bool
+	var ids []string
+	var gotName string
+	var gotDry bool
+	var gotIDs []string
+
+	root := parserTestRoot(&CommandSpec{
+		Name: "run",
+		Use:  "run",
+		Flags: []FlagSpec{
+			{Name: "name", Value: "text", Default: "guest", StringTarget: &name},
+			{Name: "dry", BoolTarget: &dry},
+			{Name: "id", Value: "id", Repeatable: true, StringSliceTarget: &ids},
+		},
+		Handler: func(_ context.Context, _ []string) error {
+			gotName, gotDry, gotIDs = name, dry, append([]string(nil), ids...)
+			return nil
+		},
+	})
+
+	if err := root.Dispatch(context.Background(), []string{"run", "--name", "alice", "--dry", "--id", "a", "--id", "b"}); err != nil {
+		t.Fatalf("first Dispatch: %v", err)
+	}
+	if gotName != "alice" || !gotDry || strings.Join(gotIDs, ",") != "a,b" {
+		t.Fatalf("first call bound values = %q, %v, %v; want alice, true, [a b]", gotName, gotDry, gotIDs)
+	}
+
+	// Second call sets none of the flags: every target must revert to its default,
+	// not retain the first call's values.
+	if err := root.Dispatch(context.Background(), []string{"run", "--id", "c"}); err != nil {
+		t.Fatalf("second Dispatch: %v", err)
+	}
+	if gotName != "guest" {
+		t.Fatalf("second call leaked string flag: name = %q, want default %q", gotName, "guest")
+	}
+	if gotDry {
+		t.Fatal("second call leaked bool flag: dry = true, want reset to false")
+	}
+	if strings.Join(gotIDs, ",") != "c" {
+		t.Fatalf("second call leaked repeatable flag: id = %v, want [c]", gotIDs)
+	}
+}
+
 func parserTestRoot(child *CommandSpec) *CommandSpec {
 	return &CommandSpec{
 		Name: "tool",
