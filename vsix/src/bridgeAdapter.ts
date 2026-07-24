@@ -140,7 +140,7 @@ export async function upgradeConfig(workspaceRoot: string): Promise<{ stdout: st
     args: launcherArgsForConfigUpgrade(raw)
   };
   await assertCompatibleBridgeVersion(adapter, workspaceRoot);
-  const { stdout, stderr } = await execFile(adapter.command, [...adapter.args, 'test-bridge', 'config', 'upgrade'], {
+  const { stdout, stderr } = await execFile(adapter.command, [...adapter.args, 'test-bridge', 'config-upgrade'], {
     cwd: workspaceRoot,
     env: adapterEnv(adapter),
     maxBuffer: 1024 * 1024
@@ -243,9 +243,9 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-// DHF-REQ: keel/requirement-59, keel/requirement-61
+// DHF-REQ: keel/requirement-42, keel/requirement-59, keel/requirement-61
 function canonicalTestsArgs(adapter: BridgeAdapterConfig, verb: 'discover' | 'desired-state' | 'run', extra: string[] = []): string[] {
-  return [...adapter.args, 'test-bridge', 'tests', verb, ...extra];
+  return [...adapter.args, 'test-bridge', verb, ...extra];
 }
 
 function launcherArgsForConfigUpgrade(config: BridgeAdapterConfig): string[] {

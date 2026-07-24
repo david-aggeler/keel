@@ -14,7 +14,7 @@ The extension is activated by a workspace-owned config file:
 }
 ```
 
-Run `keel-dev test-bridge config init` or the `Keel: Initialize Test Bridge Config`
+Run `keel-dev test-bridge config-init` or the `Keel: Initialize Test Bridge Config`
 command to create `.vscode/test-bridge.json`. Older configs are upgraded by the
 configured devtool on activation; newer configs are read without rewriting.
 

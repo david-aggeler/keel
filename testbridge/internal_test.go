@@ -333,8 +333,8 @@ func TestPrivateHelpersCoverDefaultsAndErrors(t *testing.T) {
 	if got := (RunError{ExitCode: 7}).Error(); got != "testbridge run exited 7" {
 		t.Fatalf("nil RunError text = %q", got)
 	}
-	if _, err := parseIDs([]string{"--format"}, true, true); err == nil || !strings.Contains(err.Error(), "--format supports only json") {
-		t.Fatalf("parse missing format err = %v", err)
+	if err := CommandSpec(fake).Dispatch(context.Background(), []string{"test-bridge", "discover", "--format"}); err == nil || !strings.Contains(err.Error(), "--format requires a value") {
+		t.Fatalf("discover missing format err = %v", err)
 	}
 	if err := writeDocument(Runtime{}, vscode.RunEvent{}); err == nil || !strings.Contains(err.Error(), "run-event missing") {
 		t.Fatalf("write invalid doc err = %v, want validation failure", err)
@@ -578,7 +578,7 @@ func TestValidateDocumentRejectsProtocolEdgeCases(t *testing.T) {
 		},
 		{
 			name: "config protocol args",
-			doc:  vscode.TestBridgeConfig{Version: vscode.CurrentConfigVersion, Command: "bin/tool", DisplayName: "Tool", Args: []string{"test-bridge", "tests"}},
+			doc:  vscode.TestBridgeConfig{Version: vscode.CurrentConfigVersion, Command: "bin/tool", DisplayName: "Tool", Args: []string{"test-bridge"}},
 			want: "launcher-only",
 		},
 	}

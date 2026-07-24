@@ -164,11 +164,11 @@ suite('Keel Test Bridge config contract', () => {
       "fs.mkdirSync(path.join(process.cwd(), '.devtools'), { recursive: true });",
       "fs.appendFileSync(path.join(process.cwd(), '.devtools', 'env-adapter.log'), `${args.join(' ')} env=${seen}\\n`);",
       "if (args.includes('--version')) { console.log('dev'); process.exit(0); }",
-      "if (args.join(' ') === 'test-bridge tests discover --format json') {",
+      "if (args.join(' ') === 'test-bridge discover --format json') {",
       "  console.log(JSON.stringify({ version: 1, workspace: seen, generated_at: now(), items: [] }));",
       "  process.exit(0);",
       "}",
-      "if (args.slice(0, 3).join(' ') === 'test-bridge tests run') {",
+      "if (args.slice(0, 2).join(' ') === 'test-bridge run') {",
       "  process.stdout.write(`${JSON.stringify({ version: 1, event: 'run_started', time: now(), message: seen })}\\n`);",
       "  process.stdout.write(`${JSON.stringify({ version: 1, event: 'run_finished', time: now(), exit_code: 0 })}\\n`);",
       "  process.exit(0);",
@@ -223,8 +223,8 @@ suite('Keel Test Bridge config contract', () => {
       fs.writeFileSync(fake, [
         "const args = process.argv.slice(2);",
         "if (args.includes('--version')) { console.log(process.env.BAD_VERSION ? 'not-a-version' : 'dev'); process.exit(process.env.BAD_VERSION ? 2 : 0); }",
-        "if (args.join(' ') === 'test-bridge tests discover --format json') { console.log(JSON.stringify({ version: 2, items: null })); process.exit(0); }",
-        "if (args.slice(0, 4).join(' ') === 'test-bridge tests desired-state --format') { console.log(JSON.stringify({ version: 1, groups: null })); process.exit(0); }",
+        "if (args.join(' ') === 'test-bridge discover --format json') { console.log(JSON.stringify({ version: 2, items: null })); process.exit(0); }",
+        "if (args.slice(0, 3).join(' ') === 'test-bridge desired-state --format') { console.log(JSON.stringify({ version: 1, groups: null })); process.exit(0); }",
         "process.exit(2);"
       ].join('\n'));
 
@@ -345,10 +345,10 @@ suite('Keel Test Bridge config contract', () => {
     const protocolCalls = calls.filter((call) => call !== '--version');
     assert.equal(calls.filter((call) => call === '--version').length, 4);
     assert.deepEqual(protocolCalls, [
-      'test-bridge config upgrade',
-      'test-bridge tests discover --format json',
-      'test-bridge tests desired-state --format json --id keel::lane::ci',
-      'test-bridge tests run --id keel::lane::ci'
+      'test-bridge config-upgrade',
+      'test-bridge discover --format json',
+      'test-bridge desired-state --format json --id keel::lane::ci',
+      'test-bridge run --id keel::lane::ci'
     ]);
     assert.ok(protocolCalls.every((call) => !call.split(/\s+/).includes('vscode')));
     const retiredVerb = ['p', 'l', 'a', 'n'].join('');
@@ -474,12 +474,12 @@ suite('Keel Test Bridge config contract', () => {
         .trim()
         .split(/\r?\n/);
       assert.equal(
-        callsAfterRunnable.filter((call) => call === 'test-bridge tests desired-state --format json').length,
+        callsAfterRunnable.filter((call) => call === 'test-bridge desired-state --format json').length,
         0,
         'refresh must render Desired State from discovery without a live empty-selection probe'
       );
-      assert.ok(callsAfterRunnable.includes(`test-bridge tests desired-state --format json --id ${servedRunID}`));
-      assert.ok(callsAfterRunnable.includes(`test-bridge tests run --id ${servedRunID}`));
+      assert.ok(callsAfterRunnable.includes(`test-bridge desired-state --format json --id ${servedRunID}`));
+      assert.ok(callsAfterRunnable.includes(`test-bridge run --id ${servedRunID}`));
 
       await runProfileHandlerForTest(informationalRowID);
       const callsAfterInformational = fs.readFileSync(path.join(root, '.devtools', 'fake-adapter-calls.log'), 'utf8')
@@ -525,7 +525,7 @@ suite('Keel Test Bridge config contract', () => {
         .trim()
         .split(/\r?\n/);
       assert.equal(
-        calls.filter((call) => call === `test-bridge tests desired-state --format json --id ${runID}`).length,
+        calls.filter((call) => call === `test-bridge desired-state --format json --id ${runID}`).length,
         2,
         'run-finished must re-query desired-state after the devtool changes the selected row'
       );
@@ -613,15 +613,15 @@ function desiredState() {
     groups: [{ label: 'Data Set', order: 1, mutually_exclusive: true, rows }]
   };
 }
-if (args.slice(0, 4).join(' ') === 'test-bridge tests discover --format') {
+if (args.slice(0, 3).join(' ') === 'test-bridge discover --format') {
   process.stdout.write(JSON.stringify(discovery()) + '\\n');
   process.exit(0);
 }
-if (args.slice(0, 4).join(' ') === 'test-bridge tests desired-state --format') {
+if (args.slice(0, 3).join(' ') === 'test-bridge desired-state --format') {
   process.stdout.write(JSON.stringify(desiredState()) + '\\n');
   process.exit(0);
 }
-if (args.slice(0, 3).join(' ') === 'test-bridge tests run') {
+if (args.slice(0, 2).join(' ') === 'test-bridge run') {
   const selected = args[args.indexOf('--id') + 1];
   fs.mkdirSync(path.dirname(activePath), { recursive: true });
   fs.writeFileSync(activePath, selected + '\\n');
@@ -806,9 +806,9 @@ process.exit(2);
       await vscode.commands.executeCommand('keel.tests.openArtifact', path.join(root, 'missing-artifact.txt'));
 
       const calls = fs.readFileSync(path.join(root, '.devtools', 'fake-adapter-calls.log'), 'utf8');
-      assert.match(calls, /test-bridge tests run --id keel::maintenance::clear-state/);
-      assert.match(calls, /test-bridge tests run --id keel::maintenance::unlock/);
-      assert.match(calls, /test-bridge tests run --id keel::maintenance::detect-lanes/);
+      assert.match(calls, /test-bridge run --id keel::maintenance::clear-state/);
+      assert.match(calls, /test-bridge run --id keel::maintenance::unlock/);
+      assert.match(calls, /test-bridge run --id keel::maintenance::detect-lanes/);
     } finally {
       if (previousDevWorkspace === undefined) {
         delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
@@ -886,17 +886,17 @@ process.exit(2);
       "  if (mode === 'start-fail' && fs.existsSync(sentinel)) { console.log('v0.0.0'); } else { console.log('dev'); }",
       "  process.exit(0);",
       "}",
-      "if (args.join(' ') === 'test-bridge tests discover --format json') {",
+      "if (args.join(' ') === 'test-bridge discover --format json') {",
       "  console.log(JSON.stringify({ version: 1, workspace: process.cwd(), generated_at: now(), capabilities: { clear_results_test_ids: ['case::maintenance::clear'] }, items: [{ id: selected, label: selected, kind: 'maintenance', runnable: true, profiles: ['run'] }] }));",
       "  process.exit(0);",
       "}",
-      "if (args.slice(0, 4).join(' ') === 'test-bridge tests desired-state --format') {",
+      "if (args.slice(0, 3).join(' ') === 'test-bridge desired-state --format') {",
       "  if (mode === 'desired-fail') { console.error('desired-state failed intentionally'); process.exit(3); }",
       "  if (mode === 'start-fail') { fs.writeFileSync(sentinel, 'ready'); }",
       "  console.log(JSON.stringify({ version: 3, workspace: process.cwd(), generated_at: now(), groups: [{ label: 'Empty', order: 1, mutually_exclusive: false, rows: [] }] }));",
       "  process.exit(0);",
       "}",
-      "if (args.slice(0, 3).join(' ') === 'test-bridge tests run') {",
+      "if (args.slice(0, 2).join(' ') === 'test-bridge run') {",
       "  process.stderr.write('profile warning on stderr\\n');",
       "  process.stdout.write(`${JSON.stringify({ version: 1, event: 'run_started', time: now(), test_id: selected })}\\n`);",
       "  process.stdout.write(`${JSON.stringify({ version: 1, event: 'passed', time: now(), test_id: selected })}\\n`);",
@@ -1751,11 +1751,11 @@ if (args.includes('--version')) {
   process.stdout.write('dev\\n');
   process.exit(0);
 }
-if (args.slice(0, 4).join(' ') === 'test-bridge tests discover --format') {
+if (args.slice(0, 3).join(' ') === 'test-bridge discover --format') {
   writeDiscovery();
   process.exit(0);
 }
-if (args.slice(0, 4).join(' ') === 'test-bridge tests desired-state --format') {
+if (args.slice(0, 3).join(' ') === 'test-bridge desired-state --format') {
   fs.mkdirSync(path.dirname(marker), { recursive: true });
   fs.writeFileSync(marker, args.join(' ') + '\\n');
   const wait = () => {
@@ -1861,7 +1861,7 @@ if (args.includes('--version')) {
   process.stdout.write('dev\\n');
   process.exit(0);
 }
-if (args.slice(0, 4).join(' ') === 'test-bridge tests discover --format') {
+if (args.slice(0, 3).join(' ') === 'test-bridge discover --format') {
   process.stdout.write(JSON.stringify({
     version: 1,
     workspace: process.cwd(),
@@ -1870,7 +1870,7 @@ if (args.slice(0, 4).join(' ') === 'test-bridge tests discover --format') {
   }) + '\\n');
   process.exit(0);
 }
-if (args.slice(0, 4).join(' ') === 'test-bridge tests desired-state --format') {
+if (args.slice(0, 3).join(' ') === 'test-bridge desired-state --format') {
   process.stdout.write(JSON.stringify({
     version: 3,
     workspace: process.cwd(),
@@ -1923,7 +1923,7 @@ process.exit(2);
       await mirror.syncWorkspace();
       const calls = fs.readFileSync(callsPath, 'utf8').trim().split(/\r?\n/);
       assert.ok(
-        calls.includes('test-bridge tests desired-state --format json --id demo::desired-state::dataset::full'),
+        calls.includes('test-bridge desired-state --format json --id demo::desired-state::dataset::full'),
         `desired-state refresh calls should include terminal result id; calls=${calls.join(' | ')}`
       );
     } finally {

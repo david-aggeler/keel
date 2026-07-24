@@ -17,19 +17,18 @@ const vsixCoverageFloorPercent = 76.3
 
 func vsixCommandSpec() *cli.CommandSpec {
 	return &cli.CommandSpec{
-		Name:  "vsix",
-		Use:   "vsix ci",
-		Short: "Run Keel Test Bridge VSIX checks.",
-		Subcommands: []*cli.CommandSpec{
-			{Name: "ci", Use: "vsix ci", Short: "Run pnpm build, lint, and headless VSIX tests.", Handler: handleVSIXGate},
-		},
+		Name:        "vsix",
+		Use:         "vsix ci",
+		Short:       "Run Keel Test Bridge VSIX checks.",
+		Positionals: []cli.PositionalSpec{{Name: "verb", Min: 1, Max: 1}},
+		Handler:     handleVSIXGate,
 	}
 }
 
 // DHF-REQ: keel/requirement-40
 func handleVSIXGate(ctx context.Context, args []string) error {
-	if len(args) != 0 {
-		return cli.NewUsageError("vsix ci takes no arguments: got %q", args)
+	if args[0] != "ci" {
+		return cli.NewUsageError("unknown vsix command %q\nusage: keel-dev vsix ci", args[0])
 	}
 	state := stateFrom(ctx)
 	return runVSIXGate(ctx, state.logger, state.root)

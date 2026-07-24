@@ -35,7 +35,7 @@ func TestCommandSpecOwnsCanonicalBridgeWire(t *testing.T) {
 	})
 
 	protocol := protocolFromContext(t, ctx)
-	if err := spec.Dispatch(ctx, []string{"test-bridge", "tests", "discover", "--format", "json"}); err != nil {
+	if err := spec.Dispatch(ctx, []string{"test-bridge", "discover", "--format", "json"}); err != nil {
 		t.Fatalf("discover dispatch: %v", err)
 	}
 	var discovery vscode.DiscoveryDocument
@@ -51,7 +51,7 @@ func TestCommandSpecOwnsCanonicalBridgeWire(t *testing.T) {
 	}
 
 	protocol.Reset()
-	if err := spec.Dispatch(ctx, []string{"test-bridge", "tests", "desired-state", "--format", "json", "--id", "demo::lane::fast"}); err != nil {
+	if err := spec.Dispatch(ctx, []string{"test-bridge", "desired-state", "--format", "json", "--id", "demo::lane::fast"}); err != nil {
 		t.Fatalf("desired-state dispatch: %v", err)
 	}
 	var desired vscode.DesiredStateDocument
@@ -64,7 +64,7 @@ func TestCommandSpecOwnsCanonicalBridgeWire(t *testing.T) {
 	}
 
 	protocol.Reset()
-	if err := spec.Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", "demo::lane::fast"}); err != nil {
+	if err := spec.Dispatch(ctx, []string{"test-bridge", "run", "--id", "demo::lane::fast"}); err != nil {
 		t.Fatalf("run dispatch: %v", err)
 	}
 	if !fake.sawRunLock {
@@ -79,7 +79,7 @@ func TestCommandSpecOwnsCanonicalBridgeWire(t *testing.T) {
 	}
 
 	protocol.Reset()
-	if err := spec.Dispatch(ctx, []string{"test-bridge", "config", "init"}); err != nil {
+	if err := spec.Dispatch(ctx, []string{"test-bridge", "config-init"}); err != nil {
 		t.Fatalf("config init dispatch: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, ".vscode", "test-bridge.json")); err != nil {
@@ -117,17 +117,17 @@ func TestBridgeDispatchAndTerminalEventsReachLogSinksWithoutChangingProtocol(t *
 		RunID:    func() string { return "run-log" },
 	})
 
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "discover", "--format", "json"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "discover", "--format", "json"}); err != nil {
 		t.Fatalf("discover dispatch: %v", err)
 	}
 	discoverProtocol := protocol.String()
 	protocol.Reset()
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "desired-state", "--format", "json", "--id", "demo::desired-state::cache"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "desired-state", "--format", "json", "--id", "demo::desired-state::cache"}); err != nil {
 		t.Fatalf("desired-state dispatch: %v", err)
 	}
 	protocol.Reset()
 	err = testbridge.CommandSpec(fake).Dispatch(ctx, []string{
-		"test-bridge", "tests", "run",
+		"test-bridge", "run",
 		"--id", "demo::desired-state::db",
 		"--id", "demo::desired-state::cache",
 	})
@@ -147,7 +147,7 @@ func TestBridgeDispatchAndTerminalEventsReachLogSinksWithoutChangingProtocol(t *
 		Now:      func() time.Time { return time.Unix(10, 0).UTC() },
 		RunID:    func() string { return "run-log" },
 	})
-	if err := testbridge.CommandSpec(fake).Dispatch(plainCtx, []string{"test-bridge", "tests", "discover", "--format", "json"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(plainCtx, []string{"test-bridge", "discover", "--format", "json"}); err != nil {
 		t.Fatalf("plain discover dispatch: %v", err)
 	}
 	if got := protocol.String(); got != discoverProtocol {
@@ -163,9 +163,6 @@ func TestBridgeDispatchAndTerminalEventsReachLogSinksWithoutChangingProtocol(t *
 	if !hasBridgeDispatchRecord(records, "run", []string{"demo::desired-state::db", "demo::desired-state::cache"}) {
 		t.Fatalf("records = %+v, want run dispatch record with requested ids", records)
 	}
-	if !hasBridgeDispatchArgsRecord(records, "run", []string{"--id", "demo::desired-state::db", "--id", "demo::desired-state::cache"}) {
-		t.Fatalf("records = %+v, want run dispatch record with normalized args", records)
-	}
 	if !hasBridgeTerminalRecord(records, "demo::desired-state::db", "passed", 1) ||
 		!hasBridgeTerminalRecord(records, "demo::desired-state::cache", "failed", 1) {
 		t.Fatalf("records = %+v, want terminal pass/fail records carrying exit code", records)
@@ -174,7 +171,7 @@ func TestBridgeDispatchAndTerminalEventsReachLogSinksWithoutChangingProtocol(t *
 	capture.Reset()
 	protocol.Reset()
 	err = testbridge.CommandSpec(fake).Dispatch(plainCtx, []string{
-		"test-bridge", "tests", "run",
+		"test-bridge", "run",
 		"--id", "demo::desired-state::db",
 		"--id", "demo::desired-state::cache",
 	})
@@ -206,26 +203,23 @@ func TestBridgeDispatchLogsDryRunAndValidationFailures(t *testing.T) {
 		Log:      logger.Slog(),
 	})
 
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", "demo::lane::fast"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--id", "demo::lane::fast"}); err != nil {
 		t.Fatalf("run dispatch: %v", err)
 	}
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--dry-run", "--id", "demo::lane::fast"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--dry-run", "--id", "demo::lane::fast"}); err != nil {
 		t.Fatalf("dry-run dispatch: %v", err)
 	}
-	err = testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id"})
+	err = testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--id"})
 	var usage cli.UsageError
 	if !errors.As(err, &usage) {
 		t.Fatalf("run invalid args err = %v, want usage error", err)
 	}
 	records := capture.AllJSON()
-	if !hasBridgeDispatchArgsRecord(records, "run", []string{"--id", "demo::lane::fast"}) {
-		t.Fatalf("records = %+v, want non-dry-run args dispatch", records)
+	if !hasBridgeDispatchRecord(records, "run", []string{"demo::lane::fast"}) {
+		t.Fatalf("records = %+v, want non-dry-run id dispatch", records)
 	}
-	if !hasBridgeDispatchArgsRecord(records, "run", []string{"--dry-run", "--id", "demo::lane::fast"}) {
-		t.Fatalf("records = %+v, want dry-run args dispatch", records)
-	}
-	if !hasBridgeDispatchErrorRecord(records, "run", []string{"--id"}, "--id requires a test id") {
-		t.Fatalf("records = %+v, want invalid known-verb dispatch evidence", records)
+	if !hasBridgeDispatchDryRunRecord(records, "run", []string{"demo::lane::fast"}, true) {
+		t.Fatalf("records = %+v, want dry-run id dispatch", records)
 	}
 }
 
@@ -251,7 +245,7 @@ func TestBridgeTerminalLogIncludesRunLevelErrors(t *testing.T) {
 		RunID:    func() string { return "run-level-error" },
 	})
 
-	err = testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", "demo::lane::fast"})
+	err = testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--id", "demo::lane::fast"})
 	var runErr testbridge.RunError
 	if !errors.As(err, &runErr) || runErr.ExitCode != 1 {
 		t.Fatalf("run dispatch err = %#v, want non-zero RunError", err)
@@ -274,24 +268,13 @@ func hasBridgeDispatchRecord(records []map[string]any, verb string, ids []string
 	return false
 }
 
-func hasBridgeDispatchArgsRecord(records []map[string]any, verb string, args []string) bool {
+func hasBridgeDispatchDryRunRecord(records []map[string]any, verb string, ids []string, dryRun bool) bool {
 	for _, record := range records {
 		if record["msg"] != "testbridge dispatch" || record["verb"] != verb {
 			continue
 		}
-		if equalJSONStrings(record["args"], args) {
-			return true
-		}
-	}
-	return false
-}
-
-func hasBridgeDispatchErrorRecord(records []map[string]any, verb string, args []string, errorText string) bool {
-	for _, record := range records {
-		if record["msg"] != "testbridge dispatch" || record["verb"] != verb {
-			continue
-		}
-		if equalJSONStrings(record["args"], args) && strings.Contains(stringFromJSON(record["error"]), errorText) {
+		gotDryRun, ok := record["dry_run"].(bool)
+		if ok && gotDryRun == dryRun && equalJSONStrings(record["ids"], ids) {
 			return true
 		}
 	}
@@ -386,7 +369,7 @@ func TestDiscoverDerivesDesiredStateGroupsFromProvider(t *testing.T) {
 	var protocol bytes.Buffer
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol})
 
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "discover", "--format", "json"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "discover", "--format", "json"}); err != nil {
 		t.Fatalf("discover dispatch: %v", err)
 	}
 	var doc vscode.DiscoveryDocument
@@ -451,7 +434,7 @@ func TestDiscoveryServesReconcileResultsForExclusiveGroups(t *testing.T) {
 	discover := func() vscode.DiscoveryDocument {
 		var protocol bytes.Buffer
 		ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol})
-		if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "discover", "--format", "json"}); err != nil {
+		if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "discover", "--format", "json"}); err != nil {
 			t.Fatalf("discover dispatch: %v", err)
 		}
 		var doc vscode.DiscoveryDocument
@@ -518,7 +501,7 @@ func TestExclusiveDesiredStateGroupsDeriveUnknownAndSingleActiveMember(t *testin
 	var protocol bytes.Buffer
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol})
 
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "discover", "--format", "json"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "discover", "--format", "json"}); err != nil {
 		t.Fatalf("discover dispatch: %v", err)
 	}
 	var discovery vscode.DiscoveryDocument
@@ -537,7 +520,7 @@ func TestExclusiveDesiredStateGroupsDeriveUnknownAndSingleActiveMember(t *testin
 	}
 
 	protocol.Reset()
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "desired-state", "--format", "json"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "desired-state", "--format", "json"}); err != nil {
 		t.Fatalf("desired-state dispatch with no concrete satisfied: %v", err)
 	}
 	var desired vscode.DesiredStateDocument
@@ -556,7 +539,7 @@ func TestExclusiveDesiredStateGroupsDeriveUnknownAndSingleActiveMember(t *testin
 
 	fake.desiredGroups[0].Rows[1] = probedCountingRow(calls, "demo::desired-state::dataset::full", "app-db-full", "full", true, "full active")
 	protocol.Reset()
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "desired-state", "--format", "json"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "desired-state", "--format", "json"}); err != nil {
 		t.Fatalf("desired-state dispatch with one concrete satisfied: %v", err)
 	}
 	decodeJSON(t, &protocol, &desired)
@@ -597,7 +580,7 @@ func TestExclusiveUnknownRunIsBridgeOwnedAndDoesNotInvokeConsumer(t *testing.T) 
 	})
 
 	unknownID := "demo::desired-state::group::data-set::unknown"
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", unknownID}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--id", unknownID}); err != nil {
 		t.Fatalf("run Unknown dispatch: %v\n%s", err, protocol.String())
 	}
 	if fake.runCalls != 0 {
@@ -638,7 +621,7 @@ func TestExclusiveDesiredStateSingleSelectionClearsSiblingResults(t *testing.T) 
 
 	fullID := "demo::desired-state::dataset::full"
 	unknownID := "demo::desired-state::group::data-set::unknown"
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", fullID}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--id", fullID}); err != nil {
 		t.Fatalf("run concrete dispatch: %v\n%s", err, protocol.String())
 	}
 	events := decodeEvents(t, protocol.String())
@@ -654,7 +637,7 @@ func TestExclusiveDesiredStateSingleSelectionClearsSiblingResults(t *testing.T) 
 
 	protocol.Reset()
 	fake.runCalls = 0
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", unknownID}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--id", unknownID}); err != nil {
 		t.Fatalf("run Unknown dispatch: %v\n%s", err, protocol.String())
 	}
 	if fake.runCalls != 0 {
@@ -704,7 +687,7 @@ func TestExclusiveDesiredStateReconcileSelectionClearsSiblingResults(t *testing.
 
 	fullID := "demo::desired-state::dataset::full"
 	unknownID := "demo::desired-state::group::data-set::unknown"
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", fullID}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--id", fullID}); err != nil {
 		t.Fatalf("run reconcile concrete dispatch: %v\n%s", err, protocol.String())
 	}
 	if got, want := fake.runIDs, []string{fullID}; !reflect.DeepEqual(got, want) {
@@ -719,7 +702,7 @@ func TestExclusiveDesiredStateReconcileSelectionClearsSiblingResults(t *testing.
 	}
 
 	protocol.Reset()
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "desired-state", "--format", "json"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "desired-state", "--format", "json"}); err != nil {
 		t.Fatalf("post-run desired-state dispatch: %v", err)
 	}
 	var desired vscode.DesiredStateDocument
@@ -744,7 +727,7 @@ func TestDiscoverInjectsBridgeOwnedMaintenanceVocabulary(t *testing.T) {
 	var protocol bytes.Buffer
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol})
 
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "discover", "--format", "json"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "discover", "--format", "json"}); err != nil {
 		t.Fatalf("discover dispatch: %v", err)
 	}
 
@@ -794,7 +777,7 @@ func TestRunBridgeOwnedClearStateInvokesConsumerCallback(t *testing.T) {
 		RunID:    func() string { return "run-clear-state" },
 	})
 
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", testbridge.MaintenanceClearStateID}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--id", testbridge.MaintenanceClearStateID}); err != nil {
 		t.Fatalf("clear-state run dispatch: %v\n%s", err, protocol.String())
 	}
 
@@ -834,7 +817,7 @@ func TestDiscoverDesiredStateRowUsesProbeDerivedCurrentAndAction(t *testing.T) {
 
 	var discoverOut bytes.Buffer
 	discoverCtx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &discoverOut})
-	if err := testbridge.CommandSpec(fake).Dispatch(discoverCtx, []string{"test-bridge", "tests", "discover", "--format", "json"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(discoverCtx, []string{"test-bridge", "discover", "--format", "json"}); err != nil {
 		t.Fatalf("discover dispatch: %v", err)
 	}
 	var discovery vscode.DiscoveryDocument
@@ -842,7 +825,7 @@ func TestDiscoverDesiredStateRowUsesProbeDerivedCurrentAndAction(t *testing.T) {
 
 	var desiredOut bytes.Buffer
 	desiredCtx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &desiredOut})
-	if err := testbridge.CommandSpec(fake).Dispatch(desiredCtx, []string{"test-bridge", "tests", "desired-state", "--format", "json"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(desiredCtx, []string{"test-bridge", "desired-state", "--format", "json"}); err != nil {
 		t.Fatalf("desired-state dispatch: %v", err)
 	}
 	var desiredState vscode.DesiredStateDocument
@@ -892,7 +875,7 @@ func TestDiscoverAnonymousDesiredStateRowIDIgnoresProbeDerivedAction(t *testing.
 		t.Helper()
 		var out bytes.Buffer
 		ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &out})
-		if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "discover", "--format", "json"}); err != nil {
+		if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "discover", "--format", "json"}); err != nil {
 			t.Fatalf("discover dispatch: %v", err)
 		}
 		var doc vscode.DiscoveryDocument
@@ -957,7 +940,7 @@ func TestDiscoverServesRunnableNonExclusiveDesiredStateGroups(t *testing.T) {
 	var protocol bytes.Buffer
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol})
 
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "discover", "--format", "json"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "discover", "--format", "json"}); err != nil {
 		t.Fatalf("discover dispatch: %v", err)
 	}
 	var doc vscode.DiscoveryDocument
@@ -1002,7 +985,7 @@ func TestRunDryRunResolvesDerivedDesiredStateRunIDsReadOnly(t *testing.T) {
 	}}
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: io.Discard})
 
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--dry-run", "--id", "demo::action::seed-small"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--dry-run", "--id", "demo::action::seed-small"}); err != nil {
 		t.Fatalf("dry-run desired-state run_id dispatch: %v", err)
 	}
 	if len(fake.runIDs) != 0 || fake.sawRunLock {
@@ -1034,7 +1017,7 @@ func TestDiscoverRejectsDuplicateDerivedDesiredStateIDs(t *testing.T) {
 	}}
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: io.Discard})
 
-	err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "discover", "--format", "json"})
+	err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "discover", "--format", "json"})
 	if err == nil || !strings.Contains(err.Error(), "duplicate discovery item id") {
 		t.Fatalf("duplicate derived ID err = %v, want duplicate discovery item id", err)
 	}
@@ -1054,7 +1037,7 @@ func TestDiscoverDegradesDesiredStateProviderFailure(t *testing.T) {
 	var protocol bytes.Buffer
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol})
 
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "discover", "--format", "json"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "discover", "--format", "json"}); err != nil {
 		t.Fatalf("discover should degrade desired-state failure, got: %v", err)
 	}
 	var doc vscode.DiscoveryDocument
@@ -1110,7 +1093,7 @@ func TestDesiredStateDerivationExecutesProbeAndMapsStateFields(t *testing.T) {
 	var protocol bytes.Buffer
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol})
 
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "desired-state", "--format", "json"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "desired-state", "--format", "json"}); err != nil {
 		t.Fatalf("desired-state dispatch: %v", err)
 	}
 	var desiredState vscode.DesiredStateDocument
@@ -1146,7 +1129,7 @@ func TestRunExecutesDesiredStateProbeInsideTestbridge(t *testing.T) {
 	var protocol bytes.Buffer
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return "run-probe" }})
 
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", "demo::desired-state::db"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--id", "demo::desired-state::db"}); err != nil {
 		t.Fatalf("desired-state run dispatch: %v\n%s", err, protocol.String())
 	}
 	if len(fake.runIDs) != 0 {
@@ -1178,7 +1161,7 @@ func TestRunExecutesMultipleDesiredStateRows(t *testing.T) {
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return "run-multi" }})
 
 	err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{
-		"test-bridge", "tests", "run",
+		"test-bridge", "run",
 		"--id", "demo::desired-state::db",
 		"--id", "demo::desired-state::cache",
 	})
@@ -1224,7 +1207,7 @@ func TestRunExpandsRunnableDesiredStateGroupToRows(t *testing.T) {
 	var protocol bytes.Buffer
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return "run-group" }})
 
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", "demo::desired-state::group::test-preconditions"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--id", "demo::desired-state::group::test-preconditions"}); err != nil {
 		t.Fatalf("group run dispatch: %v\n%s", err, protocol.String())
 	}
 	if len(fake.runIDs) != 0 {
@@ -1272,7 +1255,7 @@ func TestDesiredStateExpandsRunnableGroupSelectionBeforeProviderFilter(t *testin
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol})
 
 	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{
-		"test-bridge", "tests", "desired-state",
+		"test-bridge", "desired-state",
 		"--format", "json",
 		"--id", "demo::desired-state::group::test-preconditions",
 	}); err != nil {
@@ -1315,7 +1298,7 @@ func TestRunGroupSelectionDoesNotDuplicateExplicitMemberRows(t *testing.T) {
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return "run-mixed" }})
 
 	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{
-		"test-bridge", "tests", "run",
+		"test-bridge", "run",
 		"--id", "demo::desired-state::group::test-preconditions",
 		"--id", "demo::desired-state::db",
 	}); err != nil {
@@ -1355,7 +1338,7 @@ func TestRunDesiredStateGroupWithNoRunnableRowsFailsLoudly(t *testing.T) {
 	var protocol bytes.Buffer
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return "run-empty-group" }})
 
-	err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", "demo::desired-state::group::informational-checks"})
+	err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--id", "demo::desired-state::group::informational-checks"})
 	var usage cli.UsageError
 	if !errors.As(err, &usage) || !strings.Contains(err.Error(), "has no runnable rows") {
 		t.Fatalf("zero-runnable group err = %v, want loud usage error", err)
@@ -1408,7 +1391,7 @@ func TestRunExpandsNonDesiredStateGroupToRunnableDescendantLeaves(t *testing.T) 
 	var protocol bytes.Buffer
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return "run-lanes" }})
 
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", "demo::lanes"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--id", "demo::lanes"}); err != nil {
 		t.Fatalf("non-desired group run dispatch: %v\n%s", err, protocol.String())
 	}
 	if !equalStrings(fake.runIDs, []string{"demo::lane::fast", "demo::lane::slow"}) {
@@ -1517,7 +1500,7 @@ func TestRunCoversGroupSelectionDoesNotDuplicateExplicitOwningLane(t *testing.T)
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return "run-mixed-covers" }})
 
 	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{
-		"test-bridge", "tests", "run",
+		"test-bridge", "run",
 		"--id", "keel::lane::lint::covers",
 		"--id", "keel::lane::lint",
 	}); err != nil {
@@ -1557,7 +1540,7 @@ func TestRunNonDesiredStateGroupWithNoRunnableDescendantsFailsLoudly(t *testing.
 	var protocol bytes.Buffer
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return "run-empty-tree" }})
 
-	err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", "demo::empty-group"})
+	err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--id", "demo::empty-group"})
 	var usage cli.UsageError
 	if !errors.As(err, &usage) || !strings.Contains(err.Error(), `group "demo::empty-group" has no runnable descendants`) {
 		t.Fatalf("zero-runnable non-desired group err = %v, want loud usage error", err)
@@ -1603,7 +1586,7 @@ func TestRunNonDesiredStateGroupSelectionDoesNotDuplicateExplicitLeaves(t *testi
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return "run-mixed-lanes" }})
 
 	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{
-		"test-bridge", "tests", "run",
+		"test-bridge", "run",
 		"--id", "demo::lanes",
 		"--id", "demo::lane::fast",
 	}); err != nil {
@@ -1630,7 +1613,7 @@ func runTestBridgeID(t *testing.T, items []vscode.TestItem, id string) ([]string
 	var protocol bytes.Buffer
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return "run-" + strings.ReplaceAll(id, ":", "-") }})
 
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", id}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--id", id}); err != nil {
 		t.Fatalf("run %q dispatch: %v\n%s", id, err, protocol.String())
 	}
 	events := decodeEvents(t, protocol.String())
@@ -1674,7 +1657,7 @@ func TestRunNonDesiredStateGroupCancellationStopsRemainingChildren(t *testing.T)
 	var protocol bytes.Buffer
 	ctx = testbridge.WithRuntime(ctx, testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return "run-cancel-lanes" }})
 
-	err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", "demo::lanes"})
+	err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--id", "demo::lanes"})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled group run err = %v, want context.Canceled", err)
 	}
@@ -1703,7 +1686,7 @@ func TestRunDoesNotTreatLimitationStringAloneAsDesiredStateGroup(t *testing.T) {
 	}}
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: io.Discard})
 
-	err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--dry-run", "--id", "demo::custom::info"})
+	err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--dry-run", "--id", "demo::custom::info"})
 	var usage cli.UsageError
 	if !errors.As(err, &usage) || !strings.Contains(err.Error(), `resolves to non-runnable id "demo::custom::info"`) {
 		t.Fatalf("limitation-string collision err = %v, want ordinary non-runnable-id error", err)
@@ -1715,13 +1698,13 @@ func TestArgvContractForDesiredStateAndRun(t *testing.T) {
 	spec := testbridge.CommandSpec(newFakeBridge(t.TempDir()))
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: t.TempDir(), Protocol: io.Discard})
 
-	if err := spec.Dispatch(ctx, []string{"test-bridge", "tests", "discover", "--format", "json"}); err != nil {
+	if err := spec.Dispatch(ctx, []string{"test-bridge", "discover", "--format", "json"}); err != nil {
 		t.Fatalf("discover --format json: %v", err)
 	}
-	if err := spec.Dispatch(ctx, []string{"test-bridge", "tests", "desired-state", "--format", "json"}); err != nil {
+	if err := spec.Dispatch(ctx, []string{"test-bridge", "desired-state", "--format", "json"}); err != nil {
 		t.Fatalf("desired-state --format json: %v", err)
 	}
-	err := spec.Dispatch(ctx, []string{"test-bridge", "tests", "run", "--format", "json", "--id", "demo::lane::fast"})
+	err := spec.Dispatch(ctx, []string{"test-bridge", "run", "--format", "json", "--id", "demo::lane::fast"})
 	var usage cli.UsageError
 	if !errors.As(err, &usage) || !strings.Contains(err.Error(), "unknown flag \"--format\"") {
 		t.Fatalf("run --format err = %v, want usage error rejecting --format", err)
@@ -1736,14 +1719,14 @@ func TestDesiredStateIsReadOnly(t *testing.T) {
 	fake.mutateDuringRun = marker
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: io.Discard})
 
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "desired-state", "--id", "demo::lane::fast"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "desired-state", "--id", "demo::lane::fast"}); err != nil {
 		t.Fatalf("desired-state dispatch: %v", err)
 	}
 	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("desired-state mutated workspace marker, stat err=%v", err)
 	}
 
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", "demo::lane::fast"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--id", "demo::lane::fast"}); err != nil {
 		t.Fatalf("run dispatch: %v", err)
 	}
 	if _, err := os.Stat(marker); err != nil {
@@ -1759,7 +1742,7 @@ func TestRunDryRunResolvesDiscoveryServedIDsReadOnly(t *testing.T) {
 	fake.mutateDuringRun = marker
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: io.Discard})
 
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--dry-run", "--id", "demo::lane::fast"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--dry-run", "--id", "demo::lane::fast"}); err != nil {
 		t.Fatalf("dry-run dispatch: %v", err)
 	}
 	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
@@ -1769,7 +1752,7 @@ func TestRunDryRunResolvesDiscoveryServedIDsReadOnly(t *testing.T) {
 		t.Fatalf("dry-run executed run path: sawRunLock=%v runIDs=%v", fake.sawRunLock, fake.runIDs)
 	}
 
-	err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--dry-run", "--id", "demo::missing"})
+	err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--dry-run", "--id", "demo::missing"})
 	var usage cli.UsageError
 	if !errors.As(err, &usage) || !strings.Contains(err.Error(), "unknown test id") {
 		t.Fatalf("unknown dry-run err = %v, want structured unknown-id usage error", err)
@@ -1791,7 +1774,7 @@ func TestRunResolvesAliasToCanonicalBeforeRunner(t *testing.T) {
 	}}
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: io.Discard})
 
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", "demo::alias::fast"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--id", "demo::alias::fast"}); err != nil {
 		t.Fatalf("alias run dispatch: %v", err)
 	}
 	if !equalStrings(fake.runIDs, []string{"demo::lane::fast"}) {
@@ -1818,7 +1801,7 @@ func TestRunStartedRequestedLabelsUseDiscoveryLabelsOrRawIDs(t *testing.T) {
 	})
 
 	err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{
-		"test-bridge", "tests", "run",
+		"test-bridge", "run",
 		"--id", "demo::lane::friendly",
 		"--id", "other::lane::raw",
 	})
@@ -1924,7 +1907,7 @@ func TestRunErrorsAndLockConflictsUsePackagePaths(t *testing.T) {
 	spec := testbridge.CommandSpec(fake)
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: io.Discard, RunID: func() string { return "run-error" }})
 
-	err := spec.Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", "demo::lane::fast"})
+	err := spec.Dispatch(ctx, []string{"test-bridge", "run", "--id", "demo::lane::fast"})
 	var runErr testbridge.RunError
 	if !errors.As(err, &runErr) || runErr.ExitCode != 1 || !strings.Contains(runErr.Error(), "runner failed") || runErr.Unwrap() == nil {
 		t.Fatalf("run error = %#v, want RunError wrapping runner failure", err)
@@ -1936,7 +1919,7 @@ func TestRunErrorsAndLockConflictsUsePackagePaths(t *testing.T) {
 	if err := os.WriteFile(testbridge.RunLockPath(root), []byte(`{"pid":1,"created_at":"2026-07-13T00:00:00Z","ids":["x"],"token":"other"}`+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	err = spec.Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", "demo::lane::fast"})
+	err = spec.Dispatch(ctx, []string{"test-bridge", "run", "--id", "demo::lane::fast"})
 	if err == nil || !strings.Contains(err.Error(), "keel/testbridge: run lock already exists") {
 		t.Fatalf("lock conflict err = %v, want package-prefixed lock refusal", err)
 	}
@@ -1955,7 +1938,7 @@ func TestRunLockExemptionLeavesExistingLockForConsumerMaintenance(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", "demo::maintenance::unlock"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--id", "demo::maintenance::unlock"}); err != nil {
 		t.Fatalf("lock-exempt run dispatch: %v", err)
 	}
 	got, err := os.ReadFile(testbridge.RunLockPath(root))
@@ -1980,7 +1963,7 @@ func TestRunLockReleaseSymmetryDoesNotWarnWhenNoLockWasAcquiredOrLockIsAbsent(t 
 		RunID:    func() string { return "run-exempt" },
 	})
 
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", "demo::maintenance::unlock"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--id", "demo::maintenance::unlock"}); err != nil {
 		t.Fatalf("lock-exempt run dispatch: %v", err)
 	}
 	if strings.Contains(logs.String(), "release testbridge run lock") || strings.Contains(logs.String(), "no such file or directory") {
@@ -1998,7 +1981,7 @@ func TestRunLockReleaseSymmetryDoesNotWarnWhenNoLockWasAcquiredOrLockIsAbsent(t 
 		RunID:    func() string { return "run-missing-lock" },
 	})
 
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", "demo::lane::fast"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--id", "demo::lane::fast"}); err != nil {
 		t.Fatalf("run with absent lock at release dispatch: %v", err)
 	}
 	if strings.Contains(logs.String(), "release testbridge run lock") || strings.Contains(logs.String(), "no such file or directory") {
@@ -2008,7 +1991,7 @@ func TestRunLockReleaseSymmetryDoesNotWarnWhenNoLockWasAcquiredOrLockIsAbsent(t 
 	root = t.TempDir()
 	fake = newFakeBridge(root)
 	ctx = testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: io.Discard, RunID: func() string { return "run-locked" }})
-	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", "demo::lane::fast"}); err != nil {
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--id", "demo::lane::fast"}); err != nil {
 		t.Fatalf("locked run dispatch: %v", err)
 	}
 	if _, err := os.Stat(testbridge.RunLockPath(root)); !errors.Is(err, os.ErrNotExist) {
@@ -2201,18 +2184,18 @@ func TestCommandSpecErrorsAndRuntimeDefaults(t *testing.T) {
 	fake := newFakeBridge(root)
 	spec := testbridge.CommandSpec(fake)
 
-	if err := spec.Dispatch(context.Background(), []string{"test-bridge", "tests", "discover"}); err != nil {
+	if err := spec.Dispatch(context.Background(), []string{"test-bridge", "discover"}); err != nil {
 		t.Fatalf("discover with default runtime: %v", err)
 	}
-	if err := spec.Dispatch(context.Background(), []string{"test-bridge", "tests", "run"}); err == nil || !strings.Contains(err.Error(), "--id is required") {
+	if err := spec.Dispatch(context.Background(), []string{"test-bridge", "run"}); err == nil || !strings.Contains(err.Error(), "required flag --id missing") {
 		t.Fatalf("run without id err = %v, want --id required", err)
 	}
 	for _, args := range [][]string{
-		{"test-bridge", "tests", "discover", "--format", "yaml"},
-		{"test-bridge", "tests", "desired-state", "--id"},
-		{"test-bridge", "tests", "desired-state", "extra"},
-		{"test-bridge", "config", "init", "extra"},
-		{"test-bridge", "config", "upgrade", "extra"},
+		{"test-bridge", "discover", "--format", "yaml"},
+		{"test-bridge", "desired-state", "--id"},
+		{"test-bridge", "desired-state", "extra"},
+		{"test-bridge", "config-init", "extra"},
+		{"test-bridge", "config-upgrade", "extra"},
 	} {
 		if err := spec.Dispatch(context.Background(), args); err == nil {
 			t.Fatalf("Dispatch(%v) returned nil, want usage error", args)
@@ -2226,17 +2209,17 @@ func TestCommandSpecErrorsAndRuntimeDefaults(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"version":1}`+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := spec.Dispatch(testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: io.Discard}), []string{"test-bridge", "config", "upgrade"}); err != nil {
+	if err := spec.Dispatch(testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: io.Discard}), []string{"test-bridge", "config-upgrade"}); err != nil {
 		t.Fatalf("config upgrade dispatch: %v", err)
 	}
 
 	fake.discoverErr = errors.New("discover failed")
-	if err := spec.Dispatch(context.Background(), []string{"test-bridge", "tests", "discover"}); err == nil || !strings.Contains(err.Error(), "discover failed") {
+	if err := spec.Dispatch(context.Background(), []string{"test-bridge", "discover"}); err == nil || !strings.Contains(err.Error(), "discover failed") {
 		t.Fatalf("discover provider err = %v, want provider failure", err)
 	}
 	fake.discoverErr = nil
 	fake.desiredErr = errors.New("desired failed")
-	if err := spec.Dispatch(context.Background(), []string{"test-bridge", "tests", "desired-state"}); err == nil || !strings.Contains(err.Error(), "desired failed") {
+	if err := spec.Dispatch(context.Background(), []string{"test-bridge", "desired-state"}); err == nil || !strings.Contains(err.Error(), "desired failed") {
 		t.Fatalf("desired provider err = %v, want provider failure", err)
 	}
 
@@ -2245,7 +2228,7 @@ func TestCommandSpecErrorsAndRuntimeDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	fileFake := newFakeBridge(fileRoot)
-	err := testbridge.CommandSpec(fileFake).Dispatch(testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: fileRoot, Protocol: io.Discard}), []string{"test-bridge", "tests", "run", "--id", "demo::lane::fast"})
+	err := testbridge.CommandSpec(fileFake).Dispatch(testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: fileRoot, Protocol: io.Discard}), []string{"test-bridge", "run", "--id", "demo::lane::fast"})
 	if err == nil {
 		t.Fatal("run with file root returned nil, want run writer mkdir failure")
 	}
@@ -2739,7 +2722,7 @@ func TestUnknownRunDispatchesConsumerResetHook(t *testing.T) {
 	bridge := newResetFixture(root)
 	var protocol bytes.Buffer
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return "run-reset-ok" }})
-	if err := testbridge.CommandSpec(bridge).Dispatch(ctx, []string{"test-bridge", "tests", "run", "--id", unknownID}); err != nil {
+	if err := testbridge.CommandSpec(bridge).Dispatch(ctx, []string{"test-bridge", "run", "--id", unknownID}); err != nil {
 		t.Fatalf("run Unknown dispatch with reset hook: %v\n%s", err, protocol.String())
 	}
 	if len(bridge.resetRequests) != 1 {
@@ -2760,7 +2743,7 @@ func TestUnknownRunDispatchesConsumerResetHook(t *testing.T) {
 	failing.resetExit = 1
 	protocol.Reset()
 	failCtx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: failRoot, Protocol: &protocol, RunID: func() string { return "run-reset-fail" }})
-	if err := testbridge.CommandSpec(failing).Dispatch(failCtx, []string{"test-bridge", "tests", "run", "--id", unknownID}); err == nil {
+	if err := testbridge.CommandSpec(failing).Dispatch(failCtx, []string{"test-bridge", "run", "--id", unknownID}); err == nil {
 		t.Fatalf("run Unknown dispatch with failing reset hook: err = nil, want non-nil\n%s", protocol.String())
 	}
 	events = decodeEvents(t, protocol.String())
@@ -2875,7 +2858,7 @@ func TestMutexLifecycleGuard(t *testing.T) {
 		var protocol bytes.Buffer
 		runID := fmt.Sprintf("run-lifecycle-%d", step)
 		ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return runID }})
-		if err := testbridge.CommandSpec(bridge).Dispatch(ctx, append([]string{"test-bridge", "tests"}, args...)); err != nil {
+		if err := testbridge.CommandSpec(bridge).Dispatch(ctx, append([]string{"test-bridge"}, args...)); err != nil {
 			t.Fatalf("step %d dispatch %v: %v\n%s", step, args, err, protocol.String())
 		}
 		return protocol.String()
@@ -2938,7 +2921,7 @@ func dispatchRaw(t *testing.T, bridge testbridge.Bridge, root, verb string) *byt
 	t.Helper()
 	protocol := &bytes.Buffer{}
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: protocol})
-	if err := testbridge.CommandSpec(bridge).Dispatch(ctx, []string{"test-bridge", "tests", verb, "--format", "json"}); err != nil {
+	if err := testbridge.CommandSpec(bridge).Dispatch(ctx, []string{"test-bridge", verb, "--format", "json"}); err != nil {
 		t.Fatalf("%s dispatch: %v", verb, err)
 	}
 	return protocol

@@ -39,7 +39,7 @@ func stateFrom(ctx context.Context) runState {
 	return state
 }
 
-// DHF-REQ: keel/requirement-21, keel/requirement-57, keel/requirement-65
+// DHF-REQ: keel/requirement-21, keel/requirement-57, keel/requirement-65, keel/requirement-107
 func commandTree() *cli.CommandSpec {
 	tree := &cli.CommandSpec{
 		Name: "keel-dev",
@@ -55,9 +55,9 @@ func commandTree() *cli.CommandSpec {
 			Trailing: "Run keel-dev help <command> for command details.",
 		},
 		Subcommands: []*cli.CommandSpec{
-			{Name: "ci", Use: "ci", Short: "Run the verification gate: gofmt, build, vet, lint, test.", Handler: handleCI},
-			{Name: "release", Use: "release vX.Y.Z", Short: "Cut a release after a clean preflight.", Handler: handleRelease},
-			{Name: "verify", Use: "verify vX.Y.Z", Short: "Re-verify anonymous module fetch for an existing tag.", Handler: handleVerify},
+			{Name: "ci", Use: "ci", Short: "Run the verification gate: gofmt, build, vet, lint, test.", Positionals: []cli.PositionalSpec{{Name: "args", Min: 0, Max: 0}}, Handler: handleCI},
+			{Name: "release", Use: "release vX.Y.Z", Short: "Cut a release after a clean preflight.", Positionals: []cli.PositionalSpec{{Name: "version", Min: 1, Max: 1}}, Handler: handleRelease},
+			{Name: "verify", Use: "verify vX.Y.Z", Short: "Re-verify anonymous module fetch for an existing tag.", Positionals: []cli.PositionalSpec{{Name: "version", Min: 1, Max: 1}}, Handler: handleVerify},
 			testBridgeCommandSpec(),
 			vsixCommandSpec(),
 		},
@@ -66,27 +66,18 @@ func commandTree() *cli.CommandSpec {
 	return tree
 }
 
-func handleCI(ctx context.Context, args []string) error {
+func handleCI(ctx context.Context, _ []string) error {
 	state := stateFrom(ctx)
-	if len(args) != 0 {
-		return cli.NewUsageError("ci takes no arguments: got %q", args)
-	}
 	return runCIWithRunLog(ctx, state.logger, state.runLog, state.root)
 }
 
 func handleRelease(ctx context.Context, args []string) error {
 	state := stateFrom(ctx)
-	if len(args) != 1 {
-		return cli.NewUsageError("release requires exactly one argument: the semver tag (e.g. v0.1.0)")
-	}
 	return runRelease(ctx, state.logger, state.root, args[0])
 }
 
 func handleVerify(ctx context.Context, args []string) error {
 	state := stateFrom(ctx)
-	if len(args) != 1 {
-		return cli.NewUsageError("verify requires exactly one argument: the semver tag (e.g. v0.1.0)")
-	}
 	return runVerify(ctx, state.logger, args[0])
 }
 

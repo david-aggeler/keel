@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const args = process.argv.slice(2);
-const command = args.slice(0, 4).join(' ');
+const command = args.slice(0, 3).join(' ');
 const now = () => new Date().toISOString();
 const fs = require('node:fs');
 const path = require('node:path');
@@ -57,8 +57,8 @@ function upgradeConfig() {
   fs.writeFileSync(file, `${JSON.stringify(cfg, null, 2)}\n`);
 }
 
-if (command === 'test-bridge tests discover --format') {
-  const format = args[4];
+if (command === 'test-bridge discover --format') {
+  const format = args[3];
   if (format !== 'json') {
     process.stderr.write(`unsupported format ${format}\n`);
     process.exit(2);
@@ -104,9 +104,9 @@ if (command === 'test-bridge tests discover --format') {
   process.exit(0);
 }
 
-if (args.slice(0, 4).join(' ') === 'test-bridge tests desired-state --format') {
+if (args.slice(0, 3).join(' ') === 'test-bridge desired-state --format') {
   const ids = [];
-  for (let i = 5; i < args.length; i += 1) {
+  for (let i = 4; i < args.length; i += 1) {
     if (args[i] === '--id' && args[i + 1]) {
       ids.push(args[i + 1]);
       i += 1;
@@ -132,9 +132,9 @@ if (args.slice(0, 4).join(' ') === 'test-bridge tests desired-state --format') {
   process.exit(0);
 }
 
-if (args.slice(0, 3).join(' ') === 'test-bridge tests run') {
+if (args.slice(0, 2).join(' ') === 'test-bridge run') {
   const ids = [];
-  for (let i = 3; i < args.length; i += 1) {
+  for (let i = 2; i < args.length; i += 1) {
     if (args[i] === '--id' && args[i + 1]) {
       ids.push(args[i + 1]);
       i += 1;
@@ -176,7 +176,7 @@ if (args.slice(0, 3).join(' ') === 'test-bridge tests run') {
   process.exit(0);
 }
 
-if (args.slice(0, 3).join(' ') === 'test-bridge config upgrade') {
+if (args.slice(0, 2).join(' ') === 'test-bridge config-upgrade') {
   upgradeConfig();
   process.exit(0);
 }
