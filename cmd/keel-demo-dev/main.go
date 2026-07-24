@@ -84,6 +84,14 @@ func run(argv []string) int {
 		tree.RenderAllHelp(os.Stderr)
 		return 0
 	}
+	if cfg.HelpJSON {
+		// DHF-REQ: keel/requirement-100
+		if err := tree.RenderHelpJSON(os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "keel-demo-dev: "+err.Error())
+			return 1
+		}
+		return 0
+	}
 	if len(words) > 0 && words[0] == "help" {
 		tree.RenderTopicHelp(os.Stderr, words[1:])
 		return 0
