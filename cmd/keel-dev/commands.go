@@ -39,12 +39,13 @@ func stateFrom(ctx context.Context) runState {
 	return state
 }
 
-// DHF-REQ: keel/requirement-21, keel/requirement-57, keel/requirement-65, keel/requirement-107
+// DHF-REQ: keel/requirement-21, keel/requirement-57, keel/requirement-65, keel/requirement-107, keel/requirement-111
 func commandTree() *cli.CommandSpec {
 	tree := &cli.CommandSpec{
 		Name: "keel-dev",
 		Config: cli.Config{
 			Program:      "keel-dev",
+			Version:      versionString(),
 			RootSummary:  "keel-dev is keel's development CLI.",
 			Usage:        "keel-dev [--mode human|ai|json] [--no-header] [-v|--verbose] <command> [args]",
 			HelpUsage:    "keel-dev help [command]",
