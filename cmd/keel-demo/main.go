@@ -38,6 +38,11 @@ func run(argv []string) int {
 		tree.RenderRootHelp(os.Stderr)
 		return 2
 	}
+	if cfg.Version {
+		// DHF-REQ: keel/requirement-109
+		fmt.Fprintln(os.Stdout, version)
+		return 0
+	}
 	if cfg.HelpAll {
 		// DHF-REQ: keel/requirement-57
 		return renderAllHelp(tree, mode)
