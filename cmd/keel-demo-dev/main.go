@@ -126,11 +126,12 @@ func run(argv []string) int {
 	return 0
 }
 
-// DHF-REQ: keel/requirement-108
+// DHF-REQ: keel/requirement-108, keel/requirement-111
 func demoDevCommandTree(bridge testbridge.Bridge) *cli.CommandSpec {
 	tree := testbridge.CommandSpec(bridge)
 	tree.Config = cli.Config{
 		Program:      "keel-demo-dev",
+		Version:      versionString(),
 		RootSummary:  "keel-demo-dev serves a reference consumer test bridge.",
 		Usage:        "keel-demo-dev <command> [args]",
 		HelpUsage:    "keel-demo-dev help [command]",

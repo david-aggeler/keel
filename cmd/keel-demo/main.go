@@ -73,7 +73,7 @@ func run(argv []string) int {
 	return exitCodeFor(logger, tree.Dispatch(context.Background(), words))
 }
 
-// DHF-REQ: keel/requirement-28, keel/requirement-57, keel/requirement-108
+// DHF-REQ: keel/requirement-28, keel/requirement-57, keel/requirement-108, keel/requirement-111
 func commandTree() *cli.CommandSpec {
 	var inspectFormat string
 	var replaySpeed string
@@ -81,6 +81,7 @@ func commandTree() *cli.CommandSpec {
 		Name: "keel-demo",
 		Config: cli.Config{
 			Program:      "keel-demo",
+			Version:      versionString(),
 			RootSummary:  "keel-demo runs the log and exec showcase.",
 			Usage:        "keel-demo [--mode human|ai|json]",
 			HelpUsage:    "keel-demo help [command]",

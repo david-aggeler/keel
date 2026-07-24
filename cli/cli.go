@@ -77,6 +77,9 @@ type RuntimeConfig struct {
 type Config struct {
 	// Program is the executable name shown in generated usage.
 	Program string
+	// Version is the optional program version rendered as the first root-help
+	// line. Empty preserves the pre-version help shape.
+	Version string
 	// RootSummary is the opening paragraph in root help.
 	RootSummary string
 	// Usage is the primary root usage line without the leading "usage:" prefix.
@@ -732,9 +735,15 @@ func mergeModeHelp(extra []string) []string {
 // additive — consumer-only extras rendered after keel's canonical entries, with
 // any keel-owned re-declarations de-duped.
 //
-// DHF-REQ: keel/requirement-101
+// DHF-REQ: keel/requirement-101, keel/requirement-111
 func (c *CommandSpec) RenderRootHelp(w io.Writer) {
 	c.InheritConfig()
+	if c.Config.Version != "" {
+		fmt.Fprintf(w, "%s v%s\n", c.program(), c.Config.Version)
+		if c.Config.RootSummary != "" {
+			fmt.Fprintln(w)
+		}
+	}
 	if c.Config.RootSummary != "" {
 		fmt.Fprintln(w, c.Config.RootSummary)
 		fmt.Fprintln(w)
