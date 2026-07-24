@@ -117,6 +117,7 @@ func calls(t *testing.T, callsFile string) string {
 func moduleFixture(t *testing.T) string {
 	dir := t.TempDir()
 	writeFile(t, dir, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, dir, "VERSION", "9.9.9\n")
 	writeFile(t, dir, "p.go", "package p\n\nfunc One() int {\n\treturn 1\n}\n")
 	if err := os.MkdirAll(filepath.Join(dir, "vsix"), 0o755); err != nil {
 		t.Fatal(err)
@@ -453,6 +454,45 @@ func TestRunReleaseRefusesExistingTag(t *testing.T) {
 	}
 	if got := calls(t, callsFile); strings.Contains(got, "git tag -a") {
 		t.Fatalf("tag created despite existing tag:\n%s", got)
+	}
+}
+
+// DHF-TEST: keel/requirement-112
+func TestRunReleaseRefusesVersionArgumentMismatch(t *testing.T) {
+	callsFile := stubTools(t, false, false)
+	dir := moduleFixture(t)
+	writeFile(t, dir, "VERSION", "0.6.0\n")
+
+	err := runRelease(context.Background(), discardLogger(), dir, "v0.7.0")
+	if err == nil {
+		t.Fatal("release succeeded with VERSION/release argument mismatch; want refusal")
+	}
+	if !strings.Contains(err.Error(), "VERSION") || !strings.Contains(err.Error(), "0.6.0") || !strings.Contains(err.Error(), "v0.7.0") {
+		t.Fatalf("mismatch error = %v, want VERSION and both versions", err)
+	}
+	if got := calls(t, callsFile); strings.Contains(got, "git tag -a") || strings.Contains(got, "gh release create") {
+		t.Fatalf("release mutated after VERSION mismatch:\n%s", got)
+	}
+}
+
+// DHF-TEST: keel/requirement-112
+func TestPublishSkillSyncsGoldProductVersionViaOpenbrainClient(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", ".claude", "skills", "publish", "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	for _, want := range []string{
+		"openbrain-client",
+		"product_version",
+		"product `keel`",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("publish skill missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "keel-dev product_version") {
+		t.Fatalf("publish skill suggests product_version sync inside keel-dev:\n%s", text)
 	}
 }
 
