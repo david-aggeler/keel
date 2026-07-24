@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -12,12 +14,40 @@ import (
 
 // DHF-TEST: keel/requirement-109
 func TestKeelDemoDevRoutesEveryGlobalActionFlag(t *testing.T) {
+	wantVersion := rootVersionSemver(t)
+
 	for _, c := range globalActionFlagCases(t) {
 		t.Run(c.arg, func(t *testing.T) {
 			out, code := captureDemoDevOutput(t, func() int { return run([]string{c.arg}) })
-			assertGlobalActionFlagOutput(t, c, out, code, "keel-demo-dev", demoVersion)
+			assertGlobalActionFlagOutput(t, c, out, code, "keel-demo-dev", wantVersion)
 		})
 	}
+}
+
+// DHF-TEST: keel/requirement-110 (keel/ac-391)
+func TestKeelDemoDevVersionComesFromRootVersionFile(t *testing.T) {
+	want := rootVersionSemver(t)
+
+	out, code := captureDemoDevOutput(t, func() int { return run([]string{"--version"}) })
+	got := strings.TrimSpace(out)
+	if code != 0 {
+		t.Fatalf("keel-demo-dev --version exit = %d, want 0\noutput:\n%s", code, out)
+	}
+	if !strings.HasPrefix(got, want) {
+		t.Fatalf("keel-demo-dev --version = %q, want prefix %q", got, want)
+	}
+	if got == "dev" || got == "demo" {
+		t.Fatalf("keel-demo-dev --version reported placeholder %q", got)
+	}
+}
+
+func rootVersionSemver(t *testing.T) string {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join("..", "..", "VERSION"))
+	if err != nil {
+		t.Fatalf("read VERSION: %v", err)
+	}
+	return strings.TrimSpace(string(body))
 }
 
 type globalActionFlagCase struct {
@@ -91,8 +121,12 @@ func assertGlobalActionFlagOutput(t *testing.T, c globalActionFlagCase, out stri
 			t.Fatalf("%s %s emitted empty JSON inventory", program, c.arg)
 		}
 	case "Version":
-		if strings.TrimSpace(out) != wantVersion {
-			t.Fatalf("%s %s output = %q, want %q", program, c.arg, strings.TrimSpace(out), wantVersion)
+		got := strings.TrimSpace(out)
+		if !strings.HasPrefix(got, wantVersion) {
+			t.Fatalf("%s %s output = %q, want prefix %q", program, c.arg, got, wantVersion)
+		}
+		if got == "dev" || got == "demo" {
+			t.Fatalf("%s %s reported placeholder %q", program, c.arg, got)
 		}
 	default:
 		if strings.TrimSpace(out) == "" {

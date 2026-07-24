@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -12,9 +14,7 @@ import (
 
 // DHF-TEST: keel/requirement-109
 func TestKeelDevRoutesEveryGlobalActionFlag(t *testing.T) {
-	oldVersion := version
-	version = "v9.8.7"
-	t.Cleanup(func() { version = oldVersion })
+	wantVersion := rootVersionSemver(t)
 
 	for _, c := range globalActionFlagCases(t) {
 		t.Run(c.arg, func(t *testing.T) {
@@ -23,9 +23,39 @@ func TestKeelDevRoutesEveryGlobalActionFlag(t *testing.T) {
 					t.Fatalf("keel-dev %s exit = %d, want 0", c.arg, code)
 				}
 			})
-			assertGlobalActionFlagOutput(t, c, stdout+stderr, "keel-dev", "v9.8.7")
+			assertGlobalActionFlagOutput(t, c, stdout+stderr, "keel-dev", wantVersion)
 		})
 	}
+}
+
+// DHF-TEST: keel/requirement-110 (keel/ac-391)
+func TestKeelDevVersionComesFromRootVersionFile(t *testing.T) {
+	want := rootVersionSemver(t)
+
+	stdout, stderr := captureProcessStreams(t, func() {
+		if code := run([]string{"--version"}); code != 0 {
+			t.Fatalf("keel-dev --version exit = %d, want 0", code)
+		}
+	})
+	got := strings.TrimSpace(stdout)
+	if stderr != "" {
+		t.Fatalf("keel-dev --version stderr = %q, want empty", stderr)
+	}
+	if !strings.HasPrefix(got, want) {
+		t.Fatalf("keel-dev --version = %q, want prefix %q", got, want)
+	}
+	if got == "dev" || got == "demo" {
+		t.Fatalf("keel-dev --version reported placeholder %q", got)
+	}
+}
+
+func rootVersionSemver(t *testing.T) string {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join("..", "..", "VERSION"))
+	if err != nil {
+		t.Fatalf("read VERSION: %v", err)
+	}
+	return strings.TrimSpace(string(body))
 }
 
 type globalActionFlagCase struct {
@@ -96,8 +126,12 @@ func assertGlobalActionFlagOutput(t *testing.T, c globalActionFlagCase, out, pro
 			t.Fatalf("%s %s emitted empty JSON inventory", program, c.arg)
 		}
 	case "Version":
-		if strings.TrimSpace(out) != wantVersion {
-			t.Fatalf("%s %s output = %q, want %q", program, c.arg, strings.TrimSpace(out), wantVersion)
+		got := strings.TrimSpace(out)
+		if !strings.HasPrefix(got, wantVersion) {
+			t.Fatalf("%s %s output = %q, want prefix %q", program, c.arg, got, wantVersion)
+		}
+		if got == "dev" || got == "demo" {
+			t.Fatalf("%s %s reported placeholder %q", program, c.arg, got)
 		}
 	default:
 		if strings.TrimSpace(out) == "" {

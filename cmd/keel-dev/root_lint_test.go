@@ -39,17 +39,15 @@ func TestFindModuleRoot(t *testing.T) {
 
 // DHF-TEST: keel/requirement-11, keel/requirement-57
 func TestRunDirectVersionHelpAndNoCommandBranches(t *testing.T) {
-	oldVersion := version
-	version = "v1.2.3"
-	t.Cleanup(func() { version = oldVersion })
+	wantVersion := rootVersionSemver(t)
 
 	stdout, stderr := captureProcessStreams(t, func() {
 		if code := run([]string{"--version"}); code != 0 {
 			t.Fatalf("run --version exit = %d, want 0", code)
 		}
 	})
-	if strings.TrimSpace(stdout) != "v1.2.3" || stderr != "" {
-		t.Fatalf("run --version stdout=%q stderr=%q", stdout, stderr)
+	if got := strings.TrimSpace(stdout); !strings.HasPrefix(got, wantVersion) || stderr != "" {
+		t.Fatalf("run --version stdout=%q stderr=%q, want version prefix %q and empty stderr", stdout, stderr, wantVersion)
 	}
 
 	stdout, stderr = captureProcessStreams(t, func() {
@@ -533,18 +531,11 @@ func TestKeelDevHelpAllRendersFullCommandTreeAndExitsZero(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-21
-func TestVersionStringDefaultsAndUsesStampedVersion(t *testing.T) {
-	old := version
-	t.Cleanup(func() { version = old })
-
-	version = ""
-	if got := versionString(); got != "dev" {
-		t.Fatalf("default version = %q, want dev", got)
-	}
-	version = "v1.2.3"
-	if got := versionString(); got != "v1.2.3" {
-		t.Fatalf("stamped version = %q, want v1.2.3", got)
+// DHF-TEST: keel/requirement-110
+func TestVersionStringUsesRootVersionFile(t *testing.T) {
+	want := rootVersionSemver(t)
+	if got := versionString(); !strings.HasPrefix(got, want) {
+		t.Fatalf("versionString() = %q, want prefix %q", got, want)
 	}
 }
 

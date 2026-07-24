@@ -20,13 +20,10 @@ import (
 	"path/filepath"
 	"syscall"
 
+	keel "github.com/david-aggeler/keel"
 	"github.com/david-aggeler/keel/cli"
 	logging "github.com/david-aggeler/keel/log"
 )
-
-// version is stamped via -ldflags "-X main.version=vX.Y.Z"; "dev" otherwise.
-// The git commit is resolved from build info by keel/log.
-var version = ""
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -108,8 +105,8 @@ func run(argv []string) int {
 	// DHF-REQ: keel/requirement-11 — human-mode banner + build identity through
 	// keel/log's own presentation surface (Header, LogBuildIdentity).
 	if !cfg.NoHeader {
-		logger.Header("keel-dev "+words[0], version)
-		logger.LogBuildIdentity(version, "")
+		logger.Header("keel-dev "+words[0], versionString())
+		logger.LogBuildIdentity(versionString(), "")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -166,6 +163,11 @@ func newLogger(mode string, level slog.Leveler, writer io.Writer) *slog.Logger {
 		return slog.New(slog.NewTextHandler(writer, nil))
 	}
 	return logger.Slog()
+}
+
+// DHF-REQ: keel/requirement-110
+func versionString() string {
+	return keel.Version()
 }
 
 // DHF-REQ: keel/requirement-25
