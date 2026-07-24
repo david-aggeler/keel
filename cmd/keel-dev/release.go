@@ -57,6 +57,9 @@ func runRelease(ctx context.Context, logger *slog.Logger, dir string, version st
 	if err := validateVersion(version); err != nil {
 		return err
 	}
+	if err := ensureVersionFileMatches(dir, version); err != nil {
+		return fmt.Errorf("release preflight: %w", err)
+	}
 
 	// --- Preflight: refuse before mutating anything. ---
 	if err := ensureCleanTree(ctx, logger, dir); err != nil {
@@ -115,6 +118,20 @@ func runRelease(ctx context.Context, logger *slog.Logger, dir string, version st
 		return err
 	}
 	logger.Info("release complete", "module", modulePath, "version", version)
+	return nil
+}
+
+// DHF-REQ: keel/requirement-112
+func ensureVersionFileMatches(dir, version string) error {
+	body, err := os.ReadFile(filepath.Join(dir, "VERSION"))
+	if err != nil {
+		return fmt.Errorf("read VERSION: %w", err)
+	}
+	fileVersion := strings.TrimSpace(string(body))
+	want := strings.TrimPrefix(version, "v")
+	if fileVersion != want {
+		return fmt.Errorf("VERSION mismatch: VERSION contains %q but release argument is %q; bump VERSION to %s before releasing", fileVersion, version, want)
+	}
 	return nil
 }
 

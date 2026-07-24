@@ -7,13 +7,17 @@ add GOPRIVATE, tokens, netrc, or Docker build secrets on any path.
 
 The whole loop is driven by keel's own CLI, `keel-dev` — keel dogfooding
 keel/log and keel/exec. Record operations (issues, CRs, requirements) are **not**
-part of this loop; use `openbrain-client` from PATH for those.
+part of this loop; use `openbrain-client` from PATH for those. The root
+`VERSION` file is the release-of-record and must be bumped before releasing.
 
 ## 1. Cut the release
 
 From a clean checkout of `main`:
 
 ```sh
+printf 'X.Y.Z\n' > VERSION
+git add VERSION
+git commit -m "chore: bump VERSION to X.Y.Z"
 just publish vX.Y.Z
 ```
 
@@ -22,34 +26,74 @@ preflight step fails:
 
 1. **Version check** — `vX.Y.Z` must be a strict semver tag (`v0.1.0`,
    `v1.2.3-rc.1`).
-2. **Clean tree** — `git status --porcelain` must be empty.
-3. **Tag absent** — `vX.Y.Z` must not already exist locally.
-4. **Green core gate** — the full `keel-dev ci` sequence (gofmt, `go build ./...`,
+2. **VERSION match** — root `VERSION` must contain `X.Y.Z` exactly. A mismatch
+   aborts before any tag or GitHub release is created.
+3. **Clean tree** — `git status --porcelain` must be empty.
+4. **Tag absent** — `vX.Y.Z` must not already exist locally.
+5. **Green core gate** — the full `keel-dev ci` sequence (gofmt, `go build ./...`,
    `go vet ./...`, the compiled-in lint policies, `go test ./...`) must pass.
-5. **Green VSIX gate** — `keel-dev vsix ci` runs pnpm compile/lint and the
+6. **Green VSIX gate** — `keel-dev vsix ci` runs pnpm compile/lint and the
    headless VS Code extension suite. It fails loudly if Node, pnpm, or xvfb is
    absent.
 Only then does it:
 
-6. **Stamp + commit the VSIX version** — `vsix/package.json` is stamped from
+7. **Stamp + commit the VSIX version** — `vsix/package.json` is stamped from
    the release tag and the stamp is **committed**, so the tag's tree carries
    the same version as the release asset (one version, no dirty-stamp drift).
-7. **VSIX asset build** — `pnpm --dir vsix run package:vsix` builds the
+8. **VSIX asset build** — `pnpm --dir vsix run package:vsix` builds the
    release asset from that committed state into `bin/`.
-8. Create the annotated tag `vX.Y.Z` and push it — plus the release (stamp)
+9. Create the annotated tag `vX.Y.Z` and push it — plus the release (stamp)
    commit via `git push origin HEAD` — to `origin`, so `origin/main` carries
    the stamped manifest the tag points at.
-9. Create the GitHub release with `gh release create ... --generate-notes`,
+10. Create the GitHub release with `gh release create ... --generate-notes`,
    attaching `bin/keel-test-bridge-X.Y.Z.vsix`.
-10. **Verify anonymous resolution** — in a throwaway module with a fresh
+11. **Verify anonymous resolution** — in a throwaway module with a fresh
    `GOMODCACHE` and every private-access escape hatch scrubbed
    (`GOPRIVATE`/`GOINSECURE`/`GONOSUMDB` empty, global git config ignored), run
    `go get github.com/david-aggeler/keel@vX.Y.Z` and fail loudly if it does not
    resolve. Retries a few times to absorb proxy.golang.org propagation lag.
 
 keel runs no GitHub Actions CI — the `release` verb's own clean-cache fetch check
-(step 10) is the proof that the tag is publicly fetchable. To re-check a tag later,
+(step 11) is the proof that the tag is publicly fetchable. To re-check a tag later,
 run `keel-dev verify vX.Y.Z` (see below).
+
+## 2. Sync gold product_version
+
+<!-- DHF-REQ: keel/requirement-112 -->
+
+After the release succeeds, advance gold's `product_version` for product `keel`
+through `openbrain-client` from PATH. The current client does not expose a narrow
+product-version admin subcommand, so use its product-catalog export/import path:
+
+```sh
+sync_dir="/tmp/keel-release-sync-X.Y.Z"
+rm -rf "$sync_dir"
+mkdir -p "$sync_dir"
+openbrain-client --mode ai records export --layer full --products keel --out "$sync_dir"
+```
+
+Edit `$sync_dir/products.json` for product `keel`: ensure the `Versions[]` row for
+`X.Y.Z` exists, set its `Status` to `released`, add release evidence to `Body` and
+`ReleaseNotes`, and ensure exactly one later row remains `in_development`.
+
+```sh
+openbrain-client --mode ai records import --layer full --products keel --in "$sync_dir" --allow-nonempty-target --verify
+```
+
+Then query gold from a fresh export and confirm the current `product_version` for
+product `keel` reflects `X.Y.Z`:
+
+```sh
+confirm_dir="/tmp/keel-release-confirm-X.Y.Z"
+rm -rf "$confirm_dir"
+mkdir -p "$confirm_dir"
+openbrain-client --mode ai records export --layer full --products keel --out "$confirm_dir"
+jq -e --arg v "X.Y.Z" '.[] | select(.Slug=="keel") | .Versions[] | select(.Version==$v and .Status=="released")' "$confirm_dir/products.json"
+```
+
+If the installed `openbrain-client` cannot export/import product catalog data or
+the confirmation query does not return the released row, stop and fix the
+client/tooling path before continuing; do not add SoR client code to `keel-dev`.
 
 ### Prerequisites
 
@@ -57,7 +101,7 @@ run `keel-dev verify vX.Y.Z` (see below).
   PATH.
 - Push access to `origin` and permission to create GitHub releases.
 
-## 2. Verify an existing tag
+## 3. Verify an existing tag
 
 To re-check a tag without cutting anything (what the tag CI does):
 
@@ -65,7 +109,7 @@ To re-check a tag without cutting anything (what the tag CI does):
 go run ./cmd/keel-dev verify vX.Y.Z
 ```
 
-## 3. Bump a consumer
+## 4. Bump a consumer
 
 In each consumer repo that depends on keel:
 
