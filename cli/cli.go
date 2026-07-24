@@ -113,8 +113,12 @@ type CommandSpec struct {
 	Long string
 	// Args describes positional arguments when Use is not supplied.
 	Args string
+	// Group is an optional generated-help grouping label.
+	Group string
 	// Flags are command-specific flags rendered in command help.
 	Flags []FlagSpec
+	// Positionals describes the accepted positional operand arity.
+	Positionals []PositionalSpec
 	// Subcommands are this command's child command specs.
 	Subcommands []*CommandSpec
 	// Handler executes this command when dispatched.
@@ -136,6 +140,32 @@ type FlagSpec struct {
 	Default string
 	// Short is the flag description.
 	Short string
+	// Alias is an optional single-letter short flag without a leading dash.
+	Alias string
+	// Enum limits value flags to the listed values.
+	Enum []string
+	// Required marks a value flag as mandatory.
+	Required bool
+	// Repeatable allows a string-list flag to be supplied more than once.
+	Repeatable bool
+	// StringTarget receives a parsed string flag value.
+	StringTarget *string
+	// BoolTarget receives a parsed bool flag value.
+	BoolTarget *bool
+	// StringSliceTarget receives parsed repeatable string flag values.
+	StringSliceTarget *[]string
+}
+
+// PositionalSpec describes a named positional operand group. Min and Max define
+// the accepted arity; Max < 0 means unbounded.
+type PositionalSpec struct {
+	// Name identifies the operand in usage diagnostics.
+	Name string
+	// Min is the minimum accepted count for this operand group.
+	Min int
+	// Max is the maximum accepted count for this operand group; Max < 0 is
+	// unbounded.
+	Max int
 }
 
 // UsageError reports invalid CLI usage. Consumers should present its diagnostic
@@ -276,8 +306,10 @@ func (c *CommandSpec) Child(name string) (*CommandSpec, bool) {
 
 // Dispatch invokes the deepest matching command handler. It inherits root
 // Config into child nodes, rejects empty or unknown command paths with
-// UsageError, rejects undeclared flag-shaped arguments, and passes the remaining
-// arguments to the resolved Handler unchanged.
+// UsageError, parses command-declared typed flags, validates positional arity,
+// and passes the remaining positional arguments to the resolved Handler.
+//
+// DHF-REQ: keel/requirement-104
 func (c *CommandSpec) Dispatch(ctx context.Context, args []string) error {
 	c.InheritConfig()
 	if len(args) == 0 {
@@ -290,43 +322,251 @@ func (c *CommandSpec) Dispatch(ctx context.Context, args []string) error {
 	if node.Handler == nil {
 		return UsageError{Err: fmt.Errorf("%s", node.Usage(matched))}
 	}
-	if err := node.rejectUnknownFlags(matched, remaining); err != nil {
+	handlerArgs, err := node.parseCommandArgs(matched, remaining)
+	if err != nil {
 		return err
 	}
-	return node.Handler(ctx, remaining)
+	return node.Handler(ctx, handlerArgs)
 }
 
-// rejectUnknownFlags returns a UsageError for any flag-shaped remaining token
-// that the resolved command does not declare, so an unrecognized flag maps to
-// exit 2 rather than being coerced into a positional argument.
-func (c *CommandSpec) rejectUnknownFlags(matched, remaining []string) error {
-	for _, arg := range remaining {
-		if len(arg) < 2 || arg[0] != '-' {
+func (c *CommandSpec) parseCommandArgs(matched, remaining []string) ([]string, error) {
+	c.applyFlagDefaults()
+	seen := map[string]bool{}
+	var handlerArgs []string
+	stopOptions := false
+	for i := 0; i < len(remaining); i++ {
+		arg := remaining[i]
+		if stopOptions || len(arg) < 2 || arg[0] != '-' || arg == "-" {
+			handlerArgs = append(handlerArgs, arg)
 			continue
 		}
 		if arg == "--" {
-			break
-		}
-		name := strings.TrimLeft(arg, "-")
-		if eq := strings.IndexByte(name, '='); eq >= 0 {
-			name = name[:eq]
-		}
-		if c.hasFlag(name) {
+			stopOptions = true
 			continue
 		}
-		return UsageError{Err: fmt.Errorf("unknown flag %q\n%s", arg, c.Usage(matched))}
+		if strings.HasPrefix(arg, "--") {
+			consumed, passthrough, err := c.parseLongFlag(arg, remaining, &i, seen)
+			if err != nil {
+				return nil, err
+			}
+			if !consumed {
+				handlerArgs = append(handlerArgs, passthrough...)
+			}
+			continue
+		}
+		consumed, passthrough, err := c.parseShortFlags(arg, remaining, &i, seen)
+		if err != nil {
+			return nil, err
+		}
+		if !consumed {
+			handlerArgs = append(handlerArgs, passthrough...)
+		}
+	}
+	if err := c.checkRequiredFlags(seen, matched); err != nil {
+		return nil, err
+	}
+	if err := c.validatePositionals(matched, handlerArgs); err != nil {
+		return nil, err
+	}
+	return handlerArgs, nil
+}
+
+func (c *CommandSpec) applyFlagDefaults() {
+	for _, f := range c.Flags {
+		switch {
+		case f.StringTarget != nil:
+			*f.StringTarget = f.Default
+		case f.BoolTarget != nil:
+			*f.BoolTarget = f.Default == "true"
+		case f.StringSliceTarget != nil:
+			*f.StringSliceTarget = nil
+			if f.Default != "" {
+				*f.StringSliceTarget = append(*f.StringSliceTarget, f.Default)
+			}
+		}
+	}
+}
+
+func (c *CommandSpec) parseLongFlag(arg string, remaining []string, index *int, seen map[string]bool) (bool, []string, error) {
+	body := strings.TrimPrefix(arg, "--")
+	name, value, hasValue := body, "", false
+	if eq := strings.IndexByte(body, '='); eq >= 0 {
+		name, value, hasValue = body[:eq], body[eq+1:], true
+	}
+	flag, ok := c.flagByName(name)
+	if !ok {
+		return false, nil, UsageError{Err: fmt.Errorf("unknown flag %q", arg)}
+	}
+	if !flag.hasTarget() {
+		return false, []string{arg}, nil
+	}
+	if flag.BoolTarget != nil {
+		if hasValue {
+			parsed, err := parseBoolFlagValue(value)
+			if err != nil {
+				return false, nil, err
+			}
+			*flag.BoolTarget = parsed
+		} else {
+			*flag.BoolTarget = true
+		}
+		seen[flag.Name] = true
+		return true, nil, nil
+	}
+	if !hasValue {
+		if *index+1 >= len(remaining) {
+			return false, nil, UsageError{Err: fmt.Errorf("--%s requires a value", name)}
+		}
+		*index++
+		value = remaining[*index]
+	}
+	if err := flag.setValue(value); err != nil {
+		return false, nil, err
+	}
+	seen[flag.Name] = true
+	return true, nil, nil
+}
+
+func (c *CommandSpec) parseShortFlags(arg string, remaining []string, index *int, seen map[string]bool) (bool, []string, error) {
+	body := strings.TrimPrefix(arg, "-")
+	if body == "" {
+		return false, []string{arg}, nil
+	}
+	for pos := 0; pos < len(body); pos++ {
+		alias := body[pos : pos+1]
+		flag, ok := c.flagByAlias(alias)
+		if !ok {
+			return false, nil, UsageError{Err: fmt.Errorf("unknown flag %q", "-"+alias)}
+		}
+		if !flag.hasTarget() {
+			return false, []string{arg}, nil
+		}
+		if flag.BoolTarget != nil {
+			*flag.BoolTarget = true
+			seen[flag.Name] = true
+			continue
+		}
+		if len(body) > 1 {
+			return false, nil, UsageError{Err: fmt.Errorf("flag -%s requires a separate value", alias)}
+		}
+		if *index+1 >= len(remaining) {
+			return false, nil, UsageError{Err: fmt.Errorf("-%s requires a value", alias)}
+		}
+		*index++
+		if err := flag.setValue(remaining[*index]); err != nil {
+			return false, nil, err
+		}
+		seen[flag.Name] = true
+	}
+	return true, nil, nil
+}
+
+func (c *CommandSpec) checkRequiredFlags(seen map[string]bool, matched []string) error {
+	for _, f := range c.Flags {
+		if f.Required && !seen[f.Name] {
+			return UsageError{Err: fmt.Errorf("required flag --%s missing\n%s", f.Name, c.Usage(matched))}
+		}
 	}
 	return nil
 }
 
-// hasFlag reports whether the command declares a flag with the given name.
-func (c *CommandSpec) hasFlag(name string) bool {
-	for _, f := range c.Flags {
-		if f.Name == name {
-			return true
+func (c *CommandSpec) validatePositionals(matched, args []string) error {
+	if len(c.Positionals) == 0 {
+		return nil
+	}
+	min, max := 0, 0
+	unbounded := false
+	for _, spec := range c.Positionals {
+		min += spec.Min
+		if spec.Max < 0 {
+			unbounded = true
+			continue
+		}
+		max += spec.Max
+	}
+	if len(args) < min || (!unbounded && len(args) > max) {
+		return UsageError{Err: fmt.Errorf("invalid positional arity: got %d, want %s\n%s", len(args), c.positionalArityText(), c.Usage(matched))}
+	}
+	return nil
+}
+
+func (c *CommandSpec) positionalArityText() string {
+	parts := make([]string, 0, len(c.Positionals))
+	for _, spec := range c.Positionals {
+		name := spec.Name
+		if name == "" {
+			name = "arg"
+		}
+		switch {
+		case spec.Min == spec.Max:
+			parts = append(parts, fmt.Sprintf("%d %s", spec.Min, name))
+		case spec.Max < 0:
+			parts = append(parts, fmt.Sprintf("at least %d %s", spec.Min, name))
+		default:
+			parts = append(parts, fmt.Sprintf("%d-%d %s", spec.Min, spec.Max, name))
 		}
 	}
-	return false
+	return strings.Join(parts, ", ")
+}
+
+func (c *CommandSpec) flagByName(name string) (FlagSpec, bool) {
+	for _, f := range c.Flags {
+		if f.Name == name {
+			return f, true
+		}
+	}
+	return FlagSpec{}, false
+}
+
+func (c *CommandSpec) flagByAlias(alias string) (FlagSpec, bool) {
+	for _, f := range c.Flags {
+		if f.Alias == alias {
+			return f, true
+		}
+	}
+	return FlagSpec{}, false
+}
+
+func (f FlagSpec) hasTarget() bool {
+	return f.StringTarget != nil || f.BoolTarget != nil || f.StringSliceTarget != nil
+}
+
+func (f FlagSpec) setValue(value string) error {
+	if len(f.Enum) > 0 {
+		ok := false
+		for _, allowed := range f.Enum {
+			if value == allowed {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return UsageError{Err: fmt.Errorf("invalid --%s %q: expected one of: %s", f.Name, value, strings.Join(f.Enum, ", "))}
+		}
+	}
+	switch {
+	case f.StringTarget != nil:
+		*f.StringTarget = value
+	case f.StringSliceTarget != nil:
+		if !f.Repeatable && len(*f.StringSliceTarget) > 0 {
+			*f.StringSliceTarget = nil
+		}
+		*f.StringSliceTarget = append(*f.StringSliceTarget, value)
+	default:
+		return UsageError{Err: fmt.Errorf("--%s does not accept a value", f.Name)}
+	}
+	return nil
+}
+
+func parseBoolFlagValue(value string) (bool, error) {
+	switch value {
+	case "true", "1", "yes", "on":
+		return true, nil
+	case "false", "0", "no", "off":
+		return false, nil
+	default:
+		return false, UsageError{Err: fmt.Errorf("invalid bool flag value %q", value)}
+	}
 }
 
 func (c *CommandSpec) match(path []string) (*CommandSpec, []string, []string) {
@@ -342,6 +582,72 @@ func (c *CommandSpec) match(path []string) (*CommandSpec, []string, []string) {
 		path = path[1:]
 	}
 	return node, matched, path
+}
+
+// ValidateTree checks keel's first-party command-tree invariants: command paths
+// are at most two tokens below the program, non-root namespace nodes have at
+// least two children, nodes do not mix a handler with children, and command
+// flags do not collide with keel-owned global flag names or aliases.
+//
+// DHF-REQ: keel/requirement-106, keel/requirement-104
+func (c *CommandSpec) ValidateTree() error {
+	return c.validateTree(nil, true)
+}
+
+func (c *CommandSpec) validateTree(path []string, root bool) error {
+	if !root && len(path) > 2 {
+		return fmt.Errorf("command path %q exceeds maximum depth 2", strings.Join(path, " "))
+	}
+	if c.Handler != nil && len(c.Subcommands) > 0 {
+		return fmt.Errorf("command %q mixes a handler with child commands", commandPath(path, c.Name))
+	}
+	if !root && len(c.Subcommands) == 1 {
+		return fmt.Errorf("namespace %q has fewer than two children", strings.Join(path, " "))
+	}
+	if !root && c.Handler == nil && len(c.Subcommands) == 0 {
+		return fmt.Errorf("command %q is neither a namespace nor a leaf with a handler", strings.Join(path, " "))
+	}
+	if err := c.validateFlagCollisions(path); err != nil {
+		return err
+	}
+	for _, child := range c.Subcommands {
+		if child == nil {
+			return fmt.Errorf("command %q declares a nil child command", commandPath(path, c.Name))
+		}
+		childPath := append(append([]string{}, path...), child.Name)
+		if err := child.validateTree(childPath, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *CommandSpec) validateFlagCollisions(path []string) error {
+	long, short := globalFlagNames()
+	for _, flag := range c.Flags {
+		if long[flag.Name] || short[flag.Name] {
+			return fmt.Errorf("command %q declares global flag collision %q", strings.Join(path, " "), flag.Name)
+		}
+		if flag.Alias != "" && (long[flag.Alias] || short[flag.Alias]) {
+			return fmt.Errorf("command %q declares global flag alias collision %q", strings.Join(path, " "), flag.Alias)
+		}
+	}
+	return nil
+}
+
+func globalFlagNames() (map[string]bool, map[string]bool) {
+	long := map[string]bool{}
+	for _, flag := range GlobalFlagSpecs() {
+		long[flag.Name] = true
+	}
+	return long, map[string]bool{"v": true, "h": true}
+}
+
+func commandPath(path []string, fallback string) string {
+	if len(path) > 0 {
+		return strings.Join(path, " ")
+	}
+	return fallback
 }
 
 // GlobalFlagSpecs returns the canonical help rows for the shared global flags
@@ -447,7 +753,7 @@ func (c *CommandSpec) RenderRootHelp(w io.Writer) {
 	if len(c.Subcommands) > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Commands:")
-		PrintCommandRows(w, c.Subcommands)
+		PrintGroupedCommandRows(w, c.Subcommands)
 	}
 	if modeHelp := mergeModeHelp(c.Config.ModeHelp); len(modeHelp) > 0 {
 		fmt.Fprintln(w)
@@ -518,6 +824,7 @@ type helpJSONFlag struct {
 // help inventory. Flags is always a (possibly empty) array, never null.
 type helpJSONCommand struct {
 	Path    string         `json:"path"`
+	Group   string         `json:"group"`
 	Summary string         `json:"summary"`
 	Usage   string         `json:"usage"`
 	Flags   []helpJSONFlag `json:"flags"`
@@ -554,6 +861,7 @@ func (c *CommandSpec) appendHelpJSON(out *[]helpJSONCommand, path []string) {
 	}
 	*out = append(*out, helpJSONCommand{
 		Path:    strings.Join(path, " "),
+		Group:   commandGroup(c),
 		Summary: c.Short,
 		Usage:   strings.TrimPrefix(c.Usage(path), "usage: "),
 		Flags:   flags,
@@ -587,7 +895,7 @@ func (c *CommandSpec) RenderCommandHelp(w io.Writer, path []string) {
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Subcommands:")
-	RenderSubcommandHelp(w, path, c.Subcommands, 0)
+	PrintGroupedCommandRows(w, c.Subcommands)
 }
 
 // RenderSubcommandHelp writes a nested subcommand listing below parent. Rows
@@ -621,6 +929,67 @@ func PrintCommandRows(w io.Writer, commands []*CommandSpec) {
 	for _, cmd := range commands {
 		fmt.Fprintf(w, "  %-*s  %s\n", width, cmd.Name, cmd.Short)
 	}
+}
+
+// PrintGroupedCommandRows writes command summary rows under group headings.
+// Group order and command order within each group follow declaration order.
+//
+// DHF-REQ: keel/requirement-105
+func PrintGroupedCommandRows(w io.Writer, commands []*CommandSpec) {
+	groups := groupCommands(commands)
+	width := commandNameWidth(commands)
+	for _, group := range groups {
+		fmt.Fprintf(w, "%s:\n", group.name)
+		printIndentedCommandRows(w, group.commands, 2, width)
+	}
+}
+
+func printIndentedCommandRows(w io.Writer, commands []*CommandSpec, indent, width int) {
+	if width == 0 {
+		width = commandNameWidth(commands)
+	}
+	prefix := strings.Repeat(" ", indent)
+	for _, cmd := range commands {
+		fmt.Fprintf(w, "%s%-*s  %s\n", prefix, width, cmd.Name, cmd.Short)
+	}
+}
+
+func commandNameWidth(commands []*CommandSpec) int {
+	width := 0
+	for _, cmd := range commands {
+		if len(cmd.Name) > width {
+			width = len(cmd.Name)
+		}
+	}
+	return width
+}
+
+type commandGroupRows struct {
+	name     string
+	commands []*CommandSpec
+}
+
+func groupCommands(commands []*CommandSpec) []commandGroupRows {
+	var groups []commandGroupRows
+	index := map[string]int{}
+	for _, cmd := range commands {
+		name := commandGroup(cmd)
+		at, ok := index[name]
+		if !ok {
+			index[name] = len(groups)
+			groups = append(groups, commandGroupRows{name: name})
+			at = len(groups) - 1
+		}
+		groups[at].commands = append(groups[at].commands, cmd)
+	}
+	return groups
+}
+
+func commandGroup(cmd *CommandSpec) string {
+	if cmd.Group != "" {
+		return cmd.Group
+	}
+	return "Other"
 }
 
 // PrintFlagRows writes flag help rows using the package's shared two-line flag
