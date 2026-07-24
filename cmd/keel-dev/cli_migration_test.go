@@ -55,6 +55,40 @@ func TestTestBridgeCommandTreeIsFlatAndUsesCLIBoundFlags(t *testing.T) {
 		t.Fatalf("test-bridge leaves = %#v, want %#v", got, want)
 	}
 
+	for _, tc := range []struct {
+		path []string
+		want string
+	}{
+		{path: []string{"test-bridge", "config-init"}, want: "Config"},
+		{path: []string{"test-bridge", "config-upgrade"}, want: "Config"},
+		{path: []string{"test-bridge", "discover"}, want: "Tests"},
+		{path: []string{"test-bridge", "desired-state"}, want: "Tests"},
+		{path: []string{"test-bridge", "run"}, want: "Tests"},
+	} {
+		spec := commandSpecByPath(tree, tc.path...)
+		if spec == nil {
+			t.Fatalf("missing command %s", strings.Join(tc.path, " "))
+		}
+		if spec.Group != tc.want {
+			t.Fatalf("%s group = %q, want %q", strings.Join(tc.path, " "), spec.Group, tc.want)
+		}
+	}
+	var help strings.Builder
+	testBridge.RenderCommandHelp(&help, []string{"test-bridge"})
+	helpText := help.String()
+	for _, want := range []string{
+		"Config:\n  config-init",
+		"Config:\n  config-init     Write .vscode/test-bridge.json if absent.\n  config-upgrade",
+		"Tests:\n  discover",
+	} {
+		if !strings.Contains(helpText, want) {
+			t.Fatalf("test-bridge help = %q, want section containing %q", helpText, want)
+		}
+	}
+	if strings.Contains(helpText, "Other:") {
+		t.Fatalf("test-bridge help = %q, want no Other group", helpText)
+	}
+
 	assertStringFlagTarget(t, commandSpecByPath(tree, "test-bridge", "discover"), "format", []string{"json"}, false)
 	assertStringFlagTarget(t, commandSpecByPath(tree, "test-bridge", "desired-state"), "format", []string{"json"}, false)
 	assertStringSliceFlagTarget(t, commandSpecByPath(tree, "test-bridge", "desired-state"), "id", true, false)
