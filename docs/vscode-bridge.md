@@ -82,4 +82,4 @@ go run ./cmd/keel-demo-dev test-bridge run --id keel-demo-dev::maintenance::unbl
 ```
 
 The VSIX no longer emits a demo-family invocation. Its wire surface is the four
-canonical shapes above: discover, desired-state, run, and config upgrade.
+canonical shapes above: discover, desired-state, run, and config-upgrade.

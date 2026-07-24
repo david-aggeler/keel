@@ -239,7 +239,6 @@ suite('Keel Test Bridge expected-red specs', () => {
 
         const resolved = await collectChild(spawnKeelDev(root, [
           'test-bridge',
-          'tests',
           'run',
           '--dry-run',
           ...runnableIds.flatMap((id) => ['--id', id])
@@ -249,7 +248,6 @@ suite('Keel Test Bridge expected-red specs', () => {
 
         const rejected = await collectChild(spawnKeelDev(root, [
           'test-bridge',
-          'tests',
           'run',
           '--dry-run',
           '--id',
