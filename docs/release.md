@@ -59,17 +59,41 @@ run `keel-dev verify vX.Y.Z` (see below).
 
 ## 2. Sync gold product_version
 
+<!-- DHF-REQ: keel/requirement-112 -->
+
 After the release succeeds, advance gold's `product_version` for product `keel`
-through `openbrain-client` from PATH:
+through `openbrain-client` from PATH. The current client does not expose a narrow
+product-version admin subcommand, so use its product-catalog export/import path:
 
 ```sh
-openbrain-client admin_update_product_version --product keel --version X.Y.Z --status released
+sync_dir="/tmp/keel-release-sync-X.Y.Z"
+rm -rf "$sync_dir"
+mkdir -p "$sync_dir"
+openbrain-client --mode ai records export --layer full --products keel --out "$sync_dir"
 ```
 
-Then query gold and confirm the current `product_version` for product `keel`
-reflects `X.Y.Z`. If the installed `openbrain-client` does not expose that
-product-version update command, stop and fix the client/tooling path before
-continuing; do not add SoR client code to `keel-dev`.
+Edit `$sync_dir/products.json` for product `keel`: ensure the `Versions[]` row for
+`X.Y.Z` exists, set its `Status` to `released`, add release evidence to `Body` and
+`ReleaseNotes`, and ensure exactly one later row remains `in_development`.
+
+```sh
+openbrain-client --mode ai records import --layer full --products keel --in "$sync_dir" --allow-nonempty-target --verify
+```
+
+Then query gold from a fresh export and confirm the current `product_version` for
+product `keel` reflects `X.Y.Z`:
+
+```sh
+confirm_dir="/tmp/keel-release-confirm-X.Y.Z"
+rm -rf "$confirm_dir"
+mkdir -p "$confirm_dir"
+openbrain-client --mode ai records export --layer full --products keel --out "$confirm_dir"
+jq -e --arg v "X.Y.Z" '.[] | select(.Slug=="keel") | .Versions[] | select(.Version==$v and .Status=="released")' "$confirm_dir/products.json"
+```
+
+If the installed `openbrain-client` cannot export/import product catalog data or
+the confirmation query does not return the released row, stop and fix the
+client/tooling path before continuing; do not add SoR client code to `keel-dev`.
 
 ### Prerequisites
 
