@@ -8,11 +8,11 @@ the Go module.
 ## Commands
 
 ```sh
-go run ./cmd/keel-dev test-bridge tests discover --format json
-go run ./cmd/keel-dev test-bridge tests desired-state --format json --id keel::lane::test-fast
-go run ./cmd/keel-dev test-bridge tests run --id keel::lane::test-fast
-go run ./cmd/keel-dev test-bridge config init
-go run ./cmd/keel-dev test-bridge config upgrade
+go run ./cmd/keel-dev test-bridge discover --format json
+go run ./cmd/keel-dev test-bridge desired-state --format json --id keel::lane::test-fast
+go run ./cmd/keel-dev test-bridge run --id keel::lane::test-fast
+go run ./cmd/keel-dev test-bridge config-init
+go run ./cmd/keel-dev test-bridge config-upgrade
 go run ./cmd/keel-dev vsix ci
 ```
 
@@ -61,12 +61,12 @@ The JSON Schema is embedded in `keel/vscode` as `test-bridge-config` and is
 drift-checked against the Go type. `CurrentConfigVersion` is the schema version
 constant.
 
-`keel-dev test-bridge config init` writes the default template. `keel-dev
-test-bridge config upgrade` migrates supported older configs forward, preserves
+`keel-dev test-bridge config-init` writes the default template. `keel-dev
+test-bridge config-upgrade` migrates supported older configs forward, preserves
 user values, and is byte-idempotent. If the config version is newer than the
 binary, upgrade refuses without writing. The extension follows the same rule on
 activation: older configs are upgraded by invoking the configured devtool's
-`test-bridge config upgrade` verb and notifying the user to inspect the git
+`test-bridge config-upgrade` verb and notifying the user to inspect the git
 diff; newer configs are read tolerantly and never rewritten.
 
 ## Demo Content
@@ -76,9 +76,9 @@ point `.vscode/test-bridge.json` at that binary, then run the advertised
 maintenance items through the canonical run verb:
 
 ```bash
-go run ./cmd/keel-demo-dev test-bridge tests run --id keel-demo-dev::maintenance::block-bad-lane
-go run ./cmd/keel-demo-dev test-bridge tests run --id keel-demo-dev::lane::go-fail
-go run ./cmd/keel-demo-dev test-bridge tests run --id keel-demo-dev::maintenance::unblock-bad-lane
+go run ./cmd/keel-demo-dev test-bridge run --id keel-demo-dev::maintenance::block-bad-lane
+go run ./cmd/keel-demo-dev test-bridge run --id keel-demo-dev::lane::go-fail
+go run ./cmd/keel-demo-dev test-bridge run --id keel-demo-dev::maintenance::unblock-bad-lane
 ```
 
 The VSIX no longer emits a demo-family invocation. Its wire surface is the four
