@@ -218,48 +218,37 @@ type RunRequest struct {
 }
 
 // CommandSpec returns a dispatch root for the canonical protocol token:
-// test-bridge tests discover|desired-state|run and config init|upgrade.
+// test-bridge discover|desired-state|run and config-init|config-upgrade.
 //
-// DHF-REQ: keel/requirement-58, keel/requirement-60
+// DHF-REQ: keel/requirement-58, keel/requirement-60, keel/requirement-107
 func CommandSpec(bridge Bridge) *cli.CommandSpec {
+	var discoverFormat string
+	var desiredStateFormat string
+	var desiredStateIDs []string
+	var runIDs []string
+	var runDryRun bool
 	return &cli.CommandSpec{
 		Subcommands: []*cli.CommandSpec{
 			{
 				Name:  "test-bridge",
 				Short: "Serve VS Code test-bridge protocol commands.",
 				Subcommands: []*cli.CommandSpec{
-					{
-						Name:  "config",
-						Short: "Initialize or upgrade test bridge config.",
-						Subcommands: []*cli.CommandSpec{
-							{Name: "init", Use: "test-bridge config init", Short: "Write .vscode/test-bridge.json if absent.", Handler: handleConfigInit(bridge)},
-							{Name: "upgrade", Use: "test-bridge config upgrade", Short: "Upgrade .vscode/test-bridge.json to the current schema.", Handler: handleConfigUpgrade(bridge)},
-						},
-					},
-					{
-						Name:  "tests",
-						Short: "Discover tests, report desired state, and run selections.",
-						Subcommands: []*cli.CommandSpec{
-							{Name: "discover", Use: "test-bridge tests discover [--format json]", Short: "Emit the test discovery document.", Flags: []cli.FlagSpec{{Name: "format", Value: "json", Short: "Output format."}}, Handler: handleDiscover(bridge)},
-							{Name: "desired-state", Use: "test-bridge tests desired-state [--format json] [--id test-id]", Short: "Emit the read-only desired-state document.", Flags: []cli.FlagSpec{{Name: "format", Value: "json", Short: "Output format."}, {Name: "id", Value: "test-id", Short: "Selected test id."}}, Handler: handleDesiredState(bridge)},
-							{Name: "run", Use: "test-bridge tests run [--dry-run] --id test-id", Short: "Run selected tests.", Flags: []cli.FlagSpec{{Name: "id", Value: "test-id", Short: "Selected test id."}, {Name: "dry-run", Short: "Resolve selected test ids without executing them."}}, Handler: handleRun(bridge)},
-						},
-					},
+					{Name: "config-init", Use: "test-bridge config-init", Short: "Write .vscode/test-bridge.json if absent.", Group: "Config", Positionals: []cli.PositionalSpec{{Name: "args", Min: 0, Max: 0}}, Handler: handleConfigInit(bridge)},
+					{Name: "config-upgrade", Use: "test-bridge config-upgrade", Short: "Upgrade .vscode/test-bridge.json to the current schema.", Group: "Config", Positionals: []cli.PositionalSpec{{Name: "args", Min: 0, Max: 0}}, Handler: handleConfigUpgrade(bridge)},
+					{Name: "discover", Use: "test-bridge discover [--format json]", Short: "Emit the test discovery document.", Group: "Tests", Positionals: []cli.PositionalSpec{{Name: "args", Min: 0, Max: 0}}, Flags: []cli.FlagSpec{{Name: "format", Value: "json", Default: "json", Enum: []string{"json"}, Short: "Output format.", StringTarget: &discoverFormat}}, Handler: handleDiscover(bridge, &discoverFormat)},
+					{Name: "desired-state", Use: "test-bridge desired-state [--format json] [--id test-id]", Short: "Emit the read-only desired-state document.", Group: "Tests", Positionals: []cli.PositionalSpec{{Name: "args", Min: 0, Max: 0}}, Flags: []cli.FlagSpec{{Name: "format", Value: "json", Default: "json", Enum: []string{"json"}, Short: "Output format.", StringTarget: &desiredStateFormat}, {Name: "id", Value: "test-id", Repeatable: true, Short: "Selected test id.", StringSliceTarget: &desiredStateIDs}}, Handler: handleDesiredState(bridge, &desiredStateFormat, &desiredStateIDs)},
+					{Name: "run", Use: "test-bridge run [--dry-run] --id test-id", Short: "Run selected tests.", Group: "Tests", Positionals: []cli.PositionalSpec{{Name: "args", Min: 0, Max: 0}}, Flags: []cli.FlagSpec{{Name: "id", Value: "test-id", Repeatable: true, Required: true, Short: "Selected test id.", StringSliceTarget: &runIDs}, {Name: "dry-run", Short: "Resolve selected test ids without executing them.", BoolTarget: &runDryRun}}, Handler: handleRun(bridge, &runIDs, &runDryRun)},
 				},
 			},
 		},
 	}
 }
 
-func handleDiscover(bridge Bridge) cli.Handler {
+func handleDiscover(bridge Bridge, format *string) cli.Handler {
 	return func(ctx context.Context, args []string) error {
 		rt := runtimeOrDefault(ctx, bridge)
-		ids, err := parseIDs(args, true, true)
-		if err != nil {
-			logBridgeDispatch(rt, "discover", bridgeDispatchLog{Args: args, Err: err})
-			return err
-		}
-		logBridgeDispatch(rt, "discover", bridgeDispatchLog{Args: args, IDs: ids})
+		_ = format
+		logBridgeDispatch(rt, "discover", bridgeDispatchLog{Args: args})
 		doc, err := discoverWithDerivedDesiredState(ctx, bridge)
 		if err != nil {
 			return err
@@ -550,17 +539,14 @@ func stableIDSegment(value string) string {
 	return out
 }
 
-// DHF-REQ: keel/requirement-60
-func handleDesiredState(bridge Bridge) cli.Handler {
+// DHF-REQ: keel/requirement-60, keel/requirement-107
+func handleDesiredState(bridge Bridge, format *string, ids *[]string) cli.Handler {
 	return func(ctx context.Context, args []string) error {
 		rt := runtimeOrDefault(ctx, bridge)
-		ids, err := parseIDs(args, true, true)
-		if err != nil {
-			logBridgeDispatch(rt, "desired-state", bridgeDispatchLog{Args: args, Err: err})
-			return err
-		}
-		logBridgeDispatch(rt, "desired-state", bridgeDispatchLog{Args: args, IDs: ids})
-		doc, err := deriveDesiredStateDeclaration(ctx, bridge, ids)
+		_ = format
+		selected := append([]string(nil), (*ids)...)
+		logBridgeDispatch(rt, "desired-state", bridgeDispatchLog{Args: args, IDs: selected})
+		doc, err := deriveDesiredStateDeclaration(ctx, bridge, selected)
 		if err != nil {
 			return err
 		}
@@ -789,26 +775,23 @@ func deriveDesiredStateRow(ctx context.Context, root string, row DesiredStateRow
 	}, nil
 }
 
-// DHF-REQ: keel/requirement-58
+// DHF-REQ: keel/requirement-58, keel/requirement-107
 // DHF-REQ: keel/requirement-86
-func handleRun(bridge Bridge) cli.Handler {
+func handleRun(bridge Bridge, ids *[]string, dryRun *bool) cli.Handler {
 	return func(ctx context.Context, args []string) error {
 		rt := runtimeOrDefault(ctx, bridge)
-		ids, dryRun, err := parseRunArgs(args)
+		selected := append([]string(nil), (*ids)...)
+		strict := *dryRun
+		logBridgeDispatch(rt, "run", bridgeDispatchLog{Args: args, IDs: selected, DryRun: boolPtr(*dryRun)})
+		requests, err := resolveRunRequests(ctx, bridge, selected, strict)
 		if err != nil {
-			logBridgeDispatch(rt, "run", bridgeDispatchLog{Args: args, Err: err})
+			logBridgeDispatch(rt, "run", bridgeDispatchLog{Args: args, IDs: selected, DryRun: boolPtr(*dryRun), Err: err})
 			return err
 		}
-		logBridgeDispatch(rt, "run", bridgeDispatchLog{Args: args, IDs: ids, DryRun: boolPtr(dryRun)})
-		requests, err := resolveRunRequests(ctx, bridge, ids, dryRun)
-		if err != nil {
-			logBridgeDispatch(rt, "run", bridgeDispatchLog{Args: args, IDs: ids, DryRun: boolPtr(dryRun), Err: err})
-			return err
-		}
-		if dryRun {
+		if *dryRun {
 			return nil
 		}
-		ids = runResolutionIDs(requests)
+		selected = runResolutionIDs(requests)
 		runID := newRunID(rt)
 		writer, closeWriter, err := newRunWriter(rt, bridge.Workspace(), runID)
 		if err != nil {
@@ -817,8 +800,8 @@ func handleRun(bridge Bridge) cli.Handler {
 		defer closeWriter()
 		exitCode := 1
 		writer(vscode.RunEvent{Event: "run_started", Live: boolPtr(true), Requested: runResolutionRequests(requests)})
-		if !bridgeLockExempt(bridge, ids) {
-			releaseLock, err := acquireRunLock(runtimeRoot(rt, bridge), ids, runID, rt.Log)
+		if !bridgeLockExempt(bridge, selected) {
+			releaseLock, err := acquireRunLock(runtimeRoot(rt, bridge), selected, runID, rt.Log)
 			if err != nil {
 				writer(vscode.RunEvent{Event: "errored", Message: err.Error()})
 				writer(vscode.RunEvent{Event: "run_finished", ExitCode: &exitCode})
@@ -1075,31 +1058,6 @@ func desiredStateDeclarationsByRunID(desiredState DesiredStateDeclaration) map[s
 	return rows
 }
 
-func parseRunArgs(args []string) ([]string, bool, error) {
-	ids := make([]string, 0)
-	dryRun := false
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--dry-run":
-			dryRun = true
-		case "--id":
-			if i+1 >= len(args) {
-				return nil, false, cli.NewUsageError("--id requires a test id")
-			}
-			i++
-			ids = append(ids, args[i])
-		case "--format":
-			return nil, false, cli.NewUsageError("unknown flag \"--format\"")
-		default:
-			return nil, false, cli.NewUsageError("unknown test-bridge tests argument %q", args[i])
-		}
-	}
-	if len(ids) == 0 {
-		return nil, false, cli.NewUsageError("--id is required")
-	}
-	return ids, dryRun, nil
-}
-
 // DHF-REQ: keel/requirement-58, keel/requirement-72
 // DHF-REQ: keel/requirement-84, keel/requirement-86
 func resolveRunRequests(ctx context.Context, bridge Bridge, ids []string, strict bool) ([]runResolution, error) {
@@ -1305,12 +1263,7 @@ func runRequestForTestItem(item vscode.TestItem) vscode.RunRequest {
 func handleConfigInit(bridge Bridge) cli.Handler {
 	return func(ctx context.Context, args []string) error {
 		rt := runtimeOrDefault(ctx, bridge)
-		if len(args) != 0 {
-			err := cli.NewUsageError("test-bridge config init takes no arguments: got %q", args)
-			logBridgeDispatch(rt, "config init", bridgeDispatchLog{Args: args, Err: err})
-			return err
-		}
-		logBridgeDispatch(rt, "config init", bridgeDispatchLog{Args: args})
+		logBridgeDispatch(rt, "config-init", bridgeDispatchLog{Args: args})
 		_, err := InitConfig(runtimeRoot(rt, bridge), bridge.ConfigTemplate())
 		return err
 	}
@@ -1319,43 +1272,10 @@ func handleConfigInit(bridge Bridge) cli.Handler {
 func handleConfigUpgrade(bridge Bridge) cli.Handler {
 	return func(ctx context.Context, args []string) error {
 		rt := runtimeOrDefault(ctx, bridge)
-		if len(args) != 0 {
-			err := cli.NewUsageError("test-bridge config upgrade takes no arguments: got %q", args)
-			logBridgeDispatch(rt, "config upgrade", bridgeDispatchLog{Args: args, Err: err})
-			return err
-		}
-		logBridgeDispatch(rt, "config upgrade", bridgeDispatchLog{Args: args})
+		logBridgeDispatch(rt, "config-upgrade", bridgeDispatchLog{Args: args})
 		_, err := UpgradeConfig(runtimeRoot(rt, bridge), bridge.ConfigTemplate())
 		return err
 	}
-}
-
-func parseIDs(args []string, allowEmpty bool, allowFormat bool) ([]string, error) {
-	ids := make([]string, 0)
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--format":
-			if !allowFormat {
-				return nil, cli.NewUsageError("unknown flag \"--format\"")
-			}
-			if i+1 >= len(args) || args[i+1] != "json" {
-				return nil, cli.NewUsageError("--format supports only json")
-			}
-			i++
-		case "--id":
-			if i+1 >= len(args) {
-				return nil, cli.NewUsageError("--id requires a test id")
-			}
-			i++
-			ids = append(ids, args[i])
-		default:
-			return nil, cli.NewUsageError("unknown test-bridge tests argument %q", args[i])
-		}
-	}
-	if !allowEmpty && len(ids) == 0 {
-		return nil, cli.NewUsageError("--id is required")
-	}
-	return ids, nil
 }
 
 func writeDocument(rt Runtime, doc any) error {

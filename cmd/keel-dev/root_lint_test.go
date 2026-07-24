@@ -57,7 +57,7 @@ func TestRunDirectVersionHelpAndNoCommandBranches(t *testing.T) {
 			t.Fatalf("run --help-all exit = %d, want 0", code)
 		}
 	})
-	if stdout != "" || !strings.Contains(stderr, "test-bridge tests run") {
+	if stdout != "" || !strings.Contains(stderr, "test-bridge run") {
 		t.Fatalf("run --help-all stdout=%q stderr=%q, want help on stderr", stdout, stderr)
 	}
 
@@ -521,7 +521,7 @@ func TestKeelDevHelpAllRendersFullCommandTreeAndExitsZero(t *testing.T) {
 		"ci commands:",
 		"release commands:",
 		"test-bridge commands:",
-		"test-bridge tests commands:",
+		"test-bridge commands:",
 		"vsix commands:",
 	} {
 		if !strings.Contains(got, want) {
