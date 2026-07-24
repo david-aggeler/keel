@@ -65,14 +65,10 @@ func main() {
 }
 
 func run(argv []string) int {
-	bridge := demoBridge{}
-	tree := testbridge.CommandSpec(bridge)
-	tree.Config = cli.Config{
-		Program:      "keel-demo-dev",
-		RootSummary:  "keel-demo-dev serves a reference consumer test bridge.",
-		Usage:        "keel-demo-dev <command> [args]",
-		HelpUsage:    "keel-demo-dev help [command]",
-		CommandUsage: "keel-demo-dev <command> --help",
+	tree := demoDevCommandTree(demoBridge{})
+	if err := tree.ValidateTree(); err != nil {
+		fmt.Fprintln(os.Stderr, "keel-demo-dev: "+err.Error())
+		return 1
 	}
 
 	cfg, words, err := cli.ParseGlobalConfig(argv)
@@ -120,6 +116,19 @@ func run(argv []string) int {
 		return 1
 	}
 	return 0
+}
+
+// DHF-REQ: keel/requirement-108
+func demoDevCommandTree(bridge testbridge.Bridge) *cli.CommandSpec {
+	tree := testbridge.CommandSpec(bridge)
+	tree.Config = cli.Config{
+		Program:      "keel-demo-dev",
+		RootSummary:  "keel-demo-dev serves a reference consumer test bridge.",
+		Usage:        "keel-demo-dev <command> [args]",
+		HelpUsage:    "keel-demo-dev help [command]",
+		CommandUsage: "keel-demo-dev <command> --help",
+	}
+	return tree
 }
 
 type demoBridge struct{}

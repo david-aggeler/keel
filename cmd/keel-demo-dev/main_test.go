@@ -50,6 +50,32 @@ func TestRunDirectVersionHelpConfigAndUsageBranches(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-108
+func TestKeelDemoDevUsesSharedCLICommandTreeValidationAndBindings(t *testing.T) {
+	source, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	if !strings.Contains(string(source), ".ValidateTree()") {
+		t.Fatal("keel-demo-dev run path does not validate its keel/cli command tree")
+	}
+
+	if err := testbridge.CommandSpec(demoBridge{}).ValidateTree(); err != nil {
+		t.Fatalf("keel-demo-dev command tree failed ValidateTree: %v", err)
+	}
+
+	root := t.TempDir()
+	if _, err := dispatchDemoBridge(t, root, "test-bridge", "desired-state", "--format", "json", "--id", idLaneFakeSmoke); err != nil {
+		t.Fatalf("desired-state with declared --format/--id flags: %v", err)
+	}
+	if _, err := dispatchDemoBridge(t, root, "test-bridge", "run", "--dry-run", "--id", idDetectLanes); err != nil {
+		t.Fatalf("run with declared --dry-run/--id flags: %v", err)
+	}
+	if _, err := dispatchDemoBridge(t, root, "test-bridge", "run", "--id", idDetectLanes, "extra"); err == nil || !strings.Contains(err.Error(), "invalid positional arity") {
+		t.Fatalf("run with extra operand err = %v, want shared CLI positional arity error", err)
+	}
+}
+
 // DHF-TEST: keel/requirement-62, keel/requirement-74, keel/requirement-75, keel/requirement-76, keel/requirement-83, keel/requirement-87
 func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	exe := buildDemoDev(t)
