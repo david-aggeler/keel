@@ -177,6 +177,41 @@ func TestKeelDemoHelpJSONReportsWriteFailure(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-108
+func TestKeelDemoWorkflowCommandsUseDeclaredCLIParsing(t *testing.T) {
+	if err := commandTree().ValidateTree(); err != nil {
+		t.Fatalf("keel-demo command tree failed ValidateTree: %v", err)
+	}
+
+	inspect, code := runDemo(t, "workflow", "inspect", "--format", "json", "run-123")
+	if code != 0 {
+		t.Fatalf("workflow inspect exit = %d, want 0\n%s", code, inspect)
+	}
+	for _, want := range []string{"workflow inspect", "run-123", "format=json"} {
+		if !strings.Contains(inspect, want) {
+			t.Fatalf("workflow inspect output missing %q\n%s", want, inspect)
+		}
+	}
+
+	missingOperand, code := runDemo(t, "workflow", "inspect", "--format", "json")
+	if code != 2 {
+		t.Fatalf("workflow inspect without run id exit = %d, want usage 2\n%s", code, missingOperand)
+	}
+	if !strings.Contains(missingOperand, "invalid positional arity") || !strings.Contains(missingOperand, "usage: keel-demo workflow inspect") {
+		t.Fatalf("workflow inspect arity error was not produced by shared CLI parsing:\n%s", missingOperand)
+	}
+
+	replay, code := runDemo(t, "workflow", "replay", "--speed", "fast", "demo.transcript")
+	if code != 0 {
+		t.Fatalf("workflow replay exit = %d, want 0\n%s", code, replay)
+	}
+	for _, want := range []string{"workflow replay", "demo.transcript", "speed=fast"} {
+		if !strings.Contains(replay, want) {
+			t.Fatalf("workflow replay output missing %q\n%s", want, replay)
+		}
+	}
+}
+
 // DHF-TEST: keel/requirement-26
 func TestRunShowcaseDirectReturnsStructuredFailure(t *testing.T) {
 	var out bytes.Buffer
