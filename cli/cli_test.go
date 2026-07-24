@@ -146,6 +146,42 @@ func TestCommandModelDispatchHelpAndUsageErrors(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-111 (keel/ac-392, keel/ac-393)
+func TestRenderRootHelpRendersOptionalProgramVersionHeader(t *testing.T) {
+	root := &CommandSpec{
+		Name: "keel-demo",
+		Config: Config{
+			Program:      "keel-demo",
+			Version:      "1.2.3",
+			RootSummary:  "keel-demo runs the showcase.",
+			Usage:        "keel-demo [--mode human|ai|json]",
+			HelpUsage:    "keel-demo help [command]",
+			CommandUsage: "keel-demo <command> --help",
+		},
+	}
+
+	var help bytes.Buffer
+	root.RenderRootHelp(&help)
+	lines := strings.Split(help.String(), "\n")
+	if got, want := lines[0], "keel-demo v1.2.3"; got != want {
+		t.Fatalf("first root-help line = %q, want %q\n%s", got, want, help.String())
+	}
+	if got, want := lines[2], "keel-demo runs the showcase."; got != want {
+		t.Fatalf("root summary line = %q, want %q after version header\n%s", got, want, help.String())
+	}
+
+	root.Config.Version = ""
+	help.Reset()
+	root.RenderRootHelp(&help)
+	lines = strings.Split(help.String(), "\n")
+	if got, want := lines[0], "keel-demo runs the showcase."; got != want {
+		t.Fatalf("first root-help line with empty version = %q, want %q\n%s", got, want, help.String())
+	}
+	if strings.Contains(help.String(), "keel-demo v") {
+		t.Fatalf("root help with empty version includes header:\n%s", help.String())
+	}
+}
+
 // DHF-TEST: keel/requirement-21
 func TestParseGlobalConfigTreatsModeAndNoHeaderAsSharedCore(t *testing.T) {
 	cfg, rest, err := ParseGlobalConfig([]string{"--mode", "ai", "--no-header", "ci"})
