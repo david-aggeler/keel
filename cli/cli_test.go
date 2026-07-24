@@ -463,6 +463,9 @@ func TestUsageErrorAndGlobalParseErrors(t *testing.T) {
 	if err.Error() != "bad args" {
 		t.Fatalf("Error = %q", err.Error())
 	}
+	if (UsageError{}).Error() != "" {
+		t.Fatalf("zero UsageError should render empty text")
+	}
 	if !errors.Is(fmt.Errorf("wrap: %w", err), err.Err) {
 		t.Fatalf("UsageError should unwrap to underlying diagnostic")
 	}
@@ -475,6 +478,44 @@ func TestUsageErrorAndGlobalParseErrors(t *testing.T) {
 	}
 	if mode, err := ParseMode("HUMAN"); err != nil || mode != ModeHuman {
 		t.Fatalf("ParseMode(HUMAN) = %q, %v", mode, err)
+	}
+}
+
+// DHF-TEST: keel/requirement-21
+func TestLegacyCommandRowHelpersAndFallbackUsage(t *testing.T) {
+	if got := (&CommandSpec{}).Usage(nil); got != "usage: command <command> [args]" {
+		t.Fatalf("fallback Usage = %q", got)
+	}
+
+	commands := []*CommandSpec{
+		{Name: "beta", Use: "beta", Short: "Second."},
+		{Name: "alpha", Use: "alpha", Short: "First."},
+	}
+	var rows bytes.Buffer
+	PrintCommandRows(&rows, commands)
+	for _, want := range []string{
+		"  beta   Second.",
+		"  alpha  First.",
+	} {
+		if !strings.Contains(rows.String(), want) {
+			t.Fatalf("PrintCommandRows missing %q:\n%s", want, rows.String())
+		}
+	}
+
+	parent := []string{"parent"}
+	var nested bytes.Buffer
+	RenderSubcommandHelp(&nested, parent, commands, 0)
+	got := nested.String()
+	assertBefore(t, got, "alpha", "beta")
+	for _, want := range []string{
+		"  alpha",
+		"      First.",
+		"  beta",
+		"      Second.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("RenderSubcommandHelp missing %q:\n%s", want, got)
+		}
 	}
 }
 
