@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	keel "github.com/david-aggeler/keel"
 	"github.com/david-aggeler/keel/cli"
 	procexec "github.com/david-aggeler/keel/exec"
 	"github.com/david-aggeler/keel/testbridge"
@@ -22,8 +23,6 @@ import (
 )
 
 const (
-	demoVersion = "demo"
-
 	idRoot        = "keel-demo-dev::root"
 	idMaintenance = testbridge.MaintenanceGroupID
 	idDesired     = "keel::desired-state"
@@ -77,7 +76,8 @@ func run(argv []string) int {
 		return 2
 	}
 	if cfg.Version {
-		fmt.Fprintln(os.Stdout, demoVersion)
+		// DHF-REQ: keel/requirement-110
+		fmt.Fprintln(os.Stdout, versionString())
 		return 0
 	}
 	if cfg.HelpAll {
@@ -146,7 +146,7 @@ func (demoBridge) Workspace() testbridge.Workspace {
 }
 
 func (demoBridge) Metadata() vscode.DevtoolMetadata {
-	return vscode.DevtoolMetadata{Name: "keel-demo-dev", Version: demoVersion, Commit: "demo", BuiltAt: "demo"}
+	return vscode.DevtoolMetadata{Name: "keel-demo-dev", Version: versionString(), Commit: "demo", BuiltAt: "demo"}
 }
 
 func (demoBridge) ConfigTemplate() vscode.TestBridgeConfig {
@@ -156,6 +156,11 @@ func (demoBridge) ConfigTemplate() vscode.TestBridgeConfig {
 		Args:        []string{},
 		DisplayName: "Keel Demo Dev",
 	}
+}
+
+// DHF-REQ: keel/requirement-110
+func versionString() string {
+	return keel.Version()
 }
 
 // DHF-REQ: keel/requirement-62
