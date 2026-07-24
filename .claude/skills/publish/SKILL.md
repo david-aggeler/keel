@@ -69,15 +69,50 @@ Stream the output. `keel-dev release <version>` runs the full pipeline:
 
 ## Step 4: Sync gold product_version
 
-After `just publish <version>` succeeds, run the gold sync with `openbrain-client` from PATH:
+<!-- DHF-REQ: keel/requirement-112 -->
+
+After `just publish <version>` succeeds, advance gold through `openbrain-client`
+from PATH. The installed client does not expose a narrow
+`admin_update_product_version` command; use its product-catalog export/import path
+instead:
 
 ```sh
-openbrain-client admin_update_product_version --product keel --version X.Y.Z --status released
+sync_dir="/tmp/keel-release-sync-X.Y.Z"
+rm -rf "$sync_dir"
+mkdir -p "$sync_dir"
+openbrain-client --mode ai records export --layer full --products keel --out "$sync_dir"
 ```
 
-Then query gold and confirm the current `product_version` for product `keel` reflects `X.Y.Z`.
-If the installed `openbrain-client` does not expose the product-version update command, stop and
-hand back to the owner with that exact blocker; do not implement a gold client in `keel-dev`.
+Edit `$sync_dir/products.json` for product `keel`:
+
+- Ensure the `Versions[]` row whose `Version` is `X.Y.Z` exists.
+- Set that row's `Status` to `released`.
+- Add release evidence to that row's `Body` and `ReleaseNotes`: tag `vX.Y.Z`, stamp
+  commit, VSIX asset name, anonymous `go get` result, and release notes ref when one
+  exists.
+- Ensure exactly one later `Versions[]` row remains `in_development` for follow-up
+  work; create or retain it per the release plan.
+
+Then import and verify the catalog bundle:
+
+```sh
+openbrain-client --mode ai records import --layer full --products keel --in "$sync_dir" --allow-nonempty-target --verify
+```
+
+Finally query gold from a fresh export and confirm product `keel` reflects `X.Y.Z`
+as released:
+
+```sh
+confirm_dir="/tmp/keel-release-confirm-X.Y.Z"
+rm -rf "$confirm_dir"
+mkdir -p "$confirm_dir"
+openbrain-client --mode ai records export --layer full --products keel --out "$confirm_dir"
+jq -e --arg v "X.Y.Z" '.[] | select(.Slug=="keel") | .Versions[] | select(.Version==$v and .Status=="released")' "$confirm_dir/products.json"
+```
+
+If the installed `openbrain-client` cannot export/import product catalog data or
+the confirmation query does not return the released row, stop and hand back to the
+owner with that exact blocker; do not implement a gold client in `keel-dev`.
 
 ## Step 5: Report results
 
