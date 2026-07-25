@@ -408,8 +408,15 @@ func (l *Logger) argsWithAutoSource(args []any) []any {
 	return out
 }
 
-// Header emits a ruled banner, rendered per console mode.
+// Header emits a ruled banner only, rendered per console mode.
 func (l *Logger) Header(title string, version string) { header(l.slog(), title, version) }
+
+// BuildIdentity emits a startup banner and a structured build identity record.
+//
+// DHF-REQ: keel/requirement-32
+func (l *Logger) BuildIdentity(title, version, gitCommit string) {
+	buildIdentity(l.slog(), title, version, gitCommit)
+}
 
 // Section emits a ruled section banner, rendered per console mode.
 func (l *Logger) Section(name string) { section(l.slog(), name) }
@@ -1341,6 +1348,12 @@ func header(logger *slog.Logger, title string, version string) {
 		logger = slog.Default()
 	}
 	logger.Info(title, "banner", "header", "title", title, "version", version)
+}
+
+// DHF-REQ: keel/requirement-32
+func buildIdentity(logger *slog.Logger, title, version, gitCommit string) {
+	header(logger, title, version)
+	logBuildIdentity(logger, version, gitCommit)
 }
 
 // DHF-REQ: openbrain/requirement-151, keel/requirement-24
