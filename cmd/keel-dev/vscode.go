@@ -276,6 +276,26 @@ func (keelTestBridge) ClearState(_ context.Context, req testbridge.RunRequest, _
 	return 0, nil
 }
 
+// DHF-REQ: keel/requirement-87
+func (keelTestBridge) Lanes(ctx context.Context) ([]vscode.TestItem, error) {
+	root := stateFrom(ctx).root
+	if root == "" {
+		if rt, ok := testbridge.RuntimeFrom(ctx); ok {
+			root = rt.Root
+		}
+	}
+	families, err := detectGoFamilies(root)
+	if err != nil {
+		return nil, err
+	}
+	generated := generatedLanesFile(root, families)
+	items := make([]vscode.TestItem, 0, len(generated.Lanes))
+	for _, lane := range generated.Lanes {
+		items = append(items, laneItem("keel::lane::"+lane.ID, lane.Order+" "+lane.Label, lane.Order))
+	}
+	return items, nil
+}
+
 // DHF-REQ: keel/requirement-63
 func (keelTestBridge) ConfigTemplate() vscode.TestBridgeConfig {
 	return vscode.DefaultTestBridgeConfig()
