@@ -543,7 +543,7 @@ which is human/CLI-only and never adapter-emitted).
 - `test-bridge config init` — human/CLI bootstrap verb.
 - `file-backed lane discovery|detect` — devtool CLI verbs; "detect lanes" reaches the
   tree as maintenance item `a.1` and executes through interaction 3
-  (`run --id keel::maintenance::detect-lanes`), never as a direct `lanes`
+  (`run --id testbridge::maintenance::detect-lanes`), never as a direct `lanes`
   invocation.
 - Any VS Code settings surface — `testBridge.*` settings are intentionally
   unsupported; the config file is the only knob.

@@ -806,9 +806,9 @@ process.exit(2);
       await vscode.commands.executeCommand('keel.tests.openArtifact', path.join(root, 'missing-artifact.txt'));
 
       const calls = fs.readFileSync(path.join(root, '.devtools', 'fake-adapter-calls.log'), 'utf8');
-      assert.match(calls, /test-bridge run --id keel::maintenance::clear-state/);
-      assert.match(calls, /test-bridge run --id keel::maintenance::unlock/);
-      assert.match(calls, /test-bridge run --id keel::maintenance::detect-lanes/);
+      assert.match(calls, /test-bridge run --id testbridge::maintenance::clear-state/);
+      assert.match(calls, /test-bridge run --id testbridge::maintenance::unlock/);
+      assert.match(calls, /test-bridge run --id testbridge::maintenance::detect-lanes/);
     } finally {
       if (previousDevWorkspace === undefined) {
         delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
@@ -1346,9 +1346,9 @@ process.exit(2);
     // requirement-65 (amended): a bare root serves no lanes until detect-lanes
     // runs; the maintenance item seeds .vscode/test-lanes.json with the gate lanes.
     const bareDiscovery = await discoverTests(root);
-    assert.ok(bareDiscovery.items.some((item) => item.id === 'keel::maintenance::detect-lanes'));
+    assert.ok(bareDiscovery.items.some((item) => item.id === 'testbridge::maintenance::detect-lanes'));
     assert.ok(!bareDiscovery.items.some((item) => item.id === 'keel::lane::lint'));
-    const detect = await collectChild(runTests(root, ['keel::maintenance::detect-lanes']));
+    const detect = await collectChild(runTests(root, ['testbridge::maintenance::detect-lanes']));
     assert.equal(detect.code, 0);
 
     const discovery = await discoverTests(root);
@@ -1378,7 +1378,7 @@ process.exit(2);
     const demoController = vscode.tests.createTestController(`keelDemoDevDiscovery-${Date.now()}`, 'Keel Demo Dev Discovery');
     try {
       const demoTree = publishDiscovery(demoController, root, demoDiscovery);
-      assert.ok(demoTree.discoveryItemsById.has('keel::maintenance'));
+      assert.ok(demoTree.discoveryItemsById.has('testbridge::maintenance'));
       assert.ok(demoTree.discoveryItemsById.has('keel-demo-dev::lanes'));
       assert.ok(demoTree.discoveryItemsById.has('keel-demo-dev::frameworks'));
       assert.ok(demoTree.discoveryItemsById.has('keel-demo-dev::lane::fake-smoke'));
@@ -1426,7 +1426,7 @@ process.exit(2);
     // lanes file through the real binary before driving the lint lane.
     const devLanesPath = path.join(devRoot, '.vscode', 'test-lanes.json');
     const previousLanes = fs.existsSync(devLanesPath) ? fs.readFileSync(devLanesPath, 'utf8') : undefined;
-    const devDetect = await collectChild(runTests(devRoot, ['keel::maintenance::detect-lanes']));
+    const devDetect = await collectChild(runTests(devRoot, ['testbridge::maintenance::detect-lanes']));
     assert.equal(devDetect.code, 0);
     const runStreamRoot = devRoot;
     const runsDir = path.join(runStreamRoot, '.devtools', 'vscode-runs');
@@ -1499,9 +1499,9 @@ process.exit(2);
       generated_at: new Date().toISOString(),
       capabilities: {
         clear_results: true,
-        clear_results_test_ids: ['keel::maintenance::clear-results']
+        clear_results_test_ids: ['testbridge::maintenance::clear-results']
       },
-      items: [{ id: 'keel::maintenance::clear-results', label: 'clear Keel test results', kind: 'maintenance', runnable: true, profiles: ['run'] }]
+      items: [{ id: 'testbridge::maintenance::clear-results', label: 'clear Keel test results', kind: 'maintenance', runnable: true, profiles: ['run'] }]
     });
     setCurrentTreeForTest(tree);
 
@@ -1509,7 +1509,7 @@ process.exit(2);
       version: 1,
       event: 'passed',
       time: new Date().toISOString(),
-      test_id: 'keel::maintenance::clear-results'
+      test_id: 'testbridge::maintenance::clear-results'
     }), true);
     assert.equal(shouldInvalidateResultsForEvent({
       version: 1,

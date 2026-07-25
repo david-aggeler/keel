@@ -177,7 +177,7 @@ type MaintenanceItemProvider interface {
 // Bridge-owned maintenance vocabulary. Consumers may reference these ids from
 // run handlers, but they do not author the discovery rows or capability arrays.
 const (
-	MaintenanceGroupID        = "keel" + "::maintenance"
+	MaintenanceGroupID        = "testbridge" + "::maintenance"
 	MaintenanceDetectLanesID  = MaintenanceGroupID + "::detect-lanes"
 	MaintenanceUnlockID       = MaintenanceGroupID + "::unlock"
 	MaintenanceClearResultsID = MaintenanceGroupID + "::clear-results"
@@ -314,7 +314,7 @@ func bridgeMaintenanceItem(id, label, sortText string) vscode.TestItem {
 		Label:       label,
 		SortText:    sortText,
 		Kind:        "maintenance",
-		Framework:   "keel",
+		Framework:   "testbridge",
 		Runner:      "testbridge",
 		RunnerLabel: "testbridge",
 		Runnable:    true,
@@ -745,7 +745,7 @@ func exclusiveUnknownRunID(parentID, groupLabel string) string {
 func desiredStateRootID(bridge Bridge) string {
 	node := bridge.Workspace().Node
 	if node == "" {
-		node = "keel"
+		node = "testbridge"
 	}
 	return node + "::desired-state"
 }
@@ -1105,7 +1105,7 @@ func bridgeLaneFileRows(items []vscode.TestItem) []bridgeLane {
 		id := bridgeLaneFileID(item)
 		lanes = append(lanes, bridgeLane{
 			ID:                id,
-			Label:             bridgeLaneFileLabel(item),
+			Label:             bridgeLaneFileLabel(item, id),
 			Order:             bridgeLaneFileOrder(item),
 			Framework:         item.Framework,
 			RequiredResources: append([]string(nil), item.RequiredResources...),
@@ -1116,17 +1116,20 @@ func bridgeLaneFileRows(items []vscode.TestItem) []bridgeLane {
 }
 
 func bridgeLaneFileID(item vscode.TestItem) string {
-	prefix := "keel" + "::lane::"
-	if strings.HasPrefix(item.ID, prefix) {
-		return strings.TrimPrefix(item.ID, prefix)
+	if _, suffix, ok := strings.Cut(strings.TrimSpace(item.ID), "::lane::"); ok && suffix != "" {
+		return suffix
+	}
+	if prefix, suffix, ok := strings.Cut(strings.TrimSpace(item.ID), "::"); ok && prefix != "" && suffix != "" {
+		parts := strings.Split(suffix, "::")
+		return parts[len(parts)-1]
 	}
 	return item.ID
 }
 
-func bridgeLaneFileLabel(item vscode.TestItem) string {
+func bridgeLaneFileLabel(item vscode.TestItem, id string) string {
 	label := item.Label
 	if label == "" {
-		label = item.ID
+		label = id
 	}
 	return label
 }

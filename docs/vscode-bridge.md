@@ -16,7 +16,7 @@ go run ./cmd/keel-dev test-bridge config-upgrade
 go run ./cmd/keel-dev vsix ci
 ```
 
-Run `keel::maintenance::detect-lanes` once from the Test Explorer to populate
+Run `testbridge::maintenance::detect-lanes` once from the Test Explorer to populate
 `.vscode/test-lanes.json`. The seeded gate lane ids are:
 
 - `keel::lane::lint`
