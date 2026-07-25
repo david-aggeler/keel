@@ -796,6 +796,69 @@ func TestRunBridgeOwnedClearStateInvokesConsumerCallback(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-87
+func TestBridgeInjectedRunnableMaintenanceIDsHaveDefinedRunPaths(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.runErr = fmt.Errorf("unknown test id %q", testbridge.MaintenanceDetectLanesID)
+	fake.lanes = []vscode.TestItem{{
+		ID:                "demo::lane::fast",
+		Label:             "fast",
+		SortText:          "c.10",
+		Kind:              "lane",
+		Framework:         "go",
+		Runnable:          true,
+		Profiles:          []string{"run"},
+		LaneID:            "demo::lane::fast",
+		RequiredResources: []string{"go-toolchain"},
+	}}
+	var discover bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{
+		Root:     root,
+		Protocol: &discover,
+		RunID:    func() string { return "run-maintenance" },
+	})
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "discover", "--format", "json"}); err != nil {
+		t.Fatalf("discover dispatch: %v", err)
+	}
+	var doc vscode.DiscoveryDocument
+	decodeJSON(t, &discover, &doc)
+	var ids []string
+	for _, item := range doc.Items {
+		if item.ParentID == testbridge.MaintenanceGroupID && item.Kind == "maintenance" && item.Runnable {
+			ids = append(ids, item.ID)
+		}
+	}
+	if len(ids) == 0 {
+		t.Fatalf("discovery items = %+v, want runnable bridge maintenance ids", doc.Items)
+	}
+	for _, id := range ids {
+		var protocol bytes.Buffer
+		ctx := testbridge.WithRuntime(ctx, testbridge.Runtime{
+			Root:     root,
+			Protocol: &protocol,
+			RunID:    func() string { return "run-maintenance" },
+		})
+		if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--id", id}); err != nil {
+			t.Fatalf("maintenance id %s dispatched through undefined path: %v\n%s", id, err, protocol.String())
+		}
+		events := decodeEvents(t, protocol.String())
+		if !eventsContain(events, "passed", id, "") || events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode != 0 {
+			t.Fatalf("maintenance id %s events = %+v, want passed and run_finished exit 0", id, events)
+		}
+	}
+	if len(fake.runIDs) != 0 {
+		t.Fatalf("bridge-injected maintenance delegated to generic runner ids=%v, want bridge-owned paths only", fake.runIDs)
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".vscode", "test-lanes.json"))
+	if err != nil {
+		t.Fatalf("detect-lanes did not write lanes file: %v", err)
+	}
+	if !strings.Contains(string(data), "demo::lane::fast") {
+		t.Fatalf("detect-lanes lanes file = %s, want LaneProvider lane", data)
+	}
+}
+
 // DHF-TEST: keel/requirement-75
 func TestDiscoverDesiredStateRowUsesProbeDerivedCurrentAndAction(t *testing.T) {
 	root := t.TempDir()
@@ -2354,6 +2417,7 @@ type fakeBridge struct {
 	root                            string
 	calls                           string
 	extraItems                      []vscode.TestItem
+	lanes                           []vscode.TestItem
 	runIDs                          []string
 	runCalls                        int
 	cancelAfterFirstRun             context.CancelFunc
@@ -2564,6 +2628,10 @@ func (f *fakeBridge) Run(_ context.Context, req testbridge.RunRequest, emit vsco
 		return 1, f.runErr
 	}
 	return 0, nil
+}
+
+func (f *fakeBridge) Lanes(context.Context) ([]vscode.TestItem, error) {
+	return f.lanes, nil
 }
 
 func (f *fakeBridge) LockExemptRun([]string) bool {

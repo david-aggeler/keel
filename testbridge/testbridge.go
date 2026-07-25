@@ -196,6 +196,20 @@ type LaneProvider interface {
 	Lanes(context.Context) ([]vscode.TestItem, error)
 }
 
+type bridgeLanesFile struct {
+	Version int          `json:"version"`
+	Lanes   []bridgeLane `json:"lanes"`
+}
+
+type bridgeLane struct {
+	ID                string              `json:"id"`
+	Label             string              `json:"label"`
+	Order             string              `json:"order,omitempty"`
+	Framework         string              `json:"framework,omitempty"`
+	RequiredResources []string            `json:"required_resources,omitempty"`
+	Members           []map[string]string `json:"members,omitempty"`
+}
+
 // Bridge is the provider set required by the canonical command tree.
 type Bridge interface {
 	DiscoveryProvider
@@ -1014,7 +1028,7 @@ func runRemainingSelections(ctx context.Context, bridge Bridge, requests []runRe
 
 func bridgeHandlesMaintenanceRun(id string) bool {
 	switch id {
-	case MaintenanceUnlockID, MaintenanceClearResultsID, MaintenanceClearStateID:
+	case MaintenanceDetectLanesID, MaintenanceUnlockID, MaintenanceClearResultsID, MaintenanceClearStateID:
 		return true
 	default:
 		return false
@@ -1024,7 +1038,14 @@ func bridgeHandlesMaintenanceRun(id string) bool {
 // DHF-REQ: keel/requirement-87
 func runBridgeMaintenance(ctx context.Context, bridge Bridge, root, runID, id string, writer vscode.RunEventWriter) (int, error) {
 	writer(vscode.RunEvent{Event: "test_started", TestID: id})
+	passedMessage := ""
 	switch id {
+	case MaintenanceDetectLanesID:
+		message, err := writeBridgeDetectedLanes(ctx, bridge, root, writer)
+		if err != nil {
+			return 1, err
+		}
+		passedMessage = message
 	case MaintenanceUnlockID:
 		if err := os.Remove(RunLockPath(root)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return 1, err
@@ -1042,8 +1063,106 @@ func runBridgeMaintenance(ctx context.Context, bridge Bridge, root, runID, id st
 	default:
 		return 2, cli.NewUsageError("unknown bridge maintenance id %q", id)
 	}
-	writer(vscode.RunEvent{Event: "passed", TestID: id})
+	writer(vscode.RunEvent{Event: "passed", TestID: id, Message: passedMessage})
 	return 0, nil
+}
+
+func writeBridgeDetectedLanes(ctx context.Context, bridge Bridge, root string, writer vscode.RunEventWriter) (string, error) {
+	var lanes []vscode.TestItem
+	if provider, ok := bridge.(LaneProvider); ok {
+		provided, err := provider.Lanes(ctx)
+		if err != nil {
+			return "", err
+		}
+		lanes = provided
+	} else {
+		writer(vscode.RunEvent{Event: "output", TestID: MaintenanceDetectLanesID, Message: "no LaneProvider; wrote empty .vscode/test-lanes.json"})
+	}
+	file := bridgeLanesFile{Version: 1, Lanes: bridgeLaneFileRows(lanes)}
+	data, err := json.MarshalIndent(file, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(root, ".vscode", "test-lanes.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
+		return "", err
+	}
+	for _, lane := range file.Lanes {
+		writer(vscode.RunEvent{Event: "output", TestID: MaintenanceDetectLanesID, Message: fmt.Sprintf("detected %s", lane.ID)})
+	}
+	return "wrote .vscode/test-lanes.json", nil
+}
+
+func bridgeLaneFileRows(items []vscode.TestItem) []bridgeLane {
+	lanes := make([]bridgeLane, 0, len(items))
+	for _, item := range items {
+		if item.ID == "" || (item.Kind != "" && item.Kind != "lane") {
+			continue
+		}
+		id := bridgeLaneFileID(item)
+		lanes = append(lanes, bridgeLane{
+			ID:                id,
+			Label:             bridgeLaneFileLabel(item),
+			Order:             bridgeLaneFileOrder(item),
+			Framework:         item.Framework,
+			RequiredResources: append([]string(nil), item.RequiredResources...),
+			Members:           bridgeLaneFileMembers(item, id),
+		})
+	}
+	return lanes
+}
+
+func bridgeLaneFileID(item vscode.TestItem) string {
+	prefix := "keel" + "::lane::"
+	if strings.HasPrefix(item.ID, prefix) {
+		return strings.TrimPrefix(item.ID, prefix)
+	}
+	return item.ID
+}
+
+func bridgeLaneFileLabel(item vscode.TestItem) string {
+	label := item.Label
+	if label == "" {
+		label = item.ID
+	}
+	return label
+}
+
+func bridgeLaneFileOrder(item vscode.TestItem) string {
+	if order := normalizedBridgeLaneOrder(item.SortText); order != "" {
+		return order
+	}
+	if fields := strings.Fields(item.Label); len(fields) > 0 {
+		return normalizedBridgeLaneOrder(fields[0])
+	}
+	return ""
+}
+
+func normalizedBridgeLaneOrder(value string) string {
+	value = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(value)), ".")
+	if len(value) < 3 || value[1] != '.' {
+		return ""
+	}
+	for _, r := range value[2:] {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	return value
+}
+
+func bridgeLaneFileMembers(item vscode.TestItem, id string) []map[string]string {
+	switch {
+	case strings.Contains(id, "vsix"):
+		return []map[string]string{{"root": "vsix"}}
+	case strings.Contains(item.Framework, "go") || strings.HasPrefix(id, "go-") || id == "lint" || id == "test-fast" || id == "test-coverage" || id == "ci":
+		return []map[string]string{{"root": "go"}}
+	default:
+		return nil
+	}
 }
 
 func desiredStateDeclarationsByRunID(desiredState DesiredStateDeclaration) map[string]DesiredStateRow {

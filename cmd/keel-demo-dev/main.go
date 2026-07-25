@@ -276,6 +276,18 @@ func (b demoBridge) ClearState(_ context.Context, req testbridge.RunRequest, _ v
 	return 0, nil
 }
 
+// DHF-REQ: keel/requirement-87
+func (b demoBridge) Lanes(ctx context.Context) ([]vscode.TestItem, error) {
+	if err := writeDemoReadyState(b.workspace(ctx).Root); err != nil {
+		return nil, err
+	}
+	return []vscode.TestItem{
+		lane(idLaneGoPass, idLanes, "C.10 real Go pass", []string{"go-toolchain"}),
+		lane(idLaneGoFail, idLanes, "C.20 real Go fail", []string{"go-toolchain"}),
+		lane(idLaneFakeSmoke, idLanes, "C.30 fake provisioning smoke", []string{"demo-environment", "demo-database", "demo-services"}),
+	}, nil
+}
+
 func (b demoBridge) runOne(ctx context.Context, root, id string, emit vscode.RunEventWriter) (int, error) {
 	switch id {
 	case idDetectLanes:
@@ -474,6 +486,10 @@ func writeDemoLanesFile(root string) error {
 	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
 		return err
 	}
+	return writeDemoReadyState(root)
+}
+
+func writeDemoReadyState(root string) error {
 	for _, resource := range []string{"docker-env", "postgres", "service-a", "service-b", "service-c", "sdk", "dns", "ping"} {
 		if err := writeDemoPrereqReady(root, resource); err != nil {
 			return err
