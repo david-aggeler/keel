@@ -562,10 +562,10 @@ func TestVSCodeDiscoveryEmitsStructuredOrderedTree(t *testing.T) {
 		label string
 		sort  string
 	}{
-		"keel::maintenance":   {label: "A - Test Bridge Maintenance", sort: "a"},
-		"keel::desired-state": {label: "B - Desired State", sort: "b"},
-		"keel::lanes":         {label: "C - Lanes", sort: "c"},
-		"keel::frameworks":    {label: "D - Frameworks", sort: "d"},
+		"testbridge::maintenance": {label: "A - Test Bridge Maintenance", sort: "a"},
+		"keel::desired-state":     {label: "B - Desired State", sort: "b"},
+		"keel::lanes":             {label: "C - Lanes", sort: "c"},
+		"keel::frameworks":        {label: "D - Frameworks", sort: "d"},
 	}
 	if len(top) != len(wantTop) {
 		t.Fatalf("top-level groups = %+v, want exactly %d groups", top, len(wantTop))
@@ -579,7 +579,7 @@ func TestVSCodeDiscoveryEmitsStructuredOrderedTree(t *testing.T) {
 			t.Fatalf("top-level group %q = %+v, want label=%q kind=group sort_text=%q runnable=false", id, item, want.label, want.sort)
 		}
 	}
-	wantOrder := []string{"keel::maintenance", "keel::desired-state", "keel::lanes", "keel::frameworks"}
+	wantOrder := []string{"testbridge::maintenance", "keel::desired-state", "keel::lanes", "keel::frameworks"}
 	topIDs := make([]string, 0, len(top))
 	for id := range top {
 		topIDs = append(topIDs, id)
@@ -1512,7 +1512,7 @@ func TestVSCodeLaneAdditionalErrorBranches(t *testing.T) {
 	if code, err := runVSCodeMaintenance(root, vscodeMaintenanceDetectLanes); code != 2 || err == nil {
 		t.Fatalf("detect maintenance without writer = code %d err %v, want usage", code, err)
 	}
-	if code, err := runVSCodeMaintenance(root, "keel::maintenance::missing"); code != 2 || err == nil {
+	if code, err := runVSCodeMaintenance(root, "testbridge::maintenance::missing"); code != 2 || err == nil {
 		t.Fatalf("unknown maintenance = code %d err %v, want usage", code, err)
 	}
 	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), "{")
@@ -3381,7 +3381,7 @@ func TestRunVSCodeLaneDirectDispatcherBranches(t *testing.T) {
 	writeFile(t, root, "go.sum", "")
 	writeFile(t, root, "root_test.go", "package keel\n\nimport \"testing\"\n\nfunc TestRoot(t *testing.T) {}\n")
 
-	if code, err := runVSCodeLane(context.Background(), nil, root, "keel::maintenance::bogus", "run-1", 1024, nil); err == nil || code != 2 {
+	if code, err := runVSCodeLane(context.Background(), nil, root, "testbridge::maintenance::bogus", "run-1", 1024, nil); err == nil || code != 2 {
 		t.Fatalf("unknown maintenance lane = code %d err %v, want usage code 2", code, err)
 	}
 	if code, err := runVSCodeLane(context.Background(), nil, root, "keel::lane::missing", "run-1", 1024, nil); err == nil || code != 1 || !strings.Contains(err.Error(), "unknown vscode lane id") {

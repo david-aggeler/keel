@@ -69,7 +69,7 @@ func TestRunLockReentrantForDescendantRuns(t *testing.T) {
 		t.Fatalf("exported env token = %q, want token-outer", got)
 	}
 
-	nestedRelease, err := acquireRunLock(root, []string{"keel::maintenance::detect-lanes"}, "token-nested", nil)
+	nestedRelease, err := acquireRunLock(root, []string{MaintenanceDetectLanesID}, "token-nested", nil)
 	if err != nil {
 		t.Fatalf("nested acquire under matching ancestor token: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestRunLockAncestorTokenWinsOverDeadPID(t *testing.T) {
 
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
-	release, err := acquireRunLock(root, []string{"keel::maintenance::detect-lanes"}, "nested-token", logger)
+	release, err := acquireRunLock(root, []string{MaintenanceDetectLanesID}, "nested-token", logger)
 	if err != nil {
 		t.Fatalf("nested acquire under dead ancestor token err = %v, want reentrant proceed", err)
 	}
@@ -387,12 +387,51 @@ func TestDesiredStateReportContextAndBridgeMaintenanceBranches(t *testing.T) {
 	if err == nil || code != 1 || !strings.Contains(err.Error(), "does not implement clear-state") {
 		t.Fatalf("clear-state without provider = code %d err %v, want provider error", code, err)
 	}
-	code, err = runBridgeMaintenance(context.Background(), &bridge, root, "run-1", "keel::maintenance::bogus", writer)
+	code, err = runBridgeMaintenance(context.Background(), &bridge, root, "run-1", MaintenanceGroupID+"::bogus", writer)
 	if err == nil || code != 2 || !strings.Contains(err.Error(), "unknown bridge maintenance id") {
 		t.Fatalf("unknown maintenance = code %d err %v, want usage error", code, err)
 	}
 	if !eventsContain(events, "test_started", MaintenanceUnlockID) || !eventsContain(events, "passed", MaintenanceUnlockID) {
 		t.Fatalf("maintenance events = %+v, want unlock start/pass", events)
+	}
+}
+
+// DHF-TEST: keel/requirement-58
+func TestBridgeLaneFileIDDerivesGenericNamespaceSegments(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		item  vscode.TestItem
+		id    string
+		label string
+	}{
+		{
+			name:  "lane namespace",
+			item:  vscode.TestItem{ID: "openbrain-dev::lane::acceptance"},
+			id:    "acceptance",
+			label: "acceptance",
+		},
+		{
+			name:  "non-lane namespace",
+			item:  vscode.TestItem{ID: "openbrain-dev::suite::acceptance"},
+			id:    "acceptance",
+			label: "acceptance",
+		},
+		{
+			name:  "plain id with explicit label",
+			item:  vscode.TestItem{ID: "acceptance", Label: "Acceptance lane"},
+			id:    "acceptance",
+			label: "Acceptance lane",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id := bridgeLaneFileID(tc.item)
+			if id != tc.id {
+				t.Fatalf("bridgeLaneFileID(%q) = %q, want %q", tc.item.ID, id, tc.id)
+			}
+			if label := bridgeLaneFileLabel(tc.item, id); label != tc.label {
+				t.Fatalf("bridgeLaneFileLabel(%q) = %q, want %q", tc.item.ID, label, tc.label)
+			}
+		})
 	}
 }
 
