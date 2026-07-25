@@ -1355,6 +1355,51 @@ func TestConsoleOutput_RendersBannersByConsoleMode(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-32
+func TestLoggerBuildIdentityEmitsBannerAndStructuredRecord(t *testing.T) {
+	var console bytes.Buffer
+	jsonlDir := t.TempDir()
+	logger := mustNewLogger(t, logging.Config{
+		Console:  logging.ConsolePlain,
+		Service:  "keel-dev",
+		Writer:   &console,
+		JSONLDir: jsonlDir,
+	})
+	t.Cleanup(func() {
+		if err := logger.Close(); err != nil {
+			t.Fatalf("Close returned error: %v", err)
+		}
+	})
+
+	logger.BuildIdentity("keel-dev ci", "v1.2.3", "")
+
+	if out := console.String(); !strings.Contains(out, "keel-dev ci v1.2.3") {
+		t.Fatalf("plain console missing startup banner:\n%s", out)
+	}
+
+	jsonlBytes, err := os.ReadFile(logger.JSONLLogPath())
+	if err != nil {
+		t.Fatalf("read jsonl sink: %v", err)
+	}
+	records := parseJSONLines(t, string(jsonlBytes))
+	if len(records) != 2 {
+		t.Fatalf("JSONL records = %d, want banner and build identity: %#v", len(records), records)
+	}
+	if got := records[0]["banner"]; got != "header" {
+		t.Fatalf("first JSONL record banner = %v, want header: %#v", got, records[0])
+	}
+	buildIdentity := records[1]
+	if got := buildIdentity["msg"]; got != "build identity" {
+		t.Fatalf("build identity msg = %v, want build identity: %#v", got, buildIdentity)
+	}
+	if got := buildIdentity["version"]; got != "v1.2.3" {
+		t.Fatalf("build identity version = %v, want v1.2.3: %#v", got, buildIdentity)
+	}
+	if got, ok := buildIdentity["git_commit"].(string); !ok || got == "" {
+		t.Fatalf("build identity git_commit = %#v, want resolved non-empty string: %#v", buildIdentity["git_commit"], buildIdentity)
+	}
+}
+
 // DHF-TEST: openbrain/requirement-152
 func TestConsoleOutput_LevelThresholdAndColorGating(t *testing.T) {
 	t.Setenv("NO_COLOR", "")
