@@ -28,7 +28,7 @@
 //	}
 //	defer logger.Close()
 //
-//	logger.Header("gateway", version) // ruled startup banner
+//	logger.BuildIdentity("gateway", version, gitCommit) // ruled startup banner + build identity
 //	logger.Debug("config loaded", "path", cfgPath)
 //	logger.Info("listening", "addr", addr)
 //	logger.Warn("retrying", "attempt", n)
@@ -68,9 +68,10 @@
 // like any other logged value; reach for it only where the same multi-field
 // failure context is logged repeatedly.
 //
-// The remaining surface hangs off [Logger]. [Logger.Header] and [Logger.Section]
-// emit ruled banners, and [Logger.Field]/[Logger.Fields] emit aligned
-// label/value rows ([FieldRow]) — these render in every console mode, not just
-// plain text. [Logger.Emit] logs a metrics event, and [Logger.LogBuildIdentity]
-// logs a one-line build-identity record at startup.
+// The remaining surface hangs off [Logger]. [Logger.Header] emits a banner-only
+// rule, [Logger.BuildIdentity] emits a startup banner plus the structured build
+// identity event, and [Logger.Section] emits section banners. [Logger.Field] and
+// [Logger.Fields] emit aligned label/value rows ([FieldRow]) — these render in
+// every console mode, not just plain text. [Logger.Emit] logs a metrics event,
+// and [Logger.LogBuildIdentity] logs only the one-line build-identity record.
 package log

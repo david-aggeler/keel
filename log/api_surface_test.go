@@ -74,6 +74,7 @@ func TestPublicAPISurfaceMatchesMinimalLoggerContract(t *testing.T) {
 
 	requiredLoggerMethods := []string{
 		"Header",
+		"BuildIdentity",
 		"Section",
 		"Field",
 		"Fields",
