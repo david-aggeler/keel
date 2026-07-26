@@ -39,7 +39,7 @@ func stateFrom(ctx context.Context) runState {
 	return state
 }
 
-// DHF-REQ: keel/requirement-21, keel/requirement-57, keel/requirement-65, keel/requirement-107, keel/requirement-111
+// DHF-REQ: keel/requirement-21, keel/requirement-57, keel/requirement-65, keel/requirement-107, keel/requirement-111, keel/requirement-114
 func commandTree() *cli.CommandSpec {
 	tree := &cli.CommandSpec{
 		Name: "keel-dev",
@@ -61,6 +61,7 @@ func commandTree() *cli.CommandSpec {
 			{Name: "verify", Use: "verify vX.Y.Z", Short: "Re-verify anonymous module fetch for an existing tag.", Positionals: []cli.PositionalSpec{{Name: "version", Min: 1, Max: 1}}, Handler: handleVerify},
 			testBridgeCommandSpec(),
 			vsixCommandSpec(),
+			worktreeCommandSpec(),
 		},
 	}
 	tree.InheritConfig()
