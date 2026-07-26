@@ -35,7 +35,7 @@ function pythonVenvDiscoveryItem() {
   const active = pythonVenvProvisioned();
   return {
     id: 'keel::action::provision-python-venv',
-    parent_id: 'keel::desired-state::group::test-preconditions',
+    parent_id: 'testbridge::desired-state::group::test-preconditions',
     label: active ? 'python-venv satisfied: provisioned -> provisioned' : 'python-venv reconcilable: missing -> provisioned',
     sort_text: 'b.010.002',
     kind: 'maintenance',
@@ -71,14 +71,14 @@ if (command === 'test-bridge discover --format') {
       clear_results: true,
       refresh_invalidates_results: true,
       neutral_parent_rollups: true,
-      clear_results_test_ids: ['keel::maintenance::clear-results'],
-      clear_state_test_ids: ['keel::maintenance::clear-state']
+      clear_results_test_ids: ['testbridge::maintenance::clear-results'],
+      clear_state_test_ids: ['testbridge::maintenance::clear-state']
     },
     items: [
-      { id: 'keel::maintenance', label: 'A - Test Bridge Maintenance', sort_text: 'a', kind: 'group', runnable: false, profiles: [] },
-      { id: 'keel::desired-state', label: 'B - Desired State', sort_text: 'b', kind: 'group', runnable: false, profiles: [] },
-      { id: 'keel::desired-state::group::test-preconditions', parent_id: 'keel::desired-state', label: 'Test Preconditions', sort_text: 'b.010', kind: 'group', runnable: false, profiles: [], limitations: ['mutually_exclusive=false'] },
-      { id: 'keel::desired-state::test-preconditions::python::available::reuse', parent_id: 'keel::desired-state::group::test-preconditions', label: 'python satisfied: available -> available', sort_text: 'b.010.001', kind: 'group', runnable: false, profiles: [], limitations: ['action=reuse', 'active=false'] },
+      { id: 'testbridge::maintenance', label: 'A - Test Bridge Maintenance', sort_text: 'a', kind: 'group', runnable: false, profiles: [] },
+      { id: 'testbridge::desired-state', label: 'B - Desired State', sort_text: 'b', kind: 'group', runnable: false, profiles: [] },
+      { id: 'testbridge::desired-state::group::test-preconditions', parent_id: 'testbridge::desired-state', label: 'Test Preconditions', sort_text: 'b.010', kind: 'group', runnable: false, profiles: [], limitations: ['mutually_exclusive=false'] },
+      { id: 'testbridge::desired-state::test-preconditions::python::available::reuse', parent_id: 'testbridge::desired-state::group::test-preconditions', label: 'python satisfied: available -> available', sort_text: 'b.010.001', kind: 'group', runnable: false, profiles: [], limitations: ['action=reuse', 'active=false'] },
       pythonVenvDiscoveryItem(),
       { id: 'keel::lanes', label: 'C - Lanes', sort_text: 'c', kind: 'group', runnable: false, profiles: [] },
       { id: 'keel::frameworks', label: 'D - Frameworks', sort_text: 'd', kind: 'group', runnable: false, profiles: [] },
@@ -95,9 +95,9 @@ if (command === 'test-bridge discover --format') {
       { id: 'keel::lane::test-coverage', parent_id: 'keel::lanes', label: 'test-coverage', kind: 'lane', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['coverage'] },
       { id: 'keel::lane::vsix-ci', parent_id: 'keel::lanes', label: 'c.10 vsix ci', sort_text: 'c.010', kind: 'lane', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'], required_resources: ['go-toolchain', 'keel-module-root', 'stub-binaries', 'pnpm'] },
       { id: 'keel::lane::ci', parent_id: 'keel::lanes', label: 'c.30 ci', sort_text: 'c.030', kind: 'lane', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'], required_resources: ['go-toolchain', 'keel-module-root', 'stub-binaries'] },
-      { id: 'keel::maintenance::unlock', parent_id: 'keel::maintenance', label: 'a.2 unlock test bridge', sort_text: 'a.002', kind: 'maintenance', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'] },
-      { id: 'keel::maintenance::clear-results', parent_id: 'keel::maintenance', label: 'a.3 clear test results', sort_text: 'a.003', kind: 'maintenance', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'] },
-      { id: 'keel::maintenance::clear-state', parent_id: 'keel::maintenance', label: 'a.4 clear local test state', sort_text: 'a.004', kind: 'maintenance', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'] }
+      { id: 'testbridge::maintenance::unlock', parent_id: 'testbridge::maintenance', label: 'a.2 unlock test bridge', sort_text: 'a.002', kind: 'maintenance', framework: 'testbridge', runner: 'testbridge', runner_label: 'testbridge', runnable: true, profiles: ['run'] },
+      { id: 'testbridge::maintenance::clear-results', parent_id: 'testbridge::maintenance', label: 'a.3 clear test results', sort_text: 'a.003', kind: 'maintenance', framework: 'testbridge', runner: 'testbridge', runner_label: 'testbridge', runnable: true, profiles: ['run'] },
+      { id: 'testbridge::maintenance::clear-state', parent_id: 'testbridge::maintenance', label: 'a.4 clear local test state', sort_text: 'a.004', kind: 'maintenance', framework: 'testbridge', runner: 'testbridge', runner_label: 'testbridge', runnable: true, profiles: ['run'] }
     ]
   }, null, 2));
   process.stdout.write('\n');
@@ -141,12 +141,12 @@ if (args.slice(0, 2).join(' ') === 'test-bridge run') {
     }
   }
   // Strict like the real keel-dev bridge (formal_review-80): ids the adapter
-  // never served — including the VSIX-private keel::desired-state:: display
+  // never served — including the VSIX-private testbridge::desired-state:: display
   // namespace — are rejected, not silently run.
   const servedRunIds = ['keel::action::provision-python-venv'];
   for (const id of ids) {
-    const known = id.startsWith('keel::') || id.startsWith('go::') || id.startsWith('alias::');
-    if (!known || id.startsWith('keel::desired-state::')) {
+    const known = id.startsWith('keel::') || id.startsWith('testbridge::') || id.startsWith('go::') || id.startsWith('alias::');
+    if (!known || id.startsWith('testbridge::desired-state::')) {
       process.stderr.write(`unknown vscode lane id ${JSON.stringify(id)}\n`);
       process.exit(2);
     }
@@ -164,7 +164,7 @@ if (args.slice(0, 2).join(' ') === 'test-bridge run') {
     process.exit(0);
   }
   emit({ event: 'test_started', test_id: selected });
-  if (selected === 'keel::maintenance::clear-state' || selected === 'keel::maintenance::clear-results' || selected === 'keel::maintenance::unlock') {
+  if (selected === 'testbridge::maintenance::clear-state' || selected === 'testbridge::maintenance::clear-results' || selected === 'testbridge::maintenance::unlock') {
     emit({ event: 'output', test_id: selected, message: `completed ${selected}` });
     emit({ event: 'passed', test_id: selected, duration_ms: 1 });
     emit({ event: 'run_finished', exit_code: 0 });

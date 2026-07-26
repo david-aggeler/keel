@@ -37,7 +37,7 @@ suite('Keel Test Bridge expected-red specs', () => {
     await expectKnownRed('vsix:req-69:approved-four-group-tree', async () => {
       const root = createRealBridgeWorkspace('keel-req69-');
       try {
-        const detect = await collectChild(runTests(root, ['keel::maintenance::detect-lanes']));
+        const detect = await collectChild(runTests(root, ['testbridge::maintenance::detect-lanes']));
         assert.equal(detect.code, 0, detect.stderr + detect.stdout);
 
         const discovery = await discoverTests(root);
@@ -51,7 +51,7 @@ suite('Keel Test Bridge expected-red specs', () => {
           { label: 'D - Frameworks', kind: 'group' }
         ]);
         assert.deepEqual(top.map((item) => item.id), [
-          'keel::maintenance',
+          'testbridge::maintenance',
           'keel::desired-state',
           'keel::lanes',
           'keel::frameworks'
@@ -231,7 +231,7 @@ suite('Keel Test Bridge expected-red specs', () => {
     await expectKnownRed('vsix:req-72:runnable-id-dry-run-sweep', async () => {
       const root = createRealBridgeWorkspace('keel-req72-');
       try {
-        const detect = await collectChild(runTests(root, ['keel::maintenance::detect-lanes']));
+        const detect = await collectChild(runTests(root, ['testbridge::maintenance::detect-lanes']));
         assert.equal(detect.code, 0, detect.stderr + detect.stdout);
         const discovery = await discoverTests(root);
         const runnableIds = discovery.items.filter((item) => item.runnable).map((item) => item.id);
