@@ -288,14 +288,9 @@ func (b demoBridge) Lanes(ctx context.Context) ([]vscode.TestItem, error) {
 	}, nil
 }
 
+// DHF-REQ: keel/requirement-87
 func (b demoBridge) runOne(ctx context.Context, root, id string, emit vscode.RunEventWriter) (int, error) {
 	switch id {
-	case idDetectLanes:
-		if err := writeDemoLanesFile(root); err != nil {
-			return 1, err
-		}
-		emit(vscode.RunEvent{Event: "passed", TestID: id, Message: "wrote .vscode/test-lanes.json for demo lanes"})
-		return 0, nil
 	case idBlockBadLane:
 		if err := writeBlockState(root, idLaneGoFail); err != nil {
 			return 1, err
@@ -464,29 +459,6 @@ func demoDataSetPath(root string) string {
 func hasDemoLanesFile(root string) bool {
 	_, err := os.Stat(demoLanesPath(root))
 	return err == nil
-}
-
-func writeDemoLanesFile(root string) error {
-	path := demoLanesPath(root)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	body := map[string]any{
-		"version": 1,
-		"lanes": []map[string]any{
-			{"id": idLaneGoPass, "label": "real Go pass", "framework": "go", "required_resources": []string{"go-toolchain"}},
-			{"id": idLaneGoFail, "label": "real Go fail", "framework": "go", "required_resources": []string{"go-toolchain"}},
-			{"id": idLaneFakeSmoke, "label": "fake provisioning smoke", "framework": "fake", "required_resources": []string{"demo-environment", "demo-database", "demo-services"}},
-		},
-	}
-	data, err := json.MarshalIndent(body, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
-		return err
-	}
-	return writeDemoReadyState(root)
 }
 
 func writeDemoReadyState(root string) error {
