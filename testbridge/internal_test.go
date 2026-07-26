@@ -435,6 +435,44 @@ func TestBridgeLaneFileIDDerivesGenericNamespaceSegments(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-87
+func TestBridgeDetectLanesSerializesEmptyAndFallbackFilesCompatibly(t *testing.T) {
+	root := t.TempDir()
+	if code, err := runBridgeMaintenance(context.Background(), newInternalBridge(root), root, "run-1", MaintenanceDetectLanesID, func(vscode.RunEvent) {}); err != nil || code != 0 {
+		t.Fatalf("empty detect-lanes maintenance = code %d err %v", code, err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".vscode", "test-lanes.json"))
+	if err != nil {
+		t.Fatalf("read empty lanes file: %v", err)
+	}
+	if !strings.Contains(string(data), `"lanes": []`) || strings.Contains(string(data), `"lanes": null`) {
+		t.Fatalf("empty lanes file = %s, want lanes array", data)
+	}
+
+	fallbackRoot := t.TempDir()
+	fallback := laneOnlyBridge{
+		internalBridge: newInternalBridge(fallbackRoot),
+		lanes: []vscode.TestItem{{
+			ID:    "demo::lane::unclassified",
+			Label: "unclassified",
+			Kind:  "lane",
+		}},
+	}
+	if code, err := runBridgeMaintenance(context.Background(), fallback, fallbackRoot, "run-2", MaintenanceDetectLanesID, func(vscode.RunEvent) {}); err != nil || code != 0 {
+		t.Fatalf("fallback detect-lanes maintenance = code %d err %v", code, err)
+	}
+	data, err = os.ReadFile(filepath.Join(fallbackRoot, ".vscode", "test-lanes.json"))
+	if err != nil {
+		t.Fatalf("read fallback lanes file: %v", err)
+	}
+	text := string(data)
+	for _, notWant := range []string{`"lanes": null`, `"members": null`, `"description"`, `"prerequisites"`} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("fallback lanes file = %s, should not contain %s", data, notWant)
+		}
+	}
+}
+
 // DHF-TEST: keel/requirement-11, keel/requirement-92
 func TestPruneCompletedRunStreamsKeepsNewestCompletedAndActive(t *testing.T) {
 	runDir := t.TempDir()
@@ -663,6 +701,15 @@ type internalBridge struct {
 type maintenanceBridge struct {
 	internalBridge
 	cleared bool
+}
+
+type laneOnlyBridge struct {
+	internalBridge
+	lanes []vscode.TestItem
+}
+
+func (b laneOnlyBridge) Lanes(context.Context) ([]vscode.TestItem, error) {
+	return b.lanes, nil
 }
 
 func (b *maintenanceBridge) ClearState(context.Context, RunRequest, vscode.RunEventWriter) (int, error) {
