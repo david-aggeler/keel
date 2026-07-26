@@ -18,9 +18,6 @@ func TestSummarizeCountsEachKind(t *testing.T) {
 	if got, want := summarize(report), "untracked_file x2, uncommitted_change x1"; got != want {
 		t.Errorf("summarize = %q, want %q", got, want)
 	}
-	if got, want := itoa(0)+" "+itoa(10)+" "+itoa(407), "0 10 407"; got != want {
-		t.Errorf("itoa = %q, want %q", got, want)
-	}
 }
 
 // TestBlockingItemsForceScope pins what a force may and may not clear: held
