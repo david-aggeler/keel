@@ -196,18 +196,28 @@ type LaneProvider interface {
 	Lanes(context.Context) ([]vscode.TestItem, error)
 }
 
-type bridgeLanesFile struct {
-	Version int          `json:"version"`
-	Lanes   []bridgeLane `json:"lanes"`
+// LaneFileProvider supplies the persisted .vscode/test-lanes.json rows when a
+// consumer needs bridge-owned detect-lanes to preserve richer lane semantics.
+type LaneFileProvider interface {
+	LaneFile(context.Context) (LaneFile, error)
 }
 
-type bridgeLane struct {
+// LaneFile is the bridge-written .vscode/test-lanes.json document.
+type LaneFile struct {
+	Version int            `json:"version"`
+	Lanes   []LaneFileLane `json:"lanes"`
+}
+
+// LaneFileLane is one persisted lane row in a bridge-written lane file.
+type LaneFileLane struct {
 	ID                string              `json:"id"`
 	Label             string              `json:"label"`
-	Order             string              `json:"order,omitempty"`
+	Order             string              `json:"order"`
+	Description       string              `json:"description"`
 	Framework         string              `json:"framework,omitempty"`
 	RequiredResources []string            `json:"required_resources,omitempty"`
-	Members           []map[string]string `json:"members,omitempty"`
+	Members           []map[string]string `json:"members"`
+	Prerequisites     []string            `json:"prerequisites"`
 }
 
 // Bridge is the provider set required by the canonical command tree.
@@ -1068,17 +1078,26 @@ func runBridgeMaintenance(ctx context.Context, bridge Bridge, root, runID, id st
 }
 
 func writeBridgeDetectedLanes(ctx context.Context, bridge Bridge, root string, writer vscode.RunEventWriter) (string, error) {
-	var lanes []vscode.TestItem
-	if provider, ok := bridge.(LaneProvider); ok {
+	var file LaneFile
+	if provider, ok := bridge.(LaneFileProvider); ok {
+		provided, err := provider.LaneFile(ctx)
+		if err != nil {
+			return "", err
+		}
+		file = provided
+	} else if provider, ok := bridge.(LaneProvider); ok {
 		provided, err := provider.Lanes(ctx)
 		if err != nil {
 			return "", err
 		}
-		lanes = provided
+		file = LaneFile{Version: 1, Lanes: bridgeLaneFileRows(provided)}
 	} else {
 		writer(vscode.RunEvent{Event: "output", TestID: MaintenanceDetectLanesID, Message: "no LaneProvider; wrote empty .vscode/test-lanes.json"})
+		file = LaneFile{Version: 1}
 	}
-	file := bridgeLanesFile{Version: 1, Lanes: bridgeLaneFileRows(lanes)}
+	if file.Version == 0 {
+		file.Version = 1
+	}
 	data, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {
 		return "", err
@@ -1096,14 +1115,14 @@ func writeBridgeDetectedLanes(ctx context.Context, bridge Bridge, root string, w
 	return "wrote .vscode/test-lanes.json", nil
 }
 
-func bridgeLaneFileRows(items []vscode.TestItem) []bridgeLane {
-	lanes := make([]bridgeLane, 0, len(items))
+func bridgeLaneFileRows(items []vscode.TestItem) []LaneFileLane {
+	lanes := make([]LaneFileLane, 0, len(items))
 	for _, item := range items {
 		if item.ID == "" || (item.Kind != "" && item.Kind != "lane") {
 			continue
 		}
 		id := bridgeLaneFileID(item)
-		lanes = append(lanes, bridgeLane{
+		lanes = append(lanes, LaneFileLane{
 			ID:                id,
 			Label:             bridgeLaneFileLabel(item, id),
 			Order:             bridgeLaneFileOrder(item),
