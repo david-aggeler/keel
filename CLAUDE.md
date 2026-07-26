@@ -21,10 +21,8 @@ Rules for coding agents in this repo. Short and blunt on purpose.
   gold, product `keel`. Use `mcp__gold__*` tools or `openbrain-client`.
 - NEVER write dev records as local markdown files.
 - Search before creating. Every call takes `product: "keel"`.
-- openbrain-client bug: `run-queue`/`run-queue-claude` default `-product`
-  to `"openbrain"` and IGNORE the config-resolved product. ALWAYS pass
-  `-product keel` (or `--product keel`; both dash forms work) explicitly,
-  or the tail silently targets the wrong product. (openbrain/issue-414.)
+- `run-queue`/`run-queue-claude`: `--list` takes the full ref form
+  `change_request-<n>`, not `cr-<n>`.
 - Plan: `keel/dd_plan-1`. Epic: `keel/epic-1`.
 
 ## Change control
