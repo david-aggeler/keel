@@ -1,6 +1,7 @@
 package worktree_test
 
 import (
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -92,3 +93,6 @@ func writeFile(t *testing.T, path, body string) {
 // removeAll deletes a directory tree, used to stage a registration that git
 // still lists but whose directory is gone.
 func removeAll(path string) error { return os.RemoveAll(path) }
+
+// errorAs is errors.As, named locally so the assertion reads as one line.
+func errorAs(err error, target any) bool { return errors.As(err, target) }

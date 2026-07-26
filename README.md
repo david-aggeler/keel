@@ -99,9 +99,10 @@ Apache-2.0 — see [LICENSE](LICENSE).
 | `exec` | `github.com/david-aggeler/keel/exec` | `ProcessStart` — the single seam for launching subprocesses with uniform lifecycle observability: START (full untruncated command line + cwd), DURING (streamed output), END (exit code + duration), sensitive-arg redaction. |
 | `exec/claude` | `github.com/david-aggeler/keel/exec/claude` | Adapter for headless `claude -p` invocations (streaming output). |
 | `exec/codex` | `github.com/david-aggeler/keel/exec/codex` | Adapter for headless `codex exec --json` invocations: prompt in, streaming JSONL events out, determinate result/error contract, stub-tested. |
+| `worktree` | `github.com/david-aggeler/keel/worktree` | Git worktree lifecycle: bring-up that refuses a checkout it does not own, tear-down gated on inspectable working-tree state rather than merge status (with every blocking path or commit named), read-only state and branch-comparison reports, and separate safe-delete branch removal. |
 
-Layering: `log` ← `exec` ← {`exec/claude`, `exec/codex`}; `cli` stands
-alone. No external dependencies in the core compile graph — `log/otel` is
+Layering: `log` ← `exec` ← {`exec/claude`, `exec/codex`, `worktree`}; `cli`
+stands alone. No external dependencies in the core compile graph — `log/otel` is
 the one deliberate exception — and no internal replace directives.
 
 ## Keel Test Bridge (VSIX)

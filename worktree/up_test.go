@@ -13,7 +13,9 @@ import (
 
 func newManager(t *testing.T, cfg worktree.Config) *worktree.Manager {
 	t.Helper()
-	cfg.Env = gitEnv
+	if cfg.Env == nil {
+		cfg.Env = gitEnv
+	}
 	m, err := worktree.New(cfg)
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
