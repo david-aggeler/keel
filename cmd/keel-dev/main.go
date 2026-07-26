@@ -90,10 +90,11 @@ func run(argv []string) int {
 	if cfg.Verbose {
 		level = slog.LevelDebug
 	}
-	// DHF-REQ: keel/requirement-38 — test-bridge verbs keep stdout pure protocol:
-	// the console sink routes to stderr while both file sinks stay on.
+	// DHF-REQ: keel/requirement-38, keel/requirement-114 — test-bridge and
+	// worktree verbs keep stdout pure protocol: the console sink routes to
+	// stderr while both file sinks stay on.
 	consoleWriter := io.Writer(os.Stdout)
-	if len(words) > 0 && words[0] == "test-bridge" {
+	if len(words) > 0 && protocolStdoutVerbs[words[0]] {
 		consoleWriter = os.Stderr
 	}
 	logger, closeSinks, err := buildLogger(mode, level, filepath.Join(root, ".logs"), consoleWriter)
@@ -122,10 +123,23 @@ func printUsage(tree *cli.CommandSpec) {
 	tree.RenderRootHelp(os.Stderr)
 }
 
-// newProtocolStream is the single allowlisted VS Code protocol JSONL writer —
-// the only non-logger os.Stdout reference the no-raw-stdout-stream lint admits.
+// protocolStdoutVerbs are the top-level verbs that reserve stdout for their
+// machine-readable protocol — the VS Code test-bridge JSONL stream and the
+// worktree verbs' result lines. For them the keel/log console sink routes to
+// stderr; both .logs file sinks stay on.
 //
-// DHF-REQ: keel/requirement-38
+// DHF-REQ: keel/requirement-38, keel/requirement-114
+var protocolStdoutVerbs = map[string]bool{
+	"test-bridge": true,
+	"worktree":    true,
+}
+
+// newProtocolStream is the single allowlisted protocol writer — the only
+// non-logger os.Stdout reference the no-raw-stdout-stream lint admits. It
+// carries the VS Code test-bridge JSONL stream and the worktree verbs' result
+// lines (see protocolStdoutVerbs).
+//
+// DHF-REQ: keel/requirement-38, keel/requirement-114
 func newProtocolStream() io.Writer {
 	return os.Stdout
 }

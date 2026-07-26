@@ -1,9 +1,19 @@
 #!/usr/bin/env bash
-# Author-side pre-merge teardown. Refuses dirty worktrees. Does NOT delete the branch.
+# Author-side pre-merge teardown. Refuses a checkout that still holds work.
+# Does NOT delete the branch.
+#
+# Thin wrapper. Every lifecycle decision belongs to `keel-dev worktree down`,
+# which is backed by the keel/worktree package; this script only validates its
+# arguments, composes the work-item name, and delegates. It runs no git
+# lifecycle command of its own — locating the repository is the one read-only
+# probe it keeps, because the not-in-repo exit status is part of its contract.
+#
 # Usage: worktree-down.sh <kind> <seq> <slug>
 # Output (success): down <kind>-<seq>-<slug> <absolute-path>
 # Output (no-op):   down-noop <kind>-<seq>-<slug> <absolute-path>
 # Exit codes: 0 success/no-op; 2 not-in-repo; 64 bad args; 66 dirty worktree or path not registered; 1 git error
+#
+# KEEL_DEV_BIN overrides the delegate command (default: go run ./cmd/keel-dev).
 set -euo pipefail
 export LC_ALL=C
 
@@ -29,61 +39,18 @@ SLUG="${3:-}"
   exit 64
 }
 
-# --- Project root discovery ---
-git rev-parse --show-toplevel >/dev/null 2>&1 || {
+# --- Repository discovery (read-only) ---
+TOPLEVEL="$(git rev-parse --show-toplevel 2>/dev/null)" || {
   echo "not in a git repo" >&2
   exit 2
 }
-PRIMARY="$(cd "$(git rev-parse --path-format=absolute --git-common-dir)/.." && pwd -P)"
 
-# --- Resolve worktree_base from openbrain-client.local.yaml (nested YAML) ---
-MARKER_PATH="$PRIMARY/openbrain-client.local.yaml"
-WORKTREE_BASE_REL="worktrees/"
-if [[ -f "$MARKER_PATH" ]]; then
-  _val="$(awk '
-    /^placeholders:[[:space:]]*$/ { in_ph = 1; next }
-    /^[^[:space:]#]/              { in_ph = 0 }
-    in_ph && /^[[:space:]]+worktree_base:[[:space:]]*/ {
-      sub(/^[[:space:]]+worktree_base:[[:space:]]*/, "")
-      sub(/[[:space:]]*#.*$/, "")
-      gsub(/^["\x27]|["\x27]$/, "")
-      print
-      exit
-    }' "$MARKER_PATH")"
-  [[ -n "$_val" ]] && WORKTREE_BASE_REL="$_val"
-fi
-WORKTREE_BASE_ABS="$(cd "$PRIMARY" && cd "$WORKTREE_BASE_REL" && pwd -P)"
-
-# --- Derive names ---
-BRANCH="${KIND}-${SEQ}-${SLUG}"
-WORKTREE_PATH="${WORKTREE_BASE_ABS}/${BRANCH}"
-
-# --- Idempotency: already gone ---
-if [[ ! -e "$WORKTREE_PATH" ]]; then
-  echo "down-noop ${BRANCH} ${WORKTREE_PATH}"
-  exit 0
+# --- Delegate ---
+if [[ -n "${KEEL_DEV_BIN:-}" ]]; then
+  read -r -a KEEL_DEV <<<"$KEEL_DEV_BIN"
+else
+  KEEL_DEV=(go run ./cmd/keel-dev)
 fi
 
-# --- Assert target is a git worktree ---
-git -C "$WORKTREE_PATH" rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
-  echo "$WORKTREE_PATH is not a git worktree" >&2
-  exit 66
-}
-
-# --- Assert target is a REGISTERED worktree ---
-# Catches stale-metadata state: directory + .git file present but porcelain
-# has lost the registration (e.g. operator deleted .git/worktrees/<name>).
-if ! git -C "$PRIMARY" worktree list --porcelain | grep -Fxq -- "worktree $WORKTREE_PATH"; then
-  echo "$WORKTREE_PATH is not a registered worktree; run 'git worktree prune' to clean up stale entries" >&2
-  exit 66
-fi
-
-# --- Refuse dirty worktree ---
-if [[ -n "$(git -C "$WORKTREE_PATH" status --porcelain 2>/dev/null)" ]]; then
-  echo "worktree $WORKTREE_PATH has uncommitted changes; commit or stash before teardown" >&2
-  exit 66
-fi
-
-# --- Remove ---
-git -C "$PRIMARY" worktree remove "$WORKTREE_PATH"
-echo "down ${BRANCH} ${WORKTREE_PATH}"
+cd "$TOPLEVEL"
+exec "${KEEL_DEV[@]}" --no-header worktree down "${KIND}-${SEQ}-${SLUG}"
