@@ -1,12 +1,22 @@
 package worktree_test
 
 import (
+	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// TestMain silences the process-wide default logger: keel/exec falls back to it
+// whenever a test builds a Manager without one, and the START/END pair for every
+// git command would otherwise bury the test output.
+func TestMain(m *testing.M) {
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	os.Exit(m.Run())
+}
 
 // gitEnv is the fixed environment every fixture git command runs under, so a
 // developer's global git config cannot change what a test observes.
