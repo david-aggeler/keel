@@ -296,6 +296,33 @@ func (keelTestBridge) Lanes(ctx context.Context) ([]vscode.TestItem, error) {
 	return items, nil
 }
 
+// DHF-REQ: keel/requirement-87
+func (keelTestBridge) LaneFile(ctx context.Context) (testbridge.LaneFile, error) {
+	root := stateFrom(ctx).root
+	if root == "" {
+		if rt, ok := testbridge.RuntimeFrom(ctx); ok {
+			root = rt.Root
+		}
+	}
+	families, err := detectGoFamilies(root)
+	if err != nil {
+		return testbridge.LaneFile{}, err
+	}
+	generated := generatedLanesFile(root, families)
+	file := testbridge.LaneFile{Version: generated.Version, Lanes: make([]testbridge.LaneFileLane, 0, len(generated.Lanes))}
+	for _, lane := range generated.Lanes {
+		file.Lanes = append(file.Lanes, testbridge.LaneFileLane{
+			ID:            lane.ID,
+			Label:         lane.Label,
+			Order:         lane.Order,
+			Description:   lane.Description,
+			Members:       laneMembersForBridge(lane.Members),
+			Prerequisites: append([]string(nil), lane.Prerequisites...),
+		})
+	}
+	return file, nil
+}
+
 // DHF-REQ: keel/requirement-63
 func (keelTestBridge) ConfigTemplate() vscode.TestBridgeConfig {
 	return vscode.DefaultTestBridgeConfig()
@@ -1078,6 +1105,18 @@ func laneMembersForList(members []laneMember) []laneMemberListEntry {
 			for _, key := range member.rawKeys {
 				entry[key] = ""
 			}
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+func laneMembersForBridge(members []laneMember) []map[string]string {
+	out := make([]map[string]string, 0, len(members))
+	for _, member := range laneMembersForList(members) {
+		entry := map[string]string{}
+		for key, value := range member {
+			entry[key] = value
 		}
 		out = append(out, entry)
 	}

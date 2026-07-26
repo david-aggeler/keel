@@ -190,7 +190,7 @@ func TestCanonicalBridgeSurfaceHasNoVSCodeOrLanesVerbs(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-65
+// DHF-TEST: keel/requirement-65, keel/requirement-87
 func TestDetectLanesProducesFileBackedLaneTree(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
@@ -240,6 +240,85 @@ func TestDetectLanesProducesFileBackedLaneTree(t *testing.T) {
 		if !discoveryHasLane(after, want) {
 			t.Fatalf("discovery after detect missing %q: %+v", want, after.Items)
 		}
+	}
+}
+
+// DHF-TEST: keel/requirement-87
+func TestBridgeDetectLanesPreservesKeelDevLaneFileFidelity(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	if err := os.MkdirAll(filepath.Join(root, "exec"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join("exec", "exec_test.go"), "package exec\n\nimport \"testing\"\n\nfunc TestExec(t *testing.T) {}\n")
+
+	var protocol bytes.Buffer
+	if err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "run", "--id", vscodeMaintenanceDetectLanes}); err != nil {
+		t.Fatalf("detect lanes maintenance run: %v\n%s", err, protocol.String())
+	}
+	if !runEventsContain(decodeRunEvents(t, protocol.String()), "passed", vscodeMaintenanceDetectLanes) {
+		t.Fatalf("detect lanes maintenance events = %s", protocol.String())
+	}
+
+	data, err := os.ReadFile(filepath.Join(root, ".vscode", "test-lanes.json"))
+	if err != nil {
+		t.Fatalf("detect lanes did not write test-lanes.json: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("decode detected lanes file: %v\n%s", err, data)
+	}
+	want := generatedLanesFile(root, map[string]bool{"exec": true})
+	wantData, err := json.MarshalIndent(want, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal expected lanes file: %v", err)
+	}
+	wantData = append(wantData, '\n')
+	if !bytes.Equal(data, wantData) {
+		t.Fatalf("detect lanes file mismatch\n got:\n%s\nwant:\n%s", data, wantData)
+	}
+}
+
+// DHF-TEST: keel/requirement-87
+func TestKeelTestBridgeLaneProvidersUseBridgeRuntimeRoot(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	if err := os.MkdirAll(filepath.Join(root, "exec"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join("exec", "exec_test.go"), "package exec\n\nimport \"testing\"\n\nfunc TestExec(t *testing.T) {}\n")
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root})
+
+	file, err := (keelTestBridge{}).LaneFile(ctx)
+	if err != nil {
+		t.Fatalf("LaneFile: %v", err)
+	}
+	want := generatedLanesFile(root, map[string]bool{"exec": true})
+	wantData, err := json.Marshal(want)
+	if err != nil {
+		t.Fatalf("marshal expected lanes file: %v", err)
+	}
+	gotData, err := json.Marshal(file)
+	if err != nil {
+		t.Fatalf("marshal bridge lanes file: %v", err)
+	}
+	if !bytes.Equal(gotData, wantData) {
+		t.Fatalf("LaneFile mismatch\n got: %s\nwant: %s", gotData, wantData)
+	}
+
+	items, err := (keelTestBridge{}).Lanes(ctx)
+	if err != nil {
+		t.Fatalf("Lanes: %v", err)
+	}
+	ci, ok := testItemByID(items, vscodeLaneCI)
+	if !ok || ci.Label != "c.30 ci" || ci.SortText != "c.30" || !stringSlicesEqual(ci.RequiredResources, []string{"go-toolchain", "keel-module-root", "stub-binaries"}) {
+		t.Fatalf("ci lane item = %+v, ok=%v", ci, ok)
+	}
+	execLane, ok := testItemByID(items, "keel::lane::go-exec")
+	if !ok || execLane.Label != "c.40 exec" || execLane.SortText != "c.40" {
+		t.Fatalf("go-exec lane item = %+v, ok=%v", execLane, ok)
 	}
 }
 
@@ -2911,7 +2990,11 @@ func desiredStateHasRunID(groups []vscode.DesiredStateGroup, runID string) bool 
 }
 
 func discoveryItemByID(doc vscode.DiscoveryDocument, id string) (vscode.TestItem, bool) {
-	for _, item := range doc.Items {
+	return testItemByID(doc.Items, id)
+}
+
+func testItemByID(items []vscode.TestItem, id string) (vscode.TestItem, bool) {
+	for _, item := range items {
 		if item.ID == id {
 			return item, true
 		}
