@@ -991,31 +991,9 @@ func TestVSCodeLanesListAndDetect(t *testing.T) {
 		t.Fatalf("lanes list missing expanded log lane: %+v", listed.Lanes)
 	}
 
-	var dry bytes.Buffer
-	if err := writeVSCodeLanesDetect(root, true, &dry); err != nil {
-		t.Fatalf("lanes detect --dry-run: %v", err)
-	}
-	if after, err := os.ReadFile(lanesPath); err != nil || !bytes.Equal(after, before) {
-		t.Fatalf("dry-run changed lanes file: err=%v before=%q after=%q", err, before, after)
-	}
-	var dryDoc lanesDetectDocument
-	if err := json.Unmarshal(dry.Bytes(), &dryDoc); err != nil {
-		t.Fatalf("dry-run JSON: %v\n%s", err, dry.String())
-	}
-	if dryDoc.Written || !lanesDetectAdded(dryDoc, "go-exec") || !lanesDetectChanged(dryDoc, "go-log") || !lanesDetectRemoved(dryDoc, "manual") {
-		t.Fatalf("dry-run doc = %+v, want go-exec added, go-log changed, manual removed, written=false", dryDoc)
-	}
-
-	var detect bytes.Buffer
-	if err := writeVSCodeLanesDetect(root, false, &detect); err != nil {
-		t.Fatalf("lanes detect: %v", err)
-	}
-	var detectDoc lanesDetectDocument
-	if err := json.Unmarshal(detect.Bytes(), &detectDoc); err != nil {
-		t.Fatalf("detect JSON: %v\n%s", err, detect.String())
-	}
-	if !detectDoc.Written || !lanesDetectAdded(detectDoc, "go-exec") || !lanesDetectChanged(detectDoc, "go-log") || !lanesDetectRemoved(detectDoc, "manual") {
-		t.Fatalf("detect doc = %+v, want full-rewrite delta", detectDoc)
+	seedDetectedLanes(t, root)
+	if current, err := os.ReadFile(lanesPath); err != nil || bytes.Equal(current, before) {
+		t.Fatalf("bridge detect did not rewrite stale lanes file: err=%v before=%q current=%q", err, before, current)
 	}
 	afterWrite, err := os.ReadFile(lanesPath)
 	if err != nil {
@@ -1048,20 +1026,13 @@ func TestVSCodeLanesListAndDetect(t *testing.T) {
 		t.Fatalf("after detect, go-log no longer resolves to the log package (corrupted round-trip): %+v", relisted.Lanes)
 	}
 
-	var second bytes.Buffer
-	if err := writeVSCodeLanesDetect(root, false, &second); err != nil {
-		t.Fatalf("lanes detect second: %v", err)
-	}
-	var secondDoc lanesDetectDocument
-	if err := json.Unmarshal(second.Bytes(), &secondDoc); err != nil {
-		t.Fatalf("second detect JSON: %v\n%s", err, second.String())
-	}
+	seedDetectedLanes(t, root)
 	secondBytes, err := os.ReadFile(lanesPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !secondDoc.Written || len(secondDoc.Added) != 0 || len(secondDoc.Changed) != 0 || len(secondDoc.Removed) != 0 || !bytes.Equal(secondBytes, afterWrite) {
-		t.Fatalf("second detect not idempotent: doc=%+v", secondDoc)
+	if !bytes.Equal(secondBytes, afterWrite) {
+		t.Fatalf("second bridge detect not idempotent:\nfirst:\n%s\nsecond:\n%s", afterWrite, secondBytes)
 	}
 }
 
@@ -1502,10 +1473,7 @@ func TestVSCodeLaneEdgeCases(t *testing.T) {
 	// DHF-TEST: keel/requirement-73
 	// Detect-lanes is the recovery path for whole-file lane errors: it rewrites
 	// from compiled/workspace knowledge instead of preserving the invalid file.
-	var cycleDetect bytes.Buffer
-	if err := writeVSCodeLanesDetect(root, false, &cycleDetect); err != nil {
-		t.Fatalf("lanes detect should heal a cyclic file: %v\n%s", err, cycleDetect.String())
-	}
+	seedDetectedLanes(t, root)
 	if after, err := os.ReadFile(filepath.Join(root, ".vscode", "test-lanes.json")); err != nil || strings.Contains(string(after), `"id": "a"`) || !strings.Contains(string(after), `"id": "test-fast"`) {
 		t.Fatalf("lanes detect did not regenerate cyclic file: err=%v\n%s", err, after)
 	}
@@ -1556,16 +1524,13 @@ func TestVSCodeLaneAdditionalErrorBranches(t *testing.T) {
 	if lanes.wholeFileErr == nil || !discoveryItemsContain(lanes.discoveryItems(), "unexpected") {
 		t.Fatalf("malformed lanes state = %+v items=%+v", lanes.wholeFileErr, lanes.discoveryItems())
 	}
-	var protocol bytes.Buffer
-	if err := writeVSCodeLanesDetect(root, false, &protocol); err != nil {
-		t.Fatalf("detect should heal malformed lanes file: %v", err)
+	seedDetectedLanes(t, root)
+	malformedData, err := os.ReadFile(filepath.Join(root, ".vscode", "test-lanes.json"))
+	if err != nil {
+		t.Fatalf("read healed lanes file: %v", err)
 	}
-	var malformedDoc lanesDetectDocument
-	if err := json.Unmarshal(protocol.Bytes(), &malformedDoc); err != nil {
-		t.Fatalf("malformed recovery JSON: %v\n%s", err, protocol.String())
-	}
-	if !malformedDoc.Written || !lanesDetectAdded(malformedDoc, "test-fast") {
-		t.Fatalf("malformed recovery doc = %+v, want regenerated gate lanes", malformedDoc)
+	if !strings.Contains(string(malformedData), `"id": "test-fast"`) {
+		t.Fatalf("malformed recovery file = %s, want regenerated gate lanes", malformedData)
 	}
 
 	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{"version":1,"lanes":[{"id":"dup","label":"one","order":"b.40","members":[{"root":"go"}]},{"id":"dup","label":"two","order":"b.41","members":[{"root":"go"}]},{"id":"empty","label":"empty","order":"b.42","members":[]},{"id":"root-vsix","label":"vsix","order":"b.43","members":[{"root":"vsix"},{"lane":"vsix-ci"}]}]}`+"\n")
@@ -1588,17 +1553,13 @@ func TestVSCodeLaneAdditionalErrorBranches(t *testing.T) {
 		t.Fatalf("list did not serialize root/lane members:\n%s", list.String())
 	}
 
-	if code, err := runVSCodeMaintenance(root, vscodeMaintenanceDetectLanes); code != 2 || err == nil {
-		t.Fatalf("detect maintenance without writer = code %d err %v, want usage", code, err)
-	}
-	if code, err := runVSCodeMaintenance(root, "testbridge::maintenance::missing"); code != 2 || err == nil {
-		t.Fatalf("unknown maintenance = code %d err %v, want usage", code, err)
-	}
 	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), "{")
-	var events []vscode.RunEvent
-	err = runVSCodeDetectLanesMaintenance(root, func(event vscode.RunEvent) { events = append(events, event) })
-	if err != nil || len(events) == 0 || !runEventsContain(events, "output", vscodeMaintenanceDetectLanes) {
-		t.Fatalf("detect maintenance should heal malformed lanes file: err=%v events=%+v", err, events)
+	var protocol bytes.Buffer
+	if err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), vscodeMaintenanceDetectLanes); err != nil {
+		t.Fatalf("bridge detect maintenance should heal malformed lanes file: %v\n%s", err, protocol.String())
+	}
+	if !runEventsContain(decodeRunEvents(t, protocol.String()), "passed", vscodeMaintenanceDetectLanes) {
+		t.Fatalf("detect maintenance events = %s", protocol.String())
 	}
 }
 
@@ -3004,36 +2965,10 @@ func testItemByID(items []vscode.TestItem, id string) (vscode.TestItem, bool) {
 
 func seedDetectedLanes(t *testing.T, root string) {
 	t.Helper()
-	if err := runVSCodeDetectLanesMaintenance(root, func(vscode.RunEvent) {}); err != nil {
-		t.Fatalf("seed detected lanes: %v", err)
+	var protocol bytes.Buffer
+	if err := commandTree().Dispatch(contextWithVSCodeTestState(root, &protocol), []string{"test-bridge", "run", "--id", vscodeMaintenanceDetectLanes}); err != nil {
+		t.Fatalf("seed detected lanes: %v\n%s", err, protocol.String())
 	}
-}
-
-func lanesDetectAdded(doc lanesDetectDocument, id string) bool {
-	for _, entry := range doc.Added {
-		if entry.ID == id {
-			return true
-		}
-	}
-	return false
-}
-
-func lanesDetectRemoved(doc lanesDetectDocument, id string) bool {
-	for _, entry := range doc.Removed {
-		if entry.ID == id {
-			return true
-		}
-	}
-	return false
-}
-
-func lanesDetectChanged(doc lanesDetectDocument, id string) bool {
-	for _, entry := range doc.Changed {
-		if entry.ID == id {
-			return true
-		}
-	}
-	return false
 }
 
 func commandSpecHasName(spec *cli.CommandSpec, name string) bool {
@@ -3115,15 +3050,6 @@ func assertDiscoveryKindAllowedBySchema(t *testing.T, kind string) {
 func runEventsContain(events []vscode.RunEvent, event, id string) bool {
 	for _, got := range events {
 		if got.Event == event && got.TestID == id {
-			return true
-		}
-	}
-	return false
-}
-
-func eventsContainMessage(events []vscode.RunEvent, text string) bool {
-	for _, got := range events {
-		if strings.Contains(got.Message, text) {
 			return true
 		}
 	}
@@ -3464,24 +3390,15 @@ func TestRunVSCodeLaneDirectDispatcherBranches(t *testing.T) {
 	writeFile(t, root, "go.sum", "")
 	writeFile(t, root, "root_test.go", "package keel\n\nimport \"testing\"\n\nfunc TestRoot(t *testing.T) {}\n")
 
-	if code, err := runVSCodeLane(context.Background(), nil, root, "testbridge::maintenance::bogus", "run-1", 1024, nil); err == nil || code != 2 {
+	if code, err := runVSCodeLane(context.Background(), nil, root, "testbridge::maintenance::bogus", "run-1", 1024, nil); err == nil || code != 2 || !strings.Contains(err.Error(), "must be run through test-bridge") {
 		t.Fatalf("unknown maintenance lane = code %d err %v, want usage code 2", code, err)
 	}
 	if code, err := runVSCodeLane(context.Background(), nil, root, "keel::lane::missing", "run-1", 1024, nil); err == nil || code != 1 || !strings.Contains(err.Error(), "unknown vscode lane id") {
 		t.Fatalf("unknown file lane = code %d err %v, want unknown-lane error", code, err)
 	}
 
-	var events []vscode.RunEvent
-	if code, err := runVSCodeLane(context.Background(), nil, root, vscodeMaintenanceDetectLanes, "run-1", 1024, func(event vscode.RunEvent) {
-		events = append(events, event)
-	}); err != nil || code != 0 {
-		t.Fatalf("detect lanes = code %d err %v, want success", code, err)
-	}
-	if !runEventsContain(events, "output", vscodeMaintenanceDetectLanes) {
-		t.Fatalf("detect lanes events = %+v, want output maintenance events", events)
-	}
-	if _, err := os.Stat(filepath.Join(root, ".vscode", "test-lanes.json")); err != nil {
-		t.Fatalf("detect lanes did not write test-lanes.json: %v", err)
+	if code, err := runVSCodeLane(context.Background(), nil, root, vscodeMaintenanceDetectLanes, "run-1", 1024, func(vscode.RunEvent) {}); err == nil || code != 2 || !strings.Contains(err.Error(), "must be run through test-bridge") {
+		t.Fatalf("direct detect lanes = code %d err %v, want bridge-owned usage error", code, err)
 	}
 
 	bin := t.TempDir()
@@ -3498,42 +3415,6 @@ func TestRunVSCodeLaneDirectDispatcherBranches(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	if code, err := runVSCodeLane(context.Background(), nil, root, vscodeLaneVSIXGate, "run-1", 1024, nil); err == nil || code != 1 || !strings.Contains(err.Error(), `required tool "node" not found`) {
 		t.Fatalf("vsix gate lane missing toolchain = code %d err %v, want node missing", code, err)
-	}
-}
-
-// DHF-TEST: keel/requirement-11, keel/requirement-65
-func TestRunVSCodeDetectLanesMaintenanceEmitsAllDeltaKinds(t *testing.T) {
-	root := t.TempDir()
-	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
-	writeFile(t, root, "go.sum", "")
-	if err := os.MkdirAll(filepath.Join(root, "log"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(root, ".vscode"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, root, filepath.Join("log", "logging_test.go"), "package log\n\nimport \"testing\"\n\nfunc TestLog(t *testing.T) {}\n")
-	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{
-  "version": 1,
-  "lanes": [
-    {"id": "lint", "label": "lint", "order": "c.1", "description": "Run keel-dev lint checks.", "members": [{"root": "go"}]},
-    {"id": "test-fast", "label": "stale test-fast", "order": "c.2", "description": "stale", "members": [{"go": "./stale"}]},
-    {"id": "obsolete", "label": "obsolete", "order": "c.99", "description": "removed", "members": [{"go": "./obsolete"}]}
-  ]
-}
-`)
-
-	var events []vscode.RunEvent
-	err := runVSCodeDetectLanesMaintenance(root, func(event vscode.RunEvent) {
-		events = append(events, event)
-	})
-	if err != nil {
-		t.Fatalf("runVSCodeDetectLanesMaintenance: %v", err)
-	}
-	for _, want := range []string{"unchanged lint", "changed test-fast", "removed obsolete", "added test-coverage", "added go-log"} {
-		if !eventsContainMessage(events, want) {
-			t.Fatalf("detect-lanes maintenance missing output containing %q in %+v", want, events)
-		}
 	}
 }
 

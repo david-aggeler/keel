@@ -173,24 +173,6 @@ type laneLastRun struct {
 	ExitCode   int       `json:"exit_code"`
 }
 
-type lanesDetectDocument struct {
-	Version   int                `json:"version"`
-	File      string             `json:"file"`
-	Written   bool               `json:"written"`
-	Added     []lanesDetectEntry `json:"added"`
-	Removed   []lanesDetectEntry `json:"removed"`
-	Changed   []lanesDetectEntry `json:"changed"`
-	Unchanged []lanesDetectEntry `json:"unchanged"`
-}
-
-type lanesDetectEntry struct {
-	ID       string `json:"id"`
-	Label    string `json:"label,omitempty"`
-	Order    string `json:"order,omitempty"`
-	Reason   string `json:"reason,omitempty"`
-	Packages int    `json:"packages,omitempty"`
-}
-
 // DHF-REQ: keel/requirement-59, keel/requirement-60
 func testBridgeCommandSpec() *cli.CommandSpec {
 	spec := testbridge.CommandSpec(keelTestBridge{})
@@ -548,42 +530,6 @@ func writeVSCodeLanesList(root string, out io.Writer) error {
 	return testbridge.EncodeDocument(out, doc)
 }
 
-// DHF-REQ: keel/requirement-65, keel/requirement-73
-func writeVSCodeLanesDetect(root string, dryRun bool, out io.Writer) error {
-	lanes, err := loadLanesState(root)
-	if err != nil {
-		return err
-	}
-	families, err := detectGoFamilies(root)
-	if err != nil {
-		return err
-	}
-	updated := generatedLanesFile(root, families)
-	doc := lanesDetectDocument{
-		Version:   1,
-		File:      ".vscode/test-lanes.json",
-		Added:     []lanesDetectEntry{},
-		Removed:   []lanesDetectEntry{},
-		Changed:   []lanesDetectEntry{},
-		Unchanged: []lanesDetectEntry{},
-	}
-	recordLanesDetectDelta(&doc, lanes.file.Lanes, updated.Lanes)
-	if !dryRun {
-		data, err := json.MarshalIndent(updated, "", "  ")
-		if err != nil {
-			return err
-		}
-		if err := os.MkdirAll(filepath.Dir(lanes.path), 0o755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(lanes.path, append(data, '\n'), 0o644); err != nil {
-			return err
-		}
-		doc.Written = true
-	}
-	return testbridge.EncodeDocument(out, doc)
-}
-
 func generatedLanesFile(root string, families map[string]bool) testLanesFile {
 	updated := testLanesFile{Version: 1}
 	updated.Lanes = append(updated.Lanes, vscodeGateLaneDefs...)
@@ -602,74 +548,6 @@ func generatedLanesFile(root string, families map[string]bool) testLanesFile {
 		})
 	}
 	return updated
-}
-
-func recordLanesDetectDelta(doc *lanesDetectDocument, previous, next []testFileLane) {
-	previousByID := map[string]testFileLane{}
-	nextByID := map[string]testFileLane{}
-	for _, lane := range previous {
-		if lane.ID != "" {
-			previousByID[lane.ID] = lane
-		}
-	}
-	for _, lane := range next {
-		if lane.ID != "" {
-			nextByID[lane.ID] = lane
-		}
-	}
-	for _, id := range sortedLaneIDs(nextByID) {
-		nextLane := nextByID[id]
-		entry := lanesDetectEntry{ID: id, Label: nextLane.Label, Order: nextLane.Order}
-		if packages := generatedLanePackageCount(nextLane); packages > 0 {
-			entry.Packages = packages
-		}
-		previousLane, exists := previousByID[id]
-		if !exists {
-			doc.Added = append(doc.Added, entry)
-			continue
-		}
-		if sameLaneDefinition(previousLane, nextLane) {
-			doc.Unchanged = append(doc.Unchanged, lanesDetectEntry{ID: id, Reason: "unchanged"})
-			continue
-		}
-		entry.Reason = "definition changed"
-		doc.Changed = append(doc.Changed, entry)
-	}
-	for _, id := range sortedLaneIDs(previousByID) {
-		if _, exists := nextByID[id]; exists {
-			continue
-		}
-		lane := previousByID[id]
-		doc.Removed = append(doc.Removed, lanesDetectEntry{ID: id, Label: lane.Label, Order: lane.Order, Reason: "not detected"})
-	}
-}
-
-func sortedLaneIDs(lanes map[string]testFileLane) []string {
-	ids := make([]string, 0, len(lanes))
-	for id := range lanes {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	return ids
-}
-
-func sameLaneDefinition(a, b testFileLane) bool {
-	aData, aErr := json.Marshal(a)
-	bData, bErr := json.Marshal(b)
-	return aErr == nil && bErr == nil && bytes.Equal(aData, bData)
-}
-
-func generatedLanePackageCount(lane testFileLane) int {
-	const prefix = "detected category - "
-	const suffix = " packages"
-	if !strings.HasPrefix(lane.Description, prefix) || !strings.HasSuffix(lane.Description, suffix) {
-		return 0
-	}
-	count, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(lane.Description, prefix), suffix))
-	if err != nil {
-		return 0
-	}
-	return count
 }
 
 func laneItem(id, label, sortText string) vscode.TestItem {
@@ -1808,13 +1686,7 @@ func max(a, b int) int {
 // DHF-REQ: keel/requirement-48
 func runVSCodeLane(ctx context.Context, logger *slog.Logger, root, laneID, runID string, maxOutputBytes int, writer vscode.RunEventWriter) (int, error) {
 	if strings.HasPrefix(laneID, testbridge.MaintenanceGroupID+"::") {
-		if laneID == vscodeMaintenanceDetectLanes {
-			if err := runVSCodeDetectLanesMaintenance(root, writer); err != nil {
-				return 1, err
-			}
-			return 0, nil
-		}
-		return runVSCodeMaintenance(root, laneID)
+		return 2, cli.NewUsageError("bridge maintenance id %q must be run through test-bridge", laneID)
 	}
 	// DHF-REQ: keel/requirement-43
 	if selection, ok := vscode.ParseGoItemID(laneID); ok {
@@ -2130,42 +2002,6 @@ func emitLaneGoPackageEvents(raw, modulePath string, writer vscode.RunEventWrite
 			})
 		}
 	}
-}
-
-// DHF-REQ: keel/requirement-65
-func runVSCodeMaintenance(root, id string) (int, error) {
-	switch id {
-	case vscodeMaintenanceDetectLanes:
-		return 2, cli.NewUsageError("detect lanes maintenance requires run-event writer")
-	default:
-		return 2, cli.NewUsageError("unknown vscode maintenance id %q", id)
-	}
-}
-
-// DHF-REQ: keel/requirement-65
-func runVSCodeDetectLanesMaintenance(root string, writer vscode.RunEventWriter) error {
-	var out bytes.Buffer
-	if err := writeVSCodeLanesDetect(root, false, &out); err != nil {
-		writer(vscode.RunEvent{Event: "output", TestID: vscodeMaintenanceDetectLanes, Message: err.Error()})
-		return err
-	}
-	var doc lanesDetectDocument
-	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
-		return err
-	}
-	for _, entry := range doc.Added {
-		writer(vscode.RunEvent{Event: "output", TestID: vscodeMaintenanceDetectLanes, Message: fmt.Sprintf("added %s %s", entry.ID, entry.Order)})
-	}
-	for _, entry := range doc.Removed {
-		writer(vscode.RunEvent{Event: "output", TestID: vscodeMaintenanceDetectLanes, Message: fmt.Sprintf("removed %s: %s", entry.ID, entry.Reason)})
-	}
-	for _, entry := range doc.Changed {
-		writer(vscode.RunEvent{Event: "output", TestID: vscodeMaintenanceDetectLanes, Message: fmt.Sprintf("changed %s %s", entry.ID, entry.Order)})
-	}
-	for _, entry := range doc.Unchanged {
-		writer(vscode.RunEvent{Event: "output", TestID: vscodeMaintenanceDetectLanes, Message: fmt.Sprintf("unchanged %s: %s", entry.ID, entry.Reason)})
-	}
-	return nil
 }
 
 func clearVSCodeDevtoolsState(root string) error {
