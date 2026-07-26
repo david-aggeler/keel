@@ -203,6 +203,50 @@ func TestRunReleaseCommitsVSIXStampBeforeTag(t *testing.T) {
 	}
 }
 
+// TestRunReleaseStampsVSIXVersionBeforeGates proves the release path validates
+// the same stamped tree it will tag: a VERSION-bumped checkout with an old
+// vsix/package.json must still reach the VSIX gate with the manifest already
+// stamped to X.Y.Z.
+//
+// DHF-TEST: keel/requirement-112, keel/requirement-9
+func TestRunReleaseStampsVSIXVersionBeforeGates(t *testing.T) {
+	callsFile := stubTools(t, false, false)
+	bin := filepath.Dir(callsFile)
+	stub(t, bin, callsFile, "pnpm", `
+case "$*" in
+  "--dir "*" run ci")
+    package_dir=$2
+    version=$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' "$package_dir/package.json" | head -1)
+    if [ "$version" != "9.9.9" ]; then
+      printf 'VSIX gate saw unstamped manifest version %s\n' "$version" >&2
+      exit 8
+    fi
+    mkdir -p "$package_dir/.vscode-test/coverage"
+    cat > "$package_dir/.vscode-test/coverage/coverage-summary.json" <<'JSON'
+{"total":{"statements":{"total":100,"covered":91,"skipped":0,"pct":91.0}},"/tmp/keel/vsix/src/extension.ts":{"statements":{"total":100,"covered":91,"skipped":0,"pct":91.0}}}
+JSON
+    ;;
+  "--dir "*" run package:vsix")
+    package_dir=$2
+    version=$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' "$package_dir/package.json" | head -1)
+    mkdir -p "$package_dir/../bin"
+    touch "$package_dir/../bin/keel-test-bridge-$version.vsix"
+    ;;
+esac
+exit 0`)
+	dir := moduleFixture(t)
+
+	if err := runRelease(context.Background(), discardLogger(), dir, "v9.9.9"); err != nil {
+		t.Fatalf("release with unstamped starting VSIX manifest failed: %v\ncalls:\n%s", err, calls(t, callsFile))
+	}
+	got := calls(t, callsFile)
+	commit := strings.Index(got, "git commit -m keel v9.9.9: stamp VSIX version")
+	vsixGate := strings.Index(got, "pnpm --dir "+filepath.Join(dir, "vsix")+" run ci")
+	if commit == -1 || vsixGate == -1 || commit > vsixGate {
+		t.Fatalf("VSIX stamp commit must happen before VSIX gate, got commit=%d gate=%d; calls:\n%s", commit, vsixGate, got)
+	}
+}
+
 // TestCommitVSIXStampSkipsWhenAlreadyCommitted pins the no-op branch: when the
 // committed manifest already carries the target version (re-run after a
 // mid-release failure), commitVSIXStamp neither stages nor commits.
