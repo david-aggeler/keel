@@ -46,15 +46,22 @@ Small change? Still a CR. Docs-only? Still a CR (merge_gate: docs).
 
 ## Worktrees
 
-Manage per-CR worktrees with the change-request skill's scripts in
-`.claude/skills/change-request/scripts/` — NOT raw `git worktree` or
-`git checkout -b` on the primary checkout (that is blocked). `openbrain-client`
-has no worktree verb.
+`keel-dev worktree` is THE worktree lifecycle entry point, backed by the
+`keel/worktree` package — NOT raw `git worktree` or `git checkout -b` on the
+primary checkout (that is blocked). `openbrain-client` has no worktree verb.
 
-- `worktree-up.sh <kind> <seq> <slug>`     — new worktree on a fresh branch off main
-- `worktree-down.sh <kind> <seq> <slug>`   — pre-merge teardown; refuses dirty, keeps the branch
-- `worktree-resume.sh <kind> <seq> <slug>` — re-attach a worktree to an existing branch
-- `worktree-status.sh <kind> <seq> <slug>` — read-only existence check
+- `keel-dev worktree up <name>`      — create the worktree, or reuse the one already there
+- `keel-dev worktree resume <name>`  — re-attach a worktree to a branch that already exists
+- `keel-dev worktree down <name>`    — remove it, keeping the branch; refuses a checkout holding work
+- `keel-dev worktree status <name>`  — read-only state report (also `--glob <pattern>`)
+- `keel-dev worktree compare <name>` — read-only branch-vs-base facts, no verdict
+
+The change-request skill's scripts in `.claude/skills/change-request/scripts/`
+(`worktree-up.sh` / `worktree-down.sh` / `worktree-resume.sh` /
+`worktree-status.sh <kind> <seq> <slug>`) stay as thin wrappers over those
+verbs: they validate arguments, compose `<kind>-<seq>-<slug>`, and delegate.
+They hold NO lifecycle logic — the `no-shell-worktree-lifecycle` lint fails any
+git lifecycle command written back into them.
 
 Manual/operator work only. The run-queue tail creates and owns its own
 `cr-<seq>` worktrees — never hand-create those.
