@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -123,7 +127,11 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("detect-lanes maintenance exit = %d, want 0\n%s", code, detectOut)
 	}
-	assertRunEvent(t, decodeRunEvents(t, detectOut), "passed", idDetectLanes, "wrote .vscode/test-lanes.json")
+	detectEvents := decodeRunEvents(t, detectOut)
+	assertRunEvent(t, detectEvents, "output", idDetectLanes, "detected go-pass")
+	assertRunEvent(t, detectEvents, "output", idDetectLanes, "detected go-fail")
+	assertRunEvent(t, detectEvents, "output", idDetectLanes, "detected fake-smoke")
+	assertRunEvent(t, detectEvents, "passed", idDetectLanes, "wrote .vscode/test-lanes.json")
 	assertDemoLanesFile(t, root)
 	discoveryOut, code = runDemoDev(t, root, exe, "test-bridge", "discover", "--format", "json")
 	if code != 0 {
@@ -527,23 +535,14 @@ func TestDemoBridgeDirectMaintenanceMutatesWorkspaceState(t *testing.T) {
 	logger.Error("error")
 }
 
-// DHF-TEST: keel/requirement-11, keel/requirement-62, keel/requirement-87
+// DHF-TEST: keel/requirement-11, keel/requirement-62
 func TestDemoBridgeRunOneDirectMaintenanceAndFakeBranches(t *testing.T) {
 	root := t.TempDir()
 	bridge := demoBridge{}
 	var events []vscode.RunEvent
 	emit := func(event vscode.RunEvent) { events = append(events, event) }
 
-	code, err := bridge.runOne(context.Background(), root, idDetectLanes, emit)
-	if err != nil || code != 0 {
-		t.Fatalf("runOne detect lanes = code %d err %v, want success", code, err)
-	}
-	if _, err := os.Stat(demoLanesPath(root)); err != nil {
-		t.Fatalf("detect lanes did not write file: %v", err)
-	}
-	assertEventSeen(t, events, "passed", idDetectLanes, "wrote .vscode/test-lanes.json")
-
-	code, err = bridge.runOne(context.Background(), root, idBlockBadLane, emit)
+	code, err := bridge.runOne(context.Background(), root, idBlockBadLane, emit)
 	if err != nil || code != 0 {
 		t.Fatalf("runOne block lane = code %d err %v, want success", code, err)
 	}
@@ -569,6 +568,109 @@ func TestDemoBridgeRunOneDirectMaintenanceAndFakeBranches(t *testing.T) {
 	if err == nil || code != 1 || !strings.Contains(err.Error(), "unknown demo test id") {
 		t.Fatalf("runOne unknown = code %d err %v, want unknown id error", code, err)
 	}
+}
+
+// DHF-TEST: keel/requirement-87
+func TestDemoBridgeRunOneDoesNotHandleBridgeOwnedMaintenanceIDs(t *testing.T) {
+	cases := demoRunOneCaseExprs(t)
+	forbidden := map[string]string{
+		"testbridge.MaintenanceDetectLanesID":  testbridge.MaintenanceDetectLanesID,
+		testbridge.MaintenanceDetectLanesID:    testbridge.MaintenanceDetectLanesID,
+		"testbridge.MaintenanceUnlockID":       testbridge.MaintenanceUnlockID,
+		testbridge.MaintenanceUnlockID:         testbridge.MaintenanceUnlockID,
+		"testbridge.MaintenanceClearResultsID": testbridge.MaintenanceClearResultsID,
+		testbridge.MaintenanceClearResultsID:   testbridge.MaintenanceClearResultsID,
+		"testbridge.MaintenanceClearStateID":   testbridge.MaintenanceClearStateID,
+		testbridge.MaintenanceClearStateID:     testbridge.MaintenanceClearStateID,
+	}
+	for _, expr := range cases {
+		if maintenanceID, ok := forbidden[expr]; ok {
+			t.Fatalf("demoBridge.runOne handles bridge-owned maintenance id %q via case %q; cases=%v", maintenanceID, expr, cases)
+		}
+	}
+}
+
+func demoRunOneCaseExprs(t *testing.T) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse main.go: %v", err)
+	}
+	constAliases := demoConstAliases(t, file)
+	var cases []string
+	ast.Inspect(file, func(node ast.Node) bool {
+		fn, ok := node.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "runOne" || fn.Recv == nil {
+			return true
+		}
+		ast.Inspect(fn.Body, func(node ast.Node) bool {
+			clause, ok := node.(*ast.CaseClause)
+			if !ok {
+				return true
+			}
+			for _, expr := range clause.List {
+				name := demoCaseExprName(t, expr)
+				if resolved, ok := constAliases[name]; ok {
+					name = resolved
+				}
+				cases = append(cases, name)
+			}
+			return true
+		})
+		return false
+	})
+	if len(cases) == 0 {
+		t.Fatal("demoBridge.runOne has no switch cases")
+	}
+	return cases
+}
+
+func demoConstAliases(t *testing.T, file *ast.File) map[string]string {
+	t.Helper()
+	aliases := make(map[string]string)
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			valueSpec, ok := spec.(*ast.ValueSpec)
+			if !ok || len(valueSpec.Values) == 0 {
+				continue
+			}
+			for i, name := range valueSpec.Names {
+				value := valueSpec.Values[0]
+				if i < len(valueSpec.Values) {
+					value = valueSpec.Values[i]
+				}
+				aliases[name.Name] = demoCaseExprName(t, value)
+			}
+		}
+	}
+	return aliases
+}
+
+func demoCaseExprName(t *testing.T, expr ast.Expr) string {
+	t.Helper()
+	switch typed := expr.(type) {
+	case *ast.Ident:
+		return typed.Name
+	case *ast.SelectorExpr:
+		if ident, ok := typed.X.(*ast.Ident); ok {
+			return ident.Name + "." + typed.Sel.Name
+		}
+	case *ast.BasicLit:
+		if typed.Kind == token.STRING {
+			value, err := strconv.Unquote(typed.Value)
+			if err != nil {
+				t.Fatalf("unquote case expression %s: %v", typed.Value, err)
+			}
+			return value
+		}
+	}
+	t.Fatalf("unsupported runOne case expression %T", expr)
+	return ""
 }
 
 func assertEventSeen(t *testing.T, events []vscode.RunEvent, event, testID, message string) {
@@ -874,7 +976,14 @@ func assertDemoLanesFile(t *testing.T, root string) {
 		t.Fatalf("read demo lanes file: %v", err)
 	}
 	text := string(data)
-	for _, want := range []string{`"id": "go-pass"`, `"id": "go-fail"`, `"id": "fake-smoke"`} {
+	for _, want := range []string{
+		`"id": "go-pass"`,
+		`"id": "go-fail"`,
+		`"id": "fake-smoke"`,
+		`"framework": "keel-demo-dev"`,
+		`"order": "c.10"`,
+		`"root": "go"`,
+	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("test-lanes.json missing %s:\n%s", want, text)
 		}
