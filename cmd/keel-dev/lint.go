@@ -287,7 +287,7 @@ func fileFunc(file, fn string) string {
 // is intentionally excluded: it is the internal devtool, not part of keel's
 // consumer-facing API. exec is walked recursively, so exec/claude and exec/codex
 // are covered.
-var libraryDocDirs = []string{"log", "exec", "cli"}
+var libraryDocDirs = []string{"log", "exec", "cli", "worktree"}
 
 // scanNoUndocumentedExports reports every exported identifier (function, type,
 // method on an exported type, struct field, const, or var) in keel's library
