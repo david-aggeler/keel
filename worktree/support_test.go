@@ -88,3 +88,7 @@ func writeFile(t *testing.T, path, body string) {
 		t.Fatalf("write %s: %v", path, err)
 	}
 }
+
+// removeAll deletes a directory tree, used to stage a registration that git
+// still lists but whose directory is gone.
+func removeAll(path string) error { return os.RemoveAll(path) }
