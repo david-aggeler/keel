@@ -57,11 +57,11 @@ func TestUndeletableEmptyAndUnreadableDirectories(t *testing.T) {
 	}
 }
 
-// TestPathsThatCannotBeStatted keeps an unusable worktrees directory from
+// TestPathsThatFailToStat keeps an unusable worktrees directory from
 // reading as "nothing there yet".
 //
 // DHF-TEST: keel/requirement-113 (keel/ac-400)
-func TestPathsThatCannotBeStatted(t *testing.T) {
+func TestPathsThatFailToStat(t *testing.T) {
 	root := newRepo(t)
 	// A file where the worktrees directory belongs: every path under it fails to
 	// stat with something other than not-exist.
@@ -134,11 +134,11 @@ func TestGitFailureCarriesStdoutWhenStderrIsSilent(t *testing.T) {
 	}
 }
 
-// TestStateOfAnUnbroughtUpNameIsQuiet keeps the read-only report usable as a
+// TestStateOfANameNeverBroughtUpIsQuiet keeps the read-only report usable as a
 // probe: nothing there is a fact, not a failure.
 //
 // DHF-TEST: keel/requirement-113 (keel/ac-407)
-func TestStateOfAnUnbroughtUpNameIsQuiet(t *testing.T) {
+func TestStateOfANameNeverBroughtUpIsQuiet(t *testing.T) {
 	root := newRepo(t)
 	m := newManager(t, worktree.Config{RepoRoot: root, Base: "main"})
 	state, err := m.State(context.Background(), "never-created")

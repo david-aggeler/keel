@@ -130,7 +130,9 @@ unanalyzed
 undemoable
 undrained
 uninspectable
+unlinkability
 unlinkable
+unlistable
 unparseable
 unpushed
 unredacted
@@ -139,6 +141,7 @@ unreviewed
 unscored
 unwedge
 unwired
+unwritable
 vapp
 vapps
 Vitest

@@ -208,6 +208,91 @@ func TestDownAlreadyGoneIsADistinctNoop(t *testing.T) {
 	}
 }
 
+// TestDownPrunesARegistrationWhoseDirectoryIsGone covers the inverse of the
+// no-op: the checkout was deleted out of band but git still lists it. There is
+// nothing left to destroy, so tear-down drops the stale registration itself and
+// says so distinctly, rather than refusing over a directory that is not there.
+// A second call then converges on the plain no-op.
+//
+// DHF-TEST: keel/requirement-113 (keel/ac-405)
+func TestDownPrunesARegistrationWhoseDirectoryIsGone(t *testing.T) {
+	root := newRepo(t)
+	m := newManager(t, worktree.Config{RepoRoot: root, Base: "main"})
+	ctx := context.Background()
+	wt, err := m.Up(ctx, "unit-1")
+	if err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	// Delete the directory behind git's back; the registration survives.
+	if err := removeAll(wt.Path); err != nil {
+		t.Fatalf("remove checkout: %v", err)
+	}
+
+	res, err := m.Down(ctx, "unit-1", worktree.DownOptions{})
+	if err != nil {
+		t.Fatalf("down of a registered-but-absent checkout: %v", err)
+	}
+	if res.Outcome != worktree.DownPruned {
+		t.Errorf("outcome = %q, want %q", res.Outcome, worktree.DownPruned)
+	}
+
+	state, err := m.State(ctx, "unit-1")
+	if err != nil {
+		t.Fatalf("state: %v", err)
+	}
+	if state.Registered {
+		t.Error("the stale registration outlived the tear-down")
+	}
+	if !state.Stale.Empty() {
+		t.Errorf("state still reports blockers after the prune: %+v", state.Stale)
+	}
+
+	// The branch outlives the registration, and a re-run is the plain no-op.
+	if out, err := gitTry(root, "show-ref", "--verify", "--quiet", "refs/heads/unit-1"); err != nil {
+		t.Errorf("branch unit-1 was destroyed by the prune: %v\n%s", err, out)
+	}
+	second, err := m.Down(ctx, "unit-1", worktree.DownOptions{})
+	if err != nil {
+		t.Fatalf("second down: %v", err)
+	}
+	if second.Outcome != worktree.DownNoop {
+		t.Errorf("second outcome = %q, want %q", second.Outcome, worktree.DownNoop)
+	}
+}
+
+// TestDownReportsARegistrationAPruneCannotClear keeps the pruning branch honest:
+// git refuses to prune a locked registration, so the absent directory stays a
+// reported condition with the unlock remediation instead of a silent success.
+//
+// DHF-TEST: keel/requirement-113 (keel/ac-401)
+func TestDownReportsARegistrationAPruneCannotClear(t *testing.T) {
+	root := newRepo(t)
+	m := newManager(t, worktree.Config{RepoRoot: root, Base: "main"})
+	ctx := context.Background()
+	wt, err := m.Up(ctx, "unit-1")
+	if err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	git(t, root, "worktree", "lock", wt.Path)
+	if err := removeAll(wt.Path); err != nil {
+		t.Fatalf("remove checkout: %v", err)
+	}
+
+	// A force covers held work; it does not unlock a registration for you.
+	_, err = m.Down(ctx, "unit-1", worktree.DownOptions{Force: true})
+	report := blockedReport(t, err)
+	stale := report.OfKind(worktree.BlockerStaleRegistration)
+	if len(stale) != 1 {
+		t.Fatalf("stale-registration blockers = %+v, want one", stale)
+	}
+	if !strings.Contains(stale[0].Remediation, "worktree unlock") {
+		t.Errorf("remediation %q does not name the unlock", stale[0].Remediation)
+	}
+	if report.HoldsWork() {
+		t.Error("a surviving registration was classified as work held")
+	}
+}
+
 // TestDownReportsLostRegistration catches the directory-present, registration-
 // lost state and hands back the prune remediation rather than a raw git error.
 //

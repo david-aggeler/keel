@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -18,6 +19,11 @@ const (
 	// and it stays distinguishable from a first-time removal so a caller can
 	// still account for what it actually did.
 	DownNoop DownOutcome = "noop"
+	// DownPruned: the directory was already gone but its registration survived,
+	// so tear-down dropped the registration. Nothing on disk was destroyed; the
+	// outcome is distinct from a removal because nothing was removed, and from a
+	// no-op because git state did change.
+	DownPruned DownOutcome = "pruned"
 )
 
 // DownOptions carries the caller's tear-down policy.
@@ -51,7 +57,9 @@ type DownResult struct {
 //
 // An already-removed, unregistered path is success with [DownNoop] and no
 // mutating git command, so a reconciliation loop can re-invoke Down after a
-// crash, or after a peer tore the same checkout down, and converge.
+// crash, or after a peer tore the same checkout down, and converge. A path
+// whose directory is gone while its registration survives is the same story
+// half-finished: Down prunes the registration and reports [DownPruned].
 //
 // DHF-REQ: keel/requirement-113 (keel/ac-401, keel/ac-402, keel/ac-403, keel/ac-405)
 func (m *Manager) Down(ctx context.Context, name string, opts DownOptions) (DownResult, error) {
@@ -72,7 +80,9 @@ func (m *Manager) Down(ctx context.Context, name string, opts DownOptions) (Down
 	case os.IsNotExist(statErr) && !registered:
 		result.Outcome = DownNoop
 		return result, nil
-	case statErr != nil && !os.IsNotExist(statErr):
+	case os.IsNotExist(statErr):
+		return m.pruneAbsent(ctx, op, result, path)
+	case statErr != nil:
 		return result, wrapError(op, CodeGit, path, statErr, "inspect %s", path)
 	}
 
@@ -96,6 +106,37 @@ func (m *Manager) Down(ctx context.Context, name string, opts DownOptions) (Down
 		return result, err
 	}
 	result.Outcome = DownRemoved
+	return result, nil
+}
+
+// pruneAbsent handles the inverse of the no-op: the directory is gone but the
+// registration survives. Inspecting a checkout that is not there could only
+// report the failure to read it, so tear-down drops the registration instead —
+// there is nothing on disk left for a removal to destroy, and the branch is
+// untouched either way. A registration a prune cannot clear (git skips locked
+// ones) stays a reported condition rather than a silent success, so the caller
+// is never told the checkout is gone while git still lists it.
+func (m *Manager) pruneAbsent(ctx context.Context, op string, result DownResult, path string) (DownResult, error) {
+	if _, err := m.run(ctx, op, m.repoRoot, "worktree", "prune"); err != nil {
+		return result, err
+	}
+	regs, err := m.registrations(ctx, op)
+	if err != nil {
+		return result, err
+	}
+	if _, stillRegistered := lookup(regs, path); stillRegistered {
+		var report StaleReport
+		report.add(Blocker{
+			Kind:        BlockerStaleRegistration,
+			Path:        path,
+			Detail:      "the directory is gone but the registration survived a prune, which git skips for a locked worktree",
+			Remediation: "run `git worktree unlock " + path + "` once the reason for the lock is gone, then tear down again",
+		})
+		blocked := newError(op, CodeBlocked, path, "%s cannot be removed: %s", path, summarize(report))
+		blocked.Report = &report
+		return result, blocked
+	}
+	result.Outcome = DownPruned
 	return result, nil
 }
 
@@ -130,21 +171,9 @@ func summarize(report StaleReport) string {
 	}
 	parts := make([]string, 0, len(order))
 	for _, kind := range order {
-		parts = append(parts, string(kind)+" x"+itoa(seen[kind]))
+		parts = append(parts, string(kind)+" x"+strconv.Itoa(seen[kind]))
 	}
 	return strings.Join(parts, ", ")
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var digits []byte
-	for n > 0 {
-		digits = append([]byte{byte('0' + n%10)}, digits...)
-		n /= 10
-	}
-	return string(digits)
 }
 
 // inspect accumulates every blocking item for a checkout that exists on disk.
