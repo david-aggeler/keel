@@ -42,15 +42,16 @@ func validateVersion(version string) error {
 
 // runRelease cuts a release in one invocation:
 //
-//	preflight (clean tree + green `keel-dev ci` + green `keel-dev vsix ci`) ->
-//	stamp vsix/package.json from the tag and COMMIT the stamp -> build the VSIX
-//	asset -> annotated tag (whose tree now carries the stamped version) ->
-//	`gh release create` -> anonymous go-get verification from a clean cache.
+//	preflight (version + clean tree + tag absent) -> stamp vsix/package.json from
+//	the tag and COMMIT the stamp -> green `keel-dev ci` + green `keel-dev vsix ci`
+//	on the stamped tree -> build the VSIX asset -> annotated tag (whose tree now
+//	carries the stamped version) -> `gh release create` -> anonymous go-get
+//	verification from a clean cache.
 //
-// It refuses before creating any tag if the tree is dirty or the gate is red,
-// so a broken tag-on-red state cannot happen.
+// It refuses before creating any tag if the tree is dirty, the tag already
+// exists, or the gate is red, so a broken tag-on-red state cannot happen.
 //
-// DHF-REQ: keel/requirement-9, keel/requirement-25
+// DHF-REQ: keel/requirement-9, keel/requirement-25, keel/requirement-112
 func runRelease(ctx context.Context, logger *slog.Logger, dir string, version string) error {
 	logger.Info("release "+version, "banner", "section", "name", "release "+version)
 
@@ -68,6 +69,17 @@ func runRelease(ctx context.Context, logger *slog.Logger, dir string, version st
 	if err := ensureTagAbsent(ctx, logger, dir, version); err != nil {
 		return fmt.Errorf("release preflight: %w", err)
 	}
+
+	// --- Stamp + commit the VSIX version before the gates. ---
+	// The gates validate the same committed tree the tag will point at, so the
+	// VSIX headless suite's version-skew guard sees the release version instead
+	// of the previous manifest version.
+	if err := stampVSIXPackageVersion(filepath.Join(dir, "vsix", "package.json"), strings.TrimPrefix(version, "v")); err != nil {
+		return fmt.Errorf("stamp vsix version: %w", err)
+	}
+	if err := commitVSIXStamp(ctx, logger, dir, version); err != nil {
+		return err
+	}
 	if err := runCI(ctx, logger, dir); err != nil {
 		return fmt.Errorf("release preflight: %w", err)
 	}
@@ -76,17 +88,7 @@ func runRelease(ctx context.Context, logger *slog.Logger, dir string, version st
 	}
 	logger.Info("preflight green", "version", version)
 
-	// --- Stamp + commit the VSIX version, then build the asset. ---
-	// The stamp is committed BEFORE the tag so the tag's tree carries the same
-	// vsix/package.json version as the release asset (one-version invariant);
-	// tagging a dirty stamp would publish an asset the tagged source disagrees
-	// with.
-	if err := stampVSIXPackageVersion(filepath.Join(dir, "vsix", "package.json"), strings.TrimPrefix(version, "v")); err != nil {
-		return fmt.Errorf("stamp vsix version: %w", err)
-	}
-	if err := commitVSIXStamp(ctx, logger, dir, version); err != nil {
-		return err
-	}
+	// --- Build the asset from the already-stamped release tree. ---
 	asset, err := buildVSIXReleaseAsset(ctx, logger, dir, version)
 	if err != nil {
 		return err

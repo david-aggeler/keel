@@ -30,16 +30,16 @@ preflight step fails:
    aborts before any tag or GitHub release is created.
 3. **Clean tree** — `git status --porcelain` must be empty.
 4. **Tag absent** — `vX.Y.Z` must not already exist locally.
-5. **Green core gate** — the full `keel-dev ci` sequence (gofmt, `go build ./...`,
+5. **Stamp + commit the VSIX version** — `vsix/package.json` is stamped from
+   the release tag and the stamp is **committed**, so the gates, tag, and
+   release asset all use the same version (one version, no dirty-stamp drift).
+6. **Green core gate** — the full `keel-dev ci` sequence (gofmt, `go build ./...`,
    `go vet ./...`, the compiled-in lint policies, `go test ./...`) must pass.
-6. **Green VSIX gate** — `keel-dev vsix ci` runs pnpm compile/lint and the
+7. **Green VSIX gate** — `keel-dev vsix ci` runs pnpm compile/lint and the
    headless VS Code extension suite. It fails loudly if Node, pnpm, or xvfb is
    absent.
 Only then does it:
 
-7. **Stamp + commit the VSIX version** — `vsix/package.json` is stamped from
-   the release tag and the stamp is **committed**, so the tag's tree carries
-   the same version as the release asset (one version, no dirty-stamp drift).
 8. **VSIX asset build** — `pnpm --dir vsix run package:vsix` builds the
    release asset from that committed state into `bin/`.
 9. Create the annotated tag `vX.Y.Z` and push it — plus the release (stamp)
