@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.7.0
+
+### Breaking
+
+- Bridge-owned Test Bridge discovery ids move from `keel::maintenance::*` to
+  `testbridge::maintenance::*`; rebuild devtools and the VSIX from the same tag.
+
 ## Unreleased
 
 - Keel takes ownership of the VS Code extension as `aggeler.keel-test-bridge`.

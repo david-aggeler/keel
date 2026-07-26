@@ -96,7 +96,7 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	var discovery vscode.DiscoveryDocument
 	decodeJSON(t, discoveryOut, &discovery)
 	assertItem(t, discovery.Items, testbridge.MaintenanceGroupID, "group", false)
-	assertItem(t, discovery.Items, "keel::desired-state", "group", false)
+	assertItem(t, discovery.Items, "keel-demo-dev::desired-state", "group", false)
 	assertItem(t, discovery.Items, "keel-demo-dev::lanes", "group", false)
 	assertItem(t, discovery.Items, "keel-demo-dev::frameworks", "group", false)
 	assertItem(t, discovery.Items, testbridge.MaintenanceDetectLanesID, "maintenance", true)
@@ -112,8 +112,8 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	if stringSlicesContain(discovery.Capabilities.ClearStateTestIDs, idUnblockBadLane) {
 		t.Fatalf("clear_state_test_ids aliases unblock-bad-lane: %v", discovery.Capabilities.ClearStateTestIDs)
 	}
-	assertMissingItem(t, discovery.Items, "keel::desired-state::group::test-preconditions")
-	assertMissingItem(t, discovery.Items, "keel::desired-state::group::app-db-data-set")
+	assertMissingItem(t, discovery.Items, "keel-demo-dev::desired-state::group::test-preconditions")
+	assertMissingItem(t, discovery.Items, "keel-demo-dev::desired-state::group::app-db-data-set")
 	for _, id := range []string{"keel-demo-dev::desired-state::docker-env", "keel-demo-dev::desired-state::dataset::small"} {
 		assertMissingItem(t, discovery.Items, id)
 	}
@@ -135,14 +135,14 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	assertItem(t, discovery.Items, "keel-demo-dev::lane::fake-smoke", "lane", true)
 	assertItem(t, discovery.Items, "go::test::passing::TestReferencePass", "test", true)
 	assertItem(t, discovery.Items, "go::test::failing::TestReferenceFailure", "test", true)
-	assertItem(t, discovery.Items, "keel::desired-state::group::test-preconditions", "group", true)
-	dataSetGroup := assertItem(t, discovery.Items, "keel::desired-state::group::app-db-data-set", "group", false)
+	assertItem(t, discovery.Items, "keel-demo-dev::desired-state::group::test-preconditions", "group", true)
+	dataSetGroup := assertItem(t, discovery.Items, "keel-demo-dev::desired-state::group::app-db-data-set", "group", false)
 	if dataSetGroup.SortText != "b.020" || !strings.Contains(strings.Join(dataSetGroup.Limitations, " "), "mutually_exclusive=true") {
 		t.Fatalf("data-set discovery group = %+v, want order and exclusivity surfaced", dataSetGroup)
 	}
 	for _, id := range []string{"keel-demo-dev::desired-state::docker-env", "keel-demo-dev::desired-state::dataset::small"} {
 		item := assertItem(t, discovery.Items, id, "group", true)
-		if item.ParentID != "keel::desired-state::group::test-preconditions" && item.ParentID != "keel::desired-state::group::app-db-data-set" {
+		if item.ParentID != "keel-demo-dev::desired-state::group::test-preconditions" && item.ParentID != "keel-demo-dev::desired-state::group::app-db-data-set" {
 			t.Fatalf("desired-state row %s parent = %q, want derived desired-state group", id, item.ParentID)
 		}
 	}
@@ -305,7 +305,7 @@ func TestKeelDemoDevDesiredStateRowsAreRunnable(t *testing.T) {
 		t.Fatalf("re-activate small after Unknown reset exit = %d, want 0\n%s", code, out)
 	}
 
-	out, code = runDemoDev(t, root, exe, "test-bridge", "run", "--id", "keel::desired-state::group::test-preconditions")
+	out, code = runDemoDev(t, root, exe, "test-bridge", "run", "--id", "keel-demo-dev::desired-state::group::test-preconditions")
 	if code != 0 {
 		t.Fatalf("desired-state group exit = %d, want 0\n%s", code, out)
 	}
@@ -874,7 +874,7 @@ func assertDemoLanesFile(t *testing.T, root string) {
 		t.Fatalf("read demo lanes file: %v", err)
 	}
 	text := string(data)
-	for _, want := range []string{"keel-demo-dev::lane::go-pass", "keel-demo-dev::lane::go-fail", "keel-demo-dev::lane::fake-smoke"} {
+	for _, want := range []string{`"id": "go-pass"`, `"id": "go-fail"`, `"id": "fake-smoke"`} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("test-lanes.json missing %s:\n%s", want, text)
 		}

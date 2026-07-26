@@ -1768,7 +1768,7 @@ func max(a, b int) int {
 
 // DHF-REQ: keel/requirement-48
 func runVSCodeLane(ctx context.Context, logger *slog.Logger, root, laneID, runID string, maxOutputBytes int, writer vscode.RunEventWriter) (int, error) {
-	if strings.HasPrefix(laneID, "keel::maintenance::") {
+	if strings.HasPrefix(laneID, testbridge.MaintenanceGroupID+"::") {
 		if laneID == vscodeMaintenanceDetectLanes {
 			if err := runVSCodeDetectLanesMaintenance(root, writer); err != nil {
 				return 1, err

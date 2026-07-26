@@ -87,7 +87,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     vscode.commands.registerCommand('keel.tests.unlock', async () => {
       try {
-        await runAdapterMaintenance(controller, ['keel::maintenance::unlock']);
+        await runAdapterMaintenance(controller, ['testbridge::maintenance::unlock']);
         void vscode.window.showInformationMessage(`Unlocked ${currentAdapterConfig().displayName} Test Bridge.`);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -97,7 +97,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     vscode.commands.registerCommand('keel.tests.detectLanes', async () => {
       try {
-        await runAdapterMaintenance(controller, ['keel::maintenance::detect-lanes']);
+        await runAdapterMaintenance(controller, ['testbridge::maintenance::detect-lanes']);
         void vscode.window.showInformationMessage(`Detected ${currentAdapterConfig().displayName} test lanes.`);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -662,7 +662,7 @@ function appendDesiredStateDocument(run: vscode.TestRun, desiredState: DesiredSt
   }
 }
 
-const desiredStateRootProtocolID = 'keel::desired-state';
+const desiredStateRootProtocolID = 'testbridge::desired-state';
 
 // desiredStateRowProtocolID builds the VSIX-private DISPLAY id for an
 // informational (non-runnable) desired-state row. It is a tree key only —

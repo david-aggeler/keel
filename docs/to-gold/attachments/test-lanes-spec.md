@@ -92,7 +92,7 @@ Field rules:
 | Field | Req | Rules |
 |---|---|---|
 | `version` | yes | Integer. Unknown major version → whole-file diagnostic (see 2.1). |
-| `id` | yes | `[a-z][a-z0-9-]*`, unique across lanes in the file. Wire item id becomes `keel::lane::<id>`. IDs never carry ordinals. |
+| `id` | yes | `[a-z][a-z0-9-]*`, unique across lanes in the file. The consuming devtool maps it into that devtool's own lane namespace, e.g. `keel::lane::<id>` for keel-dev or `<consumer-namespace>::lane::<id>` for another consumer. IDs never carry ordinals. |
 | `label` | yes | Human label, no ordinal prefix (the devtool prepends `order`). |
 | `order` | yes | Dotted ordinal, e.g. `c.40`. Shape-checked only (`letter.digits`) — the devtool owns group placement, so renumbering top-level groups never invalidates lanes files. `detect-lanes` seeds gate lanes at `c.1` lint, `c.2` test-fast, `c.3` test-coverage, `c.10` vsix-ci, `c.30` ci; category detection starts at `c.40`. Duplicate orders still render (V7 warning; `sort_text` breaks ties by id). |
 | `description` | no | Free text; the devtool appends the measured duration hint (see §6). |
@@ -295,7 +295,7 @@ the file write (when any) triggers watcher-driven re-discovery.
    - go glob → one alias per matched package AND its file/test descendants;
    - root → alias of the framework root and its descendants;
    - lane → alias of that lane's item only (`canonical_id =
-     keel::lane::<id>`) — referenced lanes are NOT re-expanded (prevents
+     <consumer-namespace>::lane::<id>`, e.g. `keel::lane::<id>` for keel-dev) — referenced lanes are NOT re-expanded (prevents
      exponential blow-up in composed lanes; the referenced lane's own covers
      are one click away).
    Cost note: full expansion multiplies discovery payload; keel's module size

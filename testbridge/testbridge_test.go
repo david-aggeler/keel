@@ -733,6 +733,9 @@ func TestDiscoverInjectsBridgeOwnedMaintenanceVocabulary(t *testing.T) {
 
 	var doc vscode.DiscoveryDocument
 	decodeJSON(t, &protocol, &doc)
+	if got, want := testbridge.MaintenanceGroupID, "testbridge::maintenance"; got != want {
+		t.Fatalf("MaintenanceGroupID = %q, want neutral bridge-owned id %q", got, want)
+	}
 	if got, want := doc.Capabilities.ClearResultsTestIDs, []string{testbridge.MaintenanceClearResultsID}; !equalStrings(got, want) {
 		t.Fatalf("clear_results_test_ids = %v, want %v", got, want)
 	}
@@ -755,6 +758,93 @@ func TestDiscoverInjectsBridgeOwnedMaintenanceVocabulary(t *testing.T) {
 		if item.ParentID != testbridge.MaintenanceGroupID || item.Kind != "maintenance" || item.Label != want.label || item.SortText != want.sort || !item.Runnable {
 			t.Fatalf("maintenance item %q = %+v, want canonical parent label=%q sort=%q runnable", id, item, want.label, want.sort)
 		}
+		if item.Framework != "testbridge" {
+			t.Fatalf("maintenance item %q framework = %q, want bridge-owned neutral framework", id, item.Framework)
+		}
+	}
+}
+
+// DHF-TEST: keel/requirement-58
+func TestBridgeOwnedVocabularyIsConsumerAgnostic(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.lanes = []vscode.TestItem{{
+		ID:        "openbrain-dev::lane::acceptance",
+		Label:     "",
+		SortText:  "c.010",
+		Kind:      "lane",
+		Framework: "openbrain-dev",
+		Runnable:  true,
+		Profiles:  []string{"run"},
+	}}
+	fake.desiredGroups = []testbridge.DesiredStateGroup{{
+		Label:             "Data Set",
+		MutuallyExclusive: true,
+		Rows: []testbridge.DesiredStateRow{
+			probedRow("", "db", "fixture-data", "seeded", "empty", false, "seed", false, false),
+		},
+	}}
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{
+		Root:     root,
+		Protocol: &bytes.Buffer{},
+		RunID:    func() string { return "run-neutral" },
+	})
+
+	var discoverOut bytes.Buffer
+	discoverCtx := testbridge.WithRuntime(ctx, testbridge.Runtime{Root: root, Protocol: &discoverOut})
+	if err := testbridge.CommandSpec(fake).Dispatch(discoverCtx, []string{"test-bridge", "discover", "--format", "json"}); err != nil {
+		t.Fatalf("discover dispatch: %v", err)
+	}
+	var discovery vscode.DiscoveryDocument
+	decodeJSON(t, &discoverOut, &discovery)
+	for _, id := range []string{
+		"testbridge::maintenance",
+		"testbridge::maintenance::detect-lanes",
+		"testbridge::maintenance::unlock",
+		"testbridge::maintenance::clear-results",
+		"testbridge::maintenance::clear-state",
+	} {
+		item, ok := testItemByID(discovery.Items, id)
+		if !ok {
+			t.Fatalf("discovery missing neutral bridge-owned id %q: %+v", id, discovery.Items)
+		}
+		if strings.HasPrefix(item.ID, "keel::") || strings.HasPrefix(item.ParentID, "keel::") || item.Framework == "keel" {
+			t.Fatalf("bridge-owned item %q leaks keel-domain vocabulary: %+v", id, item)
+		}
+	}
+
+	var desiredOut bytes.Buffer
+	desiredCtx := testbridge.WithRuntime(ctx, testbridge.Runtime{Root: root, Protocol: &desiredOut})
+	if err := testbridge.CommandSpec(emptyNodeBridge{fake}).Dispatch(desiredCtx, []string{"test-bridge", "desired-state", "--format", "json"}); err != nil {
+		t.Fatalf("desired-state dispatch: %v", err)
+	}
+	var desired vscode.DesiredStateDocument
+	decodeJSON(t, &desiredOut, &desired)
+	row := desiredStateRowByResource(t, desired.Groups[0].Rows, "Unknown State")
+	if !strings.HasPrefix(row.RunID, "testbridge::desired-state::") {
+		t.Fatalf("default desired-state row id = %q, want neutral testbridge namespace", row.RunID)
+	}
+
+	var runOut bytes.Buffer
+	runCtx := testbridge.WithRuntime(ctx, testbridge.Runtime{Root: root, Protocol: &runOut, RunID: func() string { return "run-neutral" }})
+	if err := testbridge.CommandSpec(fake).Dispatch(runCtx, []string{"test-bridge", "run", "--id", testbridge.MaintenanceDetectLanesID}); err != nil {
+		t.Fatalf("detect-lanes dispatch: %v\n%s", err, runOut.String())
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".vscode", "test-lanes.json"))
+	if err != nil {
+		t.Fatalf("read detected lanes: %v", err)
+	}
+	var lanes struct {
+		Lanes []struct {
+			ID    string `json:"id"`
+			Label string `json:"label"`
+		} `json:"lanes"`
+	}
+	if err := json.Unmarshal(data, &lanes); err != nil {
+		t.Fatalf("decode lanes file: %v\n%s", err, data)
+	}
+	if len(lanes.Lanes) != 1 || lanes.Lanes[0].ID != "acceptance" || lanes.Lanes[0].Label != "acceptance" {
+		t.Fatalf("detected lanes = %+v, want generic final-segment id/label from non-keel lane", lanes.Lanes)
 	}
 }
 
@@ -854,8 +944,8 @@ func TestBridgeInjectedRunnableMaintenanceIDsHaveDefinedRunPaths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("detect-lanes did not write lanes file: %v", err)
 	}
-	if !strings.Contains(string(data), "demo::lane::fast") {
-		t.Fatalf("detect-lanes lanes file = %s, want LaneProvider lane", data)
+	if !strings.Contains(string(data), `"id": "fast"`) {
+		t.Fatalf("detect-lanes lanes file = %s, want LaneProvider lane short id", data)
 	}
 }
 
@@ -2433,6 +2523,16 @@ type fakeBridge struct {
 	desiredGroups                   []testbridge.DesiredStateGroup
 	filterDesiredStateByIDs         bool
 	desiredStateEmptyForSelectedIDs bool
+}
+
+type emptyNodeBridge struct {
+	*fakeBridge
+}
+
+func (b emptyNodeBridge) Workspace() testbridge.Workspace {
+	workspace := b.fakeBridge.Workspace()
+	workspace.Node = ""
+	return workspace
 }
 
 func newFakeBridge(root string) *fakeBridge {
