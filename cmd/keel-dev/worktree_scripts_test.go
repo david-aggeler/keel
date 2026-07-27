@@ -201,10 +201,10 @@ func TestWorktreeUpScriptLifecycle(t *testing.T) {
 	occupied := runWorktreeScript(t, env, env.repo, "worktree-up.sh", "cr", "2", "beta")
 	assertScript(t, "up refuses an unregistered path", occupied, 65, nil)
 
-	// A branch with no checkout: bring-up refuses and points at resume.
+	// A branch with no checkout: bring-up attaches it through keel/worktree.
 	mustRun(t, env.repo, "git", "branch", "cr-3-gamma")
-	orphaned := runWorktreeScript(t, env, env.repo, "worktree-up.sh", "cr", "3", "gamma")
-	assertScript(t, "up refuses an existing branch", orphaned, 65, nil, "cr-3-gamma")
+	attached := runWorktreeScript(t, env, env.repo, "worktree-up.sh", "cr", "3", "gamma")
+	assertScript(t, "up attaches an existing branch", attached, 0, results("up cr-3-gamma "+env.path("cr-3-gamma")))
 }
 
 // TestWorktreeDownScriptLifecycle pins worktree-down.sh's removal, no-op, and
