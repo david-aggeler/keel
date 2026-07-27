@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Create a new git worktree on a fresh branch off the default branch.
+# Create a new git worktree on a fresh branch off the local default branch.
 #
 # Thin wrapper. Every lifecycle decision belongs to `keel-dev worktree up`,
 # which is backed by the keel/worktree package; this script only validates its
