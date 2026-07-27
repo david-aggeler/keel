@@ -206,13 +206,34 @@ func TestReportsIssueNoMutatingGitCommand(t *testing.T) {
 	}
 }
 
+// TestRepoFingerprintCoversLocalConfig holds the fingerprint to what its comment
+// claims. The package writes `branch.<name>.keel-worktree-base` into the local
+// config, so a report that wrote config would be a mutation the fingerprint has
+// to see — it is the second, independent line of defense behind assertReadOnly.
+//
+// DHF-TEST: keel/requirement-113 (keel/ac-407)
+func TestRepoFingerprintCoversLocalConfig(t *testing.T) {
+	root := newRepo(t)
+
+	before := repoFingerprint(t, root)
+	git(t, root, "config", "branch.unit-1.keel-worktree-base", "main")
+	if after := repoFingerprint(t, root); after == before {
+		t.Errorf("a local config write left the fingerprint unchanged:\n%s", before)
+	}
+}
+
 // repoFingerprint captures everything a mutating git command would change:
-// registrations, refs, the index, and the working tree.
+// registrations, refs, the index, the working tree, and the local config — the
+// last because the package stores branch.<name>.keel-worktree-base there, so a
+// config write is a repository change a report must never make.
+//
+// DHF-REQ: keel/requirement-113 (keel/ac-407)
 func repoFingerprint(t *testing.T, root string) string {
 	t.Helper()
 	return strings.Join([]string{
 		git(t, root, "worktree", "list", "--porcelain"),
 		git(t, root, "for-each-ref", "--format=%(refname) %(objectname)"),
 		git(t, root, "status", "--porcelain"),
+		git(t, root, "config", "--list", "--local"),
 	}, "\n")
 }
