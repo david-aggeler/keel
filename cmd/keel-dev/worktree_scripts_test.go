@@ -139,6 +139,16 @@ func assertScript(t *testing.T, label string, got worktreeScriptResult, wantExit
 	}
 }
 
+func assertScriptWorktreeBranchAbsent(t *testing.T, env worktreeScriptEnv, name string) {
+	t.Helper()
+	if _, err := os.Stat(env.path(name)); !os.IsNotExist(err) {
+		t.Fatalf("worktree path %s exists after refusal: %v", env.path(name), err)
+	}
+	if testBranchExists(t, env.repo, name) {
+		t.Fatalf("branch %s exists after refusal", name)
+	}
+}
+
 // results is shorthand for a scenario's expected result lines.
 func results(lines ...string) []string { return lines }
 
@@ -201,10 +211,10 @@ func TestWorktreeUpScriptLifecycle(t *testing.T) {
 	occupied := runWorktreeScript(t, env, env.repo, "worktree-up.sh", "cr", "2", "beta")
 	assertScript(t, "up refuses an unregistered path", occupied, 65, nil)
 
-	// A branch with no checkout: bring-up refuses and points at resume.
+	// A branch with no checkout: bring-up attaches it through keel/worktree.
 	mustRun(t, env.repo, "git", "branch", "cr-3-gamma")
-	orphaned := runWorktreeScript(t, env, env.repo, "worktree-up.sh", "cr", "3", "gamma")
-	assertScript(t, "up refuses an existing branch", orphaned, 65, nil, "cr-3-gamma")
+	attached := runWorktreeScript(t, env, env.repo, "worktree-up.sh", "cr", "3", "gamma")
+	assertScript(t, "up attaches an existing branch", attached, 0, results("up cr-3-gamma "+env.path("cr-3-gamma")))
 }
 
 // TestWorktreeDownScriptLifecycle pins worktree-down.sh's removal, no-op, and
@@ -276,6 +286,7 @@ func TestWorktreeResumeScriptLifecycle(t *testing.T) {
 
 	missing := runWorktreeScript(t, env, env.repo, "worktree-resume.sh", "cr", "9", "absent")
 	assertScript(t, "resume without a branch", missing, 67, nil, "cr-9-absent")
+	assertScriptWorktreeBranchAbsent(t, env, "cr-9-absent")
 
 	// Tear the checkout down, keeping the branch, then re-attach it.
 	runWorktreeScript(t, env, env.repo, "worktree-down.sh", "cr", "1", "alpha")
