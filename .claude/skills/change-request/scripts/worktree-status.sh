@@ -18,7 +18,7 @@
 #
 # Exit codes: 0 always (informational); 2 not-in-repo; 64 bad args; 65 unusable worktree_base
 #
-# KEEL_DEV_BIN overrides the delegate command (default: go run ./cmd/keel-dev).
+# KEEL_DEV_BIN overrides the delegate command (default: cached ./cmd/keel-dev build).
 set -euo pipefail
 export LC_ALL=C
 
@@ -28,10 +28,23 @@ TOPLEVEL="$(git rev-parse --show-toplevel 2>/dev/null)" || {
   exit 2
 }
 
+cd "$TOPLEVEL"
+
 if [[ -n "${KEEL_DEV_BIN:-}" ]]; then
   read -r -a KEEL_DEV <<<"$KEEL_DEV_BIN"
 else
-  KEEL_DEV=(go run ./cmd/keel-dev)
+  # DHF-REQ: keel/requirement-114 (keel/ac-409, keel/ac-410)
+  CACHE_ROOT="${XDG_CACHE_HOME:-${HOME:-${TMPDIR:-/tmp}}/.cache}"
+  CACHE_DIR="$CACHE_ROOT/keel/change-request"
+  mkdir -p "$CACHE_DIR"
+  KEEL_DEV_PATH="$CACHE_DIR/keel-dev"
+  KEEL_DEV_TMP="$(mktemp "$CACHE_DIR/keel-dev.XXXXXX")"
+  go build -o "$KEEL_DEV_TMP" ./cmd/keel-dev || {
+    rm -f "$KEEL_DEV_TMP"
+    exit 1
+  }
+  mv "$KEEL_DEV_TMP" "$KEEL_DEV_PATH"
+  KEEL_DEV=("$KEEL_DEV_PATH")
 fi
 
 # --- Dispatch on form ---
@@ -47,7 +60,6 @@ if [[ "${1:-}" == "--glob" ]]; then
     echo "invalid glob pattern" >&2
     exit 64
   }
-  cd "$TOPLEVEL"
   exec "${KEEL_DEV[@]}" --no-header worktree status --glob "$PATTERN"
 fi
 
@@ -73,5 +85,4 @@ SLUG="${3:-}"
   exit 64
 }
 
-cd "$TOPLEVEL"
 exec "${KEEL_DEV[@]}" --no-header worktree status "${KIND}-${SEQ}-${SLUG}"
