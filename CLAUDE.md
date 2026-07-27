@@ -50,7 +50,7 @@ Small change? Still a CR. Docs-only? Still a CR (merge_gate: docs).
 `keel/worktree` package — NOT raw `git worktree` or `git checkout -b` on the
 primary checkout (that is blocked). `openbrain-client` has no worktree verb.
 
-- `keel-dev worktree up <name>`      — create the worktree, or reuse the one already there
+- `keel-dev worktree up <name>`      — create the worktree from the local default branch, or reuse the one already there
 - `keel-dev worktree resume <name>`  — re-attach a worktree to a branch that already exists
 - `keel-dev worktree down <name>`    — remove it, keeping the branch; refuses a checkout holding work
 - `keel-dev worktree status <name>`  — read-only state report (also `--glob <pattern>`)

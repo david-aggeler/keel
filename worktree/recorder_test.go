@@ -56,7 +56,7 @@ func (r *commandRecorder) recorded() []string {
 // subcommand is read-only exactly when it is `worktree list`.
 var readOnlySubcommands = map[string]bool{
 	"status": true, "rev-parse": true, "rev-list": true, "for-each-ref": true,
-	"show-ref": true, "log": true, "diff": true, "ls-files": true, "cat-file": true,
+	"show-ref": true, "log": true, "diff": true, "ls-files": true, "cat-file": true, "config": true,
 	"symbolic-ref": true, "branch": false,
 }
 

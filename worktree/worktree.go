@@ -23,10 +23,10 @@ const (
 	OutcomeReused Outcome = "reused"
 )
 
-// baseFallbacks are the refs tried, in order, when a caller declares no base.
-// The first that resolves locally wins; none resolving is a typed error rather
-// than a hardcoded guess.
-var baseFallbacks = []string{"origin/HEAD", "main", "master", "trunk"}
+// baseFallbacks are the local refs tried, in order, when a caller declares no
+// base and no remote default names a local branch. The first that resolves
+// locally wins; none resolving is a typed error rather than a hardcoded guess.
+var baseFallbacks = []string{"main", "master", "trunk"}
 
 // Config configures a [Manager]. The zero value is usable: an empty RepoRoot
 // resolves the repository from the current directory and every other field
@@ -44,7 +44,8 @@ type Config struct {
 	// Empty (the default) makes the branch name equal the work-item name.
 	BranchPrefix string
 	// Base is the ref a newly created branch is cut from. Empty resolves the
-	// first of origin/HEAD, main, master, trunk that exists locally.
+	// repository's local default branch, falling back through main, master,
+	// trunk when no remote default names one.
 	Base string
 	// GitBin is the git binary to execute. Empty resolves "git" through PATH.
 	GitBin string
@@ -86,6 +87,9 @@ type Worktree struct {
 	// Base is the ref the branch was cut from. Empty unless Outcome is
 	// [OutcomeCreated] — an attached or reused worktree created no branch.
 	Base string
+	// BaseSHA is the commit Base resolved to when the branch was cut. Empty unless
+	// Outcome is [OutcomeCreated].
+	BaseSHA string
 	// Outcome records which idempotent path bring-up took.
 	Outcome Outcome
 }
@@ -162,7 +166,7 @@ func (m *Manager) Resolve(name string) (path, branch string, err error) {
 // checkout so the caller can attach there instead of silently growing a second
 // root for the same branch. Every refusal is [CodeConflict].
 //
-// DHF-REQ: keel/requirement-113 (keel/ac-400, keel/ac-406)
+// DHF-REQ: keel/requirement-113 (keel/ac-400, keel/ac-406, keel/ac-416, keel/ac-417)
 func (m *Manager) Up(ctx context.Context, name string) (*Worktree, error) {
 	const op = "up"
 	path, branch, err := m.Resolve(name)
@@ -214,10 +218,17 @@ func (m *Manager) Up(ctx context.Context, name string) (*Worktree, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := m.run(ctx, op, m.repoRoot, "worktree", "add", "-b", branch, path, base); err != nil {
+	baseHead, err := m.revParse(ctx, op, base)
+	if err != nil {
 		return nil, err
 	}
-	return &Worktree{Name: name, Path: path, Branch: branch, Base: base, Outcome: OutcomeCreated}, nil
+	if _, err := m.run(ctx, op, m.repoRoot, "worktree", "add", "-b", branch, path, baseHead); err != nil {
+		return nil, err
+	}
+	if err := m.storeBranchBase(ctx, op, branch, base); err != nil {
+		return nil, err
+	}
+	return &Worktree{Name: name, Path: path, Branch: branch, Base: base, BaseSHA: baseHead, Outcome: OutcomeCreated}, nil
 }
 
 // ResetFresh returns an already-registered worktree to its base ref for a fresh
@@ -264,7 +275,7 @@ func (m *Manager) ResetFresh(ctx context.Context, name string) (*Worktree, error
 	if _, err := m.run(ctx, op, path, "clean", "-ffd"); err != nil {
 		return nil, err
 	}
-	return &Worktree{Name: name, Path: path, Branch: branch, Base: base, Outcome: OutcomeReused}, nil
+	return &Worktree{Name: name, Path: path, Branch: branch, Base: base, BaseSHA: baseHead, Outcome: OutcomeReused}, nil
 }
 
 // DeleteBranch removes the branch for name with git's safe-delete semantics:
@@ -298,18 +309,47 @@ func (m *Manager) deleteBranch(ctx context.Context, name, flag string) error {
 	return nil
 }
 
-// resolveBase returns the configured base ref, or the first fallback that
-// resolves locally. Nothing resolving is a typed error, never a guess.
+// resolveBase returns the configured base ref, or the local default/fallback
+// base that resolves locally. Nothing resolving is a typed error, never a guess.
+//
+// DHF-REQ: keel/requirement-113 (keel/ac-416, keel/ac-417)
 func (m *Manager) resolveBase(ctx context.Context, op string) (string, error) {
 	if m.base != "" {
+		if !m.refResolvable(ctx, m.base) {
+			return m.base, newError(op, CodeBranchMissing, "", "base ref %q does not resolve in %s", m.base, m.repoRoot)
+		}
 		return m.base, nil
 	}
-	for _, ref := range baseFallbacks {
+	candidates := m.baseCandidates(ctx, op)
+	for _, ref := range candidates {
 		if m.refResolvable(ctx, ref) {
 			return ref, nil
 		}
 	}
-	return "", newError(op, CodeBranchMissing, "", "no base ref declared and none of %s resolves in %s", strings.Join(baseFallbacks, ", "), m.repoRoot)
+	return "", newError(op, CodeBranchMissing, "", "no base ref declared and none of %s resolves in %s", strings.Join(candidates, ", "), m.repoRoot)
+}
+
+func (m *Manager) baseCandidates(ctx context.Context, op string) []string {
+	candidates := append([]string(nil), baseFallbacks...)
+	if !m.refResolvable(ctx, "refs/remotes/origin/HEAD") {
+		return candidates
+	}
+	out, err := m.run(ctx, op, m.repoRoot, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+	if err != nil {
+		return candidates
+	}
+	remoteDefault := strings.TrimSpace(out)
+	_, localDefault, ok := strings.Cut(remoteDefault, "/")
+	if !ok || localDefault == "" {
+		return candidates
+	}
+	deduped := []string{localDefault}
+	for _, candidate := range candidates {
+		if candidate != localDefault {
+			deduped = append(deduped, candidate)
+		}
+	}
+	return deduped
 }
 
 func (m *Manager) branchExists(ctx context.Context, branch string) bool {
@@ -326,6 +366,23 @@ func (m *Manager) revParse(ctx context.Context, op, ref string) (string, error) 
 		return "", err
 	}
 	return strings.TrimSpace(out), nil
+}
+
+func (m *Manager) storeBranchBase(ctx context.Context, op, branch, base string) error {
+	_, err := m.run(ctx, op, m.repoRoot, "config", "branch."+branch+".keel-worktree-base", base)
+	return err
+}
+
+func (m *Manager) branchBase(ctx context.Context, op, branch string) (string, bool) {
+	if branch == "" {
+		return "", false
+	}
+	out, err := m.run(ctx, op, m.repoRoot, "config", "--get", "--default", "", "branch."+branch+".keel-worktree-base")
+	if err != nil {
+		return "", false
+	}
+	base := strings.TrimSpace(out)
+	return base, base != ""
 }
 
 func (m *Manager) countCommits(ctx context.Context, op, revRange string) (int, error) {
