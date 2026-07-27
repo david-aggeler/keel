@@ -126,6 +126,9 @@ func worktreeExitCodeSpecs() []cli.ExitCodeSpec {
 
 func handleWorktreeUp(base *string) cli.Handler {
 	return func(ctx context.Context, args []string) error {
+		if err := validateWorkItemName("up", args[0]); err != nil {
+			return err
+		}
 		binding, err := newWorktreeBinding(ctx, strings.TrimSpace(*base))
 		if err != nil {
 			return err
@@ -135,6 +138,9 @@ func handleWorktreeUp(base *string) cli.Handler {
 }
 
 func handleWorktreeResume(ctx context.Context, args []string) error {
+	if err := validateWorkItemName("resume", args[0]); err != nil {
+		return err
+	}
 	binding, err := newWorktreeBinding(ctx, "")
 	if err != nil {
 		return err
@@ -144,6 +150,9 @@ func handleWorktreeResume(ctx context.Context, args []string) error {
 
 func handleWorktreeDown(force *bool) cli.Handler {
 	return func(ctx context.Context, args []string) error {
+		if err := validateWorkItemName("down", args[0]); err != nil {
+			return err
+		}
 		binding, err := newWorktreeBinding(ctx, "")
 		if err != nil {
 			return err
@@ -154,6 +163,9 @@ func handleWorktreeDown(force *bool) cli.Handler {
 
 func handleWorktreeBranchDelete(force *bool) cli.Handler {
 	return func(ctx context.Context, args []string) error {
+		if err := validateWorkItemName("branch-delete", args[0]); err != nil {
+			return err
+		}
 		binding, err := newWorktreeBinding(ctx, "")
 		if err != nil {
 			return err
@@ -171,6 +183,11 @@ func handleWorktreeStatus(glob *string) cli.Handler {
 		case pattern == "" && len(args) == 0:
 			return worktreeInvalidArg("status", "keel-dev worktree status needs a name or --glob <pattern>")
 		}
+		if pattern == "" {
+			if err := validateWorkItemName("status", args[0]); err != nil {
+				return err
+			}
+		}
 		binding, err := newWorktreeBinding(ctx, "")
 		if err != nil {
 			return err
@@ -183,6 +200,9 @@ func handleWorktreeStatus(glob *string) cli.Handler {
 }
 
 func handleWorktreeCompare(ctx context.Context, args []string) error {
+	if err := validateWorkItemName("compare", args[0]); err != nil {
+		return err
+	}
 	binding, err := newWorktreeBinding(ctx, "")
 	if err != nil {
 		return err
@@ -721,6 +741,99 @@ func gitProbe(ctx context.Context, logger *slog.Logger, dir string, args ...stri
 	}
 	result, _ := process.Wait()
 	return result.Stdout, result.ExitCode, nil
+}
+
+// worktreeWorkItemKinds is keel's own work-item taxonomy. It lives here, in
+// keel's development CLI, and deliberately NOT in keel/worktree: that package is
+// consumer-agnostic (keel/ac-399), and a package that knows what a "cr" or an
+// "epic" is has stopped being neutral. keel-dev may know keel's vocabulary.
+var worktreeWorkItemKinds = []string{"cr", "epic", "story"}
+
+// worktreeSlugMaxLen bounds the slug, matching the length the wrapper scripts
+// enforced in shell before this became the single decider.
+const worktreeSlugMaxLen = 100
+
+// validateWorkItemName decides whether a name is a well-formed work item —
+// <kind>-<seq> with an optional -<slug> — and is the ONE implementation of that
+// judgement. The delegating wrapper scripts carry none of their own; they
+// compose a name and hand it here, so a violation is refused once, with the
+// invalid-argument status 64 the shell contract established (keel/ac-409).
+//
+// The checks run in the order the scripts ran them — kind, slug charset, slug
+// length, seq — so a name wrong in more than one way is refused for the same
+// reason it always was.
+//
+// The slug is optional because the autonomous run-queue tail owns worktrees
+// named cr-<seq> with no slug (CLAUDE.md); the three-argument wrappers can never
+// compose such a name, so the set of names THEY can get accepted is unchanged.
+//
+// DHF-REQ: keel/requirement-114 (keel/ac-421, keel/ac-409, keel/ac-399)
+func validateWorkItemName(op, name string) error {
+	parts := strings.SplitN(name, "-", 3)
+	if !worktreeWorkItemKind(parts[0]) {
+		return worktreeInvalidArg(op, fmt.Sprintf("invalid kind %q in work-item name %q: want one of %s",
+			parts[0], name, strings.Join(worktreeWorkItemKinds, ", ")))
+	}
+	if len(parts) > 2 {
+		slug := parts[2]
+		if !validWorktreeSlug(slug) {
+			return worktreeInvalidArg(op, fmt.Sprintf("invalid slug %q in work-item name %q: want a lowercase letter or digit, then lowercase letters, digits, and dashes",
+				slug, name))
+		}
+		if len(slug) > worktreeSlugMaxLen {
+			return worktreeInvalidArg(op, fmt.Sprintf("slug too long in work-item name %q: %d characters, want at most %d",
+				name, len(slug), worktreeSlugMaxLen))
+		}
+	}
+	seq := ""
+	if len(parts) > 1 {
+		seq = parts[1]
+	}
+	if !validWorktreeSeq(seq) {
+		return worktreeInvalidArg(op, fmt.Sprintf("invalid seq %q in work-item name %q: want one or more digits", seq, name))
+	}
+	return nil
+}
+
+func worktreeWorkItemKind(kind string) bool {
+	for _, known := range worktreeWorkItemKinds {
+		if kind == known {
+			return true
+		}
+	}
+	return false
+}
+
+// validWorktreeSlug accepts the slug charset the skill scripts accepted:
+// ^[a-z0-9][a-z0-9-]*$.
+func validWorktreeSlug(slug string) bool {
+	if slug == "" {
+		return false
+	}
+	for i := 0; i < len(slug); i++ {
+		c := slug[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+		case c == '-' && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// validWorktreeSeq accepts the sequence charset the skill scripts accepted:
+// ^[0-9]+$.
+func validWorktreeSeq(seq string) bool {
+	if seq == "" {
+		return false
+	}
+	for i := 0; i < len(seq); i++ {
+		if seq[i] < '0' || seq[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // validWorktreeGlob accepts the pattern charset the skill scripts accept, so a

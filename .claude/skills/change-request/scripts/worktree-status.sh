@@ -3,10 +3,12 @@
 # parent-epic worktree.
 #
 # Thin wrapper. The report belongs to `keel-dev worktree status`, which is
-# backed by the keel/worktree package; this script only validates its arguments,
-# composes the work-item name, and delegates. It runs no git lifecycle command
-# of its own — locating the repository is the one read-only probe it keeps,
-# because the not-in-repo exit status is part of its contract.
+# backed by the keel/worktree package; this script only composes the work-item
+# name and delegates. What a well-formed <kind>-<seq>-<slug> is, is the
+# delegate's judgement alone — a violation comes back from it as exit 64. The
+# script runs no git lifecycle command of its own — locating the repository is
+# the one read-only probe it keeps, because the not-in-repo exit status is part
+# of its contract.
 #
 # Three-arg form:
 #   Usage: worktree-status.sh <kind> <seq> <slug>
@@ -49,23 +51,6 @@ else
 	KIND="${1:-}"
 	SEQ="${2:-}"
 	SLUG="${3:-}"
-
-	[[ "$KIND" =~ ^(cr|epic|story)$ ]] || {
-		echo "invalid kind" >&2
-		exit 64
-	}
-	[[ "$SLUG" =~ ^[a-z0-9][a-z0-9-]*$ ]] || {
-		echo "invalid slug" >&2
-		exit 64
-	}
-	[[ ${#SLUG} -le 100 ]] || {
-		echo "slug too long" >&2
-		exit 64
-	}
-	[[ "$SEQ" =~ ^[0-9]+$ ]] || {
-		echo "invalid seq" >&2
-		exit 64
-	}
 	STATUS_ARGS=("${KIND}-${SEQ}-${SLUG}")
 fi
 
