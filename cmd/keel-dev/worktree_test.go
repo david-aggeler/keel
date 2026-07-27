@@ -239,7 +239,8 @@ func (e worktreeVerbEnv) runWithLogs(t *testing.T, args ...string) (string, stri
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
 	var out strings.Builder
 	ctx := withRunStateProtocol(context.Background(), logger, nil, e.repo, &out)
-	code := exitFor(logger, commandTree().Dispatch(ctx, args))
+	tree := commandTree()
+	code := exitFor(logger, dispatchKeelDev(ctx, tree, args))
 	return out.String(), logs.String(), code
 }
 
@@ -448,10 +449,70 @@ func TestWorktreeStatusVerb(t *testing.T) {
 	assertVerb(t, "glob status rejects a bad pattern", out, code, "", 64)
 
 	out, code = env.run(t, "worktree", "status")
-	assertVerb(t, "status needs a name or a pattern", out, code, "", 2)
+	assertVerb(t, "status needs a name or a pattern", out, code, "", 64)
 
 	out, code = env.run(t, "worktree", "status", "--glob", "cr*", "cr-1-alpha")
-	assertVerb(t, "status refuses both forms", out, code, "", 2)
+	assertVerb(t, "status refuses both forms", out, code, "", 64)
+}
+
+// DHF-TEST: keel/requirement-114 (keel/ac-414)
+func TestWorktreeMalformedArgvExitsInvalidArgument(t *testing.T) {
+	env := newWorktreeVerbEnv(t)
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{name: "unknown subcommand", args: []string{"worktree", "bogus", "cr-1-alpha"}},
+		{name: "bare namespace", args: []string{"worktree"}},
+		{name: "mutually exclusive status forms", args: []string{"worktree", "status", "--glob", "cr*", "cr-1-alpha"}},
+	}
+
+	for _, tc := range cases {
+		out, code := env.run(t, tc.args...)
+		assertVerb(t, tc.name, out, code, "", 64)
+	}
+}
+
+// DHF-TEST: keel/requirement-114 (keel/ac-414)
+func TestWorktreeMalformedArgvProcessExitStatus(t *testing.T) {
+	bin := buildKeelDev(t)
+	env := newWorktreeScriptEnv(t, bin)
+	cases := []struct {
+		name       string
+		args       []string
+		wantStderr string
+	}{
+		{name: "unknown subcommand", args: []string{"worktree", "bogus", "cr-1-alpha"}, wantStderr: "unknown worktree command \"bogus\""},
+		{name: "bare namespace", args: []string{"worktree"}, wantStderr: "missing worktree command"},
+		{name: "mutually exclusive status forms", args: []string{"worktree", "status", "--glob", "cr*", "cr-1-alpha"}, wantStderr: "takes a name or --glob, not both"},
+	}
+
+	for _, tc := range cases {
+		stdout, stderr, code := runKeelDevProcess(t, env.repo, bin, append([]string{"--no-header"}, tc.args...)...)
+		assertVerb(t, tc.name, stdout, code, "", 64)
+		if !strings.Contains(stderr, tc.wantStderr) {
+			t.Fatalf("%s: stderr missing %q\nstderr: %s", tc.name, tc.wantStderr, stderr)
+		}
+	}
+}
+
+func runKeelDevProcess(t *testing.T, dir, bin string, args ...string) (string, string, int) {
+	t.Helper()
+	cmd := exec.Command(bin, args...)
+	cmd.Dir = dir
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	code := 0
+	if err != nil {
+		exitErr, ok := err.(*exec.ExitError)
+		if !ok {
+			t.Fatalf("run keel-dev %v: %v", args, err)
+		}
+		code = exitErr.ExitCode()
+	}
+	return stdout.String(), stderr.String(), code
 }
 
 // TestWorktreeStatusVerbWithoutWorktreesDirectory covers the report path used

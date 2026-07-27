@@ -158,9 +158,9 @@ func handleWorktreeStatus(glob *string) cli.Handler {
 		pattern := strings.TrimSpace(*glob)
 		switch {
 		case pattern != "" && len(args) > 0:
-			return cli.NewUsageError("keel-dev worktree status takes a name or --glob, not both")
+			return worktreeInvalidArg("status", "keel-dev worktree status takes a name or --glob, not both")
 		case pattern == "" && len(args) == 0:
-			return cli.NewUsageError("keel-dev worktree status needs a name or --glob <pattern>")
+			return worktreeInvalidArg("status", "keel-dev worktree status needs a name or --glob <pattern>")
 		}
 		binding, err := newWorktreeBinding(ctx)
 		if err != nil {
@@ -179,6 +179,45 @@ func handleWorktreeCompare(ctx context.Context, args []string) error {
 		return err
 	}
 	return binding.compare(ctx, args[0])
+}
+
+// dispatchKeelDev applies keel-dev's command-family exit-code taxonomy after
+// shared CLI dispatch. Generic usage errors still exit 2; malformed worktree
+// argv exits through the worktree invalid-argument row.
+//
+// DHF-REQ: keel/requirement-114 (keel/ac-414)
+func dispatchKeelDev(ctx context.Context, tree *cli.CommandSpec, words []string) error {
+	err := tree.Dispatch(ctx, words)
+	if len(words) == 0 || words[0] != "worktree" {
+		return err
+	}
+	return classifyWorktreeArgvError(tree, words, err)
+}
+
+func classifyWorktreeArgvError(tree *cli.CommandSpec, words []string, err error) error {
+	if err == nil {
+		return nil
+	}
+	var usage cli.UsageError
+	if !errors.As(err, &usage) {
+		return err
+	}
+	return worktreeInvalidArg("argv", worktreeArgvMessage(tree, words, usage.Error()))
+}
+
+func worktreeArgvMessage(tree *cli.CommandSpec, words []string, fallback string) string {
+	namespace, ok := tree.Child("worktree")
+	if !ok {
+		return fallback
+	}
+	usage := namespace.Usage([]string{"worktree"})
+	if len(words) == 1 {
+		return fmt.Sprintf("missing worktree command\n%s", usage)
+	}
+	if _, ok := namespace.Child(words[1]); !ok {
+		return fmt.Sprintf("unknown worktree command %q\n%s", words[1], usage)
+	}
+	return fallback
 }
 
 // worktreeBinding is one resolved worktree session: the manager, the primary
@@ -758,6 +797,10 @@ func worktreeFailure(op string, code worktree.ErrorCode, format string, args ...
 		Message:  fmt.Sprintf(format, args...),
 		ExitCode: int(code),
 	}
+}
+
+func worktreeInvalidArg(op, message string) error {
+	return worktreeExit(op, &worktree.Error{Op: op, Code: worktree.CodeInvalidArgument, Message: message})
 }
 
 // worktreeExit maps a keel/worktree failure onto its exit status. A failure the
