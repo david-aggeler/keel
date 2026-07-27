@@ -218,7 +218,24 @@ func TestWorktreeScriptsDefaultDelegatePreservesExitCode(t *testing.T) {
 		t.Fatalf("test branch %s already exists", name)
 	}
 
-	got := runWorktreeScriptWithEnv(t, root, "worktree-resume.sh", nil, "cr", "999991", "default-delegate")
+	cacheRoot := filepath.Join(t.TempDir(), "cache")
+	home := filepath.Join(t.TempDir(), "home")
+	tmp := filepath.Join(t.TempDir(), "tmp")
+	for _, dir := range []string{cacheRoot, home, tmp} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	extraEnv := []string{
+		"KEEL_DEV_BIN=",
+		"XDG_CACHE_HOME=" + cacheRoot,
+		"HOME=" + home,
+		"TMPDIR=" + tmp,
+		"GOCACHE=" + filepath.Join(cacheRoot, "go-build"),
+		"GOPATH=" + filepath.Join(t.TempDir(), "gopath"),
+	}
+
+	got := runWorktreeScriptWithEnv(t, root, "worktree-resume.sh", extraEnv, "cr", "999991", "default-delegate")
 	assertScript(t, "resume without a branch through the default delegate", got, 67, nil, name)
 
 	if testBranchExists(t, root, name) {

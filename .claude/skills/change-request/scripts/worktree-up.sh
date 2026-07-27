@@ -12,7 +12,7 @@
 # Output (no-op):   up-noop <kind>-<seq>-<slug> <absolute-path>
 # Exit codes: 0 success/no-op; 2 not-in-repo; 64 bad args; 65 path or branch conflict; 1 git error
 #
-# KEEL_DEV_BIN overrides the delegate command (default: cached ./cmd/keel-dev build).
+# KEEL_DEV_BIN overrides the delegate command (default: per-invocation ./cmd/keel-dev build).
 set -euo pipefail
 export LC_ALL=C
 
@@ -22,46 +22,51 @@ SLUG="${3:-}"
 
 # --- Common pre-flight ---
 [[ "$KIND" =~ ^(cr|epic|story)$ ]] || {
-  echo "invalid kind" >&2
-  exit 64
+	echo "invalid kind" >&2
+	exit 64
 }
 [[ "$SLUG" =~ ^[a-z0-9][a-z0-9-]*$ ]] || {
-  echo "invalid slug" >&2
-  exit 64
+	echo "invalid slug" >&2
+	exit 64
 }
 [[ ${#SLUG} -le 100 ]] || {
-  echo "slug too long" >&2
-  exit 64
+	echo "slug too long" >&2
+	exit 64
 }
 [[ "$SEQ" =~ ^[0-9]+$ ]] || {
-  echo "invalid seq" >&2
-  exit 64
+	echo "invalid seq" >&2
+	exit 64
 }
 
 # --- Repository discovery (read-only) ---
 TOPLEVEL="$(git rev-parse --show-toplevel 2>/dev/null)" || {
-  echo "not in a git repo" >&2
-  exit 2
+	echo "not in a git repo" >&2
+	exit 2
 }
 
 cd "$TOPLEVEL"
 
 # --- Delegate ---
 if [[ -n "${KEEL_DEV_BIN:-}" ]]; then
-  read -r -a KEEL_DEV <<<"$KEEL_DEV_BIN"
+	read -r -a KEEL_DEV <<<"$KEEL_DEV_BIN"
 else
-  # DHF-REQ: keel/requirement-114 (keel/ac-409, keel/ac-410)
-  CACHE_ROOT="${XDG_CACHE_HOME:-${HOME:-${TMPDIR:-/tmp}}/.cache}"
-  CACHE_DIR="$CACHE_ROOT/keel/change-request"
-  mkdir -p "$CACHE_DIR"
-  KEEL_DEV_PATH="$CACHE_DIR/keel-dev"
-  KEEL_DEV_TMP="$(mktemp "$CACHE_DIR/keel-dev.XXXXXX")"
-  go build -o "$KEEL_DEV_TMP" ./cmd/keel-dev || {
-    rm -f "$KEEL_DEV_TMP"
-    exit 1
-  }
-  mv "$KEEL_DEV_TMP" "$KEEL_DEV_PATH"
-  KEEL_DEV=("$KEEL_DEV_PATH")
+	# DHF-REQ: keel/requirement-114 (keel/ac-409, keel/ac-410)
+	CACHE_ROOT="${XDG_CACHE_HOME:-${HOME:-${TMPDIR:-/tmp}}/.cache}"
+	CACHE_DIR="$CACHE_ROOT/keel/change-request"
+	mkdir -p "$CACHE_DIR"
+	KEEL_DEV_TMP="$(mktemp "$CACHE_DIR/keel-dev.XXXXXX")"
+	go build -o "$KEEL_DEV_TMP" ./cmd/keel-dev || {
+		rm -f "$KEEL_DEV_TMP"
+		exit 1
+	}
+	KEEL_DEV=("$KEEL_DEV_TMP")
 fi
 
-exec "${KEEL_DEV[@]}" --no-header worktree up "${KIND}-${SEQ}-${SLUG}"
+set +e
+"${KEEL_DEV[@]}" --no-header worktree up "${KIND}-${SEQ}-${SLUG}"
+STATUS=$?
+set -e
+if [[ -n "${KEEL_DEV_TMP:-}" ]]; then
+	rm -f "$KEEL_DEV_TMP"
+fi
+exit "$STATUS"
