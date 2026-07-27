@@ -352,8 +352,50 @@ func (m *Manager) baseCandidates(ctx context.Context, op string) []string {
 	return deduped
 }
 
+// BranchExists reports whether the branch for a work item exists locally,
+// without touching the repository: it neither creates the branch (which
+// [Manager.Up] would) nor consults a worktree registration (which is what makes
+// [Manager.State] unable to answer for a path that carries none). It is the
+// non-mutating question a caller would otherwise hand-roll as its own git ref
+// probe.
+//
+// A git failure is returned as an error rather than folded into false, so a
+// caller can tell "no such branch" apart from "git broke".
+//
+// DHF-REQ: keel/requirement-113 (keel/ac-420)
+func (m *Manager) BranchExists(ctx context.Context, name string) (bool, error) {
+	const op = "branch-exists"
+	_, branch, err := m.Resolve(name)
+	if err != nil {
+		return false, err
+	}
+	return m.branchRefExists(ctx, op, branch)
+}
+
+// branchRefExists is the single implementation of the branch-existence question.
+// for-each-ref is used rather than show-ref because it exits zero for a ref that
+// is simply not there, leaving a non-zero exit to mean what it says: git failed.
+// The pattern also matches refs BELOW the branch (refs/heads/x/y for branch x),
+// so the answer is an exact refname match, not a non-empty result.
+func (m *Manager) branchRefExists(ctx context.Context, op, branch string) (bool, error) {
+	ref := "refs/heads/" + branch
+	out, err := m.run(ctx, op, m.repoRoot, "for-each-ref", "--format=%(refname)", ref)
+	if err != nil {
+		return false, err
+	}
+	for _, line := range nonEmptyLines(out) {
+		if line == ref {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// branchExists is the internal bool-only view for the lifecycle paths that
+// already treat an unanswerable git as "not there" and fail on the next command.
 func (m *Manager) branchExists(ctx context.Context, branch string) bool {
-	return m.runQuiet(ctx, m.repoRoot, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	exists, err := m.branchRefExists(ctx, "probe", branch)
+	return err == nil && exists
 }
 
 func (m *Manager) refResolvable(ctx context.Context, ref string) bool {
