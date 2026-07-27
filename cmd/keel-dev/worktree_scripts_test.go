@@ -71,13 +71,18 @@ func buildKeelDev(t *testing.T) string {
 
 func runWorktreeScript(t *testing.T, env worktreeScriptEnv, dir, script string, args ...string) worktreeScriptResult {
 	t.Helper()
+	return runWorktreeScriptWithEnv(t, dir, script, []string{"KEEL_DEV_BIN=" + env.keelDev}, args...)
+}
+
+func runWorktreeScriptWithEnv(t *testing.T, dir, script string, extraEnv []string, args ...string) worktreeScriptResult {
+	t.Helper()
 	path, err := filepath.Abs(filepath.Join(worktreeScriptDir, script))
 	if err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("bash", append([]string{path}, args...)...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "KEEL_DEV_BIN="+env.keelDev, "LC_ALL=C")
+	cmd.Env = append(os.Environ(), append(extraEnv, "LC_ALL=C")...)
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -91,6 +96,15 @@ func runWorktreeScript(t *testing.T, env worktreeScriptEnv, dir, script string, 
 		code = exitErr.ExitCode()
 	}
 	return worktreeScriptResult{exitCode: code, stdout: stdout.String(), stderr: stderr.String()}
+}
+
+func repoRoot(t *testing.T) string {
+	t.Helper()
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root
 }
 
 // worktreeResultTokens are the leading tokens of every result line the scripts'
@@ -188,6 +202,44 @@ func TestWorktreeScriptsRefuseOutsideRepository(t *testing.T) {
 	for _, script := range []string{"worktree-up.sh", "worktree-down.sh", "worktree-status.sh", "worktree-resume.sh"} {
 		got := runWorktreeScript(t, env, outside, script, "cr", "1", "alpha")
 		assertScript(t, script+" outside a repository", got, 2, nil, "not in a git repo")
+	}
+}
+
+// TestWorktreeScriptsDefaultDelegatePreservesExitCode pins the default delegate
+// path with KEEL_DEV_BIN unset. A missing resume branch must surface the
+// delegated taxonomy code 67, not the generic 1 that `go run` returns when its
+// child exits non-zero.
+//
+// DHF-TEST: keel/requirement-114 (keel/ac-409)
+func TestWorktreeScriptsDefaultDelegatePreservesExitCode(t *testing.T) {
+	root := repoRoot(t)
+	name := "cr-999991-default-delegate"
+	if testBranchExists(t, root, name) {
+		t.Fatalf("test branch %s already exists", name)
+	}
+
+	cacheRoot := filepath.Join(t.TempDir(), "cache")
+	home := filepath.Join(t.TempDir(), "home")
+	tmp := filepath.Join(t.TempDir(), "tmp")
+	for _, dir := range []string{cacheRoot, home, tmp} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	extraEnv := []string{
+		"KEEL_DEV_BIN=",
+		"XDG_CACHE_HOME=" + cacheRoot,
+		"HOME=" + home,
+		"TMPDIR=" + tmp,
+		"GOCACHE=" + filepath.Join(cacheRoot, "go-build"),
+		"GOPATH=" + filepath.Join(t.TempDir(), "gopath"),
+	}
+
+	got := runWorktreeScriptWithEnv(t, root, "worktree-resume.sh", extraEnv, "cr", "999991", "default-delegate")
+	assertScript(t, "resume without a branch through the default delegate", got, 67, nil, name)
+
+	if testBranchExists(t, root, name) {
+		t.Fatalf("branch %s exists after default-delegate refusal", name)
 	}
 }
 
