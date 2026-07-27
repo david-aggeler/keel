@@ -118,11 +118,18 @@ func (e worktreeVerbEnv) path(name string) string { return filepath.Join(e.workt
 // run dispatches one verb and returns its protocol output and exit status.
 func (e worktreeVerbEnv) run(t *testing.T, args ...string) (string, int) {
 	t.Helper()
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	out, _, code := e.runWithLogs(t, args...)
+	return out, code
+}
+
+func (e worktreeVerbEnv) runWithLogs(t *testing.T, args ...string) (string, string, int) {
+	t.Helper()
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
 	var out strings.Builder
 	ctx := withRunStateProtocol(context.Background(), logger, nil, e.repo, &out)
 	code := exitFor(logger, commandTree().Dispatch(ctx, args))
-	return out.String(), code
+	return out.String(), logs.String(), code
 }
 
 func assertVerb(t *testing.T, label, gotOut string, gotCode int, wantOut string, wantCode int) {
@@ -135,15 +142,24 @@ func assertVerb(t *testing.T, label, gotOut string, gotCode int, wantOut string,
 	}
 }
 
-// DHF-TEST: keel/requirement-114 (keel/ac-408, keel/ac-409)
+func assertLogHas(t *testing.T, label, logs, token string) {
+	t.Helper()
+	if !strings.Contains(logs, token) {
+		t.Errorf("%s: logs do not contain %q\nlogs: %s", label, token, logs)
+	}
+}
+
+// DHF-TEST: keel/requirement-113, keel/requirement-114 (keel/ac-408, keel/ac-409, keel/ac-411)
 func TestWorktreeUpVerb(t *testing.T) {
 	env := newWorktreeVerbEnv(t)
 
-	out, code := env.run(t, "worktree", "up", "cr-1-alpha")
+	out, logs, code := env.runWithLogs(t, "worktree", "up", "cr-1-alpha")
 	assertVerb(t, "up creates", out, code, "up cr-1-alpha "+env.path("cr-1-alpha")+"\n", 0)
+	assertLogHas(t, "up creates", logs, "outcome=created")
 
-	out, code = env.run(t, "worktree", "up", "cr-1-alpha")
+	out, logs, code = env.runWithLogs(t, "worktree", "up", "cr-1-alpha")
 	assertVerb(t, "up reuses", out, code, "up-noop cr-1-alpha "+env.path("cr-1-alpha")+"\n", 0)
+	assertLogHas(t, "up reuses", logs, "outcome=reused")
 
 	if err := os.MkdirAll(env.path("cr-2-beta"), 0o755); err != nil {
 		t.Fatal(err)
@@ -152,8 +168,9 @@ func TestWorktreeUpVerb(t *testing.T) {
 	assertVerb(t, "up refuses an unregistered path", out, code, "", 65)
 
 	mustRun(t, env.repo, "git", "branch", "cr-3-gamma")
-	out, code = env.run(t, "worktree", "up", "cr-3-gamma")
-	assertVerb(t, "up refuses an existing branch", out, code, "", 65)
+	out, logs, code = env.runWithLogs(t, "worktree", "up", "cr-3-gamma")
+	assertVerb(t, "up attaches an existing branch", out, code, "up cr-3-gamma "+env.path("cr-3-gamma")+"\n", 0)
+	assertLogHas(t, "up attaches an existing branch", logs, "outcome=attached")
 
 	out, code = env.run(t, "worktree", "up", "../escape")
 	assertVerb(t, "up refuses an unsafe name", out, code, "", 64)
