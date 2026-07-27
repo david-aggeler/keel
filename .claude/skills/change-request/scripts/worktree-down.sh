@@ -11,7 +11,7 @@
 # Usage: worktree-down.sh <kind> <seq> <slug>
 # Output (success): down <kind>-<seq>-<slug> <absolute-path>
 # Output (no-op):   down-noop <kind>-<seq>-<slug> <absolute-path>
-# Exit codes: 0 success/no-op; 2 not-in-repo; 64 bad args; 66 dirty worktree or path not registered; 1 git error
+# Exit-code taxonomy: see `keel-dev help worktree`.
 #
 # KEEL_DEV_BIN overrides the delegate command (default: per-invocation ./cmd/keel-dev build).
 set -euo pipefail

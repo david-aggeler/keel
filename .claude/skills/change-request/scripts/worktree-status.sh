@@ -16,7 +16,7 @@
 #   Usage: worktree-status.sh --glob <pattern>
 #   Output: zero or more status lines for registered worktrees matching the pattern
 #
-# Exit codes: 0 always (informational); 2 not-in-repo; 64 bad args; 65 unusable worktree_base
+# Exit-code taxonomy: see `keel-dev help worktree`.
 #
 # KEEL_DEV_BIN overrides the delegate command (default: per-invocation ./cmd/keel-dev build).
 set -euo pipefail

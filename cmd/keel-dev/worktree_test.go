@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -19,6 +21,114 @@ import (
 // bring-up (up, resume), tear-down (down), and the two read-only reports
 // (status, compare).
 var worktreeLeafVerbs = []string{"up", "down", "resume", "status", "compare"}
+
+// DHF-TEST: keel/requirement-114 (keel/ac-413)
+func TestWorktreeHelpSurfacesExitCodeTaxonomy(t *testing.T) {
+	wantRows := worktree.ExitCodeTaxonomy()
+	tree := commandTree()
+
+	var topic strings.Builder
+	tree.RenderTopicHelp(&topic, []string{"worktree"})
+	assertHelpContainsExitCodes(t, "topic help", topic.String(), wantRows)
+	if !strings.Contains(topic.String(), "Exit codes:") {
+		t.Fatalf("topic help does not render an exit-code section:\n%s", topic.String())
+	}
+
+	var all strings.Builder
+	tree.RenderAllHelp(&all)
+	assertHelpContainsExitCodes(t, "--help-all", all.String(), wantRows)
+
+	var rawJSON strings.Builder
+	if err := tree.RenderHelpJSON(&rawJSON); err != nil {
+		t.Fatalf("RenderHelpJSON: %v", err)
+	}
+	var inventory []struct {
+		Path      string `json:"path"`
+		ExitCodes []struct {
+			Code    int    `json:"code"`
+			Meaning string `json:"meaning"`
+		} `json:"exit_codes"`
+	}
+	if err := json.Unmarshal([]byte(rawJSON.String()), &inventory); err != nil {
+		t.Fatalf("--help-json did not render a JSON command inventory: %v\n%s", err, rawJSON.String())
+	}
+	wantJSONRows := make([]cli.ExitCodeSpec, 0, len(wantRows))
+	for _, row := range wantRows {
+		wantJSONRows = append(wantJSONRows, cli.ExitCodeSpec{Code: int(row.Code), Meaning: row.Meaning})
+	}
+	wantPaths := append([]string{"worktree"}, func() []string {
+		paths := make([]string, 0, len(worktreeLeafVerbs))
+		for _, verb := range worktreeLeafVerbs {
+			paths = append(paths, "worktree "+verb)
+		}
+		return paths
+	}()...)
+	seenPaths := map[string]bool{}
+	for _, command := range inventory {
+		for _, wantPath := range wantPaths {
+			if command.Path == wantPath {
+				seenPaths[wantPath] = true
+				assertExitCodeJSON(t, command.Path, command.ExitCodes, wantJSONRows)
+			}
+		}
+	}
+	for _, wantPath := range wantPaths {
+		if !seenPaths[wantPath] {
+			t.Fatalf("--help-json has no %q command object:\n%s", wantPath, rawJSON.String())
+		}
+	}
+}
+
+func assertHelpContainsExitCodes(t *testing.T, label, help string, wantRows []worktree.ExitCodeDoc) {
+	t.Helper()
+	for _, row := range wantRows {
+		prefix := fmt.Sprintf("%d", row.Code)
+		found := false
+		for _, line := range strings.Split(help, "\n") {
+			fields := strings.Fields(line)
+			if len(fields) > 0 && fields[0] == prefix && strings.Contains(line, row.Meaning) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("%s missing exit-code row for %d / %q:\n%s", label, row.Code, row.Meaning, help)
+		}
+	}
+}
+
+func assertExitCodeJSON(t *testing.T, path string, got []struct {
+	Code    int    `json:"code"`
+	Meaning string `json:"meaning"`
+}, wantRows []cli.ExitCodeSpec) {
+	t.Helper()
+	seen := make(map[int]string, len(got))
+	for _, row := range got {
+		seen[row.Code] = row.Meaning
+	}
+	for _, row := range wantRows {
+		if seen[row.Code] != row.Meaning {
+			t.Fatalf("--help-json %s exit_codes[%d] = %q, want %q: %+v", path, row.Code, seen[row.Code], row.Meaning, got)
+		}
+	}
+}
+
+// DHF-TEST: keel/requirement-114 (keel/ac-413)
+func TestWorktreeWrapperHeadersPointAtGeneratedHelpForExitCodes(t *testing.T) {
+	for _, script := range []string{"worktree-up.sh", "worktree-down.sh", "worktree-status.sh", "worktree-resume.sh"} {
+		body, err := os.ReadFile(filepath.Join("..", "..", ".claude", "skills", "change-request", "scripts", script))
+		if err != nil {
+			t.Fatalf("read %s: %v", script, err)
+		}
+		text := string(body)
+		if strings.Contains(text, "# Exit codes:") {
+			t.Fatalf("%s still carries a hand-maintained exit-code taxonomy", script)
+		}
+		if !strings.Contains(text, "keel-dev help worktree") {
+			t.Fatalf("%s does not point operators at generated worktree help for exit codes", script)
+		}
+	}
+}
 
 // DHF-TEST: keel/requirement-114 (keel/ac-408)
 func TestCommandTreeExposesWorktreeNamespace(t *testing.T) {
