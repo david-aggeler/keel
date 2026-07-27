@@ -50,11 +50,18 @@ Small change? Still a CR. Docs-only? Still a CR (merge_gate: docs).
 `keel/worktree` package — NOT raw `git worktree` or `git checkout -b` on the
 primary checkout (that is blocked). `openbrain-client` has no worktree verb.
 
-- `keel-dev worktree up <name>`      — create the worktree from the local default branch, or reuse the one already there
-- `keel-dev worktree resume <name>`  — re-attach a worktree to a branch that already exists
-- `keel-dev worktree down <name>`    — remove it, keeping the branch; refuses a checkout holding work
-- `keel-dev worktree status <name>`  — read-only state report (also `--glob <pattern>`)
-- `keel-dev worktree compare <name>` — read-only branch-vs-base facts, no verdict
+Six leaves, and what each is for:
+
+- `up`            — create the worktree from the local default branch (or a caller-supplied base), or reuse the one already there
+- `resume`        — re-attach a worktree to a branch that already exists
+- `down`          — remove the checkout, keeping the branch; refuses one that still holds work
+- `branch-delete` — delete the branch once its checkout is gone; refuses an unmerged branch
+- `status`        — read-only state report, for one checkout or for every one matching a pattern
+- `compare`       — read-only branch-vs-base facts, no verdict
+
+Usage strings and flags: see `keel-dev help worktree <leaf>` (and `keel-dev help
+worktree` for the family and its exit codes). The binary is the source of truth
+for argv; this list carries only intent, which generated help does not.
 
 The change-request skill's scripts in `.claude/skills/change-request/scripts/`
 (`worktree-up.sh` / `worktree-down.sh` / `worktree-resume.sh` /
