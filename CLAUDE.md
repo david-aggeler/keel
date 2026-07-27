@@ -76,7 +76,7 @@ Manual/operator work only. The run-queue tail creates and owns its own
 ## The gate
 
 - Run `go run ./cmd/keel-dev ci`. That is THE gate: gofmt, build, vet,
-  in-process lint policies, tests with a total-coverage floor (85%).
+  in-process lint policies, tests with a total-coverage floor.
 - The local gate and the release preflight run the same command. Do not
   re-list checks anywhere else. keel runs no GitHub Actions CI.
 - VSIX: `keel-dev vsix ci` is the Node-backed sibling gate for `vsix/`
@@ -106,8 +106,9 @@ Manual/operator work only. The run-queue tail creates and owns its own
   CI never needs a real codex or claude.
 - Live smokes exist but are env-gated: `CODEXCLI_LIVE_SMOKE=1`,
   `CLAUDECLI_LIVE_SMOKE=1`. They always skip in CI.
-- Coverage floor is 85% total, enforced by the gate. Target ~90%.
-  Raise the constant in `cmd/keel-dev/coverage.go` only under a record.
+- A total-coverage floor is enforced by the gate. The floor lives in
+  `cmd/keel-dev/coverage.go` and is the only place it is stated; raise it
+  only under a record.
 
 ## Transitional bridge (until iteration 5)
 

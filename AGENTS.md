@@ -21,6 +21,7 @@ Read `CLAUDE.md`. It is the rulebook. This file is the short version.
   os.Stdout to a subprocess fails lint.
 - Tests hermetic. Adapters test against stubs. Live smokes are env-gated
   (`CODEXCLI_LIVE_SMOKE=1`, `CLAUDECLI_LIVE_SMOKE=1`) and skip in CI.
-- Coverage floor 85% total, gate-enforced. Target ~90%.
+- Total-coverage floor is gate-enforced; the number lives in
+  `cmd/keel-dev/coverage.go`.
 - Error prefixes = keel package path (`keel/exec:`, `keel/exec/codex:`,
   `keel/exec/claude:`). Never bare `exec:` (stdlib collision).
