@@ -79,6 +79,32 @@ func TestWorktreeHelpSurfacesExitCodeTaxonomy(t *testing.T) {
 	}
 }
 
+// TestWorktreeResumeHelpDoesNotAdvertiseBase pins resume as a strict attach-only
+// alias: it never reaches the fresh branch path where Config.Base matters.
+//
+// DHF-TEST: keel/requirement-113, keel/requirement-114 (keel/ac-408, keel/ac-409)
+func TestWorktreeResumeHelpDoesNotAdvertiseBase(t *testing.T) {
+	tree := commandTree()
+	var help strings.Builder
+	tree.RenderTopicHelp(&help, []string{"worktree", "resume"})
+	got := help.String()
+	if strings.Contains(got, "--base") {
+		t.Fatalf("resume help advertises a no-op base flag:\n%s", got)
+	}
+
+	namespace, ok := tree.Child("worktree")
+	if !ok {
+		t.Fatal("missing worktree namespace")
+	}
+	resume, ok := namespace.Child("resume")
+	if !ok {
+		t.Fatal("missing worktree resume command")
+	}
+	if len(resume.Flags) != 0 {
+		t.Fatalf("resume flags = %+v, want none", resume.Flags)
+	}
+}
+
 func assertHelpContainsExitCodes(t *testing.T, label, help string, wantRows []worktree.ExitCodeDoc) {
 	t.Helper()
 	for _, row := range wantRows {
@@ -314,6 +340,46 @@ func TestWorktreeUpVerb(t *testing.T) {
 	assertVerb(t, "up refuses an unsafe name", out, code, "", 64)
 }
 
+// TestWorktreeUpVerbHonorsExplicitBase proves the CLI exposes the package-level
+// base override rather than forcing every caller through default resolution.
+//
+// DHF-TEST: keel/requirement-113 (keel/ac-416)
+func TestWorktreeUpVerbHonorsExplicitBase(t *testing.T) {
+	env := newWorktreeVerbEnv(t)
+	writeFile(t, env.repo, "release.txt", "release\n")
+	mustRun(t, env.repo, "git", "add", "release.txt")
+	mustRun(t, env.repo, "git", "commit", "-m", "release base")
+	mustRun(t, env.repo, "git", "branch", "release")
+	releaseHead := strings.TrimSpace(gitOutput(t, env.repo, "rev-parse", "release"))
+	writeFile(t, env.repo, "local.txt", "local\n")
+	mustRun(t, env.repo, "git", "add", "local.txt")
+	mustRun(t, env.repo, "git", "commit", "-m", "local only")
+	localHead := strings.TrimSpace(gitOutput(t, env.repo, "rev-parse", "main"))
+	if releaseHead == localHead {
+		t.Fatal("fixture did not leave release and main at different commits")
+	}
+
+	out, logs, code := env.runWithLogs(t, "worktree", "up", "--base", "release", "cr-1-alpha")
+	assertVerb(t, "up with an explicit base", out, code, "up cr-1-alpha "+env.path("cr-1-alpha")+"\n", 0)
+	if branchHead := strings.TrimSpace(gitOutput(t, env.repo, "rev-parse", "cr-1-alpha")); branchHead != releaseHead {
+		t.Errorf("branch head = %s, want explicit base %s, not local main %s", branchHead, releaseHead, localHead)
+	}
+	assertLogHas(t, "up with an explicit base", logs, "base=release")
+	assertLogHas(t, "up with an explicit base", logs, "base_sha="+releaseHead)
+
+	status, statusCode := env.run(t, "worktree", "status", "cr-1-alpha")
+	assertVerb(t, "status after explicit-base up", status, statusCode,
+		"status cr-1-alpha "+env.path("cr-1-alpha")+" branch=true worktree=true base=release base_sha="+releaseHead+"\n", 0)
+
+	compare, compareCode := env.run(t, "worktree", "compare", "cr-1-alpha")
+	if compareCode != 0 {
+		t.Fatalf("compare after explicit-base up exited %d (%q)", compareCode, compare)
+	}
+	if !strings.HasPrefix(compare, "compare cr-1-alpha cr-1-alpha base=release base_sha="+releaseHead+" ahead=0 behind=0 ") {
+		t.Fatalf("compare after explicit-base up reported %q", compare)
+	}
+}
+
 // TestWorktreeUpVerbRefusesForeignBranch covers the path that is registered for
 // this work item but checked out on some other branch.
 //
@@ -429,10 +495,11 @@ func TestWorktreeResumeVerb(t *testing.T) {
 func TestWorktreeStatusVerb(t *testing.T) {
 	env := newWorktreeVerbEnv(t)
 	env.run(t, "worktree", "up", "cr-1-alpha")
+	baseSHA := strings.TrimSpace(gitOutput(t, env.repo, "rev-parse", "main"))
 
 	out, code := env.run(t, "worktree", "status", "cr-1-alpha")
 	assertVerb(t, "status of a live checkout", out, code,
-		"status cr-1-alpha "+env.path("cr-1-alpha")+" branch=true worktree=true\n", 0)
+		"status cr-1-alpha "+env.path("cr-1-alpha")+" branch=true worktree=true base=main base_sha="+baseSHA+"\n", 0)
 
 	out, code = env.run(t, "worktree", "status", "cr-9-absent")
 	assertVerb(t, "status of an absent checkout", out, code,
@@ -440,7 +507,7 @@ func TestWorktreeStatusVerb(t *testing.T) {
 
 	out, code = env.run(t, "worktree", "status", "--glob", "cr*")
 	assertVerb(t, "glob status", out, code,
-		"status cr-1-alpha "+env.path("cr-1-alpha")+" branch=true worktree=true\n", 0)
+		"status cr-1-alpha "+env.path("cr-1-alpha")+" branch=true worktree=true base=main base_sha="+baseSHA+"\n", 0)
 
 	out, code = env.run(t, "worktree", "status", "--glob", "epic*")
 	assertVerb(t, "glob status with no matches", out, code, "", 0)
@@ -534,12 +601,13 @@ func TestWorktreeStatusVerbWithoutWorktreesDirectory(t *testing.T) {
 func TestWorktreeCompareVerb(t *testing.T) {
 	env := newWorktreeVerbEnv(t)
 	env.run(t, "worktree", "up", "cr-1-alpha")
+	baseSHA := strings.TrimSpace(gitOutput(t, env.repo, "rev-parse", "main"))
 
 	out, code := env.run(t, "worktree", "compare", "cr-1-alpha")
 	if code != 0 {
 		t.Fatalf("compare on a fresh branch exited %d (%q)", code, out)
 	}
-	if !strings.HasPrefix(out, "compare cr-1-alpha cr-1-alpha base=main ahead=0 behind=0 ") {
+	if !strings.HasPrefix(out, "compare cr-1-alpha cr-1-alpha base=main base_sha="+baseSHA+" ahead=0 behind=0 ") {
 		t.Errorf("compare on a fresh branch reported %q", out)
 	}
 
@@ -558,6 +626,32 @@ func TestWorktreeCompareVerb(t *testing.T) {
 
 	out, code = env.run(t, "worktree", "compare", "cr-9-absent")
 	assertVerb(t, "compare on an unregistered checkout", out, code, "", 65)
+}
+
+// TestWorktreeReportsIncludeResolvedBaseSHA keeps the status and compare output
+// auditable when a ref name alone would hide a stale base.
+//
+// DHF-TEST: keel/requirement-113 (keel/ac-407, keel/ac-417)
+func TestWorktreeReportsIncludeResolvedBaseSHA(t *testing.T) {
+	env := newWorktreeVerbEnv(t)
+	env.run(t, "worktree", "up", "cr-1-alpha")
+	baseSHA := strings.TrimSpace(gitOutput(t, env.repo, "rev-parse", "main"))
+
+	status, statusCode := env.run(t, "worktree", "status", "cr-1-alpha")
+	if statusCode != 0 {
+		t.Fatalf("status exited %d (%q)", statusCode, status)
+	}
+	if !strings.Contains(status, " base=main base_sha="+baseSHA) {
+		t.Fatalf("status output %q does not include base ref and resolved SHA %s", status, baseSHA)
+	}
+
+	compare, compareCode := env.run(t, "worktree", "compare", "cr-1-alpha")
+	if compareCode != 0 {
+		t.Fatalf("compare exited %d (%q)", compareCode, compare)
+	}
+	if !strings.Contains(compare, " base=main base_sha="+baseSHA) {
+		t.Fatalf("compare output %q does not include base ref and resolved SHA %s", compare, baseSHA)
+	}
 }
 
 // TestWorktreeVerbsRefuseOutsideRepository pins the not-in-repo status the

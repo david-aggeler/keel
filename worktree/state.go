@@ -21,6 +21,9 @@ type State struct {
 	// Base is the ref the counts below were measured against. Empty when no
 	// base could be resolved.
 	Base string
+	// BaseSHA is the commit Base resolved to. Empty when no base could be
+	// resolved.
+	BaseSHA string
 	// Exists reports whether anything is present at the path.
 	Exists bool
 	// Registered reports whether this repository lists a worktree at the path.
@@ -86,6 +89,9 @@ type Comparison struct {
 	Branch string
 	// Base is the ref compared against, as declared or resolved.
 	Base string
+	// BaseSHA is the commit Base resolved to. Empty when no base could be
+	// resolved.
+	BaseSHA string
 	// Ahead is the number of commits Branch has that Base does not. Meaningful
 	// only when no [ReasonBaseUnresolvable] is present.
 	Ahead int
@@ -156,10 +162,11 @@ func (m *Manager) State(ctx context.Context, name string) (State, error) {
 		})
 	}
 
-	if base, err := m.resolveBase(ctx, op); err == nil && state.Branch != "" {
+	if base, err := m.reportBase(ctx, op, state.Branch); err == nil && state.Branch != "" {
 		state.Base = base
-		if m.refResolvable(ctx, base) {
-			state.Ahead, state.Behind, _ = m.aheadBehind(ctx, op, base, state.Branch)
+		if baseHead, err := m.revParse(ctx, op, base); err == nil {
+			state.BaseSHA = baseHead
+			state.Ahead, state.Behind, _ = m.aheadBehind(ctx, op, baseHead, state.Branch)
 		}
 	}
 	return state, nil
@@ -187,12 +194,17 @@ func (m *Manager) Compare(ctx context.Context, name string) (Comparison, error) 
 	}
 	comparison.Branch = reg.branch
 
-	base, baseErr := m.resolveBase(ctx, op)
+	base, baseErr := m.reportBase(ctx, op, comparison.Branch)
 	comparison.Base = base
+	baseHead := ""
+	if baseErr == nil {
+		baseHead, baseErr = m.revParse(ctx, op, base)
+		comparison.BaseSHA = baseHead
+	}
 
 	if reg.detached || comparison.Branch == "" {
 		comparison.add(ReasonOnBaseBranch, "the checkout is on no branch, so there is nothing to compare against "+base)
-	} else if baseErr == nil && sameBranch(comparison.Branch, base) {
+	} else if base != "" && sameBranch(comparison.Branch, base) {
 		comparison.add(ReasonOnBaseBranch, "the checkout is on the base ref "+base+" itself")
 	}
 	if comparison.Branch != "" && comparison.Branch != wantBranch {
@@ -202,12 +214,12 @@ func (m *Manager) Compare(ctx context.Context, name string) (Comparison, error) 
 	switch {
 	case baseErr != nil:
 		comparison.add(ReasonBaseUnresolvable, "no base ref could be resolved: "+baseErr.Error())
-	case !m.refResolvable(ctx, base):
+	case baseHead == "":
 		comparison.add(ReasonBaseUnresolvable, "base ref "+base+" does not resolve locally")
 	case comparison.Branch == "":
 		// Nothing to count against; the on-base-branch reason already says so.
 	default:
-		ahead, behind, err := m.aheadBehind(ctx, op, base, comparison.Branch)
+		ahead, behind, err := m.aheadBehind(ctx, op, baseHead, comparison.Branch)
 		switch {
 		case err != nil:
 			comparison.add(ReasonInspectionFailed, "could not count commits against base "+base+": "+err.Error())
@@ -229,6 +241,16 @@ func (m *Manager) Compare(ctx context.Context, name string) (Comparison, error) 
 		comparison.add(ReasonWorkingTreeDirty, "the working tree has uncommitted changes")
 	}
 	return comparison, nil
+}
+
+func (m *Manager) reportBase(ctx context.Context, op, branch string) (string, error) {
+	if m.base != "" {
+		return m.resolveBase(ctx, op)
+	}
+	if base, ok := m.branchBase(ctx, op, branch); ok {
+		return base, nil
+	}
+	return m.resolveBase(ctx, op)
 }
 
 // aheadBehind counts commits either side of base for branch, in one revision
