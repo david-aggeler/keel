@@ -61,7 +61,7 @@ The change-request skill's scripts in `.claude/skills/change-request/scripts/`
 `worktree-status.sh <kind> <seq> <slug>`) stay as thin wrappers over those
 verbs: they validate arguments, compose `<kind>-<seq>-<slug>`, and delegate.
 They hold NO lifecycle logic — the `no-shell-worktree-lifecycle` lint fails any
-git lifecycle command written back into them.
+git lifecycle command written back into them and any non-executable wrapper mode.
 
 Manual/operator work only. The run-queue tail creates and owns its own
 `cr-<seq>` worktrees — never hand-create those.
