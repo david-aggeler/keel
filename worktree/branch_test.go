@@ -146,6 +146,53 @@ func TestBaseResolutionFallsBackAndRefuses(t *testing.T) {
 	})
 }
 
+// TestExplicitBaseThatDoesNotResolveIsRefused covers ac-416's second half: an
+// explicitly supplied base that does not resolve stays a typed error and is
+// never silently replaced by the default fallback chain. The fixture is built so
+// a silent fallback would visibly succeed — the repository's default chain does
+// resolve (the control sub-test proves it), and the work item's branch does not
+// yet exist, so bring-up takes the create path and actually reaches base
+// resolution. Asserting the error code alone would not be enough: a build that
+// errored only after creating something would still pass it, which is the
+// silent-wrong-base class keel/issue-113 was filed for, so the branch and the
+// checkout must both be absent afterwards.
+//
+// DHF-TEST: keel/requirement-113 (keel/ac-416)
+func TestExplicitBaseThatDoesNotResolveIsRefused(t *testing.T) {
+	ctx := context.Background()
+	root := newRepo(t)
+
+	m := newManager(t, worktree.Config{RepoRoot: root, Base: "no-such-ref"})
+	path, branch, err := m.Resolve("unit-1")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	if _, err := m.Up(ctx, "unit-1"); !isCode(err, worktree.CodeBranchMissing) {
+		t.Fatalf("up with an unresolvable explicit base = %v, want CodeBranchMissing", err)
+	}
+	if _, err := gitTry(root, "show-ref", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
+		t.Errorf("the refused bring-up created branch %q anyway", branch)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("the refused bring-up left something at %s (stat err = %v)", path, err)
+	}
+	if out := git(t, root, "worktree", "list", "--porcelain"); strings.Contains(out, path) {
+		t.Errorf("the refused bring-up registered a worktree at %s:\n%s", path, out)
+	}
+
+	// Control: the default chain does resolve here, so the refusal above is a
+	// refusal and not a repository that could not have produced a worktree at all.
+	fallback := newManager(t, worktree.Config{RepoRoot: root})
+	wt, err := fallback.Up(ctx, "unit-2")
+	if err != nil {
+		t.Fatalf("control bring-up on the default chain: %v", err)
+	}
+	if wt.Base != "main" {
+		t.Errorf("control base = %q, want main — the fixture's default chain must resolve", wt.Base)
+	}
+}
+
 // TestDefaultBaseResolutionUsesLocalDefaultBranch pins the owner's 2026-07-27
 // default-base decision: a remote default may name the branch, but the commit
 // comes from the local branch.
