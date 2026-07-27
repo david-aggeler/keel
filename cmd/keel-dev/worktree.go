@@ -25,6 +25,8 @@ import (
 //
 // DHF-REQ: keel/requirement-114 (keel/ac-408, keel/ac-415)
 func worktreeCommandSpec() *cli.CommandSpec {
+	var upBase string
+	var resumeBase string
 	var downForce bool
 	var branchDeleteForce bool
 	var statusGlob string
@@ -36,21 +38,33 @@ func worktreeCommandSpec() *cli.CommandSpec {
 		Subcommands: []*cli.CommandSpec{
 			{
 				Name:        "up",
-				Use:         "worktree up <name>",
+				Use:         "worktree up [--base <ref>] <name>",
 				Short:       "Create the worktree for a work item, or reuse the one already there.",
 				Group:       "Lifecycle",
 				ExitCodes:   exitCodes,
 				Positionals: []cli.PositionalSpec{{Name: "name", Min: 1, Max: 1}},
-				Handler:     handleWorktreeUp,
+				Flags: []cli.FlagSpec{{
+					Name:         "base",
+					Value:        "ref",
+					Short:        "Cut a newly created branch from this ref instead of the local default branch.",
+					StringTarget: &upBase,
+				}},
+				Handler: handleWorktreeUp(&upBase),
 			},
 			{
 				Name:        "resume",
-				Use:         "worktree resume <name>",
+				Use:         "worktree resume [--base <ref>] <name>",
 				Short:       "Re-attach a worktree to a branch that already exists.",
 				Group:       "Lifecycle",
 				ExitCodes:   exitCodes,
 				Positionals: []cli.PositionalSpec{{Name: "name", Min: 1, Max: 1}},
-				Handler:     handleWorktreeResume,
+				Flags: []cli.FlagSpec{{
+					Name:         "base",
+					Value:        "ref",
+					Short:        "Use this base if resume reaches a fresh bring-up path.",
+					StringTarget: &resumeBase,
+				}},
+				Handler: handleWorktreeResume(&resumeBase),
 			},
 			{
 				Name:        "down",
@@ -117,25 +131,29 @@ func worktreeExitCodeSpecs() []cli.ExitCodeSpec {
 	return specs
 }
 
-func handleWorktreeUp(ctx context.Context, args []string) error {
-	binding, err := newWorktreeBinding(ctx)
-	if err != nil {
-		return err
+func handleWorktreeUp(base *string) cli.Handler {
+	return func(ctx context.Context, args []string) error {
+		binding, err := newWorktreeBinding(ctx, strings.TrimSpace(*base))
+		if err != nil {
+			return err
+		}
+		return binding.up(ctx, args[0])
 	}
-	return binding.up(ctx, args[0])
 }
 
-func handleWorktreeResume(ctx context.Context, args []string) error {
-	binding, err := newWorktreeBinding(ctx)
-	if err != nil {
-		return err
+func handleWorktreeResume(base *string) cli.Handler {
+	return func(ctx context.Context, args []string) error {
+		binding, err := newWorktreeBinding(ctx, strings.TrimSpace(*base))
+		if err != nil {
+			return err
+		}
+		return binding.resume(ctx, args[0])
 	}
-	return binding.resume(ctx, args[0])
 }
 
 func handleWorktreeDown(force *bool) cli.Handler {
 	return func(ctx context.Context, args []string) error {
-		binding, err := newWorktreeBinding(ctx)
+		binding, err := newWorktreeBinding(ctx, "")
 		if err != nil {
 			return err
 		}
@@ -145,7 +163,7 @@ func handleWorktreeDown(force *bool) cli.Handler {
 
 func handleWorktreeBranchDelete(force *bool) cli.Handler {
 	return func(ctx context.Context, args []string) error {
-		binding, err := newWorktreeBinding(ctx)
+		binding, err := newWorktreeBinding(ctx, "")
 		if err != nil {
 			return err
 		}
@@ -162,7 +180,7 @@ func handleWorktreeStatus(glob *string) cli.Handler {
 		case pattern == "" && len(args) == 0:
 			return worktreeInvalidArg("status", "keel-dev worktree status needs a name or --glob <pattern>")
 		}
-		binding, err := newWorktreeBinding(ctx)
+		binding, err := newWorktreeBinding(ctx, "")
 		if err != nil {
 			return err
 		}
@@ -174,7 +192,7 @@ func handleWorktreeStatus(glob *string) cli.Handler {
 }
 
 func handleWorktreeCompare(ctx context.Context, args []string) error {
-	binding, err := newWorktreeBinding(ctx)
+	binding, err := newWorktreeBinding(ctx, "")
 	if err != nil {
 		return err
 	}
@@ -245,7 +263,7 @@ const worktreeMarkerFile = "openbrain-client.local.yaml"
 // newWorktreeBinding resolves the primary checkout and the worktrees parent the
 // same way the skill scripts do, so a delegated wrapper addresses exactly the
 // paths its shell predecessor addressed.
-func newWorktreeBinding(ctx context.Context) (*worktreeBinding, error) {
+func newWorktreeBinding(ctx context.Context, baseRef string) (*worktreeBinding, error) {
 	state := stateFrom(ctx)
 	primary, err := primaryCheckout(ctx, state.logger, state.root)
 	if err != nil {
@@ -266,6 +284,7 @@ func newWorktreeBinding(ctx context.Context) (*worktreeBinding, error) {
 	manager, err := worktree.New(worktree.Config{
 		RepoRoot:     primary,
 		WorktreesDir: dir,
+		Base:         baseRef,
 		Logger:       state.logger,
 	})
 	if err != nil {
@@ -357,7 +376,7 @@ func markerWorktreeBase(body string) string {
 // up brings the work item's worktree up by delegating the lifecycle decision to
 // keel/worktree, then rendering the outcome it returns.
 //
-// DHF-REQ: keel/requirement-113, keel/requirement-114 (keel/ac-408, keel/ac-409, keel/ac-411)
+// DHF-REQ: keel/requirement-113, keel/requirement-114 (keel/ac-408, keel/ac-409, keel/ac-411, keel/ac-416)
 func (b *worktreeBinding) up(ctx context.Context, name string) error {
 	if _, _, err := b.manager.Resolve(name); err != nil {
 		return worktreeExit("up", err)
@@ -372,7 +391,7 @@ func (b *worktreeBinding) up(ctx context.Context, name string) error {
 
 	switch created.Outcome {
 	case worktree.OutcomeCreated:
-		b.logger.Info("worktree created", "worktree", created.Path, "branch", created.Branch, "base", created.Base, "outcome", string(created.Outcome))
+		b.logger.Info("worktree created", "worktree", created.Path, "branch", created.Branch, "base", created.Base, "base_sha", created.BaseSHA, "outcome", string(created.Outcome))
 		return b.emit("up", name, created.Path)
 	case worktree.OutcomeAttached:
 		b.logger.Info("worktree attached", "worktree", created.Path, "branch", created.Branch, "outcome", string(created.Outcome))
@@ -562,7 +581,7 @@ func summarizeBlockers(blockers []worktree.Blocker) string {
 // status reports one work item's checkout: the machine-readable line the skill
 // scripts consume, plus the full inspection through keel/log.
 //
-// DHF-REQ: keel/requirement-114 (keel/ac-409)
+// DHF-REQ: keel/requirement-113, keel/requirement-114 (keel/ac-407, keel/ac-409)
 func (b *worktreeBinding) status(ctx context.Context, name string) error {
 	state, err := b.manager.State(ctx, name)
 	if err != nil {
@@ -584,6 +603,7 @@ func (b *worktreeBinding) status(ctx context.Context, name string) error {
 		"detached", state.Detached,
 		"locked", state.Locked,
 		"base", state.Base,
+		"base_sha", state.BaseSHA,
 		"ahead", state.Ahead,
 		"behind", state.Behind,
 		"blockers", len(state.Stale.Blockers),
@@ -591,7 +611,7 @@ func (b *worktreeBinding) status(ctx context.Context, name string) error {
 	for _, blocker := range state.Stale.Blockers {
 		b.logBlocker(blocker)
 	}
-	return b.emitStatus(name, b.reportPath(name, state.Path), exists, state.Registered)
+	return b.emitStatus(name, b.reportPath(name, state.Path), exists, state.Registered, state.Base, state.BaseSHA)
 }
 
 // statusGlob reports every directory under the worktrees parent whose name
@@ -631,7 +651,11 @@ func (b *worktreeBinding) statusGlob(ctx context.Context, pattern string) error 
 		if err != nil {
 			return worktreeExit("status", err)
 		}
-		if err := b.emitStatus(name, path, exists, registered); err != nil {
+		state, err := b.manager.State(ctx, name)
+		if err != nil {
+			return worktreeExit("status", err)
+		}
+		if err := b.emitStatus(name, path, exists, registered, state.Base, state.BaseSHA); err != nil {
 			return err
 		}
 	}
@@ -642,7 +666,7 @@ func (b *worktreeBinding) statusGlob(ctx context.Context, pattern string) error 
 // every applicable reason, and deliberately no verdict — merge readiness is the
 // caller's conjunction, not this verb's.
 //
-// DHF-REQ: keel/requirement-114 (keel/ac-408)
+// DHF-REQ: keel/requirement-113, keel/requirement-114 (keel/ac-407, keel/ac-408)
 func (b *worktreeBinding) compare(ctx context.Context, name string) error {
 	comparison, err := b.manager.Compare(ctx, name)
 	if err != nil {
@@ -654,12 +678,13 @@ func (b *worktreeBinding) compare(ctx context.Context, name string) error {
 	b.logger.Info("branch comparison",
 		"branch", comparison.Branch,
 		"base", comparison.Base,
+		"base_sha", comparison.BaseSHA,
 		"ahead", comparison.Ahead,
 		"behind", comparison.Behind,
 		"reasons", len(comparison.Reasons),
 	)
-	return b.write(fmt.Sprintf("compare %s %s base=%s ahead=%d behind=%d reasons=%d",
-		name, comparison.Branch, comparison.Base, comparison.Ahead, comparison.Behind, len(comparison.Reasons)))
+	return b.write(fmt.Sprintf("compare %s %s base=%s base_sha=%s ahead=%d behind=%d reasons=%d",
+		name, comparison.Branch, comparison.Base, comparison.BaseSHA, comparison.Ahead, comparison.Behind, len(comparison.Reasons)))
 }
 
 // reportPath returns the path the reports name. The manager's path is used
@@ -751,8 +776,12 @@ func (b *worktreeBinding) emit(token, name, path string) error {
 }
 
 // emitStatus writes one status result line.
-func (b *worktreeBinding) emitStatus(name, path string, branch, registered bool) error {
-	return b.write(fmt.Sprintf("status %s %s branch=%t worktree=%t", name, path, branch, registered))
+func (b *worktreeBinding) emitStatus(name, path string, branch, registered bool, base, baseSHA string) error {
+	line := fmt.Sprintf("status %s %s branch=%t worktree=%t", name, path, branch, registered)
+	if base != "" || baseSHA != "" {
+		line += fmt.Sprintf(" base=%s base_sha=%s", base, baseSHA)
+	}
+	return b.write(line)
 }
 
 // write puts one result line on the protocol stream. Result lines are the

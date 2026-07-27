@@ -353,10 +353,11 @@ func TestWorktreeResumeScriptLifecycle(t *testing.T) {
 func TestWorktreeStatusScriptReports(t *testing.T) {
 	env := newWorktreeScriptEnv(t, buildKeelDev(t))
 	runWorktreeScript(t, env, env.repo, "worktree-up.sh", "cr", "1", "alpha")
+	baseSHA := strings.TrimSpace(gitOutput(t, env.repo, "rev-parse", "main"))
 
 	live := runWorktreeScript(t, env, env.repo, "worktree-status.sh", "cr", "1", "alpha")
 	assertScript(t, "status of a live checkout", live, 0,
-		results("status cr-1-alpha "+env.path("cr-1-alpha")+" branch=true worktree=true"))
+		results("status cr-1-alpha "+env.path("cr-1-alpha")+" branch=true worktree=true base=main base_sha="+baseSHA))
 
 	absent := runWorktreeScript(t, env, env.repo, "worktree-status.sh", "cr", "9", "absent")
 	assertScript(t, "status of an absent checkout", absent, 0,
@@ -364,7 +365,7 @@ func TestWorktreeStatusScriptReports(t *testing.T) {
 
 	matched := runWorktreeScript(t, env, env.repo, "worktree-status.sh", "--glob", "cr*")
 	assertScript(t, "glob status", matched, 0,
-		results("status cr-1-alpha "+env.path("cr-1-alpha")+" branch=true worktree=true"))
+		results("status cr-1-alpha "+env.path("cr-1-alpha")+" branch=true worktree=true base=main base_sha="+baseSHA))
 
 	none := runWorktreeScript(t, env, env.repo, "worktree-status.sh", "--glob", "epic*")
 	assertScript(t, "glob status with no matches", none, 0, nil)
