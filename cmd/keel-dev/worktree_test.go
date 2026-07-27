@@ -18,9 +18,9 @@ import (
 )
 
 // worktreeLeafVerbs are the leaves keel/ac-408 requires the namespace to carry:
-// bring-up (up, resume), tear-down (down), and the two read-only reports
-// (status, compare).
-var worktreeLeafVerbs = []string{"up", "down", "resume", "status", "compare"}
+// bring-up (up, resume), tear-down (down), branch removal, and the two
+// read-only reports (status, compare).
+var worktreeLeafVerbs = []string{"up", "down", "branch-delete", "resume", "status", "compare"}
 
 // DHF-TEST: keel/requirement-114 (keel/ac-413)
 func TestWorktreeHelpSurfacesExitCodeTaxonomy(t *testing.T) {
@@ -349,6 +349,29 @@ func TestWorktreeDownVerb(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-114 (keel/ac-415)
+func TestWorktreeBranchDeleteVerbRefusesUnmergedUnlessForced(t *testing.T) {
+	env := newWorktreeVerbEnv(t)
+	env.run(t, "worktree", "up", "cr-1-alpha")
+	unit := env.path("cr-1-alpha")
+	writeFile(t, unit, "work.txt", "unmerged work\n")
+	mustRun(t, unit, "git", "add", "work.txt")
+	mustRun(t, unit, "git", "commit", "-m", "unmerged")
+	env.run(t, "worktree", "down", "cr-1-alpha")
+
+	out, code := env.run(t, "worktree", "branch-delete", "cr-1-alpha")
+	assertVerb(t, "branch-delete refuses an unmerged branch", out, code, "", 1)
+	if !testBranchExists(t, env.repo, "cr-1-alpha") {
+		t.Fatal("safe branch-delete removed an unmerged branch")
+	}
+
+	out, code = env.run(t, "worktree", "branch-delete", "--force", "cr-1-alpha")
+	assertVerb(t, "branch-delete --force removes an unmerged branch", out, code, "branch-delete cr-1-alpha\n", 0)
+	if testBranchExists(t, env.repo, "cr-1-alpha") {
+		t.Fatal("forced branch-delete left the branch behind")
+	}
+}
+
 // TestWorktreeDownVerbPrunesAnAbsentDirectory covers the half-finished case: the
 // directory is gone but the registration survives.
 //
@@ -482,7 +505,7 @@ func TestWorktreeCompareVerb(t *testing.T) {
 // DHF-TEST: keel/requirement-114 (keel/ac-409)
 func TestWorktreeVerbsRefuseOutsideRepository(t *testing.T) {
 	env := worktreeVerbEnv{repo: resolvedTempDir(t)}
-	for _, verb := range []string{"up", "down", "resume", "status", "compare"} {
+	for _, verb := range worktreeLeafVerbs {
 		out, code := env.run(t, "worktree", verb, "cr-1-alpha")
 		assertVerb(t, "worktree "+verb+" outside a repository", out, code, "", 2)
 	}
