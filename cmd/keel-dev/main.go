@@ -114,7 +114,7 @@ func run(argv []string) int {
 	defer stop()
 
 	slogLogger := logger.Slog()
-	return exitFor(slogLogger, tree.Dispatch(withRunState(ctx, slogLogger, logger, root), words))
+	return exitFor(slogLogger, dispatchKeelDev(withRunState(ctx, slogLogger, logger, root), tree, words))
 }
 
 // printUsage writes the static help text. Help is documentation, not run
