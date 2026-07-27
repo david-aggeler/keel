@@ -315,6 +315,15 @@ func (b *worktreeBinding) resume(ctx context.Context, name string) error {
 	if err != nil {
 		return worktreeExit("resume", err)
 	}
+	// The strict-alias resume verb preserves the legacy branch-missing refusal
+	// without letting the general bring-up path create that missing branch first.
+	exists, err := b.branchExists(ctx, branch)
+	if err != nil {
+		return worktreeExit("resume", err)
+	}
+	if !exists {
+		return worktreeFailure("resume", worktree.CodeBranchMissing, "branch %s does not exist", branch)
+	}
 	if err := b.ensureWorktreesDir(); err != nil {
 		return err
 	}

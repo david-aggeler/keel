@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -149,6 +150,32 @@ func assertLogHas(t *testing.T, label, logs, token string) {
 	}
 }
 
+func assertWorktreeBranchAbsent(t *testing.T, repo, path, branch string) {
+	t.Helper()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("worktree path %s exists after refusal: %v", path, err)
+	}
+	if testBranchExists(t, repo, branch) {
+		t.Fatalf("branch %s exists after refusal", branch)
+	}
+}
+
+func testBranchExists(t *testing.T, repo, branch string) bool {
+	t.Helper()
+	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	cmd.Dir = repo
+	err := cmd.Run()
+	if err == nil {
+		return true
+	}
+	exitErr, ok := err.(*exec.ExitError)
+	if ok && exitErr.ExitCode() == 1 {
+		return false
+	}
+	t.Fatalf("git show-ref for %s: %v", branch, err)
+	return false
+}
+
 // DHF-TEST: keel/requirement-113, keel/requirement-114 (keel/ac-408, keel/ac-409, keel/ac-411)
 func TestWorktreeUpVerb(t *testing.T) {
 	env := newWorktreeVerbEnv(t)
@@ -254,6 +281,7 @@ func TestWorktreeResumeVerb(t *testing.T) {
 
 	out, code = env.run(t, "worktree", "resume", "cr-9-absent")
 	assertVerb(t, "resume without a branch", out, code, "", 67)
+	assertWorktreeBranchAbsent(t, env.repo, env.path("cr-9-absent"), "cr-9-absent")
 
 	env.run(t, "worktree", "down", "cr-1-alpha")
 	out, code = env.run(t, "worktree", "resume", "cr-1-alpha")

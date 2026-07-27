@@ -139,6 +139,16 @@ func assertScript(t *testing.T, label string, got worktreeScriptResult, wantExit
 	}
 }
 
+func assertScriptWorktreeBranchAbsent(t *testing.T, env worktreeScriptEnv, name string) {
+	t.Helper()
+	if _, err := os.Stat(env.path(name)); !os.IsNotExist(err) {
+		t.Fatalf("worktree path %s exists after refusal: %v", env.path(name), err)
+	}
+	if testBranchExists(t, env.repo, name) {
+		t.Fatalf("branch %s exists after refusal", name)
+	}
+}
+
 // results is shorthand for a scenario's expected result lines.
 func results(lines ...string) []string { return lines }
 
@@ -276,6 +286,7 @@ func TestWorktreeResumeScriptLifecycle(t *testing.T) {
 
 	missing := runWorktreeScript(t, env, env.repo, "worktree-resume.sh", "cr", "9", "absent")
 	assertScript(t, "resume without a branch", missing, 67, nil, "cr-9-absent")
+	assertScriptWorktreeBranchAbsent(t, env, "cr-9-absent")
 
 	// Tear the checkout down, keeping the branch, then re-attach it.
 	runWorktreeScript(t, env, env.repo, "worktree-down.sh", "cr", "1", "alpha")
