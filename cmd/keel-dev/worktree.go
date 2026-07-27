@@ -27,15 +27,18 @@ import (
 func worktreeCommandSpec() *cli.CommandSpec {
 	var downForce bool
 	var statusGlob string
+	exitCodes := worktreeExitCodeSpecs()
 	return &cli.CommandSpec{
-		Name:  "worktree",
-		Short: "Bring worktrees up and down and report their state.",
+		Name:      "worktree",
+		Short:     "Bring worktrees up and down and report their state.",
+		ExitCodes: exitCodes,
 		Subcommands: []*cli.CommandSpec{
 			{
 				Name:        "up",
 				Use:         "worktree up <name>",
 				Short:       "Create the worktree for a work item, or reuse the one already there.",
 				Group:       "Lifecycle",
+				ExitCodes:   exitCodes,
 				Positionals: []cli.PositionalSpec{{Name: "name", Min: 1, Max: 1}},
 				Handler:     handleWorktreeUp,
 			},
@@ -44,6 +47,7 @@ func worktreeCommandSpec() *cli.CommandSpec {
 				Use:         "worktree resume <name>",
 				Short:       "Re-attach a worktree to a branch that already exists.",
 				Group:       "Lifecycle",
+				ExitCodes:   exitCodes,
 				Positionals: []cli.PositionalSpec{{Name: "name", Min: 1, Max: 1}},
 				Handler:     handleWorktreeResume,
 			},
@@ -52,6 +56,7 @@ func worktreeCommandSpec() *cli.CommandSpec {
 				Use:         "worktree down [--force] <name>",
 				Short:       "Remove a work item's worktree, keeping its branch.",
 				Group:       "Lifecycle",
+				ExitCodes:   exitCodes,
 				Positionals: []cli.PositionalSpec{{Name: "name", Min: 1, Max: 1}},
 				Flags: []cli.FlagSpec{{
 					Name:       "force",
@@ -65,6 +70,7 @@ func worktreeCommandSpec() *cli.CommandSpec {
 				Use:         "worktree status <name> | worktree status --glob <pattern>",
 				Short:       "Report a work item's checkout, or every checkout matching a pattern.",
 				Group:       "Reports",
+				ExitCodes:   exitCodes,
 				Positionals: []cli.PositionalSpec{{Name: "name", Min: 0, Max: 1}},
 				Flags: []cli.FlagSpec{{
 					Name:         "glob",
@@ -79,11 +85,21 @@ func worktreeCommandSpec() *cli.CommandSpec {
 				Use:         "worktree compare <name>",
 				Short:       "Report a branch against its base ref, without rendering a verdict.",
 				Group:       "Reports",
+				ExitCodes:   exitCodes,
 				Positionals: []cli.PositionalSpec{{Name: "name", Min: 1, Max: 1}},
 				Handler:     handleWorktreeCompare,
 			},
 		},
 	}
+}
+
+func worktreeExitCodeSpecs() []cli.ExitCodeSpec {
+	docs := worktree.ExitCodeTaxonomy()
+	specs := make([]cli.ExitCodeSpec, 0, len(docs))
+	for _, doc := range docs {
+		specs = append(specs, cli.ExitCodeSpec{Code: int(doc.Code), Meaning: doc.Meaning})
+	}
+	return specs
 }
 
 func handleWorktreeUp(ctx context.Context, args []string) error {
