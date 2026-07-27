@@ -274,43 +274,14 @@ func markerWorktreeBase(body string) string {
 	return ""
 }
 
-// up creates the work item's worktree, or reports the one already there as a
-// no-op. A path occupied by something this repository does not own for the work
-// item, and a branch that exists without a checkout, are both refused —
-// re-attaching an existing branch is what resume is for.
+// up brings the work item's worktree up by delegating the lifecycle decision to
+// keel/worktree, then rendering the outcome it returns.
 //
-// DHF-REQ: keel/requirement-114 (keel/ac-408, keel/ac-409)
+// DHF-REQ: keel/requirement-113, keel/requirement-114 (keel/ac-408, keel/ac-409, keel/ac-411)
 func (b *worktreeBinding) up(ctx context.Context, name string) error {
-	path, branch, err := b.manager.Resolve(name)
-	if err != nil {
+	if _, _, err := b.manager.Resolve(name); err != nil {
 		return worktreeExit("up", err)
 	}
-	state, err := b.manager.State(ctx, name)
-	if err != nil {
-		return worktreeExit("up", err)
-	}
-	switch {
-	case state.Exists && state.Registered && state.Branch == branch:
-		b.logger.Info("worktree already exists; no-op", "worktree", path, "branch", branch)
-		return b.emit("up-noop", name, path)
-	case state.Exists && !state.Registered:
-		return worktreeFailure("up", worktree.CodeConflict,
-			"path %s exists but is not a registered worktree; remove it or run keel-dev worktree resume %s", path, name)
-	case state.Exists:
-		return worktreeFailure("up", worktree.CodeConflict,
-			"path %s is registered on branch %q, want %q; remove it or resume the branch it holds", path, state.Branch, branch)
-	}
-
-	exists, err := b.branchExists(ctx, branch)
-	if err != nil {
-		return worktreeExit("up", err)
-	}
-	if exists {
-		return worktreeFailure("up", worktree.CodeConflict,
-			"branch %s already exists but no worktree is registered at %s; run keel-dev worktree resume %s to recreate the worktree, or 'git branch -D %s' to start over",
-			branch, path, name, branch)
-	}
-
 	if err := b.ensureWorktreesDir(); err != nil {
 		return err
 	}
@@ -318,34 +289,40 @@ func (b *worktreeBinding) up(ctx context.Context, name string) error {
 	if err != nil {
 		return worktreeExit("up", err)
 	}
-	b.logger.Info("worktree created", "worktree", created.Path, "branch", created.Branch, "base", created.Base)
-	return b.emit("up", name, created.Path)
+
+	switch created.Outcome {
+	case worktree.OutcomeCreated:
+		b.logger.Info("worktree created", "worktree", created.Path, "branch", created.Branch, "base", created.Base, "outcome", string(created.Outcome))
+		return b.emit("up", name, created.Path)
+	case worktree.OutcomeAttached:
+		b.logger.Info("worktree attached", "worktree", created.Path, "branch", created.Branch, "outcome", string(created.Outcome))
+		return b.emit("up", name, created.Path)
+	case worktree.OutcomeReused:
+		b.logger.Info("worktree already exists; no-op", "worktree", created.Path, "branch", created.Branch, "outcome", string(created.Outcome))
+		return b.emit("up-noop", name, created.Path)
+	default:
+		return worktreeFailure("up", worktree.CodeGit, "worktree up returned unknown outcome %q for %s", created.Outcome, name)
+	}
 }
 
-// resume re-attaches a worktree to a branch that already exists. A branch that
-// does not exist is refused rather than created — creating it is what up is for.
+// resume is the strict-alias compatibility verb for the attach outcome. It
+// delegates to keel/worktree and then maps the returned outcome onto the legacy
+// resume tokens.
 //
-// DHF-REQ: keel/requirement-114 (keel/ac-409)
+// DHF-REQ: keel/requirement-113, keel/requirement-114 (keel/ac-409, keel/ac-411)
 func (b *worktreeBinding) resume(ctx context.Context, name string) error {
-	path, branch, err := b.manager.Resolve(name)
+	_, branch, err := b.manager.Resolve(name)
 	if err != nil {
 		return worktreeExit("resume", err)
 	}
-	state, err := b.manager.State(ctx, name)
-	if err != nil {
-		return worktreeExit("resume", err)
-	}
-	if state.Registered {
-		b.logger.Info("worktree already registered; no-op", "worktree", path, "branch", state.Branch)
-		return b.emit("resume-noop", name, path)
-	}
+	// The strict-alias resume verb preserves the legacy branch-missing refusal
+	// without letting the general bring-up path create that missing branch first.
 	exists, err := b.branchExists(ctx, branch)
 	if err != nil {
 		return worktreeExit("resume", err)
 	}
 	if !exists {
-		return worktreeFailure("resume", worktree.CodeBranchMissing,
-			"branch %s does not exist; use keel-dev worktree up %s to create it", branch, name)
+		return worktreeFailure("resume", worktree.CodeBranchMissing, "branch %s does not exist", branch)
 	}
 	if err := b.ensureWorktreesDir(); err != nil {
 		return err
@@ -354,8 +331,18 @@ func (b *worktreeBinding) resume(ctx context.Context, name string) error {
 	if err != nil {
 		return worktreeExit("resume", err)
 	}
-	b.logger.Info("worktree attached", "worktree", attached.Path, "branch", attached.Branch)
-	return b.emit("resume", name, attached.Path)
+	switch attached.Outcome {
+	case worktree.OutcomeAttached:
+		b.logger.Info("worktree attached", "worktree", attached.Path, "branch", attached.Branch, "outcome", string(attached.Outcome))
+		return b.emit("resume", name, attached.Path)
+	case worktree.OutcomeReused:
+		b.logger.Info("worktree already registered; no-op", "worktree", attached.Path, "branch", attached.Branch, "outcome", string(attached.Outcome))
+		return b.emit("resume-noop", name, attached.Path)
+	default:
+		b.logger.Info("worktree resume reached non-attach outcome", "worktree", attached.Path, "branch", attached.Branch, "outcome", string(attached.Outcome))
+		return worktreeFailure("resume", worktree.CodeBranchMissing,
+			"branch %s reached outcome %q, want %q", branch, attached.Outcome, worktree.OutcomeAttached)
+	}
 }
 
 // down removes the work item's checkout, keeping its branch. An already-absent
