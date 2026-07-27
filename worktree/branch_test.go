@@ -272,6 +272,80 @@ func TestWorktreesDirDefaults(t *testing.T) {
 	}
 }
 
+// TestBranchExistsAnswersTruthfullyWithoutMutating is the query a consumer would
+// otherwise hand-roll as its own git ref probe: a branch that exists in
+// refs/heads with no worktree registered at the work item's path is reported as
+// existing, and asking leaves the repository byte-for-byte as it was — no ref,
+// no registration, no config entry created, deleted, or modified. The registered
+// state report cannot answer this (it reads the branch from the registration),
+// which is why the question needs its own exported, non-mutating query.
+//
+// DHF-TEST: keel/requirement-113 (keel/ac-420)
+func TestBranchExistsAnswersTruthfullyWithoutMutating(t *testing.T) {
+	root := newRepo(t)
+	// The AC's Given: the branch exists, nothing is registered at its path.
+	git(t, root, "branch", "unit-1", "main")
+
+	rec := &commandRecorder{}
+	m := newManager(t, worktree.Config{RepoRoot: root, Base: "main", Logger: rec})
+	ctx := context.Background()
+
+	before := repoFingerprint(t, root)
+	exists, err := m.BranchExists(ctx, "unit-1")
+	if err != nil {
+		t.Fatalf("branch exists: %v", err)
+	}
+	if !exists {
+		t.Error("an existing branch with no registered worktree was reported absent")
+	}
+	if after := repoFingerprint(t, root); after != before {
+		t.Errorf("the query changed the repository:\nbefore %s\nafter  %s", before, after)
+	}
+	rec.assertReadOnly(t)
+
+	// The state report reads Branch from the registration, so it is structurally
+	// unable to answer — the gap this query closes.
+	state, err := m.State(ctx, "unit-1")
+	if err != nil {
+		t.Fatalf("state: %v", err)
+	}
+	if state.Registered || state.Branch != "" {
+		t.Fatalf("state = %+v, want an unregistered path with no branch", state)
+	}
+
+	// A branch that is not there is false, not an error, and still mutates nothing.
+	before = repoFingerprint(t, root)
+	absent, err := m.BranchExists(ctx, "unit-2")
+	if err != nil {
+		t.Fatalf("branch exists for an absent branch: %v", err)
+	}
+	if absent {
+		t.Error("an absent branch was reported as existing")
+	}
+	if after := repoFingerprint(t, root); after != before {
+		t.Error("asking about an absent branch changed the repository")
+	}
+
+	// A name that is not a safe work item is refused before any git command.
+	if _, err := m.BranchExists(ctx, "bad name"); !isCode(err, worktree.CodeInvalidArgument) {
+		t.Errorf("branch exists for an unsafe name = %v, want CodeInvalidArgument", err)
+	}
+
+	// A git that fails is surfaced, never silently reported as "no such branch":
+	// a caller must be able to tell the two apart.
+	broken := newManager(t, worktree.Config{
+		RepoRoot: root, Base: "main",
+		GitBin: stubGit(t), Env: stubEnv("KEEL_STUB_OK="),
+	})
+	brokenExists, err := broken.BranchExists(ctx, "unit-1")
+	if !isCode(err, worktree.CodeGit) {
+		t.Errorf("branch exists with a failing git = %v, want CodeGit", err)
+	}
+	if brokenExists {
+		t.Error("a failing git reported the branch as existing")
+	}
+}
+
 // TestErrorSurface pins the shape a command wrapper maps onto an exit status.
 //
 // DHF-TEST: keel/requirement-113 (keel/ac-399)

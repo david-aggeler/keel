@@ -399,7 +399,7 @@ func (b *worktreeBinding) up(ctx context.Context, name string) error {
 // delegates to keel/worktree and then maps the returned outcome onto the legacy
 // resume tokens.
 //
-// DHF-REQ: keel/requirement-113, keel/requirement-114 (keel/ac-409, keel/ac-411)
+// DHF-REQ: keel/requirement-113, keel/requirement-114 (keel/ac-409, keel/ac-411, keel/ac-420)
 func (b *worktreeBinding) resume(ctx context.Context, name string) error {
 	_, branch, err := b.manager.Resolve(name)
 	if err != nil {
@@ -407,7 +407,7 @@ func (b *worktreeBinding) resume(ctx context.Context, name string) error {
 	}
 	// The strict-alias resume verb preserves the legacy branch-missing refusal
 	// without letting the general bring-up path create that missing branch first.
-	exists, err := b.branchExists(ctx, branch)
+	exists, err := b.manager.BranchExists(ctx, name)
 	if err != nil {
 		return worktreeExit("resume", err)
 	}
@@ -572,7 +572,7 @@ func summarizeBlockers(blockers []worktree.Blocker) string {
 // status reports one work item's checkout: the machine-readable line the skill
 // scripts consume, plus the full inspection through keel/log.
 //
-// DHF-REQ: keel/requirement-113, keel/requirement-114 (keel/ac-407, keel/ac-409)
+// DHF-REQ: keel/requirement-113, keel/requirement-114 (keel/ac-407, keel/ac-409, keel/ac-420)
 func (b *worktreeBinding) status(ctx context.Context, name string) error {
 	state, err := b.manager.State(ctx, name)
 	if err != nil {
@@ -582,7 +582,7 @@ func (b *worktreeBinding) status(ctx context.Context, name string) error {
 	if err != nil {
 		return worktreeExit("status", err)
 	}
-	exists, err := b.branchExists(ctx, branch)
+	exists, err := b.manager.BranchExists(ctx, name)
 	if err != nil {
 		return worktreeExit("status", err)
 	}
@@ -608,7 +608,7 @@ func (b *worktreeBinding) status(ctx context.Context, name string) error {
 // statusGlob reports every directory under the worktrees parent whose name
 // matches the pattern. A missing parent is zero matches, not a failure.
 //
-// DHF-REQ: keel/requirement-114 (keel/ac-409)
+// DHF-REQ: keel/requirement-113, keel/requirement-114 (keel/ac-409, keel/ac-420)
 func (b *worktreeBinding) statusGlob(ctx context.Context, pattern string) error {
 	if !validWorktreeGlob(pattern) {
 		return worktreeFailure("status", worktree.CodeInvalidArgument, "invalid glob pattern %q", pattern)
@@ -634,7 +634,7 @@ func (b *worktreeBinding) statusGlob(ctx context.Context, pattern string) error 
 	sort.Strings(names)
 	for _, name := range names {
 		path := filepath.Join(b.worktreesDir, name)
-		exists, err := b.branchExists(ctx, name)
+		exists, err := b.manager.BranchExists(ctx, name)
 		if err != nil {
 			return worktreeExit("status", err)
 		}
@@ -705,24 +705,6 @@ func (b *worktreeBinding) ensureWorktreesDir() error {
 	}
 	b.worktreesDirPresent = true
 	return nil
-}
-
-// branchExists reports whether the local branch exists. This is a read-only ref
-// probe, not lifecycle work: the reports have to answer "does the branch exist"
-// for a path that carries no registration, which no state query can derive.
-func (b *worktreeBinding) branchExists(ctx context.Context, branch string) (bool, error) {
-	_, code, err := gitProbe(ctx, b.logger, b.primary, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
-	if err != nil {
-		return false, err
-	}
-	switch code {
-	case 0:
-		return true, nil
-	case 1:
-		return false, nil
-	default:
-		return false, worktreeFailure("probe", worktree.CodeGit, "git show-ref for branch %s exited %d", branch, code)
-	}
 }
 
 // gitProbe runs one read-only git command through keel/exec and returns its
