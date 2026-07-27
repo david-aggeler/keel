@@ -18,14 +18,15 @@ import (
 )
 
 // worktreeCommandSpec is keel-dev's binding over keel/worktree: one namespace
-// whose leaves cover bring-up (up, resume), tear-down (down), and the two
-// read-only reports (status, compare). The leaves carry argument parsing,
-// keel/log-routed rendering, and the exit-code mapping and nothing else — every
-// lifecycle decision belongs to keel/worktree.
+// whose leaves cover bring-up (up, resume), tear-down (down), branch removal,
+// and the two read-only reports (status, compare). The leaves carry argument
+// parsing, keel/log-routed rendering, and the exit-code mapping and nothing
+// else — every lifecycle decision belongs to keel/worktree.
 //
-// DHF-REQ: keel/requirement-114 (keel/ac-408)
+// DHF-REQ: keel/requirement-114 (keel/ac-408, keel/ac-415)
 func worktreeCommandSpec() *cli.CommandSpec {
 	var downForce bool
+	var branchDeleteForce bool
 	var statusGlob string
 	exitCodes := worktreeExitCodeSpecs()
 	return &cli.CommandSpec{
@@ -64,6 +65,20 @@ func worktreeCommandSpec() *cli.CommandSpec {
 					BoolTarget: &downForce,
 				}},
 				Handler: handleWorktreeDown(&downForce),
+			},
+			{
+				Name:        "branch-delete",
+				Use:         "worktree branch-delete [--force] <name>",
+				Short:       "Delete a work item's branch after its checkout is gone.",
+				Group:       "Lifecycle",
+				ExitCodes:   exitCodes,
+				Positionals: []cli.PositionalSpec{{Name: "name", Min: 1, Max: 1}},
+				Flags: []cli.FlagSpec{{
+					Name:       "force",
+					Short:      "Delete the branch even when it is not merged.",
+					BoolTarget: &branchDeleteForce,
+				}},
+				Handler: handleWorktreeBranchDelete(&branchDeleteForce),
 			},
 			{
 				Name:        "status",
@@ -125,6 +140,16 @@ func handleWorktreeDown(force *bool) cli.Handler {
 			return err
 		}
 		return binding.down(ctx, args[0], *force)
+	}
+}
+
+func handleWorktreeBranchDelete(force *bool) cli.Handler {
+	return func(ctx context.Context, args []string) error {
+		binding, err := newWorktreeBinding(ctx)
+		if err != nil {
+			return err
+		}
+		return binding.branchDelete(ctx, args[0], *force)
 	}
 }
 
@@ -414,6 +439,30 @@ func (b *worktreeBinding) down(ctx context.Context, name string, force bool) err
 	}
 	b.logger.Info("worktree removed", "worktree", removed.Path, "branch", removed.Branch, "outcome", string(removed.Outcome))
 	return b.emit("down", name, removed.Path)
+}
+
+// branchDelete removes the work item's branch as a leaf separate from
+// tear-down. The default path delegates to keel/worktree's safe delete; --force
+// delegates to the explicit force escape.
+//
+// DHF-REQ: keel/requirement-114 (keel/ac-415)
+func (b *worktreeBinding) branchDelete(ctx context.Context, name string, force bool) error {
+	_, branch, err := b.manager.Resolve(name)
+	if err != nil {
+		return worktreeExit("branch-delete", err)
+	}
+	if force {
+		if err := b.manager.ForceDeleteBranch(ctx, name); err != nil {
+			return worktreeExit("branch-delete", err)
+		}
+		b.logger.Info("worktree branch force-deleted", "branch", branch, "outcome", "deleted")
+		return b.write(fmt.Sprintf("branch-delete %s", name))
+	}
+	if err := b.manager.DeleteBranch(ctx, name); err != nil {
+		return worktreeExit("branch-delete", err)
+	}
+	b.logger.Info("worktree branch deleted", "branch", branch, "outcome", "deleted")
+	return b.write(fmt.Sprintf("branch-delete %s", name))
 }
 
 // worktreeDownBlockerKinds are the blocker kinds this verb refuses on. Commits
