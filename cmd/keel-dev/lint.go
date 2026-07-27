@@ -42,9 +42,10 @@ import (
 //     (keel/requirement-77).
 //
 //   - no-shell-worktree-lifecycle: the change-request skill's worktree wrappers
-//     must not carry a git lifecycle command of their own — every lifecycle
-//     operation goes through a keel-dev worktree verb, so keel/worktree stays
-//     the single implementation (keel/requirement-114, keel/ac-410).
+//     must be executable and must not carry a git lifecycle command of their own
+//     — every lifecycle operation goes through a keel-dev worktree verb, so
+//     keel/worktree stays the single implementation (keel/requirement-114,
+//     keel/ac-410, keel/ac-412).
 //
 // DHF-REQ: keel/requirement-10, keel/requirement-11, keel/requirement-114
 func runLint(dir string) error {
@@ -97,8 +98,8 @@ func runLint(dir string) error {
 // worktree wrappers, relative to the module root.
 var worktreeWrapperDir = filepath.Join(".claude", "skills", "change-request", "scripts")
 
-// worktreeWrapperScripts are the wrappers that must hold no lifecycle logic of
-// their own.
+// worktreeWrapperScripts are the wrappers that must be executable and hold no
+// lifecycle logic of their own.
 var worktreeWrapperScripts = []string{
 	"worktree-up.sh",
 	"worktree-down.sh",
@@ -129,25 +130,36 @@ var gitLifecycleSubcommands = map[string]bool{
 	"pull":     true,
 }
 
-// scanNoShellWorktreeLifecycle reports any git lifecycle command left in the
-// change-request skill's worktree wrappers. A wrapper that still shells out to
-// git for lifecycle work is a parallel implementation of what keel/worktree now
-// owns, which is exactly the condition keel/requirement-114 exists to end.
+// scanNoShellWorktreeLifecycle reports any non-executable worktree wrapper or
+// git lifecycle command left in the change-request skill's worktree wrappers. A
+// wrapper that still shells out to git for lifecycle work is a parallel
+// implementation of what keel/worktree now owns, which is exactly the condition
+// keel/requirement-114 exists to end.
 //
 // The scan is deliberately strict: it cannot tell an invocation from the same
 // words inside an echoed string, so a wrapper that wants to name `git worktree
 // prune` in prose must reword. Comment lines are skipped, and a tree without
 // the scripts has nothing to scan.
 //
-// DHF-REQ: keel/requirement-114 (keel/ac-410)
+// DHF-REQ: keel/requirement-114 (keel/ac-410, keel/ac-412)
 func scanNoShellWorktreeLifecycle(root string) ([]string, error) {
 	var violations []string
 	for _, name := range worktreeWrapperScripts {
 		relative := filepath.Join(worktreeWrapperDir, name)
-		body, err := os.ReadFile(filepath.Join(root, relative))
+		path := filepath.Join(root, relative)
+		info, err := os.Stat(path)
 		if os.IsNotExist(err) {
 			continue
 		}
+		if err != nil {
+			return nil, err
+		}
+		if info.Mode()&0o111 == 0 {
+			violations = append(violations, fmt.Sprintf(
+				"  no-shell-worktree-lifecycle: %s has mode %04o — worktree wrappers must be executable", relative, info.Mode().Perm()))
+		}
+
+		body, err := os.ReadFile(path)
 		if err != nil {
 			return nil, err
 		}

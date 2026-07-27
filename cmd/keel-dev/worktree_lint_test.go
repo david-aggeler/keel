@@ -57,6 +57,41 @@ func TestNoShellWorktreeLifecycleFlagsLifecycleCommands(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-114 (keel/ac-412)
+func TestNoShellWorktreeLifecycleRequiresExecutableWrappers(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, ".claude", "skills", "change-request", "scripts")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "worktree-up.sh")
+	if err := os.WriteFile(path, []byte("#!/usr/bin/env bash\nexec keel-dev worktree up \"$@\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	violations, err := scanNoShellWorktreeLifecycle(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) == 0 {
+		t.Fatal("non-executable worktree wrapper produced no lint violation")
+	}
+	if got := strings.Join(violations, "\n"); !strings.Contains(got, "mode 0644") {
+		t.Fatalf("non-executable wrapper violation did not name its mode:\n%s", got)
+	}
+
+	if err := os.Chmod(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	violations, err = scanNoShellWorktreeLifecycle(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) > 0 {
+		t.Fatalf("executable worktree wrapper produced violations:\n%s", strings.Join(violations, "\n"))
+	}
+}
+
 // DHF-TEST: keel/requirement-114 (keel/ac-410)
 func TestNoShellWorktreeLifecycleIgnoresMissingScripts(t *testing.T) {
 	violations, err := scanNoShellWorktreeLifecycle(t.TempDir())
