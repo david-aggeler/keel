@@ -177,6 +177,47 @@ func TestDefaultBaseResolutionUsesLocalDefaultBranch(t *testing.T) {
 	}
 }
 
+// TestUpCreatesTheBranchFromResolvedBaseSHA closes the time-of-check/time-of-use
+// gap between resolving BaseSHA and creating the branch: the mutating git command
+// must use the immutable commit, not the moving ref name.
+//
+// DHF-TEST: keel/requirement-113 (keel/ac-416, keel/ac-417)
+func TestUpCreatesTheBranchFromResolvedBaseSHA(t *testing.T) {
+	root := newRepo(t)
+	writeFile(t, filepath.Join(root, "release.txt"), "release\n")
+	git(t, root, "add", "release.txt")
+	git(t, root, "commit", "-m", "release")
+	git(t, root, "branch", "release")
+	releaseHead := strings.TrimSpace(git(t, root, "rev-parse", "release"))
+
+	rec := &commandRecorder{}
+	m := newManager(t, worktree.Config{RepoRoot: root, Base: "release", Logger: rec})
+	wt, err := m.Up(context.Background(), "unit-1")
+	if err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	if wt.BaseSHA != releaseHead {
+		t.Fatalf("BaseSHA = %s, want %s", wt.BaseSHA, releaseHead)
+	}
+
+	found := false
+	for _, cmd := range rec.recorded() {
+		if !strings.Contains(cmd, " worktree add -b unit-1 ") {
+			continue
+		}
+		found = true
+		if strings.HasSuffix(cmd, " release") {
+			t.Fatalf("worktree add used the moving base ref instead of the resolved SHA: %q", cmd)
+		}
+		if !strings.HasSuffix(cmd, " "+releaseHead) {
+			t.Fatalf("worktree add command = %q, want final argv %s", cmd, releaseHead)
+		}
+	}
+	if !found {
+		t.Fatalf("did not record git worktree add command; commands: %v", rec.recorded())
+	}
+}
+
 // TestNewValidatesConfig keeps option-injection and a bad root in front of the
 // first git side effect, and resolves the repository from the working directory
 // when the caller names none.

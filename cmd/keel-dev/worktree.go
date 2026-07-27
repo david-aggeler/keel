@@ -26,7 +26,6 @@ import (
 // DHF-REQ: keel/requirement-114 (keel/ac-408, keel/ac-415)
 func worktreeCommandSpec() *cli.CommandSpec {
 	var upBase string
-	var resumeBase string
 	var downForce bool
 	var branchDeleteForce bool
 	var statusGlob string
@@ -53,18 +52,12 @@ func worktreeCommandSpec() *cli.CommandSpec {
 			},
 			{
 				Name:        "resume",
-				Use:         "worktree resume [--base <ref>] <name>",
+				Use:         "worktree resume <name>",
 				Short:       "Re-attach a worktree to a branch that already exists.",
 				Group:       "Lifecycle",
 				ExitCodes:   exitCodes,
 				Positionals: []cli.PositionalSpec{{Name: "name", Min: 1, Max: 1}},
-				Flags: []cli.FlagSpec{{
-					Name:         "base",
-					Value:        "ref",
-					Short:        "Use this base if resume reaches a fresh bring-up path.",
-					StringTarget: &resumeBase,
-				}},
-				Handler: handleWorktreeResume(&resumeBase),
+				Handler:     handleWorktreeResume,
 			},
 			{
 				Name:        "down",
@@ -141,14 +134,12 @@ func handleWorktreeUp(base *string) cli.Handler {
 	}
 }
 
-func handleWorktreeResume(base *string) cli.Handler {
-	return func(ctx context.Context, args []string) error {
-		binding, err := newWorktreeBinding(ctx, strings.TrimSpace(*base))
-		if err != nil {
-			return err
-		}
-		return binding.resume(ctx, args[0])
+func handleWorktreeResume(ctx context.Context, args []string) error {
+	binding, err := newWorktreeBinding(ctx, "")
+	if err != nil {
+		return err
 	}
+	return binding.resume(ctx, args[0])
 }
 
 func handleWorktreeDown(force *bool) cli.Handler {

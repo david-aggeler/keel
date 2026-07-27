@@ -162,7 +162,7 @@ func (m *Manager) State(ctx context.Context, name string) (State, error) {
 		})
 	}
 
-	if base, err := m.resolveBase(ctx, op); err == nil && state.Branch != "" {
+	if base, err := m.reportBase(ctx, op, state.Branch); err == nil && state.Branch != "" {
 		state.Base = base
 		if baseHead, err := m.revParse(ctx, op, base); err == nil {
 			state.BaseSHA = baseHead
@@ -194,7 +194,7 @@ func (m *Manager) Compare(ctx context.Context, name string) (Comparison, error) 
 	}
 	comparison.Branch = reg.branch
 
-	base, baseErr := m.resolveBase(ctx, op)
+	base, baseErr := m.reportBase(ctx, op, comparison.Branch)
 	comparison.Base = base
 	baseHead := ""
 	if baseErr == nil {
@@ -241,6 +241,16 @@ func (m *Manager) Compare(ctx context.Context, name string) (Comparison, error) 
 		comparison.add(ReasonWorkingTreeDirty, "the working tree has uncommitted changes")
 	}
 	return comparison, nil
+}
+
+func (m *Manager) reportBase(ctx context.Context, op, branch string) (string, error) {
+	if m.base != "" {
+		return m.resolveBase(ctx, op)
+	}
+	if base, ok := m.branchBase(ctx, op, branch); ok {
+		return base, nil
+	}
+	return m.resolveBase(ctx, op)
 }
 
 // aheadBehind counts commits either side of base for branch, in one revision

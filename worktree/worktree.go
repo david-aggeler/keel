@@ -222,7 +222,10 @@ func (m *Manager) Up(ctx context.Context, name string) (*Worktree, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := m.run(ctx, op, m.repoRoot, "worktree", "add", "-b", branch, path, base); err != nil {
+	if _, err := m.run(ctx, op, m.repoRoot, "worktree", "add", "-b", branch, path, baseHead); err != nil {
+		return nil, err
+	}
+	if err := m.storeBranchBase(ctx, op, branch, base); err != nil {
 		return nil, err
 	}
 	return &Worktree{Name: name, Path: path, Branch: branch, Base: base, BaseSHA: baseHead, Outcome: OutcomeCreated}, nil
@@ -363,6 +366,23 @@ func (m *Manager) revParse(ctx context.Context, op, ref string) (string, error) 
 		return "", err
 	}
 	return strings.TrimSpace(out), nil
+}
+
+func (m *Manager) storeBranchBase(ctx context.Context, op, branch, base string) error {
+	_, err := m.run(ctx, op, m.repoRoot, "config", "branch."+branch+".keel-worktree-base", base)
+	return err
+}
+
+func (m *Manager) branchBase(ctx context.Context, op, branch string) (string, bool) {
+	if branch == "" {
+		return "", false
+	}
+	out, err := m.run(ctx, op, m.repoRoot, "config", "--get", "--default", "", "branch."+branch+".keel-worktree-base")
+	if err != nil {
+		return "", false
+	}
+	base := strings.TrimSpace(out)
+	return base, base != ""
 }
 
 func (m *Manager) countCommits(ctx context.Context, op, revRange string) (int, error) {

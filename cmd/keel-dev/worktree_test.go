@@ -79,6 +79,32 @@ func TestWorktreeHelpSurfacesExitCodeTaxonomy(t *testing.T) {
 	}
 }
 
+// TestWorktreeResumeHelpDoesNotAdvertiseBase pins resume as a strict attach-only
+// alias: it never reaches the fresh branch path where Config.Base matters.
+//
+// DHF-TEST: keel/requirement-113, keel/requirement-114 (keel/ac-408, keel/ac-409)
+func TestWorktreeResumeHelpDoesNotAdvertiseBase(t *testing.T) {
+	tree := commandTree()
+	var help strings.Builder
+	tree.RenderTopicHelp(&help, []string{"worktree", "resume"})
+	got := help.String()
+	if strings.Contains(got, "--base") {
+		t.Fatalf("resume help advertises a no-op base flag:\n%s", got)
+	}
+
+	namespace, ok := tree.Child("worktree")
+	if !ok {
+		t.Fatal("missing worktree namespace")
+	}
+	resume, ok := namespace.Child("resume")
+	if !ok {
+		t.Fatal("missing worktree resume command")
+	}
+	if len(resume.Flags) != 0 {
+		t.Fatalf("resume flags = %+v, want none", resume.Flags)
+	}
+}
+
 func assertHelpContainsExitCodes(t *testing.T, label, help string, wantRows []worktree.ExitCodeDoc) {
 	t.Helper()
 	for _, row := range wantRows {
@@ -340,6 +366,18 @@ func TestWorktreeUpVerbHonorsExplicitBase(t *testing.T) {
 	}
 	assertLogHas(t, "up with an explicit base", logs, "base=release")
 	assertLogHas(t, "up with an explicit base", logs, "base_sha="+releaseHead)
+
+	status, statusCode := env.run(t, "worktree", "status", "cr-1-alpha")
+	assertVerb(t, "status after explicit-base up", status, statusCode,
+		"status cr-1-alpha "+env.path("cr-1-alpha")+" branch=true worktree=true base=release base_sha="+releaseHead+"\n", 0)
+
+	compare, compareCode := env.run(t, "worktree", "compare", "cr-1-alpha")
+	if compareCode != 0 {
+		t.Fatalf("compare after explicit-base up exited %d (%q)", compareCode, compare)
+	}
+	if !strings.HasPrefix(compare, "compare cr-1-alpha cr-1-alpha base=release base_sha="+releaseHead+" ahead=0 behind=0 ") {
+		t.Fatalf("compare after explicit-base up reported %q", compare)
+	}
 }
 
 // TestWorktreeUpVerbRefusesForeignBranch covers the path that is registered for
