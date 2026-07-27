@@ -21,9 +21,9 @@ const (
 	// CodeInvalidArgument is a caller-supplied value rejected before any git
 	// command ran — an unsafe work-item name, an option-like base ref.
 	CodeInvalidArgument ErrorCode = 64
-	// CodeConflict is a bring-up refusal: the target path or the requested
-	// branch is already occupied by something this repository does not own for
-	// this work item.
+	// CodeConflict is a refusal because the target path is occupied, a
+	// registration points at a different path, or an existing branch/worktree
+	// registration conflicts with the requested work item.
 	CodeConflict ErrorCode = 65
 	// CodeBlocked is a tear-down refusal: the checkout still holds work, is
 	// registered in a state git will not remove cleanly, or contains content
@@ -51,6 +51,29 @@ func (c ErrorCode) String() string {
 		return "branch_missing"
 	default:
 		return "unknown"
+	}
+}
+
+// ExitCodeDoc describes one public worktree exit-code taxonomy row.
+type ExitCodeDoc struct {
+	// Code is the numeric process status returned for this failure class.
+	Code ErrorCode
+	// Meaning is the generated-help description of the failure class.
+	Meaning string
+}
+
+// ExitCodeTaxonomy returns the public worktree exit-code taxonomy in display
+// order. The Code fields are the ErrorCode constants the verbs return.
+//
+// DHF-REQ: keel/requirement-114
+func ExitCodeTaxonomy() []ExitCodeDoc {
+	return []ExitCodeDoc{
+		{Code: CodeGit, Meaning: "underlying git failure or unclassified worktree failure"},
+		{Code: CodeNotInRepository, Meaning: "current directory is not inside a git repository"},
+		{Code: CodeInvalidArgument, Meaning: "invalid worktree argument or option"},
+		{Code: CodeConflict, Meaning: "path, registration, or branch/worktree conflict"},
+		{Code: CodeBlocked, Meaning: "checkout cannot be removed because work or stale state blocks removal"},
+		{Code: CodeBranchMissing, Meaning: "requested branch is required but does not exist"},
 	}
 }
 

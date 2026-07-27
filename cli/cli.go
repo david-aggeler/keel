@@ -120,6 +120,9 @@ type CommandSpec struct {
 	Group string
 	// Flags are command-specific flags rendered in command help.
 	Flags []FlagSpec
+	// ExitCodes are optional process exit-code rows rendered in generated help
+	// and structured help JSON for commands with a declared taxonomy.
+	ExitCodes []ExitCodeSpec
 	// Positionals describes the accepted positional operand arity.
 	Positionals []PositionalSpec
 	// Subcommands are this command's child command specs.
@@ -157,6 +160,15 @@ type FlagSpec struct {
 	BoolTarget *bool
 	// StringSliceTarget receives parsed repeatable string flag values.
 	StringSliceTarget *[]string
+}
+
+// ExitCodeSpec describes one generated-help row in a command's public exit-code
+// taxonomy.
+type ExitCodeSpec struct {
+	// Code is the process exit status.
+	Code int `json:"code"`
+	// Meaning is the operator-facing description of the status.
+	Meaning string `json:"meaning"`
 }
 
 // PositionalSpec describes a named positional operand group. Min and Max define
@@ -832,11 +844,12 @@ type helpJSONFlag struct {
 // helpJSONCommand is the JSON element shape for one command in the structured
 // help inventory. Flags is always a (possibly empty) array, never null.
 type helpJSONCommand struct {
-	Path    string         `json:"path"`
-	Group   string         `json:"group"`
-	Summary string         `json:"summary"`
-	Usage   string         `json:"usage"`
-	Flags   []helpJSONFlag `json:"flags"`
+	Path      string         `json:"path"`
+	Group     string         `json:"group"`
+	Summary   string         `json:"summary"`
+	Usage     string         `json:"usage"`
+	Flags     []helpJSONFlag `json:"flags"`
+	ExitCodes []ExitCodeSpec `json:"exit_codes,omitempty"`
 }
 
 // RenderHelpJSON writes a single JSON array describing every command in the
@@ -869,11 +882,12 @@ func (c *CommandSpec) appendHelpJSON(out *[]helpJSONCommand, path []string) {
 		})
 	}
 	*out = append(*out, helpJSONCommand{
-		Path:    strings.Join(path, " "),
-		Group:   commandGroup(c),
-		Summary: c.Short,
-		Usage:   strings.TrimPrefix(c.Usage(path), "usage: "),
-		Flags:   flags,
+		Path:      strings.Join(path, " "),
+		Group:     commandGroup(c),
+		Summary:   c.Short,
+		Usage:     strings.TrimPrefix(c.Usage(path), "usage: "),
+		Flags:     flags,
+		ExitCodes: append([]ExitCodeSpec{}, c.ExitCodes...),
 	})
 	for _, child := range c.Subcommands {
 		childPath := append(append([]string{}, path...), child.Name)
@@ -898,6 +912,11 @@ func (c *CommandSpec) RenderCommandHelp(w io.Writer, path []string) {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Flags:")
 		PrintFlagRows(w, c.Flags)
+	}
+	if len(c.ExitCodes) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Exit codes:")
+		PrintExitCodeRows(w, c.ExitCodes)
 	}
 	if len(c.Subcommands) == 0 {
 		return
@@ -1014,6 +1033,19 @@ func PrintFlagRows(w io.Writer, flags []FlagSpec) {
 			def = " (default " + f.Default + ")"
 		}
 		fmt.Fprintf(w, "  --%s%s\n      %s%s\n", f.Name, value, f.Short, def)
+	}
+}
+
+// PrintExitCodeRows writes aligned exit-code taxonomy rows in declaration order.
+func PrintExitCodeRows(w io.Writer, codes []ExitCodeSpec) {
+	width := 0
+	for _, row := range codes {
+		if n := len(fmt.Sprint(row.Code)); n > width {
+			width = n
+		}
+	}
+	for _, row := range codes {
+		fmt.Fprintf(w, "  %-*d  %s\n", width, row.Code, row.Meaning)
 	}
 }
 
