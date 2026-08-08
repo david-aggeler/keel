@@ -18,6 +18,7 @@ import {
   appendRunOutput,
   applyRunEvent,
   currentTree,
+  enqueueExecutionScope,
   extensionOutput,
   getWorkspaceRoot,
   invalidateClearedResults,
@@ -250,10 +251,12 @@ export class ExternalRunMirror implements vscode.Disposable {
     const runId = first?.run_id ?? path.basename(file, '.jsonl');
     const selectedItems = first?.test_id ? resultItemsForRunEvent(testItemsForRunEvent(first.test_id), first.test_id) : [];
     const request = selectedItems.length > 0 ? new vscode.TestRunRequest(selectedItems) : new vscode.TestRunRequest();
+    const run = this.controller.createTestRun(request, `External ${runId}`);
+    enqueueExecutionScope(run, selectedItems);
     return {
       file,
       runId,
-      run: this.controller.createTestRun(request, `External ${runId}`),
+      run,
       selectedItemIds: new Set(selectedItems.map((item) => item.id)),
       selectedProtocolIds: new Set(first?.test_id ? [first.test_id] : []),
       resultItemIds: new Set<string>(),

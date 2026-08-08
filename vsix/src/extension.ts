@@ -313,6 +313,42 @@ export function rejectConcurrentRun(
   run.end();
 }
 
+// DHF-REQ: keel/requirement-71, keel/requirement-88
+export function enqueueExecutionScope(run: vscode.TestRun, selected: readonly vscode.TestItem[]): void {
+  for (const item of executionScopeLeafItems(selected)) {
+    run.enqueued(item);
+  }
+}
+
+function executionScopeLeafItems(selected: readonly vscode.TestItem[]): vscode.TestItem[] {
+  const leaves = new Map<string, vscode.TestItem>();
+  const addLeaf = (item: vscode.TestItem): void => {
+    if (isNoResultEnqueueItem(item)) {
+      return;
+    }
+    leaves.set(item.id, item);
+  };
+  const visit = (item: vscode.TestItem): void => {
+    if (item.children.size === 0) {
+      addLeaf(item);
+      for (const alias of tree?.aliasesByCanonicalId.get(protocolIDForTestItem(item)) ?? []) {
+        addLeaf(alias);
+      }
+      return;
+    }
+    item.children.forEach((child) => visit(child));
+  };
+  for (const item of selected) {
+    visit(item);
+  }
+  return Array.from(leaves.values());
+}
+
+function isNoResultEnqueueItem(item: vscode.TestItem): boolean {
+  const protocolID = protocolIDForTestItem(item);
+  return protocolID === desiredStateRootProtocolID || protocolID.includes('::desired-state');
+}
+
 // DHF-REQ: keel/requirement-70
 //
 // refresh() serializes discovery through refreshChain so concurrent callers
@@ -554,6 +590,7 @@ async function runSelected(
 
   let child: ReturnType<typeof runTests>;
   try {
+    enqueueExecutionScope(run, submittable);
     child = runTests(workspaceRoot, selectedProtocolIds);
   } catch (error) {
     appendRunOutput(run, `Failed to start Keel test run: ${error instanceof Error ? error.message : String(error)}`, 'ERROR');
