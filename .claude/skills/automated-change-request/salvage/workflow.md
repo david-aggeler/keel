@@ -1,13 +1,13 @@
 ---
 name: automated-change-request/salvage
-description: "Analyze an interrupted autonomous-tail run after run-tail detects gold status ahead of branch/worktree evidence; classify recovery as salvage, hand-back, reset, or manual, with suggest-only default and opt-in auto-apply for the green salvage class."
+description: "Analyze an interrupted autonomous-tail run after run-queue detects gold status ahead of branch/worktree evidence; classify recovery as salvage, hand-back, reset, or manual, with suggest-only default and opt-in auto-apply for the green salvage class."
 ---
 
 # Automated Salvage
 
 **Transition:** `in_progress -> in_progress` or `approved`
 
-**Goal:** When `run-tail` detects a state divergence before resuming a unit, gather
+**Goal:** When `openbrain-client run-queue` detects a state divergence before resuming a unit, gather
 objective evidence and produce a durable recovery recommendation. This verb is a
 detector-triggered recovery stage, not part of the normal tail.
 

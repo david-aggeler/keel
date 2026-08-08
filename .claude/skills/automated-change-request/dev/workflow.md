@@ -1,11 +1,12 @@
 ---
 name: automated-change-request/dev
-description: 'Implement an approved unit via a linear vertical-slice TDD loop, runnable by a non-resident executor (codex). Use when status=approved, executor=agent and the operator says "dev this CR headless" or "codex dev".'
+description: 'Implement an approved unit via a linear vertical-slice TDD loop, runnable by a non-resident executor (codex). Use when executor=agent and status is either approved (fresh claim) or in_progress with a prior blocking formal_review (rework resume), and the operator says "dev this CR headless" or "codex dev".'
 ---
 
 # Automated Dev
 
-**Transition:** `approved → in_progress` (on entry) → `implementation_review` (on a complete, green, non-empty-diff unit)
+**Transition:** `approved → in_progress` (fresh entry) **or** `in_progress → in_progress`
+(rework resume) → `implementation_review` (on a complete, green, non-empty-diff unit)
 
 **Goal:** Implement the unit's requirements **and their acceptance criteria** with a
 vertical-slice TDD loop, **run linearly by one executor** — no subagent fan-out.
@@ -25,15 +26,35 @@ then each requirement's ACs (its GWT atoms) — the ACs are what each slice's te
 ## 1. Precondition check
 
 1. `get_change_request product=openbrain id=<id>`.
-2. Confirm `status == approved` **and** `executor == agent`. If either differs, **halt**
-   and report the actual status/executor — this unit is not ready for autonomous `dev`.
-3. Resolve the requirement refs kind-aware (see `../SKILL.md` § acceptance contract) —
+2. Confirm `executor == agent`. If it differs, **halt** and report the actual executor —
+   this unit is not for an autonomous executor.
+3. Confirm the status is one of the **two** admissible entry states. There is no third;
+   decide mechanically, do not interpret.
+   <!-- DHF-REQ: openbrain/requirement-867 -->
+
+   | Observed `status` | Entry state | Action |
+   |---|---|---|
+   | `approved` | **fresh claim** | proceed; step 2 writes `in_progress`. |
+   | `in_progress` **and** a `formal_review` with `outcome: follow_up_required` naming this CR in `subject_refs` exists | **rework resume** | proceed; step 2 skips the status write (the unit is already `in_progress`). Treat that review's findings as this round's work. |
+   | `in_progress` **and no** such `formal_review` exists | not resumable | **halt** and report — the unit was never carried to `implementation_review`, so it may never have been approved. |
+   | anything else | not eligible | **halt** and report the actual status. |
+
+   The distinguishing signal for a resume is the **prior blocking `formal_review`**, never
+   the `in_progress` status alone: a rework round is one a reviewer (or a post-merge revert,
+   or a verify no-op reopen) routed back to `dev`, and it leaves that record behind. Read it
+   with `list_formal_review product=openbrain` (or `search_formal_review`) and match
+   `subject_refs` on `openbrain/change_request-<seq>`; the newest matching row is the one
+   that routed this unit back. It is legitimate for the corrective work of that round to
+   have been applied outside a `dev` child (by the run-queue supervisor or by hand) — step 2's
+   resume check reads the branch, so already-committed slices are recognized as done rather
+   than redone.
+4. Resolve the requirement refs kind-aware (see `../SKILL.md` § acceptance contract) —
    this is the slice list; each slice proves that requirement's acceptance criteria.
 
 ## 2. Start — confirm the worktree, then claim the unit
 
 **The runner owns the worktree; do not create one.** The autonomous runner
-(`openbrain-client run-tail` / `run-epic`) has already rooted this session in the
+(`openbrain-client run-queue`) has already rooted this session in the
 unit's own worktree on a dedicated `cr-<seq>` branch, and your current directory
 *is* that worktree. Creating a second worktree (e.g. `worktree-up.sh cr <seq>
 <slug>`) is what double-rooted the unit and made dev no-op on re-run — **do not do
@@ -50,7 +71,10 @@ it.**
    it** (the runner did not set the session up; do not commit to the default
    branch).
 
-2. `update_change_request` with sparse fields only.
+2. Claim the unit. **On a rework resume (step 1's second row) the unit is already
+   `in_progress` — skip this write entirely and continue at sub-step 3**; re-writing the
+   same status is a no-op that only risks a spurious rejection. On a fresh claim,
+   `update_change_request` with sparse fields only.
    <!-- DHF-REQ: openbrain/requirement-870 -->
    The claim write's sparse fields = status (plus last_edited_by) only: use
    `fields: { status: "in_progress" }` and, if you supply editor identity, include

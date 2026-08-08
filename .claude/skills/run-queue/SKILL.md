@@ -1,10 +1,10 @@
 ---
 name: run-queue
-description: "Resident-session orchestrator that drains a batch of approved change_requests one CR at a time. Each single CR is driven by a SEPARATE LLM instance (a fresh `openbrain-client run-queue` child), while the resident session supervises: it resolves the target into a CR set, reuses the client's qualify (approved+agent) + depends_on dependency-order contract, enforces an auto_merge:true stop-and-ask preflight, dispatches one `-list <cr>` child at a time (never `-epic`), and decides what to do when a child halts. Use when the user says: '/run-queue', 'run-queue iteration-2', 'run-queue epic-4', 'run-queue cr-4', 'run-queue cr-4 using claude', 'drain the queue', 'run the approved CRs of', 'work the queue for'"
+description: "Resident-session orchestrator that drains a batch of approved change_requests one CR at a time. Each single CR is driven by a SEPARATE LLM instance (a fresh `openbrain-client run-queue` child), while the resident session supervises: it resolves the target into a CR set, reuses the client's qualify (approved+agent) + depends_on dependency-order contract, enforces an auto_merge:true stop-and-ask preflight, dispatches one `--list change_request-<n>` child at a time (never `--epic`), and decides what to do when a child halts. Use when the user says: '/run-queue', 'run-queue iteration-2', 'run-queue epic-4', 'run-queue cr-4', 'run-queue cr-4 using claude', 'drain the queue', 'run the approved CRs of', 'work the queue for'"
 allowed-tools: mcp__gold__list_change_request, mcp__gold__get_change_request, mcp__gold__search_change_request, mcp__gold__get_epic, mcp__gold__get_iteration, mcp__gold__update_iteration, mcp__gold__list_inbound_refs, mcp__gold__list_relations_for, mcp__gold__update_change_request, mcp__gold__create_issue, mcp__gold__create_action_item
-x-openbrain-source: run-queue/v2
-x-openbrain-content-source-hash: sha256:00a53134300a5d16b8f2c42e48e4d119ec97647f189e04b5413c8bd27e7901cc
-x-openbrain-content-hash: sha256:3d9ef71febbcf299e90507b676e02d82ad40c21c694010047354082e8067764b
+x-openbrain-source: run-queue/v3
+x-openbrain-content-source-hash: sha256:c2ac731af4ae8aea3383b5ce37923286df37bcac2eb4d90c93bdfe5a81060e02
+x-openbrain-content-hash: sha256:40cb6c80f2dc1fb809f0b7271827429079e88331124a20e139544d4781d19df5
 ---
 
 # Run Queue
@@ -15,7 +15,7 @@ time**. The resident session **supervises**; the actual work on each single CR i
 codex/claude session for that one unit. The resident's job is orchestration: resolve the set,
 order it, gate it, dispatch one child, watch the outcome, decide the next move.
 
-This is the in-session twin of `openbrain-client run-queue`'s own `-epic` drain. The client tool
+This is the in-session twin of `openbrain-client run-queue`'s own `--epic` drain. The client tool
 can drain a whole target unattended, but it parks on the first problem it cannot resolve and moves
 on. This skill keeps a supervisor in the loop between units: it reuses the tool's exact **qualify +
 dependency-order** contract, but dispatches **a single CR per child invocation** so control returns
@@ -40,14 +40,28 @@ The **default child executor is codex** (`openbrain-client run-queue`). Use the 
 (`openbrain-client run-queue-claude`) **only when the user appends "using claude"** (or "with claude"
 / "-claude").
 
+> **The skill argument and the CLI identifier are different tokens.** `cr-4` above is the *skill's*
+> shorthand — the form the user types and the form branches and worktrees use. The **CLI does not
+> accept it**. Resolve it to the canonical record ref `change_request-<n>` before you build any
+> `openbrain-client` command line. See § Contract for the two ways this bites.
+
 ## Contract
 
 - **The child owns the worktree.** `run-queue` / `run-queue-claude` create a per-unit worktree
   themselves. **Never run `worktree-up` yourself** for a queued CR — a second worktree root corrupts
   the run. If you must inspect, do it in the child's own worktree.
-- **One CR per child invocation.** Always pass `-list <cr-N>` with a single id. Do **not** hand the
-  whole epic to `-epic` — that collapses the whole batch into one unsupervised child and surrenders
-  the between-unit control this skill exists to keep.
+- **One CR per child invocation.** Always pass `--list change_request-<n>` with a single id. Do
+  **not** hand the whole epic to `--epic` — that collapses the whole batch into one unsupervised
+  child and surrenders the between-unit control this skill exists to keep.
+- **Two spellings the CLI rejects — get both right or the dispatch dies before any work starts.**
+  - **Double-dash for every long flag.** Since the keel/cli POSIX migration, `-list` is parsed as the
+    short flag `-l` and fails `unknown flag "-l"` (exit 2). The same applies to `--epic`,
+    `--merge-gate`, `--product`, `--continue-on-error`.
+  - **Canonical ref, not the `cr-N` shorthand.** `--list cr-921` fails
+    `invalid --list entry "cr-921" (want change_request-<n>)` (exit 64). Pass `change_request-921`.
+
+  When in doubt, read the binary rather than this page: `openbrain-client --mode ai run-queue --help`
+  is the authority on the flag surface.
 - **Division of labor.** The inner child LLM does the CR's initial implementation and drives its
   tail. The outer (resident/supervisor) LLM resolves/orders/gates the set **and performs the
   corrective actions when a child halts** — it does not do a unit's initial implementation, but it
@@ -61,7 +75,8 @@ The **default child executor is codex** (`openbrain-client run-queue`). Use the 
 
 ### 1 — Resolve the target into a CR set
 
-- **`cr-N`** → that one CR. (Still runs the auto-merge preflight before dispatch.)
+- **`cr-N`** → that one CR, as the canonical ref `change_request-<n>`. (Still runs the auto-merge
+  preflight before dispatch.)
 - **`epic-N`** → its child CRs: `list_inbound_refs(epic-N)` and keep the change_requests whose
   `parent` points at the epic. (Epic children link via the child's `parent` field, not the epic's
   `related[]`.)
@@ -91,12 +106,17 @@ For each CR in dependency order, launch a single-item child run:
 
 ```bash
 # default (codex)
-openbrain-client --mode ai run-queue -list <cr-N>
+openbrain-client --mode ai run-queue --list change_request-<n>
 # "using claude"
-openbrain-client --mode ai run-queue-claude -list <cr-N>
+openbrain-client --mode ai run-queue-claude --list change_request-<n>
 ```
 
-Pass `-merge-gate full` when the CR declares `merge_gate: full` (otherwise the default `standard`
+So for the skill argument `cr-921`, the dispatch is
+`openbrain-client --mode ai run-queue --list change_request-921 --merge-gate standard`. (The bare
+positional form `run-queue change_request-921` is also accepted, but prefer `--list` — it is the
+form the rest of this skill's contract is written against.)
+
+Pass `--merge-gate full` when the CR declares `merge_gate: full` (otherwise the default `standard`
 tier applies). Run the child as a foreground/normal task and read its result — do **not** background
 it behind a `| tail` that swallows the exit status.
 

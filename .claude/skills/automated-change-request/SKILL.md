@@ -2,9 +2,9 @@
 name: automated-change-request
 description: "Executor-portable autonomous tail of the change-request lifecycle for keel — prepare, dev, review, merge, verify, salvage — written so a non-resident linear executor (e.g. codex) can run each verb in a fresh session with no project memory. Use when the user says: '/automated-change-request', 'run the automated tail', 'dev this CR headless', 'codex dev', 'codex review', 'codex merge', 'verify this tail', 'autonomous dev/review/merge/verify/salvage', 'drive this approved CR to closed', 'salvage this tail', 'prepare this issue', 'promote issue to CR', 'run-prepare'"
 allowed-tools: mcp__gold__get_change_request, mcp__gold__create_change_request, mcp__gold__update_change_request, mcp__gold__search_change_request, mcp__gold__get_requirement, mcp__gold__get_template_for, mcp__gold__get_dev_defaults, mcp__gold__list_dev_defaults, mcp__gold__create_formal_review, mcp__gold__create_issue, mcp__gold__create_action_item, mcp__gold__create_issue_fix, mcp__gold__list_issue_fix, mcp__gold__update_issue, mcp__gold__get_issue, mcp__gold__admin_list_product_versions, mcp__gold__list_inbound_refs
-x-openbrain-source: automated-change-request/v8
-x-openbrain-content-source-hash: sha256:33b49c3cdf10db6ae6e1db2ac574f48f60cc99a9539afd7a5541eae1dc8a5b5f
-x-openbrain-content-hash: sha256:38ee89374a362757a331eca42ab3a8a8e96fc015a7d6f27ed765541ca98ae773
+x-openbrain-source: automated-change-request/v12
+x-openbrain-content-source-hash: sha256:566372606a14ed49b1b5d55d5a5c1fe436e891db2607289a37fabfe1516b8fe4
+x-openbrain-content-hash: sha256:7a0a07ea11a8aa1ce322ab88ec9f3c55b2dae55d90944226b7bcaf707e89e2f8
 ---
 
 # Automated Change Request
@@ -56,11 +56,11 @@ it names. Therefore:
 | Verb | Status transition | Summary |
 |---|---|---|
 | `prepare` | `issue (reviewed) → change_request (draft → approved \| draft)` | Front-half promotion: read a reviewed issue, create a draft change_request linked to it (`parent`), then branch on confidence — fully-specified → `executor: agent` + advance to `approved` (ready for `dev`); needs human input → `executor: human` + open questions in the body + leave at `draft` (hand-back). Creates a `kind: fix` CR (parent = the issue, `requirements` empty). Pickup requires the issue at `status=reviewed`; never approves a CR with open questions, a body that does not match the server template, or a parent issue whose `related_requirements` are absent/superficial (any such gap hands back as `executor: human`). Driven by `openbrain-client run-prepare <issue-NNN>`. |
-| `dev` | `approved → in_progress → implementation_review` | Vertical-slice TDD loop, run linearly: write `in_progress` on entry, then per slice write a failing test from the public interface + GWT atom only (red), implement to green, annotate DHF-REQ/DHF-TEST. 3-round green cap → park (leave at `in_progress`). Before declaring dev complete, run the unit's declared `merge_gate` command from `dev_defaults`; gate red means dev-not-done and must be fixed in-CR or parked. On a complete, green, non-empty-diff unit write `implementation_review`. |
+| `dev` | `approved → in_progress → implementation_review`, or `in_progress → implementation_review` (rework resume) | Vertical-slice TDD loop, run linearly: write `in_progress` on a fresh entry (skip the write on a rework resume, which is already `in_progress` — admissible only when a blocking `formal_review` names the unit), then per slice write a failing test from the public interface + GWT atom only (red), implement to green, annotate DHF-REQ/DHF-TEST. 3-round green cap → park (leave at `in_progress`). Before declaring dev complete, run the unit's declared `merge_gate` command from `dev_defaults`; gate red means dev-not-done and must be fixed in-CR or parked. On a complete, green, non-empty-diff unit write `implementation_review`. |
 | `review` | `implementation_review → ready_to_merge \| in_progress` | Advisory DHF-REQ/DHF-TEST coverage report via inline `rg`; executor is the sole reviewer by default; re-run the unit's declared `merge_gate` for the reviewed HEAD. Sound unit + green gate → write `ready_to_merge`. Blocking findings or a red gate → record a `formal_review` (outcome `follow_up_required`) and write `in_progress` (routes back to dev). Never leave the status unchanged. |
-| `merge` | `ready_to_merge → merged \| in_progress` | Run the dependency guard + the `merge_gate` tier command from `dev_defaults`, then merge `cr-<seq>` into `main` via `.claude/skills/merge/scripts/merge-branch.sh` and record `code_change_ref`; write `merged`. A post-merge gate failure attributable to THIS change → revert main, record a `formal_review`, write `in_progress` (routes back to dev). A foreign/flaky failure or a merge conflict → HALT for a human (leave `ready_to_merge`). Merge ENDS at `merged`; it does NOT close or wrap up. |
+| `merge` | `ready_to_merge → merged \| in_progress` | Run the dependency guard, then merge `cr-<seq>` into `main` via `openbrain-dev worktree merge` and record `code_change_ref`; write `merged`. The typed devtool verb owns gate / merge / post-merge re-verify / cleanup phase decisions from local metadata/config only. A post-merge gate failure attributable to THIS change → revert main, record a `formal_review`, write `in_progress` (routes back to dev). A foreign/flaky failure or a merge conflict → HALT for a human (leave `ready_to_merge`). Merge ENDS at `merged`; it does NOT close or wrap up. |
 | `verify` | `merged → closed \| in_progress` | Independent post-merge scope-fidelity audit via `claude -p`: confirm all SoR records are correct, then perform the gold wrap-up (derive `fixed_in_version`, mint/satisfy the `issue_fix`, drive the parent issue to closed, multi-CR-guarded) and write `closed`. A no-op / scope shortfall routes back to dev by writing `in_progress`. |
-| `salvage` | `in_progress → in_progress` or `approved` | Interrupted-run recovery analysis invoked only by run-tail's divergence detector: gather gold/branch evidence, run the mechanical build + package-test checks when dirty work exists, classify salvage/hand-back/reset/manual, and record the recommendation. Suggest-only by default; `--auto-salvage` may apply only the green salvage class. |
+| `salvage` | `in_progress → in_progress` or `approved` | Interrupted-run recovery analysis invoked only by run-queue's divergence detector: gather gold/branch evidence, run the mechanical build + package-test checks when dirty work exists, classify salvage/hand-back/reset/manual, and record the recommendation. Suggest-only by default; `--auto-salvage` may apply only the green salvage class. |
 
 Route to: `.claude/skills/automated-change-request/<verb>/workflow.md`
 
@@ -86,13 +86,19 @@ invocation that re-reads gold and picks up from the recorded status. The gold re
 
 Pickup signal for `prepare`: an **issue** at `status=reviewed` with no open
 `change_request` already linked to it. Pickup signal for `dev`: a change_request at
-`status=approved` and `executor=agent` (which is exactly what a successful `prepare`
-leaves behind). A verb whose precondition does not match **halts** rather than
+`executor=agent` and either `status=approved` (a fresh claim — exactly what a successful
+`prepare` leaves behind) **or** `status=in_progress` with a blocking `formal_review`
+(`outcome: follow_up_required`) naming it in `subject_refs` (a **rework resume** — a
+reviewer, a post-merge revert, or a verify no-op reopen routed it back to `dev`). The
+blocking review is the signal, not `in_progress` on its own: an `in_progress` unit with
+no such review is **not** resumable and `dev` halts on it. Who applied the round's
+corrective work — a `dev` child, the run-queue supervisor, or a human — does not change
+the pickup signal. A verb whose precondition does not match **halts** rather than
 guessing.
 
 ## Worktree model — the runner owns it (do NOT create your own)
 
-The autonomous runner (`openbrain-client run-tail` / `run-epic`) creates **one**
+The autonomous runner (`openbrain-client run-queue`) creates **one**
 worktree/branch per unit, named `cr-<seq>` (derived from the change_request id),
 and roots your verb session in the right place:
 

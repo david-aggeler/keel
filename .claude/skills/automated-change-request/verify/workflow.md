@@ -85,11 +85,12 @@ the Codex executor that produced dev/review/merge.
 Choose exactly one route:
 
 - **No-op coding stage:** if the merged diff contains **no substantive
-  implementation** of the unit's scope, route it back to dev with
-  `update_change_request fields: { status: "in_progress" }`. Re-read and confirm
-  `status == in_progress`. The executor remains `agent`; do not rewrite main
-  history. **Do NOT wrap up or close** — the runner reads `in_progress` and
-  re-dispatches `dev`. Skip the rest of this file.
+  implementation** of the unit's scope, first execute step 3a with verdict route
+  `no_op_reopened`, then route it back to dev with `update_change_request fields:
+  { status: "in_progress" }`. Re-read and confirm `status == in_progress`. The
+  executor remains `agent`; do not rewrite main history. **Do NOT wrap up or
+  close** — the runner reads `in_progress` and re-dispatches `dev`. Skip the rest
+  of this file after the status write.
 - **Technically LLM/agent-solvable gap:** call `create_issue` (well-formed:
   CR ref, requirement refs, expected behavior, observed diff gap, missing
   files/symbols/tests, relevant command output), then **continue to the wrap-up +
@@ -105,6 +106,29 @@ Choose exactly one route:
   requirement refs, decision/operation needed, objective evidence), then **continue
   to the wrap-up + close below**.
 - **Fidelity satisfied:** continue to the wrap-up + close below.
+
+### 3a. Persist the verifier verdict before wrap-up writes
+
+<!-- DHF-REQ: openbrain/requirement-890 -->
+Before any `issue_fix`, parent-issue, or final close write, make the audit
+incremental: persist the verifier verdict and objective evidence on the
+change_request so a later session that exhausts its turn budget leaves a partial
+artifact instead of nothing.
+
+Use `update_change_request` with sparse `fields:` containing only `details`.
+Append (or replace, if the section already exists from a prior verify attempt) a
+`## Verify Verdict` section to the existing `details` with:
+
+- verdict route selected above (`fidelity_satisfied`, `gap_tracked_issue`,
+  `gap_tracked_action_item`, or `no_op_reopened`);
+- `code_change_ref`;
+- requirement / AC refs audited;
+- concise objective evidence: commands inspected, file/symbol/test evidence, and
+  any issue/action_item refs created for tracked gaps.
+
+Re-read the CR and confirm the `## Verify Verdict` section is present before
+continuing. If this write fails, halt and report it; do not continue to the
+wrap-up writes without a persisted verdict artifact.
 
 ## 4. Gold wrap-up (issue-parent, merged units)
 
@@ -144,13 +168,18 @@ list_issue_fix product=openbrain
 Filter the returned rows client-side to rows whose `issue` is the parent issue ref.
 If any existing row's `fixed_in_version` matches the value derived in 4a:
 
-- skip `create_issue_fix`;
-- record in your run summary:
-  `issue_fix for <issue>@<version> already exists (<ref>) - fix row satisfied by sibling CR`;
-- treat the fix row as satisfied rather than an error;
+- If exactly one row matches: skip `create_issue_fix`; record in your run summary:
+  `issue_fix for <issue>@<version> already exists (<ref>) - fix row satisfied by this or a sibling CR`;
+  treat the fix row as satisfied rather than an error; this is the checkpointed
+  re-entry path when a prior verify session minted the fix and died before
+  closing the parent issue and change_request.
+- If two-or-more rows match: halt and report the duplicate issue_fix refs. A
+  re-entrant wrap-up must create exactly one issue_fix for the parent issue at the
+  derived version; multiple rows are gold residue requiring human repair, not a
+  state to silently tolerate.
 - Proceed to 4c (parent-close guard), then step 5 (Final close).
 
-This is the expected sibling-CR idempotency path. Do not treat `duplicate_issue_fix` as the normal control path, and a pre-existing matching fix row must not STOP at `merged`.
+This is the expected re-entry / sibling-CR idempotency path. Do not treat `duplicate_issue_fix` as the normal control path, and a single pre-existing matching fix row must not STOP at `merged`.
 
 If no existing row matches, create_issue_fix exactly as below:
 

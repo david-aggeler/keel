@@ -27,7 +27,7 @@ fails either gate is **handed back as `executor: human`** (Section 3B), never ap
 
 This is the **front half** of the autonomous loop. The back half
 (`dev → review → merge → verify`) is the rest of this skill and is driven separately
-by `openbrain-client run-tail` once this verb has produced an `approved`,
+by `openbrain-client run-queue` once this verb has produced an `approved`,
 `executor: agent` CR.
 
 ## Executor contract (condensed — full text in `../SKILL.md`)
@@ -118,7 +118,7 @@ into the autonomous tail; a false `human` stamp only costs one human glance.
 5. **Re-read** (`get_change_request`) and confirm `status == approved` **and**
    `executor == agent` before reporting success. If either differs, **halt** and report.
 6. Report: `prepared <product>/<new-id> (executor=agent, approved) from <issue ref>`.
-   This CR is now a valid `run-tail` input.
+   This CR is now a valid `openbrain-client run-queue` input.
 
 ## 3B. Needs input → human CR, stays draft
 
@@ -137,7 +137,7 @@ into the autonomous tail; a false `human` stamp only costs one human glance.
 
      After you answer the questions above (edit this CR's details in place):
      - if an agent should now implement it, set `executor: agent` and the CR is
-       picked up by `run-tail` (it advances draft→approved itself only if you also
+       picked up by `openbrain-client run-queue` (it advances draft→approved itself only if you also
        approve, or re-run prepare is NOT needed — just flip executor and approve);
      - if you will implement it yourself, keep `executor: human` and drive the CR
        manually.

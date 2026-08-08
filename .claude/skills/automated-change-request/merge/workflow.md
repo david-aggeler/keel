@@ -7,8 +7,8 @@ description: 'Land a reviewed unit on main through the dependency guard + merge 
 
 **Transition:** `ready_to_merge → merged` (landed) or `→ in_progress` (self-caused post-merge failure, reverted)
 
-**Goal:** Land `cr-<seq>` on `main`. Run the dependency guard, merge via the project
-merge script, then run the declared merge-gate tier command. On a green landing the
+**Goal:** Land `cr-<seq>` on `main`. Run the dependency guard, then delegate git
+merge execution to the typed `openbrain-dev worktree merge` verb. On a green landing the
 verb **ends at `merged`** — the post-mortem close and gold wrap-up belong to `verify`.
 A post-merge gate failure attributable to THIS change reverts `main` and routes the
 unit back to `dev`; a foreign/flaky failure or a merge conflict halts for a human.
@@ -64,48 +64,37 @@ check its status. If **any** referenced unit is not `closed`:
 
    If the branch does not exist, **halt and report it** — `dev` never committed,
    so there is nothing to land.
-2. Merge the unit's branch to `main` **via the project merge script**, run from
-   the repo root (your current directory):
+2. Merge the unit's branch to `main` **via the typed devtool verb**. The verb reads
+   only local worktree metadata and repo config; it does not read gold at merge time.
 
    ```bash
-   bash .claude/skills/merge/scripts/merge-branch.sh "$BRANCH"
+   go run ./cmd/openbrain-dev --repo . worktree merge "$BRANCH"
    ```
 
-   Pass **no** worktree argument — the branch must survive in case the gate below
-   reverts and dev re-works it. Capture the resulting merge commit SHA from its
-   output.
+   If the devtool cannot resolve the branch to a registered worktree, **halt** and
+   report it; the merge verb needs the unit worktree's `.devtools/worktree.json`
+   stamp. Capture the resulting merge commit SHA from `git rev-parse HEAD` on the
+   base branch after the command succeeds.
 
-   **Do not merge with raw `git`.** The script carries the issue-166 post-merge
-   `openbrain-dev ci static-tools` re-verify that reverts the merge in place if the merged `main`
-   tree is red, and that guard must run on **every** path that advances `main`. A raw
-   `git merge` bypasses it — that bypass is exactly what left `main` red after cr-286
-   (see openbrain/issue-175). If the script exits non-zero because of a **merge conflict**
-   or a **dirty tree**, **STOP and HALT for a human** — report its verbatim output.
-   `main` was not advanced; nothing was recorded. A conflict is never routed back to
-   dev automatically. **Never fabricate a SHA.**
+   **Do not merge with raw `git`.** The devtool verb carries the phase logging,
+   merged-tree gate decision, reset-on-red guarantee, worktree teardown, and branch
+   deletion. A raw `git merge` bypasses those obligations. If the devtool exits
+   non-zero because of a **merge conflict** or a **dirty tree**, **STOP and HALT for a
+   human** — report its verbatim output. `main` was not advanced; nothing was recorded.
+   A conflict is never routed back to dev automatically. **Never fabricate a SHA.**
 3. `update_change_request` with
    `fields: { status: "merged", code_change_ref: "<sha>" }`. Re-read and confirm
    `status == merged`. The runner cross-checks that the merge commit is reachable on
    `main`; a claimed `merged` with no merge commit on `main` is fail-closed.
 
-## 4. Post-merge gate
+## 4. Post-merge gate failure handling
 
-The merge landed; now confirm the merged `main` tree is green on the declared tier.
+The typed devtool merge verb already ran the configured local gate against the
+merged tree. If it returned success, skip to step 5. If it returned a post-merge
+gate failure, it already reset the base branch to the pre-merge SHA; classify the
+failure from the command output:
 
-1. `get_dev_defaults product=openbrain`. If not found, **halt loudly** — the gate
-   cannot run without it.
-2. Read the row matching the unit's `merge_gate` field:
-
-   | Unit's merge_gate | Row key |
-   |---|---|
-   | `docs` | `merge_gate.docs` |
-   | `standard` | `merge_gate.standard` |
-   | `full` | `merge_gate.full` |
-
-   If the matching row is absent, **halt loudly** and name the missing row.
-3. **Run the command string exactly as stored.** Treat it as an opaque shell
-   invocation. Do **not** interpolate record fields into it.
-4. **On gate failure:**
+1. **On gate failure:**
    - **Idempotency caveat:** retry only if the gate command is a **read-only validator**
      (e.g. `go run ./cmd/openbrain-dev --repo "$PWD" ci static-tools && go run ./cmd/openbrain-dev --repo "$PWD" test unit`). If it has side effects, go straight
      to the classification below on the first failure (skip the retries) — never re-run
