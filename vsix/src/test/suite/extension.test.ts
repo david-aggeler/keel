@@ -945,6 +945,87 @@ process.exit(2);
     }
   });
 
+  // DHF-TEST: keel/requirement-71, keel/requirement-88
+  test('run profile enqueues the selected leaf scope before the first result event', async function () {
+    this.timeout(10_000);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-enqueue-profile-'));
+    const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+    process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = root;
+    fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+    const fake = path.join(root, 'fake-enqueue-adapter.js');
+    fs.writeFileSync(fake, [
+      "const args = process.argv.slice(2);",
+      "const now = () => new Date().toISOString();",
+      "if (args.includes('--version')) { console.log('dev'); process.exit(0); }",
+      "if (args.join(' ') === 'test-bridge discover --format json') {",
+      "  console.log(JSON.stringify({ version: 1, workspace: process.cwd(), generated_at: now(), items: [",
+      "    { id: 'case::suite', label: 'suite', kind: 'suite', runnable: true, profiles: ['run'] },",
+      "    { id: 'case::test::a', parent_id: 'case::suite', label: 'a', kind: 'test', runnable: true, profiles: ['run'] },",
+      "    { id: 'case::test::b', parent_id: 'case::suite', label: 'b', kind: 'test', runnable: true, profiles: ['run'] },",
+      "    { id: 'case::covers', parent_id: 'case::suite', label: 'covers', kind: 'group', runnable: false, profiles: [] },",
+      "    { id: 'case::covers::b', parent_id: 'case::covers', label: 'b via covers', kind: 'test', canonical_id: 'case::test::b', runnable: true, profiles: ['run'] },",
+      "    { id: 'demo::desired-state::dataset::small', parent_id: 'case::suite', label: 'small', kind: 'test', runnable: true, profiles: ['run'] }",
+      "  ] }));",
+      "  process.exit(0);",
+      "}",
+      "if (args.slice(0, 3).join(' ') === 'test-bridge desired-state --format') {",
+      "  console.log(JSON.stringify({ version: 3, workspace: process.cwd(), generated_at: now(), groups: [{ label: 'Empty', order: 1, mutually_exclusive: false, rows: [] }] }));",
+      "  process.exit(0);",
+      "}",
+      "if (args.slice(0, 2).join(' ') === 'test-bridge run') {",
+      "  const emit = (event) => process.stdout.write(JSON.stringify({ version: 1, time: now(), run_id: 'profile-enqueue', ...event }) + '\\n');",
+      "  emit({ event: 'run_started', test_id: 'case::suite' });",
+      "  emit({ event: 'test_started', test_id: 'case::test::a' });",
+      "  emit({ event: 'passed', test_id: 'case::test::a', duration_ms: 1 });",
+      "  emit({ event: 'test_started', test_id: 'case::test::b' });",
+      "  emit({ event: 'passed', test_id: 'case::test::b', duration_ms: 1 });",
+      "  emit({ event: 'run_finished', exit_code: 0 });",
+      "  process.exit(0);",
+      "}",
+      "process.exit(2);"
+    ].join('\n'));
+    fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+      version: currentConfigVersion,
+      command: process.execPath,
+      args: [fake],
+      displayName: 'Keel'
+    }, null, 2) + '\n');
+
+    try {
+      const extension = vscode.extensions.getExtension('aggeler.keel-test-bridge');
+      assert.ok(extension, 'extension should be discoverable');
+      await extension.activate();
+      await vscode.commands.executeCommand('keel.tests.refresh');
+      const controller = testControllerForTest();
+      assert.ok(controller, 'extension should expose its active TestController for tests');
+      const originalCreateTestRun = controller.createTestRun.bind(controller);
+      const stamps: StateStamp[] = [];
+      controller.createTestRun = ((request: vscode.TestRunRequest, name?: string, persist?: boolean) => {
+        const run = originalCreateTestRun(request, name, persist);
+        recordStateStamps(run, stamps);
+        return run;
+      }) as typeof controller.createTestRun;
+      try {
+        await runProfileHandlerForTest('case::suite');
+      } finally {
+        controller.createTestRun = originalCreateTestRun;
+      }
+
+      const enqueued = stamps.filter((stamp) => stamp.state === 'queued').map((stamp) => stamp.id);
+      assert.deepEqual(enqueued.sort(), ['case::covers::b', 'case::test::a', 'case::test::b'], 'all non-no-result leaf items, including covers aliases, are enqueued');
+      assert.ok(!enqueued.includes('demo::desired-state::dataset::small'), 'desired-state no-result namespace is not enqueued');
+      assert.ok(stamps.findIndex((stamp) => stamp.state === 'queued') < stamps.findIndex((stamp) => stamp.state === 'running'), 'enqueue precedes the first start event');
+      assertAncestorsNeverTerminalMidRun(stamps, [['case::suite', ['case::test::a', 'case::test::b', 'case::covers::b']]]);
+    } finally {
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   // DHF-TEST: keel/requirement-70
   test('open-workspace refresh does not invalidate terminal results on surviving items', async function () {
     this.timeout(10_000);
@@ -1637,6 +1718,71 @@ process.exit(2);
     }
   });
 
+  // DHF-TEST: keel/requirement-71, keel/requirement-88
+  test('external run mirror enqueues the selected leaf scope before replaying results', async function () {
+    this.timeout(10_000);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-external-enqueue-'));
+    const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+    process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = root;
+    const controller = vscode.tests.createTestController(`keelExternalEnqueue-${Date.now()}`, 'Keel External Enqueue');
+    const tree = publishDiscovery(controller, root, {
+      version: 1,
+      workspace: root,
+      generated_at: new Date().toISOString(),
+      items: [
+        { id: 'case::suite', label: 'suite', kind: 'suite', runnable: true, profiles: ['run'] },
+        { id: 'case::test::a', parent_id: 'case::suite', label: 'a', kind: 'test', runnable: true, profiles: ['run'] },
+        { id: 'case::test::b', parent_id: 'case::suite', label: 'b', kind: 'test', runnable: true, profiles: ['run'] },
+        { id: 'case::covers', parent_id: 'case::suite', label: 'covers', kind: 'group', runnable: false, profiles: [] },
+        { id: 'case::covers::b', parent_id: 'case::covers', label: 'b via covers', kind: 'test', canonical_id: 'case::test::b', runnable: true, profiles: ['run'] },
+        { id: 'demo::desired-state::dataset::small', parent_id: 'case::suite', label: 'small', kind: 'test', runnable: true, profiles: ['run'] }
+      ]
+    });
+    setCurrentTreeForTest(tree);
+    const spyTarget = controller as vscode.TestController & {
+      createTestRun: (request: vscode.TestRunRequest, name?: string, persist?: boolean) => vscode.TestRun;
+    };
+    const originalCreateTestRun = spyTarget.createTestRun.bind(controller);
+    const stamps: StateStamp[] = [];
+    spyTarget.createTestRun = (request: vscode.TestRunRequest, name?: string, persist?: boolean): vscode.TestRun => {
+      const run = originalCreateTestRun(request, name, persist);
+      recordStateStamps(run, stamps);
+      return run;
+    };
+    const mirror = new ExternalRunMirror(controller);
+    const runsDir = path.join(root, '.devtools', 'vscode-runs');
+    fs.mkdirSync(runsDir, { recursive: true });
+    const runFile = path.join(runsDir, `external-enqueue-${process.pid}-${Date.now()}.jsonl`);
+    fs.writeFileSync(runFile, [
+      JSON.stringify(runEvent({ event: 'run_started', run_id: 'external-enqueue', test_id: 'case::suite' })),
+      JSON.stringify(runEvent({ event: 'test_started', run_id: 'external-enqueue', test_id: 'case::test::a' })),
+      JSON.stringify(runEvent({ event: 'passed', run_id: 'external-enqueue', test_id: 'case::test::a' })),
+      JSON.stringify(runEvent({ event: 'test_started', run_id: 'external-enqueue', test_id: 'case::test::b' })),
+      JSON.stringify(runEvent({ event: 'passed', run_id: 'external-enqueue', test_id: 'case::test::b' })),
+      JSON.stringify(runEvent({ event: 'run_finished', run_id: 'external-enqueue', exit_code: 0 }))
+    ].join('\n') + '\n');
+
+    try {
+      await mirror.syncWorkspace();
+      const enqueued = stamps.filter((stamp) => stamp.state === 'queued').map((stamp) => stamp.id);
+      assert.deepEqual(enqueued.sort(), ['case::covers::b', 'case::test::a', 'case::test::b'], 'external mirror enqueues all non-no-result leaf items, including covers aliases');
+      assert.ok(!enqueued.includes('demo::desired-state::dataset::small'), 'external mirror does not enqueue desired-state no-result ids');
+      assert.ok(stamps.findIndex((stamp) => stamp.state === 'queued') < stamps.findIndex((stamp) => stamp.state === 'running'), 'external mirror enqueues before replaying starts');
+      assertAncestorsNeverTerminalMidRun(stamps, [['case::suite', ['case::test::a', 'case::test::b', 'case::covers::b']]]);
+    } finally {
+      spyTarget.createTestRun = originalCreateTestRun;
+      fs.rmSync(root, { recursive: true, force: true });
+      mirror.dispose();
+      setCurrentTreeForTest(undefined);
+      controller.dispose();
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
+    }
+  });
+
   // DHF-TEST: keel/requirement-88
   test('external run mirror invalidates exclusive-group siblings cleared by imported streams', async function () {
     this.timeout(10_000);
@@ -2186,4 +2332,73 @@ async function collectChild(child: cp.ChildProcessWithoutNullStreams): Promise<{
       resolve({ code, stdout, stderr });
     });
   });
+}
+
+type TestState = 'queued' | 'running' | 'passed' | 'failed' | 'errored' | 'skipped';
+
+interface StateStamp {
+  id: string;
+  state: TestState;
+}
+
+function recordStateStamps(run: vscode.TestRun, stamps: StateStamp[]): void {
+  const originalEnqueued = run.enqueued.bind(run);
+  const originalStarted = run.started.bind(run);
+  const originalPassed = run.passed.bind(run);
+  const originalFailed = run.failed.bind(run);
+  const originalErrored = run.errored.bind(run);
+  const originalSkipped = run.skipped.bind(run);
+  run.enqueued = (item: vscode.TestItem) => {
+    stamps.push({ id: item.id, state: 'queued' });
+    originalEnqueued(item);
+  };
+  run.started = (item: vscode.TestItem) => {
+    stamps.push({ id: item.id, state: 'running' });
+    originalStarted(item);
+  };
+  run.passed = (item: vscode.TestItem, duration?: number) => {
+    stamps.push({ id: item.id, state: 'passed' });
+    originalPassed(item, duration);
+  };
+  run.failed = (item: vscode.TestItem, message: vscode.TestMessage | readonly vscode.TestMessage[], duration?: number) => {
+    stamps.push({ id: item.id, state: 'failed' });
+    originalFailed(item, message, duration);
+  };
+  run.errored = (item: vscode.TestItem, message: vscode.TestMessage | readonly vscode.TestMessage[], duration?: number) => {
+    stamps.push({ id: item.id, state: 'errored' });
+    originalErrored(item, message, duration);
+  };
+  run.skipped = (item: vscode.TestItem) => {
+    stamps.push({ id: item.id, state: 'skipped' });
+    originalSkipped(item);
+  };
+}
+
+function assertAncestorsNeverTerminalMidRun(stamps: readonly StateStamp[], ancestors: Array<[string, string[]]>): void {
+  const priority: Record<TestState, number> = {
+    running: 6,
+    errored: 5,
+    failed: 4,
+    queued: 3,
+    passed: 2,
+    skipped: 1
+  };
+  const terminal = new Set<TestState>(['passed', 'failed', 'errored', 'skipped']);
+  const states = new Map<string, TestState>();
+  for (const stamp of stamps) {
+    states.set(stamp.id, stamp.state);
+    for (const [ancestor, leaves] of ancestors) {
+      const leafStates = leaves.map((leaf) => states.get(leaf));
+      if (leafStates.every((state) => state && terminal.has(state))) {
+        continue;
+      }
+      const rollup = leafStates.reduce<TestState | undefined>((best, state) => {
+        if (!state) {
+          return best;
+        }
+        return !best || priority[state] > priority[best] ? state : best;
+      }, undefined);
+      assert.ok(!rollup || !terminal.has(rollup), `${ancestor} computed terminal ${rollup} before every descendant settled after ${stamp.state} ${stamp.id}`);
+    }
+  }
 }
