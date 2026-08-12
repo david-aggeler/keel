@@ -10,7 +10,7 @@
 4. **If the call succeeds and returns more than one record:** halt. The singleton invariant is violated — report the count to the operator and stop. Do not pick a record arbitrarily; the operator must resolve the duplicate before the interview can run.
 5. **If the call succeeds and returns zero records (clean miss):**
    a. Call `get_template_for dto_type=dev_defaults` to retrieve the starter catalog.
-   b. Fill `title`, `summary`, and `details` from the template verbatim (T1–T11 + the three `merge_gate.*` example rows).
+   b. Fill `title`, `summary`, and `details` from the template verbatim (T1–T11).
    c. Call `create_dev_defaults` with those values.
-   d. Inform the operator: "Created a dev defaults record from the template. Edit the `merge_gate.*` rows to match your stack's commands before first `close`."
+   d. Inform the operator: "Created a dev defaults record from the template. Gate commands do NOT live here — the stages for each `transition_gate` rung come from the product's committed project configuration, which is reviewed like code; a record is data and is never executed."
    e. Store the newly created record; proceed to step 02.

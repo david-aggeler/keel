@@ -1,100 +1,99 @@
 ---
 name: epic/plan
-description: 'Decompose an active epic into change-request unit records. Use when the user says "plan epic N" or "break down epic N into units"'
+description: 'Decompose one epic into feature change-request units, requirement-first. Use when the user says "plan epic N" or "decompose this epic into units".'
+x-openbrain-content-hash: sha256:4a4631beaed40f36271e1b9b2f856b5b4925df541cacbc36f0a5b2809aae2f69
 ---
-<!-- markdownlint-disable MD033 MD036 MD034 MD040 MD026 MD032 MD012 MD024 MD028 MD031 -->
 
-# Epic Plan Workflow
+# /epic plan — Decompose an Epic into Units
 
-**Goal:** Decompose an active epic record into thin change-request unit records by enumerating the intended units and calling `create_change_request` for each one. Emits no tracking artifact.
+**Goal:** Turn one epic into a set of `kind=feature` change-request units that are structurally valid, requirement-backed, and drainable the moment they are approved.
 
-**Your Role:** You are a Developer/Product Owner facilitating unit decomposition. You read the epic record, work with the operator to plan the units, and create thin husks inline.
+**Read `SKILL.md` "Record model contract" first.**
 
-- Communicate all responses in {communication_language}
-- The output of this workflow is `change_request` records with `status=draft`, linked to the parent epic — not a file
-- Unit detailing (4-section body, requirement extraction) is owned by `/change-request create` at pickup
+## The contract this workflow exists to honor
+
+A `kind=feature` unit must reference at least one requirement, at every status, or the write is rejected. So the unit of decomposition is not "a chunk of work" — it is **a requirement with its acceptance criteria, plus the unit that implements it**. Decomposition therefore runs requirement-first:
+
+1. find or author the requirement
+2. author its acceptance criteria as `ac` records
+3. create the unit against them
+
+A step that produces a unit without a requirement produces nothing at all.
 
 ## Execution
 
 <workflow>
 
-<step n="1" goal="Load and review the active epic">
-  <action>Load {project_context} for project-wide patterns and conventions (if exists)</action>
-
-  <check if="{epic_ref} is provided">
-    <action>Call `get_epic` for {epic_ref} to load the full epic record</action>
+<step n="1" goal="Identify the epic">
+  <check if="an epic ref or sequence was provided">
+    <action>Call `get_epic` to load it.</action>
   </check>
-
-  <check if="{epic_ref} is not provided">
-    <action>Call `list_epic` with `filter={"status":"active"}` ordered by sequence</action>
-    <check if="no active epic found">
-      <output>No active epic found. Options:
-        1. Provide a specific epic ref or sequence number
-        2. Run `/epic create` to create epics
-        3. Run `update_epic` to set an epic to `active` status
-      </output>
-      <action>HALT</action>
-    </check>
-    <action>If exactly one active epic, use it. If multiple, present list and ask which to decompose.</action>
-    <action>Call `get_epic` for the selected epic</action>
+  <check if="no epic was named">
+    <action>Call `list_epic` with `filter={"status":"active"}`. With exactly one hit, confirm it with the operator and wait. With zero or several, present the list and ask.</action>
   </check>
-
-  <action>Display the epic to the operator:
-    - Title, summary, status
-    - Details and plan sections (which describe the intended units)
-  </action>
-
-  <action>Call `list_change_request` with `filter={"parent":"<epic_ref>"}` to see how many units already exist for this epic</action>
-  <action>Report existing unit count and status breakdown to the operator</action>
+  <action>Store {epic_ref}, {epic_title}, and the epic's `related_requirements`.</action>
 </step>
 
-<step n="2" goal="Enumerate intended units">
-  <action>From the epic `details` and `plan` fields, extract the list of intended units</action>
-  <action>If the epic record describes units (title, rough scope), collect them into a planned unit list</action>
-
-  <check if="no unit list is evident in the epic">
-    <action>Work with the operator to decompose the epic: identify coherent behaviors or deliverables, logical flow, and sizing</action>
-    <action>Present proposed unit list for approval before creating records</action>
-  </check>
-
-  <action>For each intended unit, establish:
-    - Unit title (clear, action-oriented)
-    - Summary (one sentence: what it does and which FRs it covers)
-  </action>
-
-  <action>Present the full unit list to the operator for confirmation</action>
-  <ask>Do these units correctly decompose the epic? Approve [a] or edit [e]?</ask>
-  <action>Iterate until operator approves the unit list</action>
+<step n="2" goal="See what already exists">
+  <action>Call `list_change_request` with `filter={"parent":"<epic_ref>"}` and report the units that already exist with their status and requirement refs.</action>
+  <action>You are extending this set, not replacing it. Never create a second unit for work an existing unit already covers — check by requirement ref, not by title similarity.</action>
 </step>
 
-<step n="3" goal="Create thin unit husks">
-  <action>For each approved unit, call `create_change_request` with:
-    - `title` — the unit title
-    - `summary` — one-sentence scope
-    - `parent` — the epic ref
+<step n="3" goal="Resolve requirements for the undecomposed scope">
+  <action>For each piece of the epic's scope not yet covered by a unit, search for an existing requirement FIRST: `search_requirement` on the capability wording, then `search_ac`, then `search_records` across types. Search what the capability IS, not the phrasing of the request that surfaced it.</action>
+  <check if="a requirement already covers it">
+    <action>Use that ref. If its statement is close but imprecise, sharpen it with `update_requirement` rather than creating a near-duplicate.</action>
+  </check>
+  <check if="no requirement covers it">
+    <action>Fetch `get_template_for dto_type=requirement`, then call `create_requirement` with `product`, `title`, a shall-form `statement`, `type`, and `status`.</action>
+    <action>Immediately author its acceptance criteria as `ac` records via `create_ac` with `parent` set to the requirement ref. Do not defer this to a later pass.</action>
+    <action>Link the new requirement onto the epic by adding its ref to `related_requirements` with `update_epic`.</action>
+  </check>
+  <action>Report the requirement set the units will be built on before creating any unit.</action>
+</step>
+
+<step n="4" goal="Propose the unit partition">
+  <action>Propose the units: for each, a title, a one-sentence summary, and the requirement refs it will carry. Keep units small enough to be implemented and reviewed in one pass.</action>
+  <action>State the intended order and any `depends_on` edges between units.</action>
+  <action>Present the proposal and wait for approval. Do not create records before approval.</action>
+</step>
+
+<step n="5" goal="Resolve the iteration and executor">
+  <action>Call `list_iteration` for the product. Determine which open iteration these units belong to.</action>
+  <check if="no suitable iteration exists">
+    <action>Ask the operator whether to create one with `create_iteration`, or to target an existing one. A unit with no `iteration` will never appear in a run-queue drain — say this plainly rather than proceeding silently.</action>
+  </check>
+  <action>Ask which executor these units are for — `agent` or `human` — and store the answer. Default to `agent` only if the operator confirms it.</action>
+</step>
+
+<step n="6" goal="Create the units">
+  <action>Fetch `get_template_for dto_type=change_request`.</action>
+  <action>For each approved unit call `create_change_request` with:
+    - `product`, `title`, `summary`
+    - `kind` — `feature` (required on every write)
+    - `parent` — {epic_ref} (an epic, never an issue)
+    - `requirements` — at least one requirement ref, non-negotiable
+    - `iteration` — the iteration from step 5
+    - `executor` — from step 5
     - `status` — `draft`
+    - `depends_on` — sibling unit refs where sequencing demands it
+    - `motivation` / `proposed_change` — enough for the operator to recognize the unit later; the full 4-section body is authored at pickup by `/change-request create`
   </action>
-  <action>Record the returned ref for each unit</action>
-
-  <check if="all units created">
-    <action>Call `list_change_request` with `filter={"parent":"<epic_ref>"}` to confirm all expected unit records exist</action>
-    <action>Verify each unit has `status=draft` and `parent` ref resolves correctly</action>
+  <check if="a create is rejected with change_request_feature_requires_requirement">
+    <action>The unit has no requirement ref. Go back to step 3 for that unit — do not retry with a different field.</action>
   </check>
+  <action>Record each returned ref.</action>
 </step>
 
-<step n="4" goal="Report and validate">
-  <action>Read fully and follow `./checklist.md` to validate unit-decomposition coverage</action>
-
-  <output>**Epic Plan Complete!**
-
-    **Epic:** {epic_title} ({epic_ref})
-    **Units Created:** {unit_count}
-
-    **Next Steps:**
-    1. Review unit records with `/epic status` or `list_change_request filter={"parent":"<epic_ref>"}`
-    2. Run `/change-request create` to begin detailing the first `draft` unit
-    3. Run `/epic status` at any time to check progress
-  </output>
+<step n="7" goal="Verify against the record graph">
+  <action>Run the checklist at `plan/checklist.md`. Report it as a table.</action>
+  <action>Fix every failure before reporting completion.</action>
 </step>
 
 </workflow>
+
+## Output
+
+`change_request` records at `status=draft` under the epic, each carrying a requirement, an iteration, and an executor. Approval to `approved` is the operator's call — and at that point at least one listed requirement must itself be approved-or-later, so raise any requirement still in `draft` now rather than at the approval gate.
+
+Next: `/change-request create` details a unit at pickup; `/epic status` shows the rollup.

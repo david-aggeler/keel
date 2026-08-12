@@ -1,51 +1,76 @@
 ---
 name: epic/add
-description: 'Add one new thin unit to a running epic. Use when the operator says "add a unit to epic N" or "one more task for this epic".'
+description: 'Add one feature change-request unit to a running epic. Use when the operator says "add a unit to epic N" or "one more unit for this epic".'
+x-openbrain-content-hash: sha256:149bae0c1cd8efd62d2f9f11f0a36fcee1e02ec9ba5b5a6e689f87ec8aae5720
 ---
 
-# /epic add — Add a Unit to a Running Epic
+# /epic add — Add One Unit to a Running Epic
 
-**Goal:** Create one thin change-request husk (`status=draft`) linked to an existing epic. This is decomposition-for-one — the same inline creation pattern used by `/epic create` step 3, with zero extra ceremony.
+**Goal:** Create a single `kind=feature` unit under an existing epic — decomposition-for-one, same contract as `/epic plan`, no extra ceremony.
+
+**Read `SKILL.md` "Record model contract" first.** The unit needs a requirement before it can exist.
 
 ## Execution
 
 <workflow>
 
 <step n="1" goal="Identify the target epic">
-  <check if="epic ref or sequence provided">
-    <action>Call `get_epic` for the provided ref or sequence to load the epic record.</action>
+  <check if="an epic ref or sequence was provided">
+    <action>Call `get_epic` to load it.</action>
   </check>
-  <check if="no epic ref provided">
-    <action>Call `list_epic` with `filter={"status":"active"}` to find the active epic.</action>
-    <check if="exactly one active epic found">
-      <action>Use it. Confirm with the operator: "Adding a unit to {epic_title} — is that right?"</action>
-      <action>Wait for confirmation.</action>
-    </check>
-    <check if="multiple active epics or none">
-      <action>Present the list and ask the operator which epic to target.</action>
-    </check>
+  <check if="no epic was named">
+    <action>Call `list_epic` with `filter={"status":"active"}`. With exactly one hit, confirm — "Adding a unit to {epic_title} — is that right?" — and wait. With zero or several, present the list and ask.</action>
   </check>
   <action>Store {epic_ref} and {epic_title}.</action>
 </step>
 
 <step n="2" goal="Elicit the unit">
-  <ask>What is the title of the new unit? (clear, action-oriented)</ask>
-  <action>Wait for the operator to provide the title.</action>
-  <ask>One-sentence summary — what does it do and which requirement does it address?</ask>
-  <action>Wait for the operator to provide the summary.</action>
+  <ask>What is the title of the new unit? Action-oriented.</ask>
+  <action>Wait for the answer.</action>
+  <ask>One sentence — what does it do, and what capability is it delivering?</ask>
+  <action>Wait for the answer.</action>
 </step>
 
-<step n="3" goal="Create the thin husk">
+<step n="3" goal="Resolve the requirement">
+  <action>Search for an existing requirement covering that capability: `search_requirement` on the capability wording, then `search_ac`, then `search_records`. Search what the capability IS, not the phrasing the operator just used.</action>
+  <action>Report what you found before writing anything.</action>
+  <check if="an existing requirement covers it">
+    <action>Confirm the match with the operator and use its ref.</action>
+  </check>
+  <check if="nothing covers it">
+    <action>Say so, fetch `get_template_for dto_type=requirement`, and author it: `create_requirement` with `product`, `title`, a shall-form `statement`, `type`, `status`.</action>
+    <action>Author its acceptance criteria in the same pass — `create_ac` with `parent` set to the new requirement ref.</action>
+    <action>Add the requirement ref to the epic's `related_requirements` via `update_epic`.</action>
+  </check>
+  <halt-condition>Do not proceed to step 5 without a requirement ref. A feature unit with an empty `requirements` array is rejected at write time, at every status.</halt-condition>
+</step>
+
+<step n="4" goal="Resolve iteration and executor">
+  <action>Call `list_iteration` and determine the iteration this unit belongs to. If none fits, ask whether to create one — a unit with no `iteration` never appears in a run-queue drain.</action>
+  <ask>Executor for this unit — `agent` or `human`?</ask>
+  <action>Wait for the answer.</action>
+</step>
+
+<step n="5" goal="Create the unit">
   <action>Call `create_change_request` with:
-    - `title` — the unit title from step 2
-    - `summary` — the one-sentence summary from step 2
+    - `product`, `title`, `summary` — from step 2
+    - `kind` — `feature`
     - `parent` — {epic_ref}
+    - `requirements` — the ref from step 3
+    - `iteration`, `executor` — from step 4
     - `status` — `draft`
   </action>
-  <action>Record the returned ref as {unit_ref}.</action>
-  <output>Unit created: {unit_ref} — "{unit_title}" under {epic_title}.
+  <action>Store the returned ref as {unit_ref}.</action>
+</step>
 
-To detail this unit at pickup, run `/change-request create` and reference {unit_ref}.</output>
+<step n="6" goal="Confirm">
+  <action>Call `get_change_request` for {unit_ref} and confirm `kind`, `parent`, `requirements`, `iteration`, `executor`, and `status` all read back as intended.</action>
+  <output>
+Added {unit_ref} — "{title}" — to {epic_title}.
+  requirement: {requirement_ref}   iteration: {iteration}   executor: {executor}   status: draft
+
+Detail it at pickup with `/change-request create`.
+  </output>
 </step>
 
 </workflow>

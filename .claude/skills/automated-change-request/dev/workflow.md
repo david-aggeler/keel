@@ -1,6 +1,7 @@
 ---
 name: automated-change-request/dev
 description: 'Implement an approved unit via a linear vertical-slice TDD loop, runnable by a non-resident executor (codex). Use when executor=agent and status is either approved (fresh claim) or in_progress with a prior blocking formal_review (rework resume), and the operator says "dev this CR headless" or "codex dev".'
+x-openbrain-content-hash: sha256:8bdbcf573a3a4c39b657352f55165fd04225987d1095c0b3df9b37fda23d538b
 ---
 
 # Automated Dev
@@ -12,6 +13,11 @@ description: 'Implement an approved unit via a linear vertical-slice TDD loop, r
 vertical-slice TDD loop, **run linearly by one executor** — no subagent fan-out.
 Resolve the requirement list kind-aware (see `../SKILL.md` § acceptance contract),
 then each requirement's ACs (its GWT atoms) — the ACs are what each slice's test proves.
+
+## Principles
+
+- Every silent error is a bug the author hasn't met yet
+- Testability and observability gaps before stylistic ones
 
 ## Executor contract (condensed — full text in `../SKILL.md`)
 
@@ -35,7 +41,7 @@ then each requirement's ACs (its GWT atoms) — the ACs are what each slice's te
    | Observed `status` | Entry state | Action |
    |---|---|---|
    | `approved` | **fresh claim** | proceed; step 2 writes `in_progress`. |
-   | `in_progress` **and** a `formal_review` with `outcome: follow_up_required` naming this CR in `subject_refs` exists | **rework resume** | proceed; step 2 skips the status write (the unit is already `in_progress`). Treat that review's findings as this round's work. |
+   | `in_progress` **and** a `formal_review` with `outcome: follow_up_required` naming this change request in `subject_refs` exists | **rework resume** | proceed; step 2 skips the status write (the unit is already `in_progress`). Treat that review's findings as this round's work. |
    | `in_progress` **and no** such `formal_review` exists | not resumable | **halt** and report — the unit was never carried to `implementation_review`, so it may never have been approved. |
    | anything else | not eligible | **halt** and report the actual status. |
 
@@ -50,6 +56,22 @@ then each requirement's ACs (its GWT atoms) — the ACs are what each slice's te
    than redone.
 4. Resolve the requirement refs kind-aware (see `../SKILL.md` § acceptance contract) —
    this is the slice list; each slice proves that requirement's acceptance criteria.
+
+## 1b. Read the acceptance contract
+
+The requirements and their acceptance criteria are the basis for the implementation and
+the tests. Read them all before you write code.
+
+1. Per resolved ref: `get_requirement`, then its acceptance criteria — the `ac` records
+   whose `parent` is that requirement (`list_inbound_refs`, then `get_ac`). Never search
+   for them; the parent edge is a direct reference. Read the records, not the change
+   request's restatement.
+2. A requirement with no acceptance criterion has no test oracle — **halt**.
+3. If the criteria contradict each other, their parent requirement, or the unit's Scope,
+   **stop before implementing** — a conflicting contract cannot be satisfied in code.
+   Record a `formal_review` (`outcome: follow_up_required`) quoting the conflicting refs,
+   append the conflict to `details`, and exit. Thin-but-not-contrary is not a conflict:
+   implement the narrowest reading and say so.
 
 ## 2. Start — confirm the worktree, then claim the unit
 
@@ -99,7 +121,7 @@ it.**
    would wrongly see it pass before implementation) and never recommit work that
    is already on the branch. If every ref is already committed and green, skip to
    step 5 (definition-of-done gate) — implementation is complete, but dev is not
-   done until the unit's declared gate is green for this worktree HEAD.
+   done until the unit's declared transition gate is green for this worktree HEAD.
 
 ## 3. Tracer bullet
 
@@ -115,10 +137,11 @@ any test from the current slice is red):
 
 ### 4a. Derive the slice spec
 
-1. `get_requirement ref=<req-ref>`.
+1. Use this requirement and its acceptance criteria as read in step 1b (re-read with
+   `get_requirement ref=<req-ref>` if the session has since been compacted).
 2. Extract:
-   - **GWT atoms** — the Given/When/Then strings from `requirement.acceptance_criteria`.
-     These are the test oracle.
+   - **GWT atoms** — the Given/When/Then strings from this requirement's acceptance
+     criteria. These are the test oracle.
    - **Public interface** — the observable surface the test exercises (function
      signature, HTTP endpoint, MCP tool name, …), derived from the requirement
      statement and the unit's Scope section.
@@ -186,51 +209,47 @@ func TestHandleFoo_RejectsMissingBody(t *testing.T) { ... }
 
 Proceed to the next slice.
 
-## 5. Definition-of-done gate — run the unit's merge_gate
+## 5. Definition-of-done gate — run the in-session transition gate
 
 All slices green is necessary but not sufficient. Before reporting dev complete,
-run the unit's declared `merge_gate` tier command against this worktree HEAD.
+run the unit's declared `transition_gate` in-session stages against this worktree HEAD.
 
 1. Re-read this change request with `get_change_request product=openbrain id=<id>`
-   and read its `merge_gate` tier. If it is absent, **halt loudly** — dev cannot
-   declare done without a declared gate.
-2. `get_dev_defaults product=openbrain`. If not found, **halt loudly** — the gate
-   cannot run without it.
-3. Read the `details` row matching the unit's `merge_gate` field:
-
-   | Unit's merge_gate | Row key |
-   |---|---|
-   | `docs` | `merge_gate.docs` |
-   | `standard` | `merge_gate.standard` |
-   | `full` | `merge_gate.full` |
-
-   If the matching row is absent, **halt loudly** and name the missing row.
-4. Extract the backticked command string from that row's rule text and **run it
-   exactly as stored**, from this worktree root. Treat it as an opaque shell
-   invocation. Do **not** interpolate record fields into it.
-5. Record the command and result honestly in your run summary. Never claim a gate
-   pass without running the command.
-6. **On gate failure:** this is **dev-not-done**, not review-ready.
-   - If the gate command is a read-only validator (for example
-     `go run ./cmd/openbrain-dev ci static-tools && go run ./cmd/openbrain-dev test unit`),
-     re-run up to **3 times total**; a flaky gate may pass on retry. Do not run a
-     4th time.
-   - If the command has side effects, do not retry; treat the first non-zero exit
+   and read its `transition_gate` rung. If it is absent, **halt loudly** — dev cannot
+   declare done without a declared transition gate.
+2. Read the committed `openbrain-client.yaml` from this worktree root and resolve
+   `transition_gates.<rung>.in_session`. Do not read any System-of-Record command row
+   or `openbrain-client.local.yaml`; execution commands live only in the
+   committed product config.
+3. Run each argv-array stage in order, synchronously in the foreground, from this
+   worktree root. Treat each stage as argv, not as a shell string. If the runner prompt
+   supplied an exact in-session gate command, run that exact command.
+4. Do **not** run `transition_gates.<rung>.runner_owned` stages. Those are owned by
+   `openbrain-client` after this verb exits. For `unit` and higher, this is where
+   coverage-floor and unit/integration/system tests attach; the `static` rung executes
+   no tests.
+5. Record the rung, in-session stages, and result honestly in your run summary. Never
+   claim a gate pass without running the stages.
+6. **On in-session gate failure:** this is **dev-not-done**, not review-ready.
+   - If the failing stage is a read-only validator — it inspects the tree and reports,
+     without writing to it — re-run the in-session gate up to **3 times total**; a flaky
+     gate may pass on retry. Do not run a 4th time.
+   - If the failing stage has side effects, do not retry; treat the first non-zero exit
      as the final failure.
    - If the final gate run is still non-zero, return to the slice loop and fix the
-     failure in this CR when the failure is clearly caused by your dev edit. Write a
+     failure in this change request when the failure is clearly caused by your dev edit. Write a
      failing test first when the fix is behavioral and testable; for deterministic
      static/tooling drift, make the minimal correction and re-run the same gate.
    - If you cannot identify or fix the failure within the existing 3-round green
      discipline, **park**: leave the unit at `in_progress` and record the blocker.
      Both writes must succeed; if the second fails, retry it before exiting:
-     create a `formal_review` naming the failing tier, run count, command, and last
-     failing output verbatim, then append to `details`: "dev merge gate `<tier>` red
+     create a `formal_review` naming the failing rung, run count, stage, and last
+     failing output verbatim, then append to `details`: "dev transition gate `<rung>` red
      at the 3-run cap — unit remains in_progress; see formal_review."
 
-Regression discipline: the CR-443 failure mode is the model case. If a dev edit
+Regression discipline: the change_request-443 failure mode is the model case. If a dev edit
 makes `build-context-parity` inside `static-tools` red, this step catches it here
-on the branch and forces an in-CR fix before `review`; it must not be left for the
+on the branch and forces a fix inside this change request before `review`; it must not be left for the
 post-merge issue-166 backstop.
 
 ## 6. End of loop
@@ -244,13 +263,13 @@ post-merge issue-166 backstop.
   "implementation complete" and do **not** advance to `review`. Stop at the parked
   unit (`status` stays `in_progress`) and point at the recorded blocker
   (`formal_review` + `details` note).
-- **Otherwise** (all slices green + annotated + committed + declared gate green):
+- **Otherwise** (all slices green + annotated + committed + in-session gate green):
   the `dev` verb is complete. Advance the unit: `update_change_request` with
   `fields: { status: "implementation_review" }`, then re-read and confirm
   `status == implementation_review`. Your committed slices are the evidence — the
   runner cross-checks that this branch is a non-empty, clean diff over `main` and
   halts "dev produced no changes" if it is empty, so never write
-  `implementation_review` without committed work. Report the gate tier, command,
+  `implementation_review` without committed work. Report the transition-gate rung, stages,
   and passing result, then report that `review` is the next verb. **Do not run
   `review` in this session** — one verb, one session.
 

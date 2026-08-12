@@ -1,6 +1,7 @@
 ---
 name: automated-change-request/verify
 description: 'Independently verify post-merge scope fidelity, complete the gold wrap-up, and close a merged autonomous unit, runnable by headless Claude after merge.'
+x-openbrain-content-hash: sha256:68459c11de6caa5841fe7d8c7d13b80d31bc7ec23212fde2ab188a71c6939abb
 ---
 
 # Automated Verify
@@ -51,7 +52,7 @@ the Codex executor that produced dev/review/merge.
    git show --find-renames --find-copies --format=fuller <code_change_ref>
    ```
 
-4. Compare the diff against the CR acceptance criteria and referenced
+4. Compare the diff against the change request acceptance criteria and referenced
    requirement bodies. Use the build/test gate result only as context; it is not
    the oracle.
 5. Collect objective evidence as you go: relevant diff hunks, present or missing
@@ -62,9 +63,9 @@ the Codex executor that produced dev/review/merge.
      it. Call `list_inbound_refs ref=<this change_request ref>
      src_dto_type=formal_review` (or the available formal_review list/search
      surface) and confirm at least one formal_review is objectively tied to this
-     CR, for example through `subject_refs`, `materials`, or `related`. If none is
+     change request, for example through `subject_refs`, `materials`, or `related`. If none is
      found, route a discrepancy when no formal_review is found: create an issue or
-     action_item with the CR ref, merge SHA, checked command/tool, and observed
+     action_item with the change request ref, merge SHA, checked command/tool, and observed
      empty result, then continue through the normal verdict routing.
    - inspect for leftover `cr-<seq>` worktree, branch, or stopped-stack residue
      using objective local evidence keyed to this unit id: `git worktree list
@@ -92,7 +93,7 @@ Choose exactly one route:
   close** — the runner reads `in_progress` and re-dispatches `dev`. Skip the rest
   of this file after the status write.
 - **Technically LLM/agent-solvable gap:** call `create_issue` (well-formed:
-  CR ref, requirement refs, expected behavior, observed diff gap, missing
+  change request ref, requirement refs, expected behavior, observed diff gap, missing
   files/symbols/tests, relevant command output), then **continue to the wrap-up +
   close below** — the gap is tracked as its own issue; the unit still closes.
 
@@ -102,7 +103,7 @@ Choose exactly one route:
   - Verify against the current repo/records, not the record's prose. If reality
     differs, fix or close the record.
   - Search for a related requirement and link it. Create a new one only if none fits.
-- **Human decision or operation needed:** call `create_action_item` (CR ref,
+- **Human decision or operation needed:** call `create_action_item` (change request ref,
   requirement refs, decision/operation needed, objective evidence), then **continue
   to the wrap-up + close below**.
 - **Fidelity satisfied:** continue to the wrap-up + close below.
@@ -126,7 +127,7 @@ Append (or replace, if the section already exists from a prior verify attempt) a
 - concise objective evidence: commands inspected, file/symbol/test evidence, and
   any issue/action_item refs created for tracked gaps.
 
-Re-read the CR and confirm the `## Verify Verdict` section is present before
+Re-read the change request and confirm the `## Verify Verdict` section is present before
 continuing. If this write fails, halt and report it; do not continue to the
 wrap-up writes without a persisted verdict artifact.
 
@@ -169,7 +170,7 @@ Filter the returned rows client-side to rows whose `issue` is the parent issue r
 If any existing row's `fixed_in_version` matches the value derived in 4a:
 
 - If exactly one row matches: skip `create_issue_fix`; record in your run summary:
-  `issue_fix for <issue>@<version> already exists (<ref>) - fix row satisfied by this or a sibling CR`;
+  `issue_fix for <issue>@<version> already exists (<ref>) - fix row satisfied by this or a sibling change request`;
   treat the fix row as satisfied rather than an error; this is the checkpointed
   re-entry path when a prior verify session minted the fix and died before
   closing the parent issue and change_request.
@@ -179,18 +180,18 @@ If any existing row's `fixed_in_version` matches the value derived in 4a:
   state to silently tolerate.
 - Proceed to 4c (parent-close guard), then step 5 (Final close).
 
-This is the expected re-entry / sibling-CR idempotency path. Do not treat `duplicate_issue_fix` as the normal control path, and a single pre-existing matching fix row must not STOP at `merged`.
+This is the expected re-entry / sibling-change-request idempotency path. Do not treat `duplicate_issue_fix` as the normal control path, and a single pre-existing matching fix row must not STOP at `merged`.
 
 If no existing row matches, create_issue_fix exactly as below:
 
 `create_issue_fix` with:
 
-- `issue` = the parent issue ref, `change_request` = this CR ref,
+- `issue` = the parent issue ref, `change_request` = this change request ref,
 - `fixed_in_version` = the value derived in 4a,
 - `code_change_ref` = the merge SHA from the record (`code_change_ref`),
 - `close_reason: "tested"`, `status: "closed"`,
 - `title` / `fix_description` / `summary` / `details` describing the fix (root cause +
-  what landed; reference this CR and the merge SHA),
+  what landed; reference this change request and the merge SHA),
 - audit fields: `created_by` / `last_edited_by` / `fixed_by` / `closed_by` = `ai:claude`
   (or your executor identity), `created_at` / `last_edited_at` / `fixed_at` /
   `closed_at` = now.
@@ -198,19 +199,19 @@ If no existing row matches, create_issue_fix exactly as below:
 Confirm it inserted. **Backport** to additional versions stays an owner decision —
 emit **one** `issue_fix` row, for the `in_development` version only.
 
-### 4c. Drive the parent issue to a terminal state (multi-CR guard)
+### 4c. Drive the parent issue to a terminal state (multi-change-request guard)
 
-Before closing the parent, check it is not still owed work by a **sibling** CR:
+Before closing the parent, check it is not still owed work by a **sibling** change request:
 `list_inbound_refs ref=<parent issue ref> src_dto_type=change_request`. For each
 referencing change_request **other than this one**, read its status. If **any** sibling
-CR is **not** `closed`, the issue is multi-CR and not yet done:
+change request is **not** `closed`, the issue spans several change requests and is not yet done:
 
 - Do **not** close the parent issue. Record in your run summary: "parent-issue close
-  deferred — open sibling CR `<ref>` (status `<status>`) still references it." Then go
-  to **step 5 (Final close)** (this CR still closes; the issue legitimately outlives
+  deferred — open sibling change request `<ref>` (status `<status>`) still references it." Then go
+  to **step 5 (Final close)** (this change request still closes; the issue legitimately outlives
   it).
 
-Otherwise this CR is the last open child: `update_issue` with
+Otherwise this change request is the last open child: `update_issue` with
 `fields: { status: "closed", close_reason: "tested", closed_by: "ai:claude",
 closed_at: "<now>" }`. Re-read and confirm `status == closed`.
 
@@ -223,7 +224,7 @@ issue/action_item) ends here:
 Re-read and confirm `status == closed`. (`code_change_ref` is already present from the
 merge verb; `close_reason: "merged"` satisfies the schema's `x-status-requires` gate.)
 
-**Worked example / postcondition check:** for an epic-parented, merged CR such as
+**Worked example / postcondition check:** for an epic-parented, merged change request such as
 `parent: openbrain/epic-5`, verify audits the merged diff, skips section 4 because no
 `issue_fix` or parent-issue close applies, executes this step, and confirms the record
 is `closed`. The runner's `verify` postcondition must see `closed`, not `merged`.

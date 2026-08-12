@@ -1,7 +1,7 @@
 <!-- markdownlint-disable MD033 MD036 MD034 MD040 MD026 MD032 MD012 MD024 MD028 MD031 MD025 MD041 -->
 # STRIDE — Reference for Threat Enumeration
 
-STRIDE is a six-category checklist for asking "how could this be attacked?". It's not a complete model on its own — it's a *coverage prompt* that keeps you from missing a category. Walk every component on the surface map through every category. Where a category genuinely doesn't apply, write `none — [reason]`; don't silently skip.
+STRIDE is a six-category checklist for asking "how could this be attacked?". It's not a complete model on its own — it's a *coverage prompt* that keeps you from missing a category. Walk every boundary and surface on the map through every category, and prove it in the §5 coverage matrix. Where a category genuinely doesn't apply, mark the cell `not applicable — [reason]`; don't silently skip — an unmarked cell is an unknown.
 
 ## The Six Categories
 
@@ -86,11 +86,11 @@ An attacker who already has limited access expands it.
 
 ## Walking a Component
 
-For each component on the surface map, ask each of the six questions in order. Write what you find — including `none — [reason]`. Look at the **trust boundaries** that touch this component: most threats live at a boundary, not inside the component.
+For each component on the surface map, ask each of the six questions in order. Mark every matrix cell — analyzed, or `not applicable — [reason]`. Look at the **trust boundaries** that touch this component: most threats live at a boundary, not inside the component.
 
-A high-quality threat has all three:
-- **Attacker class** (anonymous internet, authed tenant user, compromised node/agent, compromised dependency, etc.)
-- **Asset** (specific data, specific control, specific availability target)
-- **Path** (concrete request, concrete state, concrete sequence)
+A high-quality threat has all three, and each maps onto the `failure_mode` row:
+- **Attacker class** (anonymous internet, authed tenant user, compromised node/agent, compromised dependency, etc.) → `causes`
+- **Asset** (specific data, specific control, specific availability target) → `effects`
+- **Path** (concrete request, concrete state, concrete sequence) → the row's `details`
 
-If you can't fill all three, the threat is too vague — refine it before scoring it.
+If you can't fill all three, the threat is too vague — refine it before creating the row.

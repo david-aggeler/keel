@@ -1,20 +1,21 @@
 ---
 name: change-request/close
 description: 'Close the unit through the two-half gate: merge half then gate half. Use when the unit is ready_to_merge and ready to land.'
+x-openbrain-content-hash: sha256:de130e5dfa4893b77e8e48082e27f116c8ecc97f92fae693e88db06811f4f05a
 ---
 
 # Close Change Request
 
 **Transitions:** `ready_to_merge → merged → closed`
 
-**Goal:** Two-half gate. The merge half records the code change and moves to `merged`. The gate half runs the declared merge gate commands, creates `issue_fix` rows when the parent is an issue, and moves to `closed`.
+**Goal:** Two-half gate. The merge half records the code change and moves to `merged`. The gate half clears the declared `transition_gate` rung, creates `issue_fix` rows when the parent is an issue, and moves to `closed`.
 
 ## Execution
 
 Read and follow in order:
 
 1. `steps/step-01-merge.md` — merge half: `ready_to_merge → merged`
-2. `steps/step-02-gate.md` — gate half: run merge gate commands
+2. `steps/step-02-gate.md` — gate half: clear the declared transition-gate rung
 3. `steps/step-03-issue-fix.md` — gate half continued: `merged → closed`, issue_fix rows
 4. `steps/step-04-leftover-capture.md` — capture any unresolved follow-ups as `action_item`s linked back to this unit (so closing never loses the thread)
 

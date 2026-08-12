@@ -1,13 +1,14 @@
 ---
 name: change-request/plan
 description: 'Ratify the unit spec and stamp it approved. Use when the owner says "plan this CR" or "approve the unit".'
+x-openbrain-content-hash: sha256:2a6fb7ecaeb8a95a3d9f51320b459de1d5b14c35b871eb2ea82226c3bc5e8a37
 ---
 
 # Plan Change Request
 
 **Transition:** `draft → approved`
 
-**Goal:** Architect brief (exception-only KDs), requirement validation against codebase reality, owner one-batch confirmation, stamp `executor`/`merge_gate`/`auto_merge`.
+**Goal:** Architect brief (exception-only KDs), requirement validation against codebase reality, owner one-batch confirmation, stamp `executor`/`transition_gate`/`auto_merge`.
 
 ## Execution
 
@@ -21,7 +22,7 @@ Review the unit's Decisions table (from `get_change_request`). The brief covers 
 
 Do not re-ask decisions the owner already confirmed in `create`. An answer already marked `(owner)` or carrying an override marker is owner-confirmed precedence — it is **never** re-surfaced as an exception. Shrink the brief to what is truly new or contradictory. **Surface a plan-phase question ONLY when a `dev_defaults` value is genuinely absent or conflicting — never merely to re-confirm a settled default.** A value is genuinely absent when no catalog key exists for the answer in question. A value is genuinely conflicting when two catalog rows disagree for the same key. Any other deviation is already settled and must not be re-raised. The plan owner-confirmation batch is the lifecycle's last owner gate before fully-AFK `dev`; keep it minimal.
 
-**Owner unavailable.** If genuine exceptions exist (absent or conflicting `dev_defaults` values, per above) and the owner is unavailable to validate them, **block the unit** — leave it in `draft` and do not stamp `approved`. Do not proceed past unvalidated exceptions on a guessed answer. This block also covers create-phase answers that were not fully resolved before reaching plan: an unconfirmed cluster split or an unconfirmed `merge_gate` tier from the create batch are equally unresolved owner gates and must be settled here before `approved` is stamped. This is the *only* sanctioned block point: `dev` and `close` never wait on the owner, so any unresolved exception must be settled here or the unit waits in `draft`.
+**Owner unavailable.** If genuine exceptions exist (absent or conflicting `dev_defaults` values, per above) and the owner is unavailable to validate them, **block the unit** — leave it in `draft` and do not stamp `approved`. Do not proceed past unvalidated exceptions on a guessed answer. This block also covers create-phase answers that were not fully resolved before reaching plan: an unconfirmed cluster split or an unconfirmed `transition_gate` rung from the create batch are equally unresolved owner gates and must be settled here before `approved` is stamped. This is the *only* sanctioned block point: `dev` and `close` never wait on the owner, so any unresolved exception must be settled here or the unit waits in `draft`.
 
 **2. Requirement validation**
 
@@ -37,7 +38,7 @@ Present the owner with a single batch:
 
 - The revised Decisions table (changed rows marked)
 - The requirement list (statement + GWT atoms for each ref)
-- Proposed `executor` (agent or human), `merge_gate` tier, `auto_merge` flag
+- Proposed `executor` (agent or human), `transition_gate` rung, `auto_merge` flag
 
 Ask for one-pass confirmation or override.
 
@@ -76,7 +77,7 @@ leave the unit in `draft` and report what is missing.
 On owner confirmation (with the dependency-corrected `auto_merge`), call `update_change_request`:
 - `status: approved`
 - `executor`: confirmed value
-- `merge_gate`: confirmed tier
+- `transition_gate`: confirmed rung
 - `auto_merge`: dependency-corrected flag (forced false if any open dependency exists; owner-confirmed flag otherwise)
 - `requirements`: updated list for `kind: feature` if any new refs were added (for `kind: fix` leave empty — new refs go on the parent issue's `related_requirements`)
 - `details`: updated body with revised Decisions table

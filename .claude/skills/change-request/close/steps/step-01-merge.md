@@ -12,17 +12,30 @@ Confirm the change request is currently `ready_to_merge`. If it is still
 `implementation_review`, return to the `review` verb and complete review before
 running close.
 
-Ask the operator:
+If this unit is a non-code deliverable (doc change, superseded work, etc.), skip
+to step 3 and select the appropriate `close_reason` from the reference table in
+the verb router.
 
-> Has the branch been merged to main?
-> - Provide the merge commit SHA (or PR merge ref).
-> - Or, if this unit is a non-code deliverable (doc change, superseded work, etc.), select the appropriate `close_reason` from the reference table in the verb router.
+**2. Normal path (`close_reason: merged`) — merge with the client verb**
 
-**2. Normal path (`close_reason: merged`)**
+Do not hand-collect a SHA and do not type a merge incantation. Run the mechanical
+merge verb, which executes the product's **committed** `merge_command` and reports
+the commit:
 
-Call `update_change_request`:
+```bash
+openbrain-client merge <branch>
+```
+
+Read `code_change_ref=<sha>` from its two-line output. `already_merged=true` means
+the branch was already in — the reported ref is still the correct
+`code_change_ref`, so an interrupted close resumes by re-running the same command.
+On a non-zero exit, halt and report the exit code (`64` usage, `1` otherwise —
+including *no `merge_command` declared*); never substitute a raw `git merge`.
+See SKILL.md § Merging for the full contract.
+
+Then call `update_change_request`:
 - `status: merged`
-- `code_change_ref`: the merge commit SHA
+- `code_change_ref`: the reported SHA
 - `close_reason: merged`
 
 **3. Non-code carve-out**

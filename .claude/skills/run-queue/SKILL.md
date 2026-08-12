@@ -2,9 +2,9 @@
 name: run-queue
 description: "Resident-session orchestrator that drains a batch of approved change_requests one CR at a time. Each single CR is driven by a SEPARATE LLM instance (a fresh `openbrain-client run-queue` child), while the resident session supervises: it resolves the target into a CR set, reuses the client's qualify (approved+agent) + depends_on dependency-order contract, enforces an auto_merge:true stop-and-ask preflight, dispatches one `--list change_request-<n>` child at a time (never `--epic`), and decides what to do when a child halts. Use when the user says: '/run-queue', 'run-queue iteration-2', 'run-queue epic-4', 'run-queue cr-4', 'run-queue cr-4 using claude', 'drain the queue', 'run the approved CRs of', 'work the queue for'"
 allowed-tools: mcp__gold__list_change_request, mcp__gold__get_change_request, mcp__gold__search_change_request, mcp__gold__get_epic, mcp__gold__get_iteration, mcp__gold__update_iteration, mcp__gold__list_inbound_refs, mcp__gold__list_relations_for, mcp__gold__update_change_request, mcp__gold__create_issue, mcp__gold__create_action_item
-x-openbrain-source: run-queue/v3
-x-openbrain-content-source-hash: sha256:c2ac731af4ae8aea3383b5ce37923286df37bcac2eb4d90c93bdfe5a81060e02
-x-openbrain-content-hash: sha256:40cb6c80f2dc1fb809f0b7271827429079e88331124a20e139544d4781d19df5
+x-openbrain-source: run-queue/v4
+x-openbrain-content-source-hash: sha256:d239edfb201c5e4e83ead7d993a8bbdf792b3496507eca46eb9bfa73cfe74fbf
+x-openbrain-content-hash: sha256:526c30f29624e0c55b7cfff3a95f45dbef55c001c1deb96f24e7967dc0d8a65d
 ---
 
 # Run Queue
@@ -48,15 +48,23 @@ The **default child executor is codex** (`openbrain-client run-queue`). Use the 
 ## Contract
 
 - **The child owns the worktree.** `run-queue` / `run-queue-claude` create a per-unit worktree
-  themselves. **Never run `worktree-up` yourself** for a queued CR — a second worktree root corrupts
-  the run. If you must inspect, do it in the child's own worktree.
+  themselves, named `cr-<n>` (the canonical ref with the `change_request-` prefix stripped).
+  **Never run `worktree-up` yourself** for a queued CR — a second worktree root corrupts the run.
+  If you must inspect, do it in the child's own worktree.
+- **`--no-worktree` is the one exception, and it is single-item only.** It runs the verb sessions in
+  the current checkout instead of a per-unit worktree. Passing it with `--epic`, `--iteration`, or a
+  multi-id `--list` is rejected (`--no-worktree is only allowed for a single change_request id`).
+  Use it only when you deliberately want the unit driven in the checkout you are already in — a
+  resume of work already sitting there, or a repo state a fresh worktree would not reproduce. It
+  makes the run's blast radius your current checkout, and the verb sessions will not be on a
+  `cr-<n>` branch, which their own worktree check expects.
 - **One CR per child invocation.** Always pass `--list change_request-<n>` with a single id. Do
-  **not** hand the whole epic to `--epic` — that collapses the whole batch into one unsupervised
+  **not** hand the whole batch to `--epic` or `--iteration` — either collapses it into one unsupervised
   child and surrenders the between-unit control this skill exists to keep.
 - **Two spellings the CLI rejects — get both right or the dispatch dies before any work starts.**
   - **Double-dash for every long flag.** Since the keel/cli POSIX migration, `-list` is parsed as the
     short flag `-l` and fails `unknown flag "-l"` (exit 2). The same applies to `--epic`,
-    `--merge-gate`, `--product`, `--continue-on-error`.
+    `--transition-gate`, `--product`, `--continue-on-error`.
   - **Canonical ref, not the `cr-N` shorthand.** `--list cr-921` fails
     `invalid --list entry "cr-921" (want change_request-<n>)` (exit 64). Pass `change_request-921`.
 
@@ -112,19 +120,21 @@ openbrain-client --mode ai run-queue-claude --list change_request-<n>
 ```
 
 So for the skill argument `cr-921`, the dispatch is
-`openbrain-client --mode ai run-queue --list change_request-921 --merge-gate standard`. (The bare
+`openbrain-client --mode ai run-queue --list change_request-921 --transition-gate unit`. (The bare
 positional form `run-queue change_request-921` is also accepted, but prefer `--list` — it is the
 form the rest of this skill's contract is written against.)
 
-Pass `--merge-gate full` when the CR declares `merge_gate: full` (otherwise the default `standard`
-tier applies). Run the child as a foreground/normal task and read its result — do **not** background
-it behind a `| tail` that swallows the exit status.
+Pass `--transition-gate <rung>` only when the operator explicitly overrides the CR's
+declared `transition_gate`; otherwise let the child read the record. The rungs are
+`prose`, `static`, `unit`, `integration`, and `system`. Run the child as a
+foreground/normal task and read its result — do **not** background it behind a `| tail`
+that swallows the exit status.
 
 ### 5 — Decide what to do when a child halts
 
-Full-gate CRs and codex/claude quota pauses commonly halt **before** the tail reaches `merged`: the
-`dev`/`review` verbs background the full e2e and exit early. When a child does not land the unit
-clean, **the outer LLM performs the corrective action** — diagnose, then choose:
+System-gate CRs and codex/claude quota pauses commonly halt **before** the tail reaches `merged`.
+When a child does not land the unit clean, **the outer LLM performs the corrective action** —
+diagnose, then choose:
 
 - Read the child's own JSON log — `<repo-root>/.logs/openbrain-client-<DATE>.jsonl` — and grep for
   `tail halt` / `pipeline halted` **first** (not the raw codex/claude rollouts).
@@ -132,10 +142,9 @@ clean, **the outer LLM performs the corrective action** — diagnose, then choos
   timeout): re-launch a fresh child on the same single CR to resume the tail — no outer edit required.
 - **Corrective fix** (gate red, unmet postcondition, a bug the child left behind): the outer LLM fixes
   it in the child's worktree, then either re-dispatches a fresh child or finishes the unit by hand.
-- **Full-gate that never finished:** the outer LLM runs the gate once
-  (`go run ./cmd/openbrain-dev ci run`); when green, carry the unit to `merged` per the
-  `automated-change-request`/`change-request` close procedure (stamp `code_change_ref` +
-  `close_reason: merged`).
+- **Runner-owned gate that never finished:** the outer LLM may run the same runner-owned
+  stages once, in the child's worktree and in the foreground; when green, resume the tail
+  at the next verb rather than inventing a status transition.
 - **Real regression vs. orthogonal red:** distinguish a genuine regression from a **pre-existing
   orthogonal red on main** (a full `ci run` failing on something the CR's diff cannot affect). File
   the orthogonal red as its own issue — **never chase it inside this CR**.

@@ -1,6 +1,7 @@
 ---
 name: change-request/create
 description: 'Create a new change request (unit of implementation). Use when the user says "create a CR", "start a unit", or "implement this".'
+x-openbrain-content-hash: sha256:0f336dbc10c63c5f69baa91d6643d196d94b115ea5011c9b766625f652021e3c
 ---
 
 # Create Change Request
