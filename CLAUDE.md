@@ -101,13 +101,14 @@ The `worktree-*.sh` wrappers are GONE. They lived at
 the catalog owns and re-materializes — and the refreshed catalog deleted them
 and now calls `openbrain-client worktree up cr <seq> <slug>` directly. Do not
 restore them; do not patch gold-provided skills. Local skills (`merge/`) are
-keel's to change.
+keel's to change. Gate file-scope exclusions live in
+`keel-dev-gate-excludes.txt`; update that declaration, not cspell-only config or
+rulebook prose, when keel-dev must keep a tracked path out of file-selecting
+gate steps.
 
-This leaves `requirement-114`'s wrapper clauses (`ac-410`, `ac-412`, `ac-421`)
-and two test files — `cmd/keel-dev/worktree_scripts_test.go`,
-`cmd/keel-dev/worktree_wrapper_name_test.go` — pinning files that no longer
-exist, so `keel-dev ci` is RED until that is retired under a CR. The
-`no-shell-worktree-lifecycle` lint is unaffected: it skips absent scripts.
+The retired wrapper criteria (`ac-410`, `ac-412`, `ac-421`) remain historical.
+The `no-shell-worktree-lifecycle` lint is unaffected by the missing scripts: it
+skips absent scripts.
 
 Never hand-create a `cr-<seq>` worktree — the run-queue tail owns those.
 
