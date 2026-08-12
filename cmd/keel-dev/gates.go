@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -42,6 +43,8 @@ type step struct {
 	// for noisy tools whose progress stream is not itself a failure signal.
 	quietStderr bool
 }
+
+const gateExcludeFile = "keel-dev-gate-excludes.txt"
 
 type runLogLocator interface {
 	RunLogPath() string
@@ -153,11 +156,12 @@ func ciSteps(ctx context.Context, logger *slog.Logger, dir string) []step {
 	return steps
 }
 
-// trackedFilesWithExt returns git-tracked repo-relative paths with the supplied
-// extensions. The file-selecting gate steps use this as their input of record so
-// untracked or gitignored scratch in the checkout cannot red the gate.
+// trackedFilesWithExt returns git-tracked, non-excluded repo-relative paths with
+// the supplied extensions. The file-selecting gate steps use this as their input
+// of record so untracked, gitignored, or keel-declared excluded scratch in the
+// checkout cannot red the gate.
 //
-// DHF-REQ: keel/requirement-85
+// DHF-REQ: keel/requirement-85 (keel/ac-435)
 func trackedFilesWithExt(ctx context.Context, logger *slog.Logger, dir string, exts ...string) ([]string, error) {
 	proc, err := procexec.ProcessStart(ctx, procexec.Request{
 		Program: "git",
@@ -175,6 +179,10 @@ func trackedFilesWithExt(ctx context.Context, logger *slog.Logger, dir string, e
 	if res.ExitCode != 0 {
 		return nil, fmt.Errorf("keel-dev: list git-tracked files: git ls-files exited %d", res.ExitCode)
 	}
+	excludes, err := readGateExcludePatterns(dir)
+	if err != nil {
+		return nil, fmt.Errorf("keel-dev: read %s: %w", gateExcludeFile, err)
+	}
 	want := make(map[string]bool, len(exts))
 	for _, ext := range exts {
 		want[ext] = true
@@ -182,12 +190,90 @@ func trackedFilesWithExt(ctx context.Context, logger *slog.Logger, dir string, e
 	var files []string
 	for _, file := range strings.Split(res.Stdout, "\n") {
 		file = strings.TrimSpace(file)
-		if file == "" || !want[filepath.Ext(file)] {
+		if file == "" || gatePathExcluded(file, excludes) || !want[filepath.Ext(file)] {
 			continue
 		}
 		files = append(files, file)
 	}
 	return files, nil
+}
+
+type gateExcludePattern struct {
+	raw             string
+	recursivePrefix string
+}
+
+func readGateExcludePatterns(dir string) ([]gateExcludePattern, error) {
+	data, err := os.ReadFile(filepath.Join(dir, gateExcludeFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	var patterns []gateExcludePattern
+	for i, line := range strings.Split(string(data), "\n") {
+		pattern := strings.TrimSpace(line)
+		if pattern == "" || strings.HasPrefix(pattern, "#") {
+			continue
+		}
+		parsed, err := parseGateExcludePattern(pattern)
+		if err != nil {
+			return nil, fmt.Errorf("line %d: %w", i+1, err)
+		}
+		patterns = append(patterns, parsed)
+	}
+	return patterns, nil
+}
+
+func parseGateExcludePattern(pattern string) (gateExcludePattern, error) {
+	if strings.Contains(pattern, "\\") {
+		return gateExcludePattern{}, fmt.Errorf("pattern %q must use slash separators", pattern)
+	}
+	if strings.HasPrefix(pattern, "/") || filepath.IsAbs(pattern) {
+		return gateExcludePattern{}, fmt.Errorf("pattern %q must be repo-relative", pattern)
+	}
+	if strings.HasPrefix(pattern, "!") {
+		return gateExcludePattern{}, fmt.Errorf("negated pattern %q is unsupported", pattern)
+	}
+	if strings.Contains(pattern, "..") {
+		clean := path.Clean(pattern)
+		if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+			return gateExcludePattern{}, fmt.Errorf("pattern %q must stay inside the repository", pattern)
+		}
+	}
+	if strings.Contains(pattern, "**") {
+		if strings.Count(pattern, "**") != 1 || !strings.HasSuffix(pattern, "/**") {
+			return gateExcludePattern{}, fmt.Errorf("recursive pattern %q must end in /**", pattern)
+		}
+		prefix := strings.TrimSuffix(pattern, "/**")
+		if prefix == "" || strings.ContainsAny(prefix, "*?[") {
+			return gateExcludePattern{}, fmt.Errorf("recursive pattern %q must name a literal directory", pattern)
+		}
+		return gateExcludePattern{raw: pattern, recursivePrefix: prefix + "/"}, nil
+	}
+	if _, err := path.Match(pattern, ""); err != nil {
+		return gateExcludePattern{}, fmt.Errorf("invalid glob %q: %w", pattern, err)
+	}
+	return gateExcludePattern{raw: pattern}, nil
+}
+
+func gatePathExcluded(file string, patterns []gateExcludePattern) bool {
+	file = filepath.ToSlash(file)
+	for _, pattern := range patterns {
+		if pattern.recursivePrefix != "" {
+			if strings.HasPrefix(file, pattern.recursivePrefix) {
+				return true
+			}
+			continue
+		}
+		matched, _ := path.Match(pattern.raw, file)
+		if matched {
+			return true
+		}
+	}
+	return false
 }
 
 // runCI runs the verification gate in dir, fail-fast: the first failing step

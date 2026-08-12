@@ -505,6 +505,51 @@ exit 0
 	}
 }
 
+// DHF-TEST: keel/requirement-85 (keel/ac-435)
+func TestCspellGateExcludesCommittedGatePathsWithoutToolIgnore(t *testing.T) {
+	requireTool(t, "git")
+
+	dir := t.TempDir()
+	mustRun(t, dir, "git", "init")
+	writeFile(t, dir, "keel-dev-gate-excludes.txt", ".claude/**\n")
+	writeFile(t, dir, "cspell.json", "{\"version\":\"0.2\",\"language\":\"en-US\",\"words\":[]}\n")
+	writeFile(t, dir, "tracked.md", "# tracked\n")
+	if err := os.MkdirAll(filepath.Join(dir, ".claude", "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, ".claude/skills/generated.md", "catalog spelling offender\n")
+	mustRun(t, dir, "git", "add", "keel-dev-gate-excludes.txt", "cspell.json", "tracked.md", ".claude/skills/generated.md")
+
+	bin := t.TempDir()
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cspell := `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "10.0.1"
+  exit 0
+fi
+for arg in "$@"; do
+  case "$arg" in
+    *.claude/skills/generated.md|.claude/skills/generated.md)
+      echo "excluded catalog spelling offender reached cspell: $arg"
+      exit 1
+      ;;
+  esac
+done
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(bin, "cspell"), []byte(cspell), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cspellStep := stepByName(t, ciSteps(context.Background(), discardLogger(), dir), "cspell")
+	if !stringSliceEqual(cspellStep.args, []string{"--no-progress", "tracked.md"}) {
+		t.Fatalf("cspell args = %v, want excluded .claude path absent", cspellStep.args)
+	}
+	if err := runStep(context.Background(), discardLogger(), dir, cspellStep); err != nil {
+		t.Fatalf("cspell should not receive excluded tracked path, got %v", err)
+	}
+}
+
 func stepByName(t *testing.T, steps []step, name string) step {
 	t.Helper()
 	for _, s := range steps {
