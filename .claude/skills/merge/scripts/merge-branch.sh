@@ -1,22 +1,40 @@
 #!/usr/bin/env bash
-# merge-branch.sh — guarded merge of a unit branch onto main for the
+# merge-branch.sh — merge a unit branch onto main for the
 # automated-change-request `merge` verb.
 #
-# It merges <branch> into main with a --no-ff merge commit, then re-verifies the
-# merged tree with keel's core gate (`go run ./cmd/keel-dev ci`) and VSIX gate
-# (`go run ./cmd/keel-dev vsix ci`). If either gate is red, it reverts the merge
-# in place so main never lands red — the issue-166 post-merge re-verify guard
-# that a raw `git merge` would bypass. On success it prints the merge commit SHA
-# as `MERGE_SHA=<sha>` for the caller to capture.
+# It merges <branch> into main with a --no-ff merge commit and prints the merge
+# commit SHA as `MERGE_SHA=<sha>` for the caller to capture. Gate verification
+# belongs to the invoker's transition_gates runner-owned stages at the merged
+# boundary; this command performs the git merge only.
 #
 # Usage: merge-branch.sh <branch>
 #
 # Run from the primary checkout with main checked out. Fail-closed: exits
 # non-zero WITHOUT advancing main on wrong directory, not-on-main, a dirty
-# tracked tree, a missing branch, a merge conflict, or a red post-merge gate.
+# tracked tree, a missing branch, a branch with no commits ahead and no prior
+# merge commit, or a merge conflict.
 set -euo pipefail
 
 BRANCH="${1:?usage: merge-branch.sh <branch>}"
+
+existing_merge_for_branch() {
+	local branch="$1"
+	local branch_tip merge parent
+	local -a parents
+
+	branch_tip="$(git rev-parse "$branch")"
+	while read -r merge; do
+		read -r -a parents < <(git rev-list --parents -n 1 "$merge")
+		for parent in "${parents[@]:2}"; do
+			if [[ "$parent" == "$branch_tip" ]]; then
+				printf '%s\n' "$merge"
+				return 0
+			fi
+		done
+	done < <(git rev-list --first-parent --merges HEAD)
+
+	return 1
+}
 
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
@@ -38,7 +56,16 @@ if ! git rev-parse --verify "refs/heads/${BRANCH}" >/dev/null 2>&1; then
 	exit 1
 fi
 
-before="$(git rev-parse HEAD)"
+# DHF-REQ: keel/requirement-89
+if git merge-base --is-ancestor "$BRANCH" HEAD; then
+	if merged="$(existing_merge_for_branch "$BRANCH")"; then
+		echo "merge-branch: branch '${BRANCH}' is already merged into main at ${merged}"
+		echo "MERGE_SHA=${merged}"
+		exit 0
+	fi
+	echo "merge-branch: branch '${BRANCH}' has no commits ahead of main; refusing to report a merge" >&2
+	exit 1
+fi
 
 if ! git merge --no-ff --no-edit "$BRANCH"; then
 	git merge --abort 2>/dev/null || true
@@ -47,20 +74,6 @@ if ! git merge --no-ff --no-edit "$BRANCH"; then
 fi
 
 merged="$(git rev-parse HEAD)"
-
-# DHF-REQ: keel/requirement-89
-# Post-merge re-verify: keel's core and VSIX gates must be green on the merged tree.
-if ! go run ./cmd/keel-dev ci; then
-	echo "merge-branch: post-merge core gate red; reverting merge to keep main green" >&2
-	git reset --hard "$before"
-	exit 1
-fi
-
-if ! go run ./cmd/keel-dev vsix ci; then
-	echo "merge-branch: post-merge VSIX gate red; reverting merge to keep main green" >&2
-	git reset --hard "$before"
-	exit 1
-fi
 
 echo "merge-branch: merged '${BRANCH}' into main at ${merged}"
 echo "MERGE_SHA=${merged}"
