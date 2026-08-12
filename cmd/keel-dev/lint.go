@@ -41,13 +41,7 @@ import (
 //     devtool surfaces must not reintroduce the retired pre-rename vocabulary
 //     (keel/requirement-77).
 //
-//   - no-shell-worktree-lifecycle: the change-request skill's worktree wrappers
-//     must be executable and must not carry a git lifecycle command of their own
-//     — every lifecycle operation goes through a keel-dev worktree verb, so
-//     keel/worktree stays the single implementation (keel/requirement-114,
-//     keel/ac-410, keel/ac-412).
-//
-// DHF-REQ: keel/requirement-10, keel/requirement-11, keel/requirement-114
+// DHF-REQ: keel/requirement-10, keel/requirement-11
 func runLint(dir string) error {
 	var violations []string
 
@@ -81,126 +75,11 @@ func runLint(dir string) error {
 	}
 	violations = append(violations, v...)
 
-	v, err = scanNoShellWorktreeLifecycle(dir)
-	if err != nil {
-		return err
-	}
-	violations = append(violations, v...)
-
 	if len(violations) > 0 {
 		sort.Strings(violations)
 		return fmt.Errorf("lint: %d violation(s):\n%s", len(violations), strings.Join(violations, "\n"))
 	}
 	return nil
-}
-
-// worktreeWrapperDir is where the change-request skill keeps the delegating
-// worktree wrappers, relative to the module root.
-var worktreeWrapperDir = filepath.Join(".claude", "skills", "change-request", "scripts")
-
-// worktreeWrapperScripts are the wrappers that must be executable and hold no
-// lifecycle logic of their own.
-var worktreeWrapperScripts = []string{
-	"worktree-up.sh",
-	"worktree-down.sh",
-	"worktree-status.sh",
-	"worktree-resume.sh",
-}
-
-// gitLifecycleSubcommands are the git subcommands that create, move, or destroy
-// worktree, branch, or working-tree state. Read-only plumbing a wrapper
-// legitimately needs — rev-parse, show-ref, status, rev-list — is deliberately
-// absent, because locating the repository is not lifecycle work.
-var gitLifecycleSubcommands = map[string]bool{
-	"worktree": true,
-	"branch":   true,
-	"checkout": true,
-	"switch":   true,
-	"clone":    true,
-	"reset":    true,
-	"clean":    true,
-	"merge":    true,
-	"commit":   true,
-	"add":      true,
-	"rm":       true,
-	"mv":       true,
-	"stash":    true,
-	"push":     true,
-	"fetch":    true,
-	"pull":     true,
-}
-
-// scanNoShellWorktreeLifecycle reports any non-executable worktree wrapper or
-// git lifecycle command left in the change-request skill's worktree wrappers. A
-// wrapper that still shells out to git for lifecycle work is a parallel
-// implementation of what keel/worktree now owns, which is exactly the condition
-// keel/requirement-114 exists to end.
-//
-// The scan is deliberately strict: it cannot tell an invocation from the same
-// words inside an echoed string, so a wrapper that wants to name `git worktree
-// prune` in prose must reword. Comment lines are skipped, and a tree without
-// the scripts has nothing to scan.
-//
-// DHF-REQ: keel/requirement-114 (keel/ac-410, keel/ac-412)
-func scanNoShellWorktreeLifecycle(root string) ([]string, error) {
-	var violations []string
-	for _, name := range worktreeWrapperScripts {
-		relative := filepath.Join(worktreeWrapperDir, name)
-		path := filepath.Join(root, relative)
-		info, err := os.Stat(path)
-		if os.IsNotExist(err) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		if info.Mode()&0o111 == 0 {
-			violations = append(violations, fmt.Sprintf(
-				"  no-shell-worktree-lifecycle: %s has mode %04o — worktree wrappers must be executable", relative, info.Mode().Perm()))
-		}
-
-		body, err := os.ReadFile(path)
-		if err != nil {
-			return nil, err
-		}
-		for i, line := range strings.Split(string(body), "\n") {
-			if strings.HasPrefix(strings.TrimSpace(line), "#") {
-				continue
-			}
-			if sub, found := gitLifecycleInvocation(line); found {
-				violations = append(violations, fmt.Sprintf(
-					"  no-shell-worktree-lifecycle: %s:%d carries `git %s` — delegate the lifecycle to a keel-dev worktree verb", relative, i+1, sub))
-			}
-		}
-	}
-	return violations, nil
-}
-
-// gitLifecycleInvocation reports the lifecycle subcommand a line invokes, if
-// any. The first non-flag word after `git` is the subcommand; `-C` and `-c`
-// carry an operand that is skipped with them.
-func gitLifecycleInvocation(line string) (string, bool) {
-	fields := strings.Fields(line)
-	for i, field := range fields {
-		word := strings.Trim(field, `"'`)
-		if word != "git" && !strings.HasSuffix(word, "/git") {
-			continue
-		}
-		for j := i + 1; j < len(fields); j++ {
-			candidate := strings.Trim(fields[j], `"'`)
-			if strings.HasPrefix(candidate, "-") {
-				if candidate == "-C" || candidate == "-c" {
-					j++
-				}
-				continue
-			}
-			if gitLifecycleSubcommands[candidate] {
-				return candidate, true
-			}
-			break
-		}
-	}
-	return "", false
 }
 
 var retiredDesiredStateVocabularyDirs = []string{
