@@ -19,6 +19,7 @@ dbname
 deadcode
 DEBU
 dedup
+delegators
 DESCR
 DFMEA
 dogfooding
@@ -43,8 +44,8 @@ gofumpt
 GOINSECURE
 golangci
 gomod
-GOMODCACHE
 gomodcache
+GOMODCACHE
 GONOSUMCHECK
 GONOSUMDB
 gopath
@@ -102,6 +103,7 @@ reltype
 rollup
 Rollups
 rulebook
+rulebooks
 RUNV
 sdklog
 selftest
@@ -129,6 +131,7 @@ toplevel
 unanalyzed
 undemoable
 undrained
+undriven
 uninspectable
 unlinkability
 unlinkable
@@ -144,8 +147,8 @@ unwired
 unwritable
 vapp
 vapps
-Vitest
 vitest
+Vitest
 vscoderun
 vscodeui
 webdav
