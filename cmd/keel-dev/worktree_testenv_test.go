@@ -11,10 +11,10 @@ import (
 //
 // This scaffolding outlived the change-request skill's `worktree-*.sh` wrappers
 // it was originally written for. The catalog deleted those wrappers when it cut
-// its change-request skill over to `openbrain-client worktree`, and keel/ac-433
-// forbids a gate step from depending on a catalog-materialized path, so the
-// wrapper tests went with them (keel/issue-129, keel/change_request-169). The
-// helpers stay because cmd/keel-dev's own verb tests use them.
+// its change-request skill over to `openbrain-client worktree`; the gate exclude
+// list now keeps catalog-materialized paths out of file-selecting steps. The
+// wrapper tests went with the wrappers (keel/issue-129, keel/change_request-169).
+// The helpers stay because cmd/keel-dev's own verb tests use them.
 type worktreeTestEnv struct {
 	repo      string
 	worktrees string
