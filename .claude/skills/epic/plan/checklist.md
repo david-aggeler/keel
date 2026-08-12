@@ -1,28 +1,45 @@
-<!-- markdownlint-disable MD033 MD036 MD034 MD040 MD026 MD032 MD012 MD024 MD028 MD031 -->
-# Epic Plan — Unit Decomposition Coverage Checklist
+---
+name: epic/plan-checklist
+description: 'Post-decomposition verification for epic units. Run after /epic plan, /epic add, or /epic create step 5.'
+x-openbrain-content-hash: sha256:525221de6579758147c80653cd3acb2c3e7a168d9d447eb7c95799d638a5540e
+---
 
-This checklist validates that an epic has been correctly decomposed into change-request unit records.
+# Epic Decomposition Checklist
 
-## Record Coverage
+Verify against the record graph, not against what you intended to write. Every line is a live query.
 
-- [ ] Every intended unit exists as a `change_request` record under the epic (`list_change_request filter={"parent":"<epic_ref>"}` returns all expected units)
-- [ ] No intended unit is missing from the record query
-- [ ] No extra unit records exist that were not part of the approved plan
+## Epic
 
-## Unit Record Quality
+- [ ] `get_epic` resolves and `plan` points at a real `dd_plan` (not prose)
+- [ ] `related_requirements` lists every requirement the units reference
+- [ ] `exclusions` names what is deliberately out — an empty exclusions list on a non-trivial epic is a finding, not a pass
+- [ ] `status` matches reality: `planned` before work starts, `active` while units are open
 
-For each unit record (inspect via `get_change_request`):
+## Units — `list_change_request filter={"parent":"<epic_ref>"}`
 
-- [ ] `status` is `draft` — units are thin husks at this stage; detail-at-pickup via `/change-request create`
-- [ ] `parent` ref resolves to the correct parent epic
-- [ ] `title` is clear and action-oriented
-- [ ] `summary` is one sentence scoping the unit and the FRs it covers
+For each unit:
 
-## Requirement Coverage
+- [ ] `kind` is `feature`
+- [ ] `requirements` contains at least one requirement ref — the structural invariant, checked at every status
+- [ ] `parent` resolves to the intended epic and is **not** an issue
+- [ ] `iteration` is set — without it the unit is invisible to a run-queue drain
+- [ ] `executor` is set — without `agent` the unit never qualifies for one
+- [ ] `status` is `draft` (or a later rung reached deliberately)
+- [ ] `title` is action-oriented and distinct from every sibling
+- [ ] `depends_on` reflects the real order; no cycles
 
-- [ ] All FRs assigned to this epic in the coverage map are traceable to at least one unit by title or summary
-- [ ] No FR is left without a unit covering it
+## Requirements behind the units
 
-## Dependency Check
+- [ ] Each referenced requirement resolves via `get_requirement`
+- [ ] Each has at least one `ac` record with `parent` set to it (`list_ac`)
+- [ ] Any unit intended for near-term approval has at least one requirement at `approved` or later — otherwise the approval write will be rejected
 
-- [ ] Units are scoped so each is independently implementable without depending on future units within the same epic
+## Coverage
+
+- [ ] Every requirement in the epic's `related_requirements` is referenced by at least one unit
+- [ ] No requirement is claimed by units under two different epics
+- [ ] No unit duplicates a sibling's requirement set without a stated reason
+
+## Reporting
+
+Report as a markdown table with one row per check and an explicit pass/fail. A failing row is fixed before completion is reported — never carried forward as a note.

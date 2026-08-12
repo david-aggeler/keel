@@ -2,9 +2,9 @@
 name: openbrain-init
 description: "Bootstrap project-level HELIX01 skills via the openbrain-client binary. Fetches the skill catalog over HTTP, moves aside any existing skills into a legacy/ dir, materialises fresh content with placeholder substitution and content-hash stamping, restores local-only skills, and places agent files into .claude/agents/. Use when the user says: '/openbrain-init', 'bootstrap skills', 'fetch skills from openbrain', 'init openbrain skills', 'sync skills'"
 allowed-tools: Bash, Read, Write
-x-openbrain-source: openbrain-init/v5
-x-openbrain-content-source-hash: sha256:955846c63563c490f403eda77a616779692902fa3515b7296c606dd1294fa358
-x-openbrain-content-hash: sha256:d3216b66a73b1aa256bfbf0a75d1b072998903939580adf26386cf60bedd9ab3
+x-openbrain-source: openbrain-init/v6
+x-openbrain-content-source-hash: sha256:2fb0c0bf291861b54f1478c2fa53226809e8edb4c9f699b62e9ee831cfcf135e
+x-openbrain-content-hash: sha256:8bcd09d57e84f9d66b1cc330b868c1c06af3989b0d266b39ae107b40cde8c846
 ---
 
 # /openbrain-init — Bootstrap HELIX01 Skills
@@ -84,7 +84,7 @@ product: <product-slug>
 process: HELIX01
 mcp_instance: coal                       # target profile and tool prefix
 placeholders:                            # optional — operator-filled substitution values
-  primary_language: Go                   # example: fill Go in skill bodies
+  primary_language: Go                   # example: fill go in skill bodies
 
 targets:
   coal:
@@ -216,10 +216,11 @@ target profile, and re-run.
 **exit 1 — "HELIX01 returned an empty skill manifest"**
 No skills are released and pinned to the HELIX01 process. Remediate:
 
-1. Pin skills: `admin_update_development_process slug=HELIX01 skills={"openbrain-init":1,...}`
-2. Release each pinned skill: `admin_advance_skill_status slug=<slug> version=<n> to=released`
+1. Release each skill version: `catalog_advance_skill_status slug=<slug> version=<n> to=released`
    (Note: the skill lifecycle is one-way — `released` cannot be reverted.)
-3. Re-run `openbrain-client init-skills`.
+   There is no separate pin step: the HELIX01 manifest resolves each slug to its latest
+   `released` version, and `catalog_update_development_process` carries no skill pin map.
+2. Re-run `openbrain-client init-skills`.
 
 The binary guarantees the live `.claude/` tree is untouched when this error fires —
 the manifest is fetched BEFORE any move is performed.

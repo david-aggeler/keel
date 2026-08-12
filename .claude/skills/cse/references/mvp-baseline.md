@@ -1,5 +1,5 @@
 <!-- markdownlint-disable MD033 MD036 MD034 MD040 MD026 MD032 MD012 MD024 MD028 MD031 MD025 MD041 -->
-# keel MVP Cybersecurity Baseline
+# openbrain MVP Cybersecurity Baseline
 
 The floor. Every item below must be `Met` before construction is considered ready. Any `Gap` is an MVP blocker.
 
@@ -75,9 +75,9 @@ These are deliberately tight, testable controls — not framework-sized programs
 
 ## How to use this in the workflow
 
-- **Step 3** marks each baseline item `Met / Partial / Gap` as part of the control review.
-- **Step 6** writes the MVP Baseline Checklist with evidence and pointer to mitigations.
-- **Step 8** surfaces any `Gap` in the Executive Summary as an MVP blocker — it's the most consequential thing on the page.
+- **Pass 3** marks each baseline item `Met / Partial / Gap` as part of the control review.
+- **Pass 6** writes the checklist into §7 *Residual risk* of the threat_model — it is the review's **definition of done** — with evidence per row and pointers to the `mitigations[]` entries that would close `Partial`/`Gap` items.
+- **Pass 8** surfaces any `Gap` in the §7 executive summary as an MVP blocker — it's the most consequential thing on the page.
 
 ## What's NOT here (Deferred to Growth)
 

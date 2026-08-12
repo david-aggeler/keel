@@ -41,16 +41,16 @@ Determine the unit, its branch, and its worktree path.
 
 - **User says "merge CR-XX"** — look the unit up on gold:
   `mcp__gold__get_change_request product=keel` (or `list_change_request product=keel
-  include_summary=true`). Confirm `status=implementation_review` and read its `merge_gate`
-  tier and `parent`.
-- **Branch name** follows keel's worktree convention: `cr-<seq>` (the run-queue tail and
-  the change-request worktree scripts own these). It is not a stored field.
-- **Worktree path** — resolve with the change-request worktree helper (read-only):
+  include_summary=true`). Confirm `status=implementation_review` and read its
+  `transition_gate` rung and `parent`.
+- **Branch name** follows keel's worktree convention: `cr-<seq>` (the run-queue tail owns
+  these, via `openbrain-client worktree`). It is not a stored field.
+- **Worktree path** — resolve with the read-only keel verb:
 
-      bash .claude/skills/change-request/scripts/worktree-status.sh cr <seq> <slug>
+      go run ./cmd/keel-dev worktree status cr <seq> <slug>
 
-  (This is the change-request skill's own helper, not a keel command — invoke it as
-  documented by that skill.)
+  (The old `worktree-status.sh` wrapper is gone — it lived in a gold-provided skill the
+  catalog deleted. See `keel/issue-129`.)
 - **User says "merge this"** on a worktree branch — use the current branch/worktree and
   map back to the unit by branch name.
 

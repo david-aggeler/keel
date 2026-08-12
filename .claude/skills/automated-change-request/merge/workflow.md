@@ -1,24 +1,25 @@
 ---
 name: automated-change-request/merge
-description: 'Land a reviewed unit on main through the dependency guard + merge gate, runnable by a non-resident executor (codex). Use when status=ready_to_merge and the unit is cleared to merge.'
+description: 'Land a reviewed unit on main through the dependency guard and configured merge command, runnable by a non-resident executor (codex). Use when status=ready_to_merge and the unit is cleared to merge.'
+x-openbrain-content-hash: sha256:2c35adfc51f18dcdebe8bf2fe826bb8d4e08362fe2cb37bbabe50e1c6df01710
 ---
 
 # Automated Merge
 
-**Transition:** `ready_to_merge → merged` (landed) or `→ in_progress` (self-caused post-merge failure, reverted)
+**Transition:** `ready_to_merge → merged` (landed)
 
-**Goal:** Land `cr-<seq>` on `main`. Run the dependency guard, then delegate git
-merge execution to the typed `openbrain-dev worktree merge` verb. On a green landing the
-verb **ends at `merged`** — the post-mortem close and gold wrap-up belong to `verify`.
-A post-merge gate failure attributable to THIS change reverts `main` and routes the
-unit back to `dev`; a foreign/flaky failure or a merge conflict halts for a human.
+**Goal:** Land `cr-<seq>` on `main`. Run the dependency guard, apply the dirty-checkout
+procedure, then invoke `openbrain-client merge <ref>` and record the reported
+`code_change_ref`. The merge session does not run runner-owned gate stages; the
+runner owns those after this verb exits. On a green landing the verb **ends at
+`merged`** — the post-mortem close and gold wrap-up belong to `verify`.
 
 ## Executor contract (condensed — full text in `../SKILL.md`)
 
 - **Self-sufficient:** this file is your complete instruction set for `merge`.
 - **No fabrication:** never record a `code_change_ref` you did not obtain from a real
-  merge; never report the gate as passed without running it and seeing it pass. On any
-  failure, STOP and report the exact command + verbatim output.
+  merge command result. On any failure, STOP and report the exact command + verbatim
+  output.
 - **Linear:** run every step yourself, in order; no subagents required.
 - **Sparse writes:** every `update_change_request` uses only the changed keys via
   `fields:`; re-read after each status write.
@@ -29,7 +30,7 @@ unit back to `dev`; a foreign/flaky failure or a merge conflict halts for a huma
 
 `get_change_request product=openbrain id=<id>`. Confirm `status == ready_to_merge`; if it
 differs, **halt** and report. Read `close_reason`, `parent`, `depends_on`,
-`deferred_pending`, and `merge_gate` for use below.
+`deferred_pending`, and `transition_gate` for use below.
 
 ## 2. Dependency guard
 
@@ -38,12 +39,27 @@ check its status. If **any** referenced unit is not `closed`:
 
 - If `auto_merge` is currently `true`: `update_change_request`
   `fields: { auto_merge: false }` and **halt** —
-  > auto_merge forced off at merge gate: depends on `<ref>` (status `<status>`), not
+  > auto_merge forced off at merge: depends on `<ref>` (status `<status>`), not
   > yet closed. Resolve the dependency and rerun `merge`.
 - If `auto_merge` is already `false`: continue; note the open dependency in your run
   summary.
 
-## 3. Merge onto main (`ready_to_merge → merged`)
+## 3. Dirty-checkout procedure
+
+Before invoking the merge command, inspect the primary checkout:
+
+```bash
+git status --porcelain=v1
+```
+
+- If it is clean, continue.
+- If every dirty path is a tracked generated artifact or untracked build output,
+  park those paths outside the checkout, remember exactly what was moved, and restore
+  them after the merge command finishes or fails.
+- If any dirty path is not clearly generated/build output, **halt** and report the
+  dirty paths. That is someone's work; do not stash, move, overwrite, or discard it.
+
+## 4. Merge onto main (`ready_to_merge → merged`)
 
 > **Where this verb runs.** The runner roots the **merge** session in the
 > **primary checkout** (where `main` is checked out), *not* in the unit's
@@ -64,65 +80,36 @@ check its status. If **any** referenced unit is not `closed`:
 
    If the branch does not exist, **halt and report it** — `dev` never committed,
    so there is nothing to land.
-2. Merge the unit's branch to `main` **via the typed devtool verb**. The verb reads
-   only local worktree metadata and repo config; it does not read gold at merge time.
+2. Invoke the merge through the client:
 
    ```bash
-   go run ./cmd/openbrain-dev --repo . worktree merge "$BRANCH"
+   openbrain-client merge "$BRANCH"
    ```
 
-   If the devtool cannot resolve the branch to a registered worktree, **halt** and
-   report it; the merge verb needs the unit worktree's `.devtools/worktree.json`
-   stamp. Capture the resulting merge commit SHA from `git rev-parse HEAD` on the
-   base branch after the command succeeds.
+   The client reads the committed `merge_command` from `openbrain-client.yaml`, appends
+   the branch/ref, and prints `code_change_ref=<sha>` (or `already_merged=true` with the
+   existing SHA on an idempotent retry). It does not read gold for command text and it
+   does not run `transition_gates.<rung>.runner_owned`; the runner does that after this
+   verb exits.
 
-   **Do not merge with raw `git`.** The devtool verb carries the phase logging,
-   merged-tree gate decision, reset-on-red guarantee, worktree teardown, and branch
-   deletion. A raw `git merge` bypasses those obligations. If the devtool exits
-   non-zero because of a **merge conflict** or a **dirty tree**, **STOP and HALT for a
-   human** — report its verbatim output. `main` was not advanced; nothing was recorded.
-   A conflict is never routed back to dev automatically. **Never fabricate a SHA.**
+   **Do not merge with raw `git`** — it bypasses the configured product command. If
+   `openbrain-client merge` exits non-zero, **STOP and HALT for a human** — report its
+   verbatim output. A conflict is never routed back to dev automatically. **Never
+   fabricate a SHA.**
 3. `update_change_request` with
    `fields: { status: "merged", code_change_ref: "<sha>" }`. Re-read and confirm
    `status == merged`. The runner cross-checks that the merge commit is reachable on
    `main`; a claimed `merged` with no merge commit on `main` is fail-closed.
 
-## 4. Post-merge gate failure handling
+## 5. Runner-owned gate handoff
 
-The typed devtool merge verb already ran the configured local gate against the
-merged tree. If it returned success, skip to step 5. If it returned a post-merge
-gate failure, it already reset the base branch to the pre-merge SHA; classify the
-failure from the command output:
+If this unit's `transition_gate` has `runner_owned` stages in committed
+`openbrain-client.yaml`, this merge session must not run them. The runner runs them
+after this verb exits and owns any red-result routing. Do not pre-run, derive, skip,
+or mark those stages as already satisfied.
 
-1. **On gate failure:**
-   - **Idempotency caveat:** retry only if the gate command is a **read-only validator**
-     (e.g. `go run ./cmd/openbrain-dev --repo "$PWD" ci static-tools && go run ./cmd/openbrain-dev --repo "$PWD" test unit`). If it has side effects, go straight
-     to the classification below on the first failure (skip the retries) — never re-run
-     a side-effecting command against partial state.
-   - For read-only validators: re-run up to **3 times total**; a flaky gate may pass on
-     retry. If still failing after the 3rd run, classify the failure:
-     - **Attributable to THIS change** (the merged diff caused the red): **revert and
-       route back to dev.**
-       1. Restore `main` to the merge's first parent: `git reset --hard <code_change_ref>^1`
-          (or `git revert -m 1 <code_change_ref>` if the merge was already pushed).
-          Confirm `git rev-parse HEAD` is the pre-merge SHA. The unit's branch is
-          intact (you passed no worktree arg), so dev re-works on the branch.
-       2. `create_formal_review` (outcome `follow_up_required`) naming the failing tier,
-          run count (3), the last failing command output verbatim, and that the merge
-          was reverted.
-       3. `update_change_request` `fields: { status: "in_progress" }`; re-read to confirm.
-          This routes the unit back to `dev`: the runner reads `in_progress`, reads your
-          `formal_review`, and re-dispatches `dev` with it as the to-do. Also append to
-          `details`: "post-merge gate `<tier>` red — merge reverted, unit returned to
-          in_progress; see formal_review."
-       4. Exit cleanly.
-     - **Foreign / flaky** (a pre-existing red on `main` unrelated to this diff, or an
-       environmental flake that does not clear on retry): **do NOT route back to dev.**
-       Revert the merge as above so `main` is not left red, record a `formal_review`
-       describing the foreign failure, and **HALT for a human** — leave the status at
-       `ready_to_merge` (do not write `in_progress`). A human decides whether the
-       failure is real before the unit re-enters the tail.
-5. **On gate pass:** the merge verb is **complete**. The unit stays `merged`. Report
-   the merge SHA, the gate tier/command/result, and that `verify` is the next verb.
-   **Do not run `verify` in this session** — one verb, one session. The post-mortem
-   close, `issue_fix`, and parent-issue wrap-up all belong to `verify`.
+The merge verb is complete once the `merged` status and `code_change_ref` have been
+written and re-read. Report the merge SHA, the transition-gate rung, and that `verify`
+is the next verb after the runner-owned stages pass. **Do not run `verify` in this
+session** — one verb, one session. The post-mortem close, `issue_fix`, and parent-issue
+wrap-up all belong to `verify`.

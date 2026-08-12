@@ -2,9 +2,9 @@
 name: materialization-probe
 description: "Permanent smoke-test skill for the OpenBrain materialize pipeline: placeholder substitution (variant A), direct-text passthrough (variant B), and content-hash stamping. Seeded in_development; materialized only via the advanced-token dev path. Use when the user says: '/materialization-probe', 'materialization smoke test'"
 allowed-tools: Read
-x-openbrain-source: materialization-probe/v2
-x-openbrain-content-source-hash: sha256:c64ab44afbf4969b89f831aa9a5f0160738fe93c2203837ffdad3a06c4736527
-x-openbrain-content-hash: sha256:bd51682122fd3c090d5b9ff354e73a691fc6d0cce92524d71830959a7b094111
+x-openbrain-source: materialization-probe/v4
+x-openbrain-content-source-hash: sha256:7dfd8f5bc44484a4564405f279ca530d113c4eb7c0d12a3eab464f8b137f4ca9
+x-openbrain-content-hash: sha256:0817d453c0bb1271ab3ec0cc005861cdcd284a2e3df56d9dd90783e5f14fde52
 ---
 
 # Materialization Probe
@@ -14,12 +14,19 @@ It is seeded `in_development` and materialized only via the `include_unreleased`
 
 ## Variant A — Placeholder substitution
 
-The following tokens are baked at materialize time by the reconcile pass:
+The block below is generated from `sordata.SkillMaterializationVocabulary()` — the single source every fixture tree's probe is derived from — and the `ci-e2e-skill-materialization` gate reds if any probe drifts from it. It carries every substitutable token so the corpus-coverage gate has a full corpus to check.
 
-- Product: keel
-- MCP instance: gold
+<!-- generated from sordata.SkillMaterializationVocabulary(); do not hand-edit -->
 
-After materialization, these markers must be replaced with the resolved values from the project marker file (`openbrain-client.local.yaml`).
+- `build_command`: just build-local
+- `mcp_instance`: gold
+- `primary_language`: go
+- `process`: HELIX01
+- `product_name`: openbrain
+
+<!-- end generated token block -->
+
+After materialization, none of these markers may survive literally — each is replaced with the resolved init value or the operator placeholder from the project marker file (`openbrain-client.local.yaml`).
 
 ## Variant B — Direct-text passthrough
 

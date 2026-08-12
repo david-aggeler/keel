@@ -1,8 +1,8 @@
-# Control Checklists — Step 3 Scaffolding
+# Control Checklists — Pass 3 Scaffolding
 
-Sera walks each of these four checklists in Step 3, producing a verdict per item: ✅ Present · ⚠️ Weak · ❌ Missing · 🔜 Deferred-to-Growth · ❓ Unclear. Each `❌`/`⚠️` row lists what would close it; each `❓` becomes an Open Item.
+Sera walks each of these four checklists in Pass 3, producing a verdict per item: Present · Weak · Missing · Deferred-to-Growth · Unclear. Each `Missing`/`Weak` row lists what would close it; each `Unclear` becomes an Open Item.
 
-The lists are deliberately concrete and product-shaped. They are *not* a CIS Benchmark or a NIST control catalog — they're the controls that map to the keel MVP cybersecurity baseline plus the next ring of pragmatic security hygiene.
+The lists are deliberately concrete and product-shaped. They are *not* a CIS Benchmark or a NIST control catalog — they're the controls that map to the openbrain MVP cybersecurity baseline plus the next ring of pragmatic security hygiene.
 
 ---
 
@@ -76,9 +76,9 @@ The lists are deliberately concrete and product-shaped. They are *not* a CIS Ben
 
 ## How to use these checklists
 
-- Each row gets exactly one verdict (✅ ⚠️ ❌ 🔜 ❓).
-- For `❌` and `⚠️`: write a one-sentence "what would close it" — concrete, testable.
-- For `🔜 Deferred-to-Growth`: capture the row in the Deferred-to-Growth section with its likely framework driver.
-- For `❓ Unclear`: write the question into Open Items rather than guessing.
+- Each row gets exactly one verdict (Present · Weak · Missing · Deferred-to-Growth · Unclear).
+- For `Missing` and `Weak`: write a one-sentence "what would close it" — concrete, testable.
+- For `Deferred-to-Growth`: capture the row in the Deferred-to-Growth section with its likely framework driver.
+- For `Unclear`: write the question into Open Items rather than guessing.
 
 If a row is genuinely n/a for the current scope (e.g. no AsyncAPI surface in scope), say so and move on. Don't pad.

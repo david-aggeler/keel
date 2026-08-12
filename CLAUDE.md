@@ -42,13 +42,46 @@ The loop, always:
 5. Close the CR with the merge SHA. If an issue drove it, close the
    issue via an `issue_fix` that references the CR and the SHA.
 
-Small change? Still a CR. Docs-only? Still a CR (merge_gate: docs).
+Small change? Still a CR. Docs-only? Still a CR (`transition_gate: prose`).
+
+## Transition gates
+
+The field is `transition_gate`. Its values are five cumulative evidence
+classes — `prose` ⊂ `static` ⊂ `unit` ⊂ `integration` ⊂ `system`.
+
+Commands are NEVER read from a record. Every invoker resolves them from the
+committed `openbrain-client.yaml` at the repo root, under
+`transition_gates.<rung>`, split into two execution moments:
+
+- `in_session`   — run inside the dev/review verb session, before it writes its
+                   status transition.
+- `runner_owned` — run by the invoker after that session exits. A session must
+                   NOT run these itself.
+
+The invoker's stages run at three boundaries: `implementation_review` and
+`ready_to_merge` over the unit's branch, `merged` over the integrated tree.
+Everything is green before `ready_to_merge` is written — that is the promise.
+
+keel binds both gates (`keel-dev ci` + `keel-dev vsix ci`) at every rung, because
+`ac-288` (core-only changes skip the VSIX gate) is retired while keel is
+pre-stability. `prose` and `static` carry an empty `runner_owned`. At `unit` and
+above the indivisible `ci` sits in both lists and runs twice — a documented
+deviation, removed once `keel-dev ci` grows rungs. See `keel/requirement-89`,
+`keel/requirement-10`, and `openbrain/interface_spec-26`.
+
+The merge is the git operation ONLY. It runs no gate and tears nothing down.
 
 ## Worktrees
 
-`keel-dev worktree` is THE worktree lifecycle entry point, backed by the
-`keel/worktree` package — NOT raw `git worktree` or `git checkout -b` on the
-primary checkout (that is blocked). `openbrain-client` has no worktree verb.
+`keel-dev worktree` is THE worktree lifecycle entry point for manual/operator
+work, backed by the `keel/worktree` package — NOT raw `git worktree` or
+`git checkout -b` on the primary checkout (that is blocked).
+
+`openbrain-client worktree` now exists too (`up | down | resume | create-for |
+enter | status | allow-merge | disallow-merge`) and is what the run-queue tail
+uses for its own `cr-<seq>` worktrees. It is NOT a drop-in for `keel-dev
+worktree`: it has no `branch-delete` and no `compare`, and keel's refusal
+semantics live in `keel/worktree`.
 
 Six leaves, and what each is for:
 
@@ -63,15 +96,20 @@ Usage strings and flags: see `keel-dev help worktree <leaf>` (and `keel-dev help
 worktree` for the family and its exit codes). The binary is the source of truth
 for argv; this list carries only intent, which generated help does not.
 
-The change-request skill's scripts in `.claude/skills/change-request/scripts/`
-(`worktree-up.sh` / `worktree-down.sh` / `worktree-resume.sh` /
-`worktree-status.sh <kind> <seq> <slug>`) stay as thin wrappers over those
-verbs: they validate arguments, compose `<kind>-<seq>-<slug>`, and delegate.
-They hold NO lifecycle logic — the `no-shell-worktree-lifecycle` lint fails any
-git lifecycle command written back into them and any non-executable wrapper mode.
+The `worktree-*.sh` wrappers are GONE. They lived at
+`.claude/skills/change-request/scripts/` — inside a gold-provided skill, a path
+the catalog owns and re-materializes — and the refreshed catalog deleted them
+and now calls `openbrain-client worktree up cr <seq> <slug>` directly. Do not
+restore them; do not patch gold-provided skills. Local skills (`merge/`) are
+keel's to change.
 
-Manual/operator work only. The run-queue tail creates and owns its own
-`cr-<seq>` worktrees — never hand-create those.
+This leaves `requirement-114`'s wrapper clauses (`ac-410`, `ac-412`, `ac-421`)
+and two test files — `cmd/keel-dev/worktree_scripts_test.go`,
+`cmd/keel-dev/worktree_wrapper_name_test.go` — pinning files that no longer
+exist, so `keel-dev ci` is RED until that is retired under a CR. The
+`no-shell-worktree-lifecycle` lint is unaffected: it skips absent scripts.
+
+Never hand-create a `cr-<seq>` worktree — the run-queue tail owns those.
 
 ## The gate
 

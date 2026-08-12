@@ -1,6 +1,7 @@
 ---
 name: change-request/correct
 description: 'Make a structured change to a non-closed change request. Use when the operator says "correct this CR", "change the scope", or "update a decision".'
+x-openbrain-content-hash: sha256:12ded08a9a8faa966c05e4c9ba478abb7160f7fc2339893dfd4f5949b94efc30
 ---
 
 # Correct Change Request
@@ -37,6 +38,6 @@ Do not re-run the full interview. Only the delta needs owner eyes.
 
 ## Park / Resume
 
-To park: call `update_change_request status=on_hold` and set `deferred_reason` / `deferred_until`.
+To park: call `update_change_request status=on_hold` with **`block_reason`** (required by the schema — the write is rejected without it) and set `deferred_reason` / `deferred_until`. Park reasons on this path are the human-side holds `user_choice` / `low_importance` / `no_capacity` or the universal `needs_owner_input` / `dependency_open` / `precondition_unmet`; the agent-execution reasons belong to the blocked flag, not to `on_hold`.
 
 To resume: call `update_change_request` restoring the previous status.

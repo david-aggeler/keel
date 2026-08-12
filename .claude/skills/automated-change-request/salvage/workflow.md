@@ -1,6 +1,7 @@
 ---
 name: automated-change-request/salvage
 description: "Analyze an interrupted autonomous-tail run after run-queue detects gold status ahead of branch/worktree evidence; classify recovery as salvage, hand-back, reset, or manual, with suggest-only default and opt-in auto-apply for the green salvage class."
+x-openbrain-content-hash: sha256:9edf1e5fbccddd319510d3618a1d1a3ffb7e2c5eb5e181f98008e451dc8731b5
 ---
 
 # Automated Salvage
@@ -17,7 +18,7 @@ detector-triggered recovery stage, not part of the normal tail.
 - Accept optional `--auto-salvage`. Without `--auto-salvage`, this verb is **suggest-only**.
 - Never guess. A recommendation of `salvage` requires both a successful build and
   successful package tests for the dirty work.
-- Record the recommendation durably in a `formal_review` linked to the CR. The
+- Record the recommendation durably in a `formal_review` linked to the change request. The
   runner also surfaces the halt outcome, but logs alone are not enough.
 
 ## 1. Read State
@@ -31,37 +32,38 @@ detector-triggered recovery stage, not part of the normal tail.
    - dirty file list: `git status --short`
    - diffstat: `git diff --stat`
    - prior build-temp residue if visible under the run's build-temp directory
-   - latest formal review for the CR, if available
+   - latest formal review for the change request, if available
 
 ## 2. Classify
 
 Use this taxonomy exactly:
 
 - `reset`: zero commits ahead of main and no dirty work. Recommendation: return
-  the CR to `approved` for a fresh dev run.
+  the change request to `approved` for a fresh dev run.
 - `salvage`: dirty work exists, and both the build and package tests pass.
   Recommendation: commit the work on the unit branch, then resume the tail at
   review.
 - `hand-back`: dirty work exists, but the build or package tests fail.
   Recommendation: owner inspects/fixes the failing work; never recommend salvage.
 - `manual`: evidence is ambiguous, branch is unexpected, commits already exist
-  with dirty work, commands cannot run, or the CR precondition is not met.
+  with dirty work, commands cannot run, or the change request precondition is not met.
 
-When dirty work exists, run the mechanical gates before deciding:
-
-```bash
-just build-local
-go run ./cmd/openbrain-dev test unit
-```
+When dirty work exists, run the project's **build** and **package-test** commands before
+deciding — the two mechanical checks that say whether the dirty work is coherent.
+(In this repository they are the local build recipe and the devtool's unit-test verb;
+take the exact commands from the project's own build/test documentation or task runner,
+not from this file.)
 
 If either command fails, classify `hand-back` and include the failing command and
-verbatim output in the formal review details.
+verbatim output in the formal review details. If you cannot determine what the project's
+build and package-test commands are, classify `manual` — never guess a command, and never
+report a check you did not run.
 
 ## 3. Record Recommendation
 
 Create a `formal_review`:
 
-- `subject_refs`: the CR ref
+- `subject_refs`: the change request ref
 - `status`: `completed`
 - `outcome`: `follow_up_required`
 - `type`: `other`
@@ -80,7 +82,7 @@ If `--auto-salvage` is present:
 - Commit the dirty work on the current unit branch with a conventional subject
   such as `fix(cr-<N>): salvage interrupted dev work.`.
 - Do not apply `hand-back`, `reset`, or `manual`; stop after the review record.
-- After committing, leave the CR at `in_progress` so the runner can re-check the
+- After committing, leave the change request at `in_progress` so the runner can re-check the
   branch state and resume at `review`.
 - Be idempotent: if the work is already committed and the tree is clean on a
   re-run, do not create a duplicate commit.

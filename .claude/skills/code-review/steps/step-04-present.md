@@ -1,122 +1,100 @@
----
-deferred_work_file: './deferred-work.md'
----
-<!-- markdownlint-disable MD033 MD036 MD034 MD040 MD026 MD032 MD012 MD024 MD028 MD031 MD025 MD041 -->
-
 # Step 4: Present and Act
 
 ## RULES
 
-- YOU MUST ALWAYS SPEAK OUTPUT in your Agent communication style with the config `{communication_language}`
-- When `{spec_file}` is set, always write findings to the story file before offering action choices.
-- `decision-needed` findings must be resolved before handling `patch` findings.
+- Findings land as records. Never write findings into a local Markdown file.
+- Create the `formal_review` record before offering action choices, so nothing is lost if the session ends.
+- `decision_needed` findings must be resolved before handling `patch` findings.
+- Before authoring any record, fetch its template with `get_template_for dto_type=<type>` and write into that structure.
 
 ## INSTRUCTIONS
 
-### 1. Clean review shortcut
+### 1. Open the review record
 
-If zero findings remain after triage (all dismissed or none raised): state that and proceed to section 6 (Update story status via record).
+Call `create_formal_review` with:
 
-### 2. Write findings to the story file
+- `title` — "Code review: \<subject title or diff description\>"
+- `type` — `other`, with `type_other` = `code_review`
+- `status` — `in_progress`
+- `conducted_at` — today
+- `subject_refs` — `[{subject_ref}]` when set; otherwise leave empty and put the diff description in `subject_text`
+- `summary` — one line: what was reviewed and the headline result
+- `details` — the triaged findings, grouped by bucket, each with title, detail, and location
 
-If `{spec_file}` exists and contains a Tasks/Subtasks section, append a `### Review Findings` subsection. Write all findings in this order:
+Set `{review_ref}` to the returned ref.
 
-1. **`decision-needed`** findings (unchecked):
-   `- [ ] [Review][Decision] <Title> — <Detail>`
+If zero findings remain after triage, record the clean result in `details`, set `outcome` = `approved`, `status` = `completed`, and skip to section 5.
 
-2. **`patch`** findings (unchecked):
-   `- [ ] [Review][Patch] <Title> [<file>:<line>]`
+### 2. Present the summary
 
-3. **`defer`** findings (checked off, marked deferred):
-   `- [x] [Review][Defer] <Title> [<file>:<line>] — deferred, pre-existing`
+Announce what was recorded:
 
-Also append each `defer` finding to `{deferred_work_file}` under a heading `## Deferred from: code review ({date})`. If `{spec_file}` is set, include its basename in the heading (e.g., `code review of story-3.3 (2026-03-18)`). One bullet per finding with description.
+> **Code review complete.** \<D\> `decision_needed`, \<P\> `patch`, \<W\> `defer`, \<R\> dismissed as noise. Recorded as `{review_ref}`.
 
-### 3. Present summary
+### 3. Resolve `decision_needed` findings
 
-Announce what was written:
+If `decision_needed` findings exist, present each one with its detail and the options available. The user must decide — the correct fix is ambiguous without their input. Walk through each finding (or batch related ones) and get the user's call. Once resolved, each becomes a `patch`, a `defer`, or is dismissed.
 
-> **Code review complete.** <D> `decision-needed`, <P> `patch`, <W> `defer`, <R> dismissed as noise.
+If the user chooses to defer, ask for a one-line reason and carry it into the record created in section 5.
 
-If `{spec_file}` is set, add: `Findings written to the review findings section in {spec_file}.`
-Otherwise add: `Findings are listed above. No story file was provided, so nothing was persisted.`
+**HALT** — wait for the user's decision on every `decision_needed` finding before continuing.
 
-### 4. Resolve decision-needed findings
+### 4. Handle `patch` findings
 
-If `decision_needed` findings exist, present each one with its detail and the options available. The user must decide — the correct fix is ambiguous without their input. Walk through each finding (or batch related ones) and get the user's call. Once resolved, each becomes a `patch`, `defer`, or is dismissed.
+If `patch` findings exist (including any promoted in section 3), HALT and ask:
 
-If the user chooses to defer, ask: Quick one-line reason for deferring this item? (helps future reviews): — then append that reason to both the story file bullet and the `{deferred_work_file}` entry.
-
-**HALT** — I am waiting for your numbered choice. Reply with only the number. Do not proceed until you select an option.
-
-### 5. Handle `patch` findings
-
-If `patch` findings exist (including any resolved from step 4), HALT. Ask the user:
-
-If `{spec_file}` is set, present all three options:
-
-> **How would you like to handle the `<P>` `patch` findings?**
-> 1. **Apply every patch** — fix all of them now, no per-finding confirmation. Defer and decision-needed items are not touched.
-> 2. **Leave as action items** — they are already in the story file
-> 3. **Walk through each patch** — show details for each before deciding
-
-If `{spec_file}` is **not** set, present only options 1 and 2 (omit "Leave as action items" — findings were not written to a file):
-
-> **How would you like to handle the `<P>` `patch` findings?**
-> 1. **Apply every patch** — fix all of them now, no per-finding confirmation. Defer and decision-needed items are not touched.
-> 2. **Walk through each patch** — show details for each before deciding
-
-**HALT** — I am waiting for your numbered choice. Reply with only the number. Do not proceed until you select an option.
-
-- **Apply every patch**: Apply every patch finding without per-finding confirmation. Do not modify defer or decision-needed items. After all patches are applied, present a summary of changes made. If `{spec_file}` is set, check off the patch items in the story file (leave defer items as-is).
-- **Leave as action items** (only when `{spec_file}` is set): Done — findings are already written to the story.
-- **Walk through each patch**: Present each finding with full detail, diff context, and suggested fix. After walkthrough, re-offer the applicable options above.
-
-  **HALT** — I am waiting for your numbered choice. Do not proceed until you select an option.
-
-**✅ Code review actions complete**
-
-- Decision-needed resolved: <D>
-- Patches handled: <P>
-- Deferred: <W>
-- Dismissed: <R>
-
-### 6. Update story status via record
-
-Skip this section if `{spec_file}` is not set.
-
-#### Determine new status based on review outcome
-
-- If all `decision-needed` and `patch` findings were resolved (fixed or dismissed) AND no unresolved HIGH/MEDIUM issues remain: set `{new_status}` = `done`.
-- If `patch` findings were left as action items, or unresolved issues remain: set `{new_status}` = `in_review`.
-
-#### Update the story record
-
-Call `update_story` for `{story_key}` with `status={new_status}`. No local file edit — the record is the source of truth.
-
-If `{story_key}` is not set, skip the record update and note that story status was not updated because no story key was available.
-
-#### Completion summary
-
-> **Review Complete!**
+> **How would you like to handle the \<P\> `patch` findings?**
 >
-> **Story Status:** `{new_status}`
-> **Issues Fixed:** <fixed_count>
-> **Action Items Created:** <action_count>
-> **Deferred:** <W>
-> **Dismissed:** <R>
+> 1. **Apply every patch** — fix all of them now, no per-finding confirmation. Defer and decision items are not touched.
+> 2. **Record them** — leave the code alone; each becomes an issue in section 5.
+> 3. **Walk through each patch** — show details for each before deciding.
+
+**HALT** — wait for a numbered choice. Do not proceed until the user selects an option.
+
+- **Apply every patch**: apply every `patch` finding without per-finding confirmation. Do not touch `defer` or `decision_needed` items. Present a summary of the changes made.
+- **Record them**: no code changes; section 5 files each one.
+- **Walk through each patch**: present each finding with full detail, diff context, and suggested fix. After the walkthrough, re-offer options 1 and 2.
+
+### 5. Land every surviving finding as a record
+
+One record per finding that was not applied and not dismissed. Route by who can resolve it:
+
+| Finding state | Record | Key fields |
+|---|---|---|
+| Agent-solvable, not applied | `create_issue` | `executor` = `agent`, evidence embedded in the body, `related` = `[{review_ref}]` |
+| Needs human judgment or out-of-band action | `create_action_item` | owner, the decision being asked for, `related` = `[{review_ref}]` |
+| Deferred pre-existing defect | `create_issue` | `executor` = `agent`, body states it predates this change, `related` = `[{review_ref}]` |
+
+If the review found that a coding stage did nothing at all — the change is a no-op against its stated scope — do not file a new record. Report it and reopen the originating change request instead.
+
+Then call `update_formal_review` on `{review_ref}` with:
+
+- `action_items` — one entry per record filed above, each carrying `description`, `severity`, `status` = `open`, and the record ref in `closure_evidence`
+- `outcome` — `approved` (nothing outstanding), `approved_with_actions` (records filed, none blocking), or `follow_up_required` (a blocking finding is unresolved)
+- `status` — `completed`
+
+### 6. Completion summary
+
+> **Review complete.**
+>
+> - Review record: `{review_ref}`
+> - Patches applied: \<applied_count\>
+> - Issues filed: \<issue_count\>
+> - Action items filed: \<action_count\>
+> - Dismissed as noise: \<R\>
 
 ### 7. Next steps
 
 Present the user with follow-up options:
 
 > **What would you like to do next?**
-> 1. **Start the next story** — run `dev-story` to pick up the next `ready` story
-> 2. **Re-run code review** — address findings and review again
+>
+> 1. **Address the filed records** — pick up the issues just created
+> 2. **Re-run code review** — review again after changes
 > 3. **Done** — end the workflow
 
-**HALT** — I am waiting for your choice. Do not proceed until the user selects an option.
+**HALT** — wait for the user's choice. Do not proceed until they select an option.
 
 ## On Complete
 
-If the resolved `workflow.on_complete` is non-empty, follow it as the final terminal instruction before exiting.
+If the invoking workflow declared an `on_complete` instruction, follow it as the final terminal step before exiting.

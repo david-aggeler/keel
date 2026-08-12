@@ -139,22 +139,11 @@ func assertExitCodeJSON(t *testing.T, path string, got []struct {
 	}
 }
 
-// DHF-TEST: keel/requirement-114 (keel/ac-413)
-func TestWorktreeWrapperHeadersPointAtGeneratedHelpForExitCodes(t *testing.T) {
-	for _, script := range []string{"worktree-up.sh", "worktree-down.sh", "worktree-status.sh", "worktree-resume.sh"} {
-		body, err := os.ReadFile(filepath.Join("..", "..", ".claude", "skills", "change-request", "scripts", script))
-		if err != nil {
-			t.Fatalf("read %s: %v", script, err)
-		}
-		text := string(body)
-		if strings.Contains(text, "# Exit codes:") {
-			t.Fatalf("%s still carries a hand-maintained exit-code taxonomy", script)
-		}
-		if !strings.Contains(text, "keel-dev help worktree") {
-			t.Fatalf("%s does not point operators at generated worktree help for exit codes", script)
-		}
-	}
-}
+// ac-413's wrapper-header half is gone with the wrappers themselves
+// (keel/issue-129): it asserted that each `worktree-*.sh` header pointed at
+// `keel-dev help worktree` instead of restating the exit-code taxonomy. The
+// criterion's substance — the taxonomy is discoverable from generated help —
+// stays covered by the --help-json assertions above.
 
 // DHF-TEST: keel/requirement-114 (keel/ac-408)
 func TestCommandTreeExposesWorktreeNamespace(t *testing.T) {

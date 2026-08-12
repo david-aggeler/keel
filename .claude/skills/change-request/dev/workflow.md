@@ -1,6 +1,7 @@
 ---
 name: change-request/dev
 description: 'Implement the unit via vertical-slice TDD. Use when the unit is approved and the operator says "dev this CR" or "implement the unit".'
+x-openbrain-content-hash: sha256:c1d4d298b04b1f5474f10a42b26f170ddae4d219ffd926d368cfd4b071d8ee7d
 ---
 
 # Dev Change Request
@@ -16,8 +17,10 @@ description: 'Implement the unit via vertical-slice TDD. Use when the unit is ap
 Call `update_change_request status=in_progress` to record the transition. Set up the worktree:
 
 ```bash
-bash .claude/skills/change-request/scripts/worktree-up.sh cr <seq> <slug>
+openbrain-client worktree up cr <seq> <slug>
 ```
+
+`up` is idempotent: it prints `up <name> <path>` when it created the worktree and `up-noop <name> <path>` when one was already there, so re-running it after an interrupted session is safe. If the branch exists but the directory is gone, use `worktree resume` with the same arguments. See SKILL.md § Worktrees for the full subcommand set and the exit-code contract.
 
 **2. Tracer bullet**
 

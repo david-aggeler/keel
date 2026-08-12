@@ -1,104 +1,58 @@
 ---
 name: epic/status
-description: 'Summarize epic and unit status and surface risks. Use when the user says "check sprint status" or "show sprint status"'
+description: 'Read-only rollup of epics and their units, with risk callouts. Use when the user says "epic status", "where is epic N", or "how is the epic going".'
+x-openbrain-content-hash: sha256:ef81fec41a3405cc7927d37f6a3ee5ea3512a5cf3b00ad0b4074993346c02e20
 ---
-<!-- markdownlint-disable MD033 MD036 MD034 MD040 MD026 MD032 MD012 MD024 MD028 MD031 -->
 
-# Epic Status Workflow
+# /epic status — Epic and Unit Rollup
 
-**Goal:** Summarize epic and unit status from live records, surface risks, and recommend the next workflow action.
-
-**Your Role:** You are a Developer providing clear, actionable project visibility. No time estimates — focus on status, risks, and next steps.
+**Goal:** Answer "where do things stand" from live records. **Read-only — this workflow writes nothing.**
 
 ## Execution
 
 <workflow>
 
-<step n="1" goal="Load all epics for the active product">
-  <action>Load {project_context} for project-wide patterns and conventions (if exists)</action>
-  <action>Call `list_epic` for the active product to retrieve all epic records</action>
-  <check if="no epics found">
-    <output>No epic records found for this product. Run `/epic create` to create the first epic.</output>
-    <action>Exit workflow</action>
+<step n="1" goal="Scope the report">
+  <check if="an epic was named">
+    <action>Call `get_epic` for it.</action>
   </check>
-  <action>Record epic list with title, sequence, and status for each epic</action>
-  <action>Count epic statuses: planned {epic_planned}, active {epic_active}, done {epic_done}</action>
+  <check if="no epic was named">
+    <action>Call `list_epic` for the product and report every epic at `planned` or `active`. Include `done` epics only if the operator asks.</action>
+  </check>
 </step>
 
-<step n="2" goal="Load unit counts per epic">
-  <action>For each epic, call `list_change_request` with `filter={"parent":"<epic_ref>"}` to retrieve all unit records</action>
-  <action>For each epic, count unit statuses: draft, approved, in_progress, implementation_review, ready_to_merge, merged, closed, on_hold</action>
-  <action>Accumulate product-wide totals:
-    - total_draft, total_approved, total_in_progress, total_implementation_review, total_ready_to_merge, total_merged, total_closed
-  </action>
-  <action>Detect risks:</action>
-
-- IF any unit has status `implementation_review`: suggest `/change-request review`
-- IF any unit has status `ready_to_merge`: suggest `/change-request close` (the unit is reviewed and waiting to land)
-- IF any unit has status `in_progress` AND no units have status `approved`: recommend staying focused on active unit
-- IF all epics have status `planned` AND no units exist: prompt `/epic create`
-- IF any epic has status `active` but has no associated units: warn "active epic has no units"
+<step n="2" goal="Load the units">
+  <action>For each epic in scope call `list_change_request` with `filter={"parent":"<epic_ref>"}` and `include_summary=true`.</action>
+  <action>Roll up counts by status across the full ladder: `draft`, `approved`, `in_progress`, `implementation_review`, `ready_to_merge`, `merged`, `closed`, `on_hold`.</action>
 </step>
 
-<step n="3" goal="Select next action recommendation">
-  <action>Pick the next recommended workflow using priority, ordered by epic sequence then unit creation date:</action>
-  1. If any unit status == `in_progress` → recommend `/change-request dev` for the first in-progress unit
-  2. Else if any unit status == `ready_to_merge` → recommend `/change-request close` for the first ready-to-merge unit
-  3. Else if any unit status == `implementation_review` → recommend `/change-request review` for the first in-review unit
-  4. Else if any unit status == `approved` → recommend `/change-request dev`
-  5. Else if any unit status == `draft` → recommend `/change-request create` to detail the first draft unit
-  6. Else if any epic status == `active` and all units are `closed` → recommend `/epic retro`
-  7. Else → All implementation items done; congratulate the user.
-  <action>Store selected recommendation as: next_unit_ref, next_workflow</action>
+<step n="3" goal="Render the rollup">
+  <action>Report as a markdown table — one row per epic:</action>
+
+| Epic | Status | Units | draft | approved | in_progress | impl_review | ready_to_merge | merged | closed | on_hold |
+|---|---|---|---|---|---|---|---|---|---|---|
+
+  <action>Then, per epic in scope, a unit table: ref, title, status, iteration, executor, requirement refs.</action>
 </step>
 
-<step n="4" goal="Display summary">
-  <output>
-## Epic and Unit Status
+<step n="4" goal="Surface risks">
+  <action>Call out each of the following that is present. These are the conditions that make a healthy-looking board fail to progress:</action>
 
-**Epics:** planned {epic_planned}, active {epic_active}, done {epic_done}
-
-**Units (product-wide):** draft {total_draft}, approved {total_approved}, in_progress {total_in_progress}, implementation_review {total_implementation_review}, ready_to_merge {total_ready_to_merge}, merged {total_merged}, closed {total_closed}
-
-**Next Recommendation:** {next_workflow} ({next_unit_ref})
-
-  </output>
+  - **Undrainable units** — `status=approved` with no `iteration`, or with `executor` unset or `human` where an agent drain was expected. These will never be picked up by a run-queue drain. Name them individually.
+  - **Approval-blocked units** — units at `draft` whose every listed requirement is still below `approved`. Their approval write will be rejected. Name the blocking requirement.
+  - **Structurally invalid units** — `kind` missing, or `kind=feature` with an empty `requirements` array. These fail on the next write of any kind.
+  - **Stalled units** — `on_hold` with a `block_reason`, or long-lived `in_progress`.
+  - **Dependency knots** — `depends_on` pointing at units that are not closed, and any cycle.
+  - **Uncovered scope** — requirements in the epic's `related_requirements` that no unit references.
+  - **Closure readiness** — for an `active` epic whose units are all `closed`, say that `/epic end` is now available.
 </step>
 
-<step n="5" goal="Offer actions">
-  <ask>Pick an option:
-1) Run recommended workflow now
-2) Show all units grouped by status
-3) Show all epics with unit counts
-4) Exit
-Choice:</ask>
-
-  <check if="choice == 1">
-    <output>Run `{next_workflow}`.
-If the command targets a unit, reference `{next_unit_ref}` when prompted.</output>
-  </check>
-
-  <check if="choice == 2">
-    <action>Call `list_change_request` product-wide, group results by status</action>
-    <output>
-### Units by Status
-- Draft: {units_draft}
-- Approved: {units_approved}
-- In Progress: {units_in_progress}
-- Implementation Review: {units_implementation_review}
-- Ready To Merge: {units_ready_to_merge}
-- Merged: {units_merged}
-- Closed: {units_closed}
-    </output>
-  </check>
-
-  <check if="choice == 3">
-    <action>For each epic (ordered by sequence), display: title, status, unit counts by status</action>
-  </check>
-
-  <check if="choice == 4">
-    <action>Exit workflow</action>
-  </check>
+<step n="5" goal="Point at the next move">
+  <action>Recommend one next action, grounded in what the tables show — for example: `/change-request dev <ref>` on the next open unit, `/epic add` for uncovered scope, `/epic end` when every unit is closed, or a specific fix for an undrainable unit.</action>
 </step>
 
 </workflow>
+
+## Boundary
+
+This workflow does not change record state. If the rollup reveals something that must be fixed, say what needs fixing and which verb owns it — `/epic correct` for scope, `/epic add` for a missing unit, `/change-request correct` for a unit's own fields.
