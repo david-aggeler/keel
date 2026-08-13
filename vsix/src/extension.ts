@@ -295,6 +295,8 @@ export function signalProcessGroup(child: ChildProcessHandle, signal: NodeJS.Sig
 export function cancelActiveRun(run: vscode.TestRun, selected: readonly vscode.TestItem[], child: ChildProcessHandle): void {
   appendRunOutput(run, 'Keel test run cancelled by user.', 'WARN');
   for (const item of selected) {
+    // skipped reason (b): the run was cancelled. VS Code has no distinct
+    // cancelled state, so Skipped is the stamp. See keel/ac-428.
     run.skipped(item);
   }
   signalProcessGroup(child, 'SIGTERM');
@@ -308,6 +310,9 @@ export function rejectConcurrentRun(
   const run = controller.createTestRun(request);
   appendRunOutput(run, 'Keel test run already active; ignoring concurrent play request.', 'WARN');
   for (const item of selected) {
+    // skipped reason (c): the item was in this run's execution scope, but the
+    // run ends here without executing it — another run already holds the lane.
+    // See keel/ac-428.
     run.skipped(item);
   }
   run.end();
@@ -425,10 +430,19 @@ async function resetKeelTestResults(controller: vscode.TestController): Promise<
   await refresh(controller);
 }
 
-// invalidateClearedResults drops the prior result of each bridge-cleared item
-// (exclusive-group sibling deactivation) to no-result. Unlike resetKeelTestResults
-// it is scoped to the named items, so a member left active by the run keeps its
-// result while its deactivated siblings show none (keel/requirement-88).
+// invalidateClearedResults is the sanctioned per-item clear path for
+// exclusive-group sibling deactivation (keel/requirement-88). Unlike
+// resetKeelTestResults it is scoped to the named items, so a member left active
+// by the run keeps its result.
+//
+// It does NOT deliver a genuine no-result, and no per-item path can:
+// invalidateTestResults only marks a result outdated (F3), and item replacement
+// drops the icon only for a live in-session result — persistence-restored
+// results re-associate by id to the replacement (F14, falsified live in the
+// issue-89 reopen). Per-item Unset is unreachable on this platform; only the
+// global testing.clearTestResults reaches it (F16 / keel/ac-429). This comment
+// previously claimed deactivated siblings "show none" — that was the
+// pre-F14 belief, corrected under keel/change_request-165.
 export function invalidateClearedResults(controller: vscode.TestController, clearedResultIds: ReadonlySet<string>): void {
   if (clearedResultIds.size === 0) {
     return;
@@ -494,6 +508,10 @@ export function applyReconcileResultsCapability(controller: vscode.TestControlle
     if (entry.state === 'passed') {
       run.passed(item);
     } else {
+      // skipped reason (d): a non-active member of a mutually-exclusive
+      // desired-state group (requirement-88). Genuine no-result is
+      // unreachable per item (F16), so ⊘ is the owner-chosen rendering.
+      // See keel/ac-428.
       run.skipped(item);
     }
   }
@@ -570,6 +588,9 @@ async function runSelected(
   // the real bridge rejects ids it did not serve (formal_review-80).
   const informational = selected.filter(isInformationalDesiredStateItem);
   for (const item of informational) {
+    // skipped reason (d): a desired-state row that is display-only and never
+    // executes — the non-active side of the same requirement-88 group rule.
+    // See keel/ac-428.
     run.skipped(item);
   }
   const submittable = selected.filter((item) => !isInformationalDesiredStateItem(item));
@@ -995,10 +1016,19 @@ export function applyRunEvent(
         }
       }
       for (const item of skippedSiblingItemsForRunEvent(items, event.test_id, selectedItemIds, resultItemIds)) {
+        // skipped reason (c): a leaf inside the selection's subtree that this
+        // run will not execute and that carries no result of its own.
+        // See keel/ac-428.
         run.skipped(item);
         resultItemIds.add(item.id);
       }
       for (const item of neutralAncestorItemsForRunEvent(items, event.test_id, selectedItemIds)) {
+        // skipped reason (c), by the widest reading: an intermediate ancestor
+        // between the selection and the result item. It is in the run's scope
+        // and never executes — but unlike every other (c) site it is a
+        // non-runnable group item, which F12 says an extension does not stamp
+        // at all. Flagged as a candidate FIFTH reason by keel/ac-428's audit;
+        // see keel/issue-135 before adding another stamp of this shape.
         run.skipped(item);
       }
       appendRunOutput(run, `passed ${event.test_id ?? 'unknown'}${event.duration_ms !== undefined ? ` (${event.duration_ms} ms)` : ''}`);
@@ -1024,6 +1054,8 @@ export function applyRunEvent(
     case 'cancelled':
       for (const item of resultItemsForRunEvent(items, event.test_id)) {
         if (shouldApplyResultToItem(item, selectedItemIds, resultItemIds, event.test_id)) {
+          // skipped reason (b): the producer emitted `cancelled`, for which
+          // VS Code has no distinct state. See keel/ac-428.
           run.skipped(item);
           resultItemIds.add(item.id);
         }
@@ -1033,6 +1065,8 @@ export function applyRunEvent(
     case 'skipped':
       for (const item of resultItemsForRunEvent(items, event.test_id)) {
         if (shouldApplyResultToItem(item, selectedItemIds, resultItemIds, event.test_id)) {
+          // skipped reason (a): the producer emitted `skipped`.
+          // See keel/ac-428.
           run.skipped(item);
           resultItemIds.add(item.id);
         }
