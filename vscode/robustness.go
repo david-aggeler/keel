@@ -112,6 +112,7 @@ func IsKnownRunEvent(event string) bool {
 func NormalizeRunEvents(r io.Reader, producerErr error, emit RunEventWriter, logf func(string), requestedIDs ...string) int {
 	sawTerminal := false
 	terminalExit := 0
+	faultRecipients := append([]string(nil), requestedIDs...)
 
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
@@ -139,6 +140,9 @@ func NormalizeRunEvents(r io.Reader, producerErr error, emit RunEventWriter, log
 				terminalExit = *event.ExitCode
 			}
 		}
+		if event.Event == "run_started" {
+			faultRecipients = appendRequestedRunIDs(faultRecipients, event.Requested)
+		}
 		emit(event)
 	}
 	if err := scanner.Err(); err != nil && producerErr == nil {
@@ -153,10 +157,17 @@ func NormalizeRunEvents(r io.Reader, producerErr error, emit RunEventWriter, log
 	if producerErr != nil {
 		msg = "run producer failed: " + producerErr.Error()
 	}
-	EmitErroredForTestIDs(requestedIDs, msg, emit)
+	EmitErroredForTestIDs(faultRecipients, msg, emit)
 	code := 1
 	emit(RunEvent{Event: "run_finished", Message: msg, ExitCode: &code})
 	return code
+}
+
+func appendRequestedRunIDs(ids []string, requested []RunRequest) []string {
+	for _, request := range requested {
+		ids = append(ids, request.ID)
+	}
+	return ids
 }
 
 // EmitErroredForTestIDs reports a run fault against every affected requested id.
