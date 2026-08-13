@@ -92,6 +92,7 @@ Prereq
 prereq
 presencetool
 Println
+probeb
 procexec
 pytest
 readback

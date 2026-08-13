@@ -24,65 +24,7 @@ turn_budgets:
   review:
   # Optional max turns for merge sessions.
   merge:
-# Per-transition-gate stage bindings, split by in-session versus runner-owned execution.
-#
-# keel has exactly two gate commands, and neither is decomposable:
-#
-#   go run ./cmd/keel-dev ci        THE gate. gofmt, build, vet, in-process lint
-#                                   policies, the pinned static-tool battery
-#                                   (golangci-lint, govulncheck, cspell, gitleaks,
-#                                   shellcheck, shfmt, advisory deadcode) and the
-#                                   coverage-floored test suite, in one command.
-#   go run ./cmd/keel-dev vsix ci   Node-backed sibling gate for vsix/ (pnpm
-#                                   build/lint/headless VS Code suite). Core ci
-#                                   stays node-free, so this is a separate stage.
-#
-# The two lists are execution MOMENTS, not a duplication (openbrain/interface_spec-26,
-# "Gate ownership, and what a status proves"):
-#
-#   in_session    run inside the executor session — the dev or review verb runs
-#                 these itself, synchronously, before writing its status.
-#   runner_owned  run by the invoker AFTER that session exits. The session is told
-#                 not to run them, so a long stage is not charged to its turn
-#                 budget and a red one is repaired by a fresh dispatch.
-#
-# The invoker's stages run at three boundaries, keyed on the status just written:
-# implementation_review (over the unit's branch), ready_to_merge (over the unit's
-# branch — the coverage floor is measured at THIS boundary only), and merged (over
-# the integrated tree). keel's declared merge command is the git operation and runs
-# no gate; the integrated tree is gated by the merged-boundary stages instead
-# (keel/issue-128, keel/requirement-89).
-#
-# prose and static declare an EMPTY runner_owned list, per the spec: a session at
-# those rungs owns its whole gate and gets no handoff.
-#
-# openbrain splits its upper rungs because openbrain-dev exposes per-stage verbs
-# (lint-docs, lint-code, coverage-floor, test unit, test integration). keel-dev
-# does not: `ci` is monolithic by design (CLAUDE.md — "Do not re-list checks
-# anywhere else"), and it contains the coverage floor and the whole test suite, so
-# there is no half to hold back and no half to keep in session.
-#
-# DEVIATION, deliberate and forced. At unit and above, keel's indivisible `ci`
-# appears in BOTH lists, so it runs twice — once in session, once at the boundary.
-# The reuse memo is per-process and does not collapse that. The alternative is
-# worse in both directions: in_session-only leaves the integrated tree ungated at
-# the merged boundary (the keel/issue-70 regression class), and runner_owned-only
-# leaves the dev and review sessions writing transitions they never verified.
-# A rung-shaped `keel-dev ci` is what removes the deviation — the follow-up CR.
-#
-# Both gates run at EVERY rung, deliberately. keel/ac-288 — "a core-only change
-# does not require the VSIX gate" — is retired, deferred by owner decision
-# 2026-07-16 (keel/change_request-103): keel is pre-stability, so the VSIX gate is
-# always on, always-on safety over per-merge cost. Binding vsix ci to the upper
-# rungs only would reinstate surface-gating keyed on a hand-chosen rung rather
-# than on the diff, which is weaker than what ac-288 retired — and the regression
-# class it guards (keel/issue-70) has already recurred three times. Revisit when
-# keel reaches stability and ac-288 comes back in force.
-#
-# The lower rungs overshoot: prose and static run the coverage-floored test suite
-# because keel has no cheaper command to name. Safe, and it satisfies cumulative
-# containment, but a rung-shaped `keel-dev ci` would make the cheap rungs cheap.
-# Worth a follow-up CR.
+
 transition_gates:
   prose:
     in_session:
