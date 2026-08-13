@@ -2418,12 +2418,20 @@ func TestVSCodeRunGoBuildFailureEmitsErroredPackageEvent(t *testing.T) {
 
 	bin := t.TempDir()
 	callsFile := filepath.Join(bin, "calls.log")
+	// The stream below is the shape go1.26 actually emits for a package whose
+	// test binary does not compile: the build-* lines carry ImportPath and no
+	// Package at all, and the package is still reported start/output/fail
+	// afterwards. A stub that puts Package on the build-* lines, or that stops
+	// at build-fail, cannot fail this criterion.
 	stub(t, bin, callsFile, "go", `
 case "$1 $2" in
   "test ./log")
-    printf '%s\n' '{"Action":"build-output","Package":"github.com/david-aggeler/keel/log","Output":"# github.com/david-aggeler/keel/log\n"}'
-    printf '%s\n' '{"Action":"build-output","Package":"github.com/david-aggeler/keel/log","Output":"log/broken.go:4:2: undefined: nope\n"}'
-    printf '%s\n' '{"Action":"build-fail","Package":"github.com/david-aggeler/keel/log"}'
+    printf '%s\n' '{"ImportPath":"github.com/david-aggeler/keel/log [github.com/david-aggeler/keel/log.test]","Action":"build-output","Output":"# github.com/david-aggeler/keel/log\n"}'
+    printf '%s\n' '{"ImportPath":"github.com/david-aggeler/keel/log [github.com/david-aggeler/keel/log.test]","Action":"build-output","Output":"log/broken.go:4:2: undefined: nope\n"}'
+    printf '%s\n' '{"ImportPath":"github.com/david-aggeler/keel/log [github.com/david-aggeler/keel/log.test]","Action":"build-fail"}'
+    printf '%s\n' '{"Action":"start","Package":"github.com/david-aggeler/keel/log"}'
+    printf '%s\n' '{"Action":"output","Package":"github.com/david-aggeler/keel/log","Output":"FAIL\tgithub.com/david-aggeler/keel/log [build failed]\n"}'
+    printf '%s\n' '{"Action":"fail","Package":"github.com/david-aggeler/keel/log","Elapsed":0}'
     exit 1
     ;;
 esac
@@ -2436,8 +2444,8 @@ exit 0`)
 		t.Fatalf("go package run succeeded; want non-zero build failure\nprotocol:\n%s\ncalls:\n%s", protocol.String(), calls(t, callsFile))
 	}
 	events := decodeRunEvents(t, protocol.String())
-	if !runEventsContain(events, "errored", "go::pkg::log") {
-		t.Fatalf("run events missing package build-fail errored event: %+v", events)
+	if got := runEventCount(events, "errored", "go::pkg::log"); got != 1 {
+		t.Fatalf("errored events for go::pkg::log = %d, want exactly 1: %+v", got, events)
 	}
 	if runEventsContain(events, "failed", "go::pkg::log") {
 		t.Fatalf("run events reported build failure as failed, want only errored for package id: %+v", events)
@@ -3089,6 +3097,16 @@ func runEventsContain(events []vscode.RunEvent, event, id string) bool {
 		}
 	}
 	return false
+}
+
+func runEventCount(events []vscode.RunEvent, event, id string) int {
+	count := 0
+	for _, got := range events {
+		if got.Event == event && got.TestID == id {
+			count++
+		}
+	}
+	return count
 }
 
 func runEventFor(events []vscode.RunEvent, event, id string) vscode.RunEvent {

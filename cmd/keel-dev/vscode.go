@@ -2115,10 +2115,14 @@ func goFileRelInNestedModule(root, rel string) bool {
 func emitGoTestJSONEvents(raw string, selection vscode.GoSelection, selectedID, modulePath string, writer vscode.RunEventWriter) {
 	scanner := bufio.NewScanner(strings.NewReader(raw))
 	buildOutputByID := map[string]*strings.Builder{}
+	erroredIDs := map[string]struct{}{}
 	for scanner.Scan() {
 		var event vscode.GoTestJSONEvent
 		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
 			continue
+		}
+		if event.Action == "build-output" || event.Action == "build-fail" {
+			event.Package = vscode.GoBuildEventPackage(event)
 		}
 		testID := vscode.GoRunEventTestID(selection, event, selectedID, modulePath)
 		switch event.Action {
@@ -2127,6 +2131,14 @@ func emitGoTestJSONEvents(raw string, selection vscode.GoSelection, selectedID, 
 				writer(vscode.RunEvent{Event: "test_started", TestID: testID})
 			}
 		case "pass", "fail", "skip":
+			if _, errored := erroredIDs[testID]; errored {
+				// The package already settled as errored from its build
+				// failure. go test reports the package `fail` right after
+				// build-fail, and emitting it too would both contradict
+				// ac-425 and give one id two terminal events
+				// (requirement-71 AC 6).
+				continue
+			}
 			if vscode.GoJSONResultBelongsToSelection(selection, event) {
 				writer(vscode.RunEvent{
 					Event:      vscode.StatusEventName(event.Action),
@@ -2151,6 +2163,7 @@ func emitGoTestJSONEvents(raw string, selection vscode.GoSelection, selectedID, 
 				if b := buildOutputByID[testID]; b != nil {
 					message = b.String()
 				}
+				erroredIDs[testID] = struct{}{}
 				writer(vscode.RunEvent{Event: "errored", TestID: testID, Message: message})
 			}
 		}
