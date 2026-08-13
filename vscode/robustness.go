@@ -108,8 +108,8 @@ func IsKnownRunEvent(event string) bool {
 // It returns the exit code of the terminal run_finished (the producer's own
 // when it emitted one, else the synthetic non-zero code). logf may be nil.
 //
-// DHF-REQ: keel/requirement-23
-func NormalizeRunEvents(r io.Reader, producerErr error, emit RunEventWriter, logf func(string)) int {
+// DHF-REQ: keel/requirement-23, keel/requirement-116
+func NormalizeRunEvents(r io.Reader, producerErr error, emit RunEventWriter, logf func(string), requestedIDs ...string) int {
 	sawTerminal := false
 	terminalExit := 0
 
@@ -153,10 +153,31 @@ func NormalizeRunEvents(r io.Reader, producerErr error, emit RunEventWriter, log
 	if producerErr != nil {
 		msg = "run producer failed: " + producerErr.Error()
 	}
-	emit(RunEvent{Event: "errored", Message: msg})
+	EmitErroredForTestIDs(requestedIDs, msg, emit)
 	code := 1
 	emit(RunEvent{Event: "run_finished", Message: msg, ExitCode: &code})
 	return code
+}
+
+// EmitErroredForTestIDs reports a run fault against every affected requested id.
+// When no id is known, it preserves the historical run-scoped output event.
+//
+// DHF-REQ: keel/requirement-116
+func EmitErroredForTestIDs(testIDs []string, message string, emit RunEventWriter) {
+	seen := map[string]struct{}{}
+	for _, id := range testIDs {
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		emit(RunEvent{Event: "errored", TestID: id, Message: message})
+	}
+	if len(seen) == 0 {
+		emit(RunEvent{Event: "errored", Message: message})
+	}
 }
 
 // --- Lane preparation / structured lane-blocked result ---
