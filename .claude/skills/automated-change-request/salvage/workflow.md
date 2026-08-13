@@ -1,7 +1,7 @@
 ---
 name: automated-change-request/salvage
 description: "Analyze an interrupted autonomous-tail run after run-queue detects gold status ahead of branch/worktree evidence; classify recovery as salvage, hand-back, reset, or manual, with suggest-only default and opt-in auto-apply for the green salvage class."
-x-openbrain-content-hash: sha256:9edf1e5fbccddd319510d3618a1d1a3ffb7e2c5eb5e181f98008e451dc8731b5
+x-openbrain-content-hash: sha256:ed2187912db682058ec7ed383f3b42e8df4f9d4368f9f028becb4eeef4259b28
 ---
 
 # Automated Salvage
@@ -23,7 +23,7 @@ detector-triggered recovery stage, not part of the normal tail.
 
 ## 1. Read State
 
-1. `get_change_request product=openbrain id=<id>`.
+1. `get_change_request product=keel id=<id>`.
 2. Confirm `status == in_progress` and `executor == agent`. If not, record a
    `manual` recommendation with the observed status/executor and stop.
 3. From the current worktree, gather:

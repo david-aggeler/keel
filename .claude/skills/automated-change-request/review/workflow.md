@@ -1,7 +1,7 @@
 ---
 name: automated-change-request/review
 description: 'Produce an advisory DHF annotation coverage report and a formal_review record, runnable by a non-resident executor (codex). Use when implementation is complete (status=implementation_review) and the unit is ready for transition-gate review.'
-x-openbrain-content-hash: sha256:aecfc8197da908ab136312da74b0a5eef845eca3c1b5abf155f3bcb28a3a54c6
+x-openbrain-content-hash: sha256:80921b8115ee4c9bef273c7fc6ba3397ff89feea8a488776b219dfd8f3f58722
 ---
 
 # Automated Review
@@ -31,7 +31,7 @@ produce a `formal_review` record. Run linearly, no fan-out.
 
 ## 1. Precondition check
 
-1. `get_change_request product=openbrain id=<id>`.
+1. `get_change_request product=keel id=<id>`.
 2. Confirm `status == implementation_review`. If it differs, **halt** and report the
    actual status — the unit is not ready for `review`.
 3. Resolve the requirements **and their acceptance criteria** kind-aware (see
@@ -43,14 +43,14 @@ produce a `formal_review` record. Run linearly, no fan-out.
 For each resolved requirement (and its acceptance criteria), run the two searches **and record
 their actual results** (do not assume coverage you did not see):
 
-- `rg "DHF-REQ: openbrain/requirement-<id>"` — implementing-code markers.
-- `rg "DHF-TEST: openbrain/requirement-<id>"` — test markers.
+- `rg "DHF-REQ: keel/requirement-<id>"` — implementing-code markers.
+- `rg "DHF-TEST: keel/requirement-<id>"` — test markers.
 
 Emit a coverage table:
 
 | Requirement | DHF-REQ hits | DHF-TEST hits | Status |
 |---|---|---|---|
-| openbrain/requirement-<id> | <n> | <n> | covered / missing |
+| keel/requirement-<id> | <n> | <n> | covered / missing |
 
 **This report is advisory only.** Missing annotations are a finding to surface in the
 `formal_review` notes — they are **not** a blocker for `merge`. Enforcement
@@ -83,7 +83,7 @@ or partial slice can pass every gate.
 
    | Requirement / AC | Atom | Implemented (file:symbol) | Proven (test) | Verdict |
    |---|---|---|---|---|
-   | openbrain/ac-<id> | <clause> | <path:sym> | <path:Test…> | covered / partial / missing |
+   | keel/ac-<id> | <clause> | <path:sym> | <path:Test…> | covered / partial / missing |
 
 4. Findings that make this step **blocking**:
    - an AC atom with **no** implementation in the diff (silently dropped scope);
@@ -105,7 +105,7 @@ or partial slice can pass every gate.
 
 Review cannot pass a HEAD whose declared in-session gate is red.
 
-1. Re-read this change request with `get_change_request product=openbrain id=<id>`
+1. Re-read this change request with `get_change_request product=keel id=<id>`
    and read its `transition_gate` rung. If it is absent, **halt loudly** — review cannot
    pass without a declared transition gate.
 2. Read the committed `openbrain-client.yaml` from this worktree root and resolve
@@ -148,7 +148,7 @@ backstop.
 You are the **sole reviewer** by default — do not wait for an operator to name
 reviewers. Call `create_formal_review` with:
 
-- `subject_refs`: the ref to this change request (`openbrain/change_request-<id>`).
+- `subject_refs`: the ref to this change request (`keel/change_request-<id>`).
 - `outcome`: your verdict from the annotation report, the **acceptance-coverage table
   (step 2b)**, the green in-session transition gate, and a read of the diff — `approved` if every AC atom
   is implemented and proven and the diff looks sound,

@@ -4,7 +4,7 @@ description: "Permanent smoke-test skill for the OpenBrain materialize pipeline:
 allowed-tools: Read
 x-openbrain-source: materialization-probe/v4
 x-openbrain-content-source-hash: sha256:7dfd8f5bc44484a4564405f279ca530d113c4eb7c0d12a3eab464f8b137f4ca9
-x-openbrain-content-hash: sha256:0817d453c0bb1271ab3ec0cc005861cdcd284a2e3df56d9dd90783e5f14fde52
+x-openbrain-content-hash: sha256:15c632878822ee91c40b15d1094cd92de1185bad014016c82d8b887384842617
 ---
 
 # Materialization Probe
@@ -18,11 +18,11 @@ The block below is generated from `sordata.SkillMaterializationVocabulary()` —
 
 <!-- generated from sordata.SkillMaterializationVocabulary(); do not hand-edit -->
 
-- `build_command`: just build-local
+- `build_command`: just build
 - `mcp_instance`: gold
-- `primary_language`: go
+- `primary_language`: Go
 - `process`: HELIX01
-- `product_name`: openbrain
+- `product_name`: keel
 
 <!-- end generated token block -->
 

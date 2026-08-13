@@ -1,7 +1,7 @@
 ---
 name: automated-change-request/dev
 description: 'Implement an approved unit via a linear vertical-slice TDD loop, runnable by a non-resident executor (codex). Use when executor=agent and status is either approved (fresh claim) or in_progress with a prior blocking formal_review (rework resume), and the operator says "dev this CR headless" or "codex dev".'
-x-openbrain-content-hash: sha256:8bdbcf573a3a4c39b657352f55165fd04225987d1095c0b3df9b37fda23d538b
+x-openbrain-content-hash: sha256:876a73649f140ec9a05594cbe1cf0d764a93d711c5f92223dff981cdbe517228
 ---
 
 # Automated Dev
@@ -31,7 +31,7 @@ then each requirement's ACs (its GWT atoms) — the ACs are what each slice's te
 
 ## 1. Precondition check
 
-1. `get_change_request product=openbrain id=<id>`.
+1. `get_change_request product=keel id=<id>`.
 2. Confirm `executor == agent`. If it differs, **halt** and report the actual executor —
    this unit is not for an autonomous executor.
 3. Confirm the status is one of the **two** admissible entry states. There is no third;
@@ -48,8 +48,8 @@ then each requirement's ACs (its GWT atoms) — the ACs are what each slice's te
    The distinguishing signal for a resume is the **prior blocking `formal_review`**, never
    the `in_progress` status alone: a rework round is one a reviewer (or a post-merge revert,
    or a verify no-op reopen) routed back to `dev`, and it leaves that record behind. Read it
-   with `list_formal_review product=openbrain` (or `search_formal_review`) and match
-   `subject_refs` on `openbrain/change_request-<seq>`; the newest matching row is the one
+   with `list_formal_review product=keel` (or `search_formal_review`) and match
+   `subject_refs` on `keel/change_request-<seq>`; the newest matching row is the one
    that routed this unit back. It is legitimate for the corrective work of that round to
    have been applied outside a `dev` child (by the run-queue supervisor or by hand) — step 2's
    resume check reads the branch, so already-committed slices are recognized as done rather
@@ -192,18 +192,18 @@ Never spin past 3 rounds.
 Add DHF traceability markers, then commit the slice (code + test + markers) to the
 worktree branch.
 
-- **`DHF-REQ: openbrain/requirement-<id>`** on the smallest implementing unit
+- **`DHF-REQ: keel/requirement-<id>`** on the smallest implementing unit
   (function/method/handler) that satisfies the requirement.
-- **`DHF-TEST: openbrain/requirement-<id>`** on each test function that verifies it.
+- **`DHF-TEST: keel/requirement-<id>`** on each test function that verifies it.
 
 Use the language-appropriate comment leader. One line may carry multiple
 comma-separated refs. Example (Go):
 
 ```go
-// DHF-REQ: openbrain/requirement-42
+// DHF-REQ: keel/requirement-42
 func HandleFoo(...) { ... }
 
-// DHF-TEST: openbrain/requirement-42
+// DHF-TEST: keel/requirement-42
 func TestHandleFoo_RejectsMissingBody(t *testing.T) { ... }
 ```
 
@@ -214,7 +214,7 @@ Proceed to the next slice.
 All slices green is necessary but not sufficient. Before reporting dev complete,
 run the unit's declared `transition_gate` in-session stages against this worktree HEAD.
 
-1. Re-read this change request with `get_change_request product=openbrain id=<id>`
+1. Re-read this change request with `get_change_request product=keel id=<id>`
    and read its `transition_gate` rung. If it is absent, **halt loudly** — dev cannot
    declare done without a declared transition gate.
 2. Read the committed `openbrain-client.yaml` from this worktree root and resolve

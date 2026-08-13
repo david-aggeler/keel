@@ -94,7 +94,7 @@ For each failure_mode record that needs mitigations, call `update_failure_mode` 
 
 After the user confirms the roadmap (section above), for each mitigation the user accepts:
 
-1. Call `search_requirement product=openbrain query="<mitigation action summary>"`.
+1. Call `search_requirement product=keel query="<mitigation action summary>"`.
 2. If a matching requirement already exists that captures the same non-functional constraint:
    - Call `update_requirement` to add a GWT atom in `acceptance_criteria` (one entry: `Given <system state> When <failure trigger condition> Then <the mitigation control is in place and measurable>`). Append a note linking back to the failure_mode ref (e.g., `related: <failure_mode ref>`). Do not duplicate an atom already present.
 3. If no matching requirement exists:

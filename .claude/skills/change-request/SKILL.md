@@ -1,12 +1,12 @@
 ---
 name: change-request
-description: "Unit-of-implementation lifecycle for openbrain: create, plan, dev, review, close, status, correct. Use when the user says: '/change-request', 'create a CR', 'implement this', 'open a change request', 'resume CR', 'cr list', 'list change requests', 'start a unit', 'pick up this story', 'implement the story', 'dev this story', 'implement the next story', 'convert story to unit'"
+description: "Unit-of-implementation lifecycle for keel: create, plan, dev, review, close, status, correct. Use when the user says: '/change-request', 'create a CR', 'implement this', 'open a change request', 'resume CR', 'cr list', 'list change requests', 'start a unit', 'pick up this story', 'implement the story', 'dev this story', 'implement the next story', 'convert story to unit'"
 allowed-tools: mcp__gold__create_change_request, mcp__gold__update_change_request, mcp__gold__list_change_request, mcp__gold__get_change_request, mcp__gold__search_change_request, mcp__gold__get_issue, mcp__gold__get_template_for, mcp__gold__list_glossary_term, mcp__gold__create_glossary_term, mcp__gold__update_glossary_term, mcp__gold__search_requirement, mcp__gold__create_requirement, mcp__gold__update_requirement, mcp__gold__get_dev_defaults, mcp__gold__list_dev_defaults, mcp__gold__create_dev_defaults, mcp__gold__create_issue_fix, mcp__gold__create_formal_review, mcp__gold__create_action_item, mcp__gold__list_task, mcp__gold__create_task, mcp__gold__update_task, mcp__gold__get_task
 targets_templates:
   - change_request-template
 x-openbrain-source: change-request/v13
 x-openbrain-content-source-hash: sha256:e7df42b92337d2c8adc901fcb55e54e3b9a2c05ca59cef6d678ab168b3d2f3aa
-x-openbrain-content-hash: sha256:c2be903c8f2830a02d71521771724c5e62257884aac70e4df3662b3c365abc41
+x-openbrain-content-hash: sha256:1db028e5a0bad0d10cdd8699f0a4d92e5ac4a9b77a01220a5f1c3085a368fc35
 ---
 
 # Change Request

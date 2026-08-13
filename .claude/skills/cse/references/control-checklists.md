@@ -2,7 +2,7 @@
 
 Sera walks each of these four checklists in Pass 3, producing a verdict per item: Present · Weak · Missing · Deferred-to-Growth · Unclear. Each `Missing`/`Weak` row lists what would close it; each `Unclear` becomes an Open Item.
 
-The lists are deliberately concrete and product-shaped. They are *not* a CIS Benchmark or a NIST control catalog — they're the controls that map to the openbrain MVP cybersecurity baseline plus the next ring of pragmatic security hygiene.
+The lists are deliberately concrete and product-shaped. They are *not* a CIS Benchmark or a NIST control catalog — they're the controls that map to the keel MVP cybersecurity baseline plus the next ring of pragmatic security hygiene.
 
 ---
 

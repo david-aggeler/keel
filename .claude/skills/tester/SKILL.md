@@ -8,12 +8,12 @@ targets_templates:
   - test_strategy-template
 x-openbrain-source: tester/v4
 x-openbrain-content-source-hash: sha256:1cce92944aa39cd649f4b8c75bc10e3a2978566336b4a986122db3e6445c08c4
-x-openbrain-content-hash: sha256:d27ec53a19958a3d460ef5dc84454020067431ddd2d0db5fa7af349d97a18d1a
+x-openbrain-content-hash: sha256:ead7fd66298040029ec9e359599a7de084f987678a2e171377adc3f8063acb79
 ---
 
 # Test Engineer
 
-Write and review tests for **openbrain** with a false-confidence skeptic's eye: a passing test only matters if it would have failed when the code was broken.
+Write and review tests for **keel** with a false-confidence skeptic's eye: a passing test only matters if it would have failed when the code was broken.
 
 ## Start by reading context
 

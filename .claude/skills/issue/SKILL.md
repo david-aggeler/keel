@@ -1,13 +1,13 @@
 ---
 name: issue
-description: "Issue management in gold for the openbrain product. Use when the user says: '/issue', 'create an issue', 'file an issue', 'log this bug', 'close issue', 'triage issues', 'list issues'"
+description: "Issue management in gold for the keel product. Use when the user says: '/issue', 'create an issue', 'file an issue', 'log this bug', 'close issue', 'triage issues', 'list issues'"
 allowed-tools: mcp__gold__create_issue, mcp__gold__update_issue, mcp__gold__list_issue, mcp__gold__get_issue, mcp__gold__search_issue, mcp__gold__get_template_for, mcp__gold__search_requirement, mcp__gold__get_requirement, mcp__gold__create_requirement, mcp__gold__update_requirement
 targets_templates:
   - issue-template
   - issue_fix-template
 x-openbrain-source: issue/v6
 x-openbrain-content-source-hash: sha256:fa85a36cc4de16dcf403448fd5572fa3991e3591a88846fc12ac970c54b1076d
-x-openbrain-content-hash: sha256:37b2553d5546a57a183d1b0dcdb7a81950403d945ae006bea04714d496e9d2ba
+x-openbrain-content-hash: sha256:2cacd1fd8d5cf9f65654a8781ab4ee7b6d1d378670ae6dbe2c29c7896e494607
 ---
 
 # Issue Skill
@@ -22,7 +22,7 @@ Tools and target templates are declared in the frontmatter (`allowed-tools`, `ta
 |---|---|
 | File a new bug / improvement / doc gap | `get_template_for dto_type=issue` (authoritative for fields and enums) → `create_issue` |
 | Analyze, review, close, reopen | `update_issue` with the sparse `fields` overlay — e.g. `fields={status:"analyzed"}` or `fields={status:"closed", close_reason:"obsolete"}`. Pass ONLY the fields you are changing. |
-| List, browse, triage | `list_issue product=openbrain` (`include_deferred=true` for deferred). No server-side status filter — filter client-side or use `search_issue`. Render results as a markdown table. |
+| List, browse, triage | `list_issue product=keel` (`include_deferred=true` for deferred). No server-side status filter — filter client-side or use `search_issue`. Render results as a markdown table. |
 
 When in doubt between create and update: no existing issue ID in the
 message → create.
@@ -103,7 +103,7 @@ partial change such as closing or reopening:
   `replace=true` for a status change.
 
 Rule of thumb: to close an issue, call
-`update_issue product=openbrain id=<issue-id> fields={status:"closed", close_reason:"<reason>"}`.
+`update_issue product=keel id=<issue-id> fields={status:"closed", close_reason:"<reason>"}`.
 Never re-send the whole payload just to change one field, and never pass
 `replace=true` for a partial update.
 

@@ -16,6 +16,7 @@
     "epic",
     "grill-me",
     "issue",
+    "issue-grooming",
     "materialization-probe",
     "openbrain-init",
     "reviewer",
@@ -195,11 +196,11 @@
     },
     "skills/cse/references/control-checklists.md": {
       "coverage": "checksum",
-      "sha256": "sha256:97b636be807b478121caf5eb6c1fe88d2d64498f35c513ec04140d2752ddabd7"
+      "sha256": "sha256:c719e503790ffecb967808d57d9a99f4b51d7b75bcc58c92018c8c9a7146e83f"
     },
     "skills/cse/references/mvp-baseline.md": {
       "coverage": "checksum",
-      "sha256": "sha256:af16788ede6f9075d59ced9970af94c05e23ced4f0a8cc19e05cdc059506dbf5"
+      "sha256": "sha256:adb9313a98beaa4c075abba37ca77d014bd5f81d7554272c3d5b6d7de670ba84"
     },
     "skills/cse/references/risk-scales.md": {
       "coverage": "checksum",
@@ -252,7 +253,7 @@
     },
     "skills/dfmea/steps/step-06-mitigations.md": {
       "coverage": "checksum",
-      "sha256": "sha256:f92709e09776d2638e26605d8c0ffd14871933adebc5ff81d7c82246234265ad"
+      "sha256": "sha256:d76991f571113ae577268bfdcdc7b0635d45173a62a26915bac0b2542da6faa7"
     },
     "skills/dfmea/steps/step-07-arch-feedback.md": {
       "coverage": "checksum",
@@ -300,6 +301,9 @@
       "sha256": "sha256:071faea3f250e53c5bcfbac9011a6a654211624dccad374c1bacd2a259c5a1c1"
     },
     "skills/grill-me/SKILL.md": {
+      "coverage": "frontmatter"
+    },
+    "skills/issue-grooming/SKILL.md": {
       "coverage": "frontmatter"
     },
     "skills/issue/SKILL.md": {

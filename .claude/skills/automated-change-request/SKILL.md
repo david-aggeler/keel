@@ -1,10 +1,10 @@
 ---
 name: automated-change-request
-description: "Executor-portable autonomous tail of the change-request lifecycle for openbrain — dev, review, merge, verify, salvage — written so a non-resident linear executor (e.g. codex) can run each verb in a fresh session with no project memory. Use when the user says: '/automated-change-request', 'run the automated tail', 'dev this CR headless', 'codex dev', 'codex review', 'codex merge', 'verify this tail', 'autonomous dev/review/merge/verify/salvage', 'drive this approved CR to closed', 'salvage this tail'"
+description: "Executor-portable autonomous tail of the change-request lifecycle for keel — dev, review, merge, verify, salvage — written so a non-resident linear executor (e.g. codex) can run each verb in a fresh session with no project memory. Use when the user says: '/automated-change-request', 'run the automated tail', 'dev this CR headless', 'codex dev', 'codex review', 'codex merge', 'verify this tail', 'autonomous dev/review/merge/verify/salvage', 'drive this approved CR to closed', 'salvage this tail'"
 allowed-tools: mcp__gold__get_change_request, mcp__gold__update_change_request, mcp__gold__search_change_request, mcp__gold__get_requirement, mcp__gold__get_ac, mcp__gold__list_ac, mcp__gold__list_inbound_refs, mcp__gold__create_formal_review, mcp__gold__create_issue, mcp__gold__create_action_item, mcp__gold__create_issue_fix, mcp__gold__list_issue_fix, mcp__gold__update_issue, mcp__gold__get_issue, mcp__gold__admin_list_product_versions
 x-openbrain-source: automated-change-request/v16
 x-openbrain-content-source-hash: sha256:a3eae3c4532dc2152c5047d2eed59b1b34b6646bf5eaacc3cb5f38eb470056fe
-x-openbrain-content-hash: sha256:bf594523664f3b3d51ea9fac2130380a90b62069f374c3eb250a202d5a8b86b3
+x-openbrain-content-hash: sha256:45a828e180ac8fd49685ce2cbaece399b5dda0758396e365045d2df8917cb909
 ---
 
 # Automated Change Request

@@ -1,7 +1,7 @@
 ---
 name: automated-change-request/merge
 description: 'Land a reviewed unit on main through the dependency guard and configured merge command, runnable by a non-resident executor (codex). Use when status=ready_to_merge and the unit is cleared to merge.'
-x-openbrain-content-hash: sha256:2c35adfc51f18dcdebe8bf2fe826bb8d4e08362fe2cb37bbabe50e1c6df01710
+x-openbrain-content-hash: sha256:b53eadbd613c91965c3df505b738b2a437a4611fa4c5be14ddd84631ac1f8011
 ---
 
 # Automated Merge
@@ -28,7 +28,7 @@ runner owns those after this verb exits. On a green landing the verb **ends at
 
 ## 1. Precondition check
 
-`get_change_request product=openbrain id=<id>`. Confirm `status == ready_to_merge`; if it
+`get_change_request product=keel id=<id>`. Confirm `status == ready_to_merge`; if it
 differs, **halt** and report. Read `close_reason`, `parent`, `depends_on`,
 `deferred_pending`, and `transition_gate` for use below.
 

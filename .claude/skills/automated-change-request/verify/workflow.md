@@ -1,7 +1,7 @@
 ---
 name: automated-change-request/verify
 description: 'Independently verify post-merge scope fidelity, complete the gold wrap-up, and close a merged autonomous unit, runnable by headless Claude after merge.'
-x-openbrain-content-hash: sha256:68459c11de6caa5841fe7d8c7d13b80d31bc7ec23212fde2ab188a71c6939abb
+x-openbrain-content-hash: sha256:142abaf7f879d67b7e00976d9ebc79bd33b2d1c577632079aff20c8c444fde01
 ---
 
 # Automated Verify
@@ -27,7 +27,7 @@ the Codex executor that produced dev/review/merge.
 
 ## 1. Precondition check
 
-1. `get_change_request product=openbrain id=<id>`.
+1. `get_change_request product=keel id=<id>`.
 2. Confirm `status == merged`. If it differs, halt and report the actual status.
 3. Confirm `code_change_ref` is present (the merge verb recorded the merge SHA). If
    absent, halt and report that there is no merge commit to verify.
@@ -144,12 +144,12 @@ wrap-up writes without a persisted verdict artifact.
 
 ### 4a. Derive `fixed_in_version` (deterministic, never guess)
 
-`admin_list_product_versions product=openbrain`. The fix ships in the version
+`admin_list_product_versions product=keel`. The fix ships in the version
 **currently under development** — select the version(s) whose `Status` is
 `in_development`:
 
 - **Exactly one** `in_development` version → that is `fixed_in_version`, written in
-  canonical `openbrain/<version>` form (e.g. `openbrain/1.2.0`).
+  canonical `keel/<version>` form (e.g. `keel/1.2.0`).
 - **Zero, or two-or-more** `in_development` versions → **ambiguous**. Do **not** guess:
   leave the unit at `merged`, record in your run summary that `issue_fix` +
   parent-issue close are deferred pending an unambiguous `fixed_in_version` (state the
@@ -163,7 +163,7 @@ wrap-up writes without a persisted verdict artifact.
 Before calling `create_issue_fix`, list existing issue fixes for the parent issue:
 
 ```text
-list_issue_fix product=openbrain
+list_issue_fix product=keel
 ```
 
 Filter the returned rows client-side to rows whose `issue` is the parent issue ref.
@@ -225,7 +225,7 @@ Re-read and confirm `status == closed`. (`code_change_ref` is already present fr
 merge verb; `close_reason: "merged"` satisfies the schema's `x-status-requires` gate.)
 
 **Worked example / postcondition check:** for an epic-parented, merged change request such as
-`parent: openbrain/epic-5`, verify audits the merged diff, skips section 4 because no
+`parent: keel/epic-5`, verify audits the merged diff, skips section 4 because no
 `issue_fix` or parent-issue close applies, executes this step, and confirms the record
 is `closed`. The runner's `verify` postcondition must see `closed`, not `merged`.
 

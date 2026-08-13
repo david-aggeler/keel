@@ -1,5 +1,5 @@
 <!-- markdownlint-disable MD033 MD036 MD034 MD040 MD026 MD032 MD012 MD024 MD028 MD031 MD025 MD041 -->
-# openbrain MVP Cybersecurity Baseline
+# keel MVP Cybersecurity Baseline
 
 The floor. Every item below must be `Met` before construction is considered ready. Any `Gap` is an MVP blocker.
 

@@ -2,9 +2,9 @@
 name: openbrain-init
 description: "Bootstrap project-level HELIX01 skills via the openbrain-client binary. Fetches the skill catalog over HTTP, moves aside any existing skills into a legacy/ dir, materialises fresh content with placeholder substitution and content-hash stamping, restores local-only skills, and places agent files into .claude/agents/. Use when the user says: '/openbrain-init', 'bootstrap skills', 'fetch skills from openbrain', 'init openbrain skills', 'sync skills'"
 allowed-tools: Bash, Read, Write
-x-openbrain-source: openbrain-init/v6
-x-openbrain-content-source-hash: sha256:2fb0c0bf291861b54f1478c2fa53226809e8edb4c9f699b62e9ee831cfcf135e
-x-openbrain-content-hash: sha256:8bcd09d57e84f9d66b1cc330b868c1c06af3989b0d266b39ae107b40cde8c846
+x-openbrain-source: openbrain-init/v7
+x-openbrain-content-source-hash: sha256:1be2f679b99610d12fd6231e9fefa2196a738aaf64eb60b971cbf94f154dae27
+x-openbrain-content-hash: sha256:c133ab53237d514caff7dc52d1cb21f6305fe7fb0d2e6bc8b28118ddf6934b57
 ---
 
 # /openbrain-init — Bootstrap HELIX01 Skills
@@ -18,7 +18,10 @@ and agents are preserved.
 ## Prerequisites
 
 The following three steps install the `openbrain-client` binary from GitHub
-Releases and verify the download is uncorrupted before executing it. Note that
+Releases and verify the download is uncorrupted before executing it. They are
+the **first-acquisition** path only: once a client is installed, every
+subsequent upgrade goes through `openbrain-client self-update` (see
+*Upgrading an installed client* below). Note that
 sha256 verifies download integrity — it does not prove the release was produced
 by a trusted party, since both the binary and the checksums file are fetched from
 the same Release.
@@ -71,6 +74,28 @@ openbrain-client --version
 
 Ensure `$INSTALL_DIR` is in your `PATH`. If not, add it or use the full path.
 
+**Upgrading an installed client**
+
+The shell installer above owns first acquisition; the client owns every
+subsequent upgrade. An installed client upgrades itself from its configured
+instance's client-distribution route:
+
+```bash
+openbrain-client self-update --check   # report-only: current vs available, no change
+openbrain-client self-update           # digest-verified, atomic in-place upgrade
+```
+
+Notes on the contract:
+
+- The published digest is the sole update authority — a payload that does not
+  match it is never installed.
+- The replaced binary is retained beside the new one as `<exe>.prev`; restore it
+  by copying it back over the executable to roll back.
+- Guards are fail-closed: a downgrade, a platform mismatch, or an unwritable
+  install location aborts the update with the binary untouched.
+- There is no ambient or scheduled checking — `self-update` runs only when
+  invoked explicitly.
+
 You also need `openbrain-client.local.yaml` in the project root and at least one
 skill pinned and released on the target HELIX01 process (see Troubleshooting —
 empty manifest).
@@ -84,7 +109,7 @@ product: <product-slug>
 process: HELIX01
 mcp_instance: coal                       # target profile and tool prefix
 placeholders:                            # optional — operator-filled substitution values
-  primary_language: Go                   # example: fill go in skill bodies
+  primary_language: Go                   # example: fill Go in skill bodies
 
 targets:
   coal:
