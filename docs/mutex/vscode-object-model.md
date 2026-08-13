@@ -70,13 +70,15 @@ classDiagram
 | F5 | Replacing the `TestItem` object drops its rendered result **only when the result is attached to the live in-session object** (the activation-switch case). It does NOT work for persistence-restored results — see F14 | PARTIALLY PROVEN — scope narrowed by owner validation 2026-07-18 | cr-115 (in-session, iteration-26 owner-validated); falsified for restored results (issue-89 reopen) |
 | F6 | Replacing an item does **not** need a `TestRun` — it is silent tree surgery: no Test Results panel entry, no focus change | PROVEN | cr-115 mechanism in production |
 | F7 | Programmatic `TestRun`s (created outside any `runHandler`) are legal and drive icons | API + PROVEN | d.ts:18391 ("you can also create test requests and runs outside of the runHandler"); `externalRunMirror.ts:252–256` in production |
-| F8 | `TestRun.end()` "resets" included-but-unstamped tests — but the RENDERED outcome is a **stuck queued icon** (createTestRun moves included tests to queued, d.ts:18328; the reset never renders as not-run) | **RULED OUT** — owner live validation 2026-07-18 (the `none` experiment, discarded uncommitted from cr-123) | d.ts:18533–18537; owner screenshot: peers showed the circular-arrow queued icon |
+| F8 | `TestRun.end()` **stamps included-but-unstamped tests Skipped** — it does not leave them queued and does not clear them. `markTaskComplete` calls `setAllToState(5 /* Skipped */, e, n => n.state === 1 \|\| n.state === 2)`, i.e. everything still Queued(1) or Running(2) at run end is forced to Skipped(5), so those items render ⊘. **Corrected 2026-08-13** — this row previously claimed a *stuck queued icon*; that mechanism is falsified by the shipped builds, and it was the sole argument against the issue-125 enqueue fix. The verdict is unchanged: unstamped is still not no-result, so **mechanism D stays RULED OUT** — only the stated mechanism was wrong | **RULED OUT** — verdict from owner live validation 2026-07-18 (the `none` experiment, discarded uncommitted from cr-123); corrected mechanism is **PROVEN** by source read | `markTaskComplete` in `workbench.desktop.main.js`, read verbatim and byte-identical in 1.128.0, 1.128.1, 1.129.0, 1.129.1, 1.130.0 and 1.133.0 under `vsix/.vscode-test/vscode-linux-x64-<v>/resources/app/out/vs/workbench/`; d.ts:18328, 18533–18537 |
 | F9 | `createTestRun(request, name, persist=false)` → results not restored after window reload (`isPersisted=false`) | API, UNPROVEN rendered | d.ts:18340–18346, 18465–18468 |
 | F10 | Persisted results **are restored after window reload** — stale greens come back even though no run happened in this session | PROVEN (owner evidence in issue-86: greens present "at rest") | issue-86; VS Code behavior |
 | F11 | `run.skipped(item)` renders a **skip icon**, not no-result | PROVEN | issue_fix-68 design note ("cleared … rather than a 'skipped' terminal state that merely swaps the icon") |
-| F12 | Parent/group icons are **rolled up by VS Code from children**; an extension does not stamp group items directly (ours are non-runnable) | API behavior | Test Explorer rollup; requirement-71 territory |
+| F12 | Parent/group icons are **rolled up by VS Code from children**; an extension does not stamp group items directly (ours are non-runnable). The rollup rule itself is F15 | API behavior | Test Explorer rollup; requirement-71 territory |
 | F13 | Verification proxy: since F1, specs can only assert **object identity** (F5's replacement observable) and behavioral contracts (which methods were called) — never the icon itself. The owner's eyes are the only true readback | PROVEN methodology | cr-114 harness design; memory: real-controller expected-red |
 | F14 | **Persisted results re-associate by id.** VS Code re-attaches persistence-restored results to newly created `TestItem`s by id — the same behavior that makes results reappear after a window reload. Consequently NO removal trick (replacement included) can clear a restored result; only a NEWER stamp overrides it | PROVEN — owner live validation 2026-07-18 (CR-121 reopened on it) | issue-89 reopen evidence: install verified current, bridge capability verified correct, icon unchanged |
+| F15 | **An ancestor renders the maximum-priority state over its descendants, and Unset ranks lowest.** VS Code's `statePriority` map is `TestResultState → priority`: **Running 6 > Errored 5 > Failed 4 > Queued 3 > Passed 2 > Skipped 1 > Unset 0**. Two consequences drive this whole bug class: a descendant that has never been stamped is Unset(0) and therefore **invisible** to the rollup, so settled siblings alone decide the ancestor's icon; and Queued(3) outranks Passed(2), which is why enqueueing a descendant before results stream keeps an ancestor from flickering green in the gaps (issue-125). This is the premise the document was missing | **PROVEN** by source read | minified literal `{2:6,6:5,4:4,1:3,3:2,0:0,5:1}` in `workbench.desktop.main.js`, byte-identical in 1.128.0, 1.130.0 and 1.133.0 under `vsix/.vscode-test/vscode-linux-x64-<v>/resources/app/out/vs/workbench/`; keys are `TestResultState` (Unset 0, Queued 1, Running 2, Passed 3, Failed 4, Skipped 5, Errored 6) |
+| F16 | **The Unset ceiling: no-result is not deliverable per item.** There is no per-item clear-result API (F2), `invalidateTestResults` marks outdated rather than clearing (F3), and persistence re-associates restored results by id so no removal or replacement trick reaches them (F14). Only the **global** `testing.clearTestResults` command returns items to Unset, and it takes the whole tree with it. Mechanisms C and D were each falsified on exactly this. **No code path may attempt a per-item Unset by any other means** — not TestItem replacement, not a stamp-nothing reconcile run, not `invalidateTestResults` used as a clear. requirement-88's `cleared` invalidation is the one sanctioned path and it does not deliver Unset either | **PROVEN** — three independent falsifications | F2, F3, F14; issue-89 reopen; issue-86; keel/ac-429 |
 
 ## 3. The rendering the owner wants (target model)
 
@@ -99,7 +101,7 @@ out-of-band environment drift + refresh:
 | A. `cleared` run-event → `invalidateClearedResults` → item rebuild | Proven drop (F5), but **trigger** only exists during an activation run | Mechanism right, **trigger insufficient** — this is exactly issue-86 |
 | B. `refreshMutexStates` (CR-119) | Same rebuild, triggered after run finish, VSIX branches on `mutually_exclusive` | Fixes post-run only; still no at-rest trigger; violates dd-5 |
 | C. Bridge-computed no-result list, applied by item rebuild on every refresh | Bridge lists ids that must render no result; VSIX rebuilds the items | **FALSIFIED live (CR-121 → issue-89 reopen).** F14: restored results re-attach by id to the rebuilt item — removal cannot beat persistence. The single-authority *capability architecture* survives; the rendering mechanism does not |
-| D. Programmatic reconcile `TestRun`: include items, stamp nothing, `end()` (F8) | API-documented state reset | **FALSIFIED rendered** (owner, 2026-07-18): included tests go queued and the unstamped reset leaves the queued icon stuck — the rca-4 icon class. Per-test not-run is unreachable on this platform; global `testing.clearTestResults` is the only true not-run |
+| D. Programmatic reconcile `TestRun`: include items, stamp nothing, `end()` (F8) | API-documented state reset | **FALSIFIED rendered** (owner, 2026-07-18). Mechanism corrected 2026-08-13: `run.end()` does not strand the items on a queued icon — `markTaskComplete` forces everything still Queued or Running to **Skipped** ⊘ (F8). Either way the reset never renders as not-run, so the verdict stands unchanged. Per-item not-run is unreachable on this platform (F16); global `testing.clearTestResults` is the only true not-run |
 | H. **Bridge-served stamp list (`reconcile_results`), replayed verbatim through one non-persisted `TestRun` per refresh** | Bridge serves the rendered state per row (active → `passed`, others → `skipped` ⊘, owner-chosen); VSIX stamps exactly the served entries and ends the run (persist=false, preserveFocus, in-session signature guard) | **Chosen (requirement-97, owner-directed).** Overwriting is the ONLY rendering mechanism proven live in production (F7, external mirror) and defeats F14 by construction — a newer stamp always wins. Active member is always visibly ✓ even when never run in-session |
 | E. `invalidateTestResults` alone | Outdated-green | RULED OUT (F3, issue-80) |
 | F. `skipped` stamping | Skip icon | RULED OUT (F11) |
@@ -146,6 +148,35 @@ out-of-band environment drift + refresh:
    (which run, which stamps — red-first) + owner live-editor validation
    at rest and post-reload (ac-322) as the hard close gate, because F1
    still holds: no spec can see the icon.
+
+## 5. The permitted `run.skipped` reasons (keel/ac-428)
+
+Skipped is the tree's catch-all: producer skips, cancellations,
+informational desired-state rows and sibling stomping all land on the
+same ⊘ with no recorded rationale, which is how the issue-55 cross-run
+stomping survived review. Only these reasons are permitted, and every
+`run.skipped(` call site in `vsix/src/extension.ts` carries a comment
+naming the one it serves. **A fifth use is a visible addition, not a
+quiet one** — that is the whole point of this enumeration.
+
+| # | Reason | Call sites (`vsix/src/extension.ts`) |
+|---|---|---|
+| (a) | The producer emitted `skipped` | `applyRunEvent` `case 'skipped'` |
+| (b) | The producer emitted `cancelled`, which VS Code has no distinct state for; also the user-cancelled run | `applyRunEvent` `case 'cancelled'`; `cancelActiveRun` |
+| (c) | The item was in the run's execution scope but the run ended before it executed | `rejectConcurrentRun`; the `skippedSiblingItemsForRunEvent` loop under `case 'passed'` |
+| (d) | The item is a non-active member of a mutually-exclusive desired-state group (requirement-88) | `applyReconcileResultsCapability`; the informational-row loop in `runSelected` |
+
+Reason (c) is also delivered by VS Code itself, with no keel call site:
+`markTaskComplete` stamps Skipped on anything still Queued or Running at
+`run.end()` (F8).
+
+**One site does not fit cleanly.** The `neutralAncestorItemsForRunEvent`
+loop under `case 'passed'` stamps intermediate **ancestors** — group
+items between the selection and the result item. They are in scope and
+never execute, so (c) covers them on its widest reading, but every other
+(c) site is a runnable leaf, and F12 records that an extension does not
+stamp group items at all. Recorded as a candidate fifth reason in
+`keel/issue-135` rather than silently absorbed into (c).
 
 ### Known residual limitations (accepted, documented)
 
