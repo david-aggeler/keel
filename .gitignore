@@ -20,3 +20,5 @@ desired-state.json
 discover.json
 # per-machine /usage-report snapshots (personal spend/session data; never in public history)
 docs/usage/
+
+scratchpad/

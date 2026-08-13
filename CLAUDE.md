@@ -2,6 +2,19 @@
 
 Rules for coding agents in this repo. Short and blunt on purpose.
 
+## Conceptional
+
+- **Use concise language**
+- **Use software engineering language.** Name things with the vocabulary of the discipline — interface, boundary, contract, coupling, invariant, call path. Do not reach into another domain
+- **Prefer long term benefits over short term win.**  
+- **Observability is key. No feedback loop without logs.**
+- **Prefer strict data handling.**
+- **Prefer git operations over raw operations.**
+- **Prefer keel-dev operations over just operations.**
+- **Prefer just operations over raw operations.**
+- **Testability matters.** We want to categorize code classes, so the most relevant test categories can be executed
+- **Expect parallel work to be ongoing.**. It's mostly using worktrees
+
 ## What keel is
 
 - ONE public Go module: `github.com/david-aggeler/keel` plus the Keel Test
@@ -15,20 +28,15 @@ Rules for coding agents in this repo. Short and blunt on purpose.
   netrc, or Docker secrets to any build path. No exceptions.
 - keel is a shared foundation for downstream consumers.
 
-## Where records live
+## Keel Development Documents — Use Gold
 
-- ALL dev records (requirements, ACs, CRs, issues, epics, plan) live in
-  gold, product `keel`. Use `mcp__gold__*` tools or `openbrain-client`.
-- NEVER write dev records as local markdown files.
-- Search before creating. Every call takes `product: "keel"`.
-- `run-queue`/`run-queue-claude`: `--list` takes the full ref form
-  `change_request-<n>`, not `cr-<n>`.
-- Plan: `keel/dd_plan-1`. Epic: `keel/epic-1`.
+Keel's vision, change_request, issue, issue_fix, exploration, test_strategy, epic, story, formal_review, and every other HELIX01 type are owned by the **gold** instance (product `keel`) and authored only through `mcp__gold__*` — `create_<type>` / `update_<type>` / `draft_<type>`, `catalog_*` for the template and skill roots, and the product-plane tools (`admin_create_product`, `admin_create_product_version`, …) for products and versions. Never as local markdown. Every call takes `product: "keel"`, IDs are allocated server-side (never hand-pick a sequence number), and record status is live data — query it at time of use instead of caching it locally.
+
+**Scratchpad:** put working files (drafts, one-off scripts, intermediate outputs the user may want to read) in `/projects/keel/scratchpad/` — it is gitignored and survives the session. Session-private tmp dirs are fine only for files the user never needs to open.
 
 ## Change control
 
-EVERY code change goes through a CR. No quick-change path. No silent
-fixes. Owner-decided 2026-07-07.
+EVERY code change goes through a CR. No silent fixes.
 
 The loop, always:
 
@@ -58,59 +66,7 @@ committed `openbrain-client.yaml` at the repo root, under
 - `runner_owned` — run by the invoker after that session exits. A session must
                    NOT run these itself.
 
-The invoker's stages run at three boundaries: `implementation_review` and
-`ready_to_merge` over the unit's branch, `merged` over the integrated tree.
-Everything is green before `ready_to_merge` is written — that is the promise.
-
-keel binds both gates (`keel-dev ci` + `keel-dev vsix ci`) at every rung, because
-`ac-288` (core-only changes skip the VSIX gate) is retired while keel is
-pre-stability. `prose` and `static` carry an empty `runner_owned`. At `unit` and
-above the indivisible `ci` sits in both lists and runs twice — a documented
-deviation, removed once `keel-dev ci` grows rungs. See `keel/requirement-89`,
-`keel/requirement-10`, and `openbrain/interface_spec-26`.
-
 The merge is the git operation ONLY. It runs no gate and tears nothing down.
-
-## Worktrees
-
-`keel-dev worktree` is THE worktree lifecycle entry point for manual/operator
-work, backed by the `keel/worktree` package — NOT raw `git worktree` or
-`git checkout -b` on the primary checkout (that is blocked).
-
-`openbrain-client worktree` now exists too (`up | down | resume | create-for |
-enter | status | allow-merge | disallow-merge`) and is what the run-queue tail
-uses for its own `cr-<seq>` worktrees. It is NOT a drop-in for `keel-dev
-worktree`: it has no `branch-delete` and no `compare`, and keel's refusal
-semantics live in `keel/worktree`.
-
-Six leaves, and what each is for:
-
-- `up`            — create the worktree from the local default branch (or a caller-supplied base), or reuse the one already there
-- `resume`        — re-attach a worktree to a branch that already exists
-- `down`          — remove the checkout, keeping the branch; refuses one that still holds work
-- `branch-delete` — delete the branch once its checkout is gone; refuses an unmerged branch
-- `status`        — read-only state report, for one checkout or for every one matching a pattern
-- `compare`       — read-only branch-vs-base facts, no verdict
-
-Usage strings and flags: see `keel-dev help worktree <leaf>` (and `keel-dev help
-worktree` for the family and its exit codes). The binary is the source of truth
-for argv; this list carries only intent, which generated help does not.
-
-The `worktree-*.sh` wrappers are GONE. They lived at
-`.claude/skills/change-request/scripts/` — inside a gold-provided skill, a path
-the catalog owns and re-materializes — and the refreshed catalog deleted them
-and now calls `openbrain-client worktree up cr <seq> <slug>` directly. Do not
-restore them; do not patch gold-provided skills. Local skills (`merge/`) are
-keel's to change. Gate file-scope exclusions live in
-`keel-dev-gate-excludes.txt`; update that declaration, not cspell-only config or
-rulebook prose, when keel-dev must keep a tracked path out of file-selecting
-gate steps.
-
-The retired wrapper criteria (`ac-410`, `ac-412`, `ac-421`) remain historical.
-The `no-shell-worktree-lifecycle` lint is unaffected by the missing scripts: it
-skips absent scripts.
-
-Never hand-create a `cr-<seq>` worktree — the run-queue tail owns those.
 
 ## The gate
 
@@ -125,6 +81,27 @@ Never hand-create a `cr-<seq>` worktree — the run-queue tail owns those.
   asset, tags, creates the GitHub release with the VSIX attached, and runs the
   anonymous-fetch check.
 - Doc: `docs/release.md`.
+
+## Command surfaces — ask the tool, not this file
+
+Three command surfaces, all self-describing. This file and the SoR name
+commands only by intent; argv, verbs, flags, and exit codes come from
+generated help at time of use. Prose copies drift — the binary is the
+source of truth.
+
+- `keel-dev` — `go run ./cmd/keel-dev --help-json` for the full command
+  tree as JSON; `help <command>` for one topic.
+- `just` — `just --list` for the recipe catalog. Recipes wrap canonical
+  commands, they never re-define them.
+- `openbrain-client` (from PATH) — `openbrain-client --help-json` for
+  record ops, run-queue, and worktree lifecycle; `<command> --help` for
+  one topic.
+
+Agents run both CLIs with `--mode ai` (sparse AI-readable records);
+`human` is for operators, `json` for log consumers.
+
+If generated help is unclear, fix the help under a CR — do not
+compensate here.
 
 ## keel-dev output rules
 
