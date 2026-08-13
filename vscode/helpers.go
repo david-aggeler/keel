@@ -99,6 +99,23 @@ func GoEventPackageRel(pkg, modulePath string) string {
 	}
 }
 
+// GoBuildEventPackage resolves the package path a `go test -json` build event
+// belongs to. The toolchain reports build-output and build-fail under
+// ImportPath — "example.com/m/pkg [example.com/m/pkg.test]" — and omits Package
+// on those lines entirely, so the package identity is only available there.
+//
+// DHF-REQ: keel/requirement-116
+func GoBuildEventPackage(event GoTestJSONEvent) string {
+	if event.Package != "" {
+		return event.Package
+	}
+	path := event.ImportPath
+	if idx := strings.Index(path, " ["); idx >= 0 {
+		path = path[:idx]
+	}
+	return path
+}
+
 // GoPackageArg turns a module-relative package path into a `go` command
 // package argument.
 //

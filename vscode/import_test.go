@@ -1,6 +1,7 @@
 package vscode
 
 import (
+	"errors"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -125,4 +126,42 @@ func TestImportExternalRunAccountsForOverCapLine(t *testing.T) {
 	if len(events) == 0 || events[len(events)-1].Event != "run_finished" {
 		t.Fatalf("truncated stream did not get terminal run_finished: %+v", events)
 	}
+}
+
+// DHF-TEST: keel/requirement-116
+func TestImportExternalRunCrashKeysSyntheticErroredToRequestedIDs(t *testing.T) {
+	input := strings.NewReader(strings.Join([]string{
+		`{"event":"run_started","requested":[{"id":"go::pkg::log","label":"log"},{"id":"go::pkg::exec","label":"exec"}]}`,
+		`{"event":"test_started","test_id":"go::pkg::log"}`,
+	}, "\n"))
+
+	var events []RunEvent
+	report := ImportExternalRun(t.TempDir(), input, errors.New("signal: killed"), func(event RunEvent) {
+		events = append(events, event)
+	}, nil)
+	if report.ExitCode == 0 {
+		t.Fatal("producer crash without terminal returned exit code 0")
+	}
+	for _, id := range []string{"go::pkg::log", "go::pkg::exec"} {
+		if !hasRunEvent(events, "errored", id, "signal: killed") {
+			t.Fatalf("events = %+v, want keyed errored event for requested id %q", events, id)
+		}
+	}
+	for _, event := range events {
+		if event.Event == "errored" && event.TestID == "" {
+			t.Fatalf("events = %+v, want no run-scoped errored event when requested ids are known", events)
+		}
+	}
+	if len(events) == 0 || events[len(events)-1].Event != "run_finished" {
+		t.Fatalf("crashed stream did not get terminal run_finished: %+v", events)
+	}
+}
+
+func hasRunEvent(events []RunEvent, eventName, testID, messageContains string) bool {
+	for _, event := range events {
+		if event.Event == eventName && event.TestID == testID && strings.Contains(event.Message, messageContains) {
+			return true
+		}
+	}
+	return false
 }

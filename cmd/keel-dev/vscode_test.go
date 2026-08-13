@@ -1374,9 +1374,6 @@ exit 1`)
 	if !runEventsContain(events, "failed", selectedID) {
 		t.Fatalf("run events missing selected id failure for %s: %+v", selectedID, events)
 	}
-	if !runEventsContain(events, "errored", "") {
-		t.Fatalf("run events missing generic errored event for command failure: %+v", events)
-	}
 	if events[len(events)-1].Event != "run_finished" || events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode == 0 {
 		t.Fatalf("terminal event = %+v, want run_finished non-zero", events[len(events)-1])
 	}
@@ -1743,7 +1740,7 @@ func TestVSCodeSystemGateLanesDiscoverPrepareAndRun(t *testing.T) {
 		t.Fatal("failing ci lane returned nil error; want non-zero")
 	}
 	failed := decodeRunEvents(t, protocol.String())
-	if !runEventsContain(failed, "errored", "") || failed[len(failed)-1].ExitCode == nil || *failed[len(failed)-1].ExitCode == 0 || !strings.Contains(protocol.String(), "gofmt") {
+	if !runEventsContain(failed, "errored", "keel::lane::ci") || failed[len(failed)-1].ExitCode == nil || *failed[len(failed)-1].ExitCode == 0 || !strings.Contains(protocol.String(), "gofmt") {
 		t.Fatalf("failing ci lane events = %+v, want errored detail and non-zero run_finished", failed)
 	}
 }
@@ -2254,7 +2251,7 @@ exit 2`)
 		t.Fatalf("unexpected go test command after parse failure:\n%s", got)
 	}
 	events := decodeRunEvents(t, protocol.String())
-	if !runEventsContain(events, "errored", "") || !strings.Contains(protocol.String(), "broken_test.go") || !strings.Contains(protocol.String(), "expected") {
+	if !runEventsContain(events, "errored", "go::file::log/broken_test.go") || !strings.Contains(protocol.String(), "broken_test.go") || !strings.Contains(protocol.String(), "expected") {
 		t.Fatalf("parse failure events = %+v, want errored event naming parse error", events)
 	}
 	if events[len(events)-1].Event != "run_finished" || events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode == 0 {
@@ -2348,7 +2345,7 @@ exit 2`)
 				t.Fatalf("unexpected go test command for inactive file selection:\n%s", got)
 			}
 			events := decodeRunEvents(t, protocol.String())
-			if !runEventsContain(events, "errored", "") || !strings.Contains(protocol.String(), tt.want) {
+			if !runEventsContain(events, "errored", tt.id) || !strings.Contains(protocol.String(), tt.want) {
 				t.Fatalf("inactive file events = %+v, want errored event containing %q", events, tt.want)
 			}
 			if events[len(events)-1].Event != "run_finished" || events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode == 0 {
@@ -2410,6 +2407,52 @@ exit 0`)
 	}
 	if desiredState.Version != 3 || !desiredStateHasRunID(desiredState.Groups, vscodeDesiredStateStubBinaries) {
 		t.Fatalf("go package/root desired-state document = %+v, want v3 desired-state groups", desiredState)
+	}
+}
+
+// DHF-TEST: keel/requirement-116
+func TestVSCodeRunGoBuildFailureEmitsErroredPackageEvent(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	// The stream below is the shape go1.26 actually emits for a package whose
+	// test binary does not compile: the build-* lines carry ImportPath and no
+	// Package at all, and the package is still reported start/output/fail
+	// afterwards. A stub that puts Package on the build-* lines, or that stops
+	// at build-fail, cannot fail this criterion.
+	stub(t, bin, callsFile, "go", `
+case "$1 $2" in
+  "test ./log")
+    printf '%s\n' '{"ImportPath":"github.com/david-aggeler/keel/log [github.com/david-aggeler/keel/log.test]","Action":"build-output","Output":"# github.com/david-aggeler/keel/log\n"}'
+    printf '%s\n' '{"ImportPath":"github.com/david-aggeler/keel/log [github.com/david-aggeler/keel/log.test]","Action":"build-output","Output":"log/broken.go:4:2: undefined: nope\n"}'
+    printf '%s\n' '{"ImportPath":"github.com/david-aggeler/keel/log [github.com/david-aggeler/keel/log.test]","Action":"build-fail"}'
+    printf '%s\n' '{"Action":"start","Package":"github.com/david-aggeler/keel/log"}'
+    printf '%s\n' '{"Action":"output","Package":"github.com/david-aggeler/keel/log","Output":"FAIL\tgithub.com/david-aggeler/keel/log [build failed]\n"}'
+    printf '%s\n' '{"Action":"fail","Package":"github.com/david-aggeler/keel/log","Elapsed":0}'
+    exit 1
+    ;;
+esac
+exit 0`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var protocol bytes.Buffer
+	err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), "go::pkg::log")
+	if err == nil {
+		t.Fatalf("go package run succeeded; want non-zero build failure\nprotocol:\n%s\ncalls:\n%s", protocol.String(), calls(t, callsFile))
+	}
+	events := decodeRunEvents(t, protocol.String())
+	if got := runEventCount(events, "errored", "go::pkg::log"); got != 1 {
+		t.Fatalf("errored events for go::pkg::log = %d, want exactly 1: %+v", got, events)
+	}
+	if runEventsContain(events, "failed", "go::pkg::log") {
+		t.Fatalf("run events reported build failure as failed, want only errored for package id: %+v", events)
+	}
+	errored := runEventFor(events, "errored", "go::pkg::log")
+	if !strings.Contains(errored.Message, "undefined: nope") {
+		t.Fatalf("errored message = %q, want accumulated build-output", errored.Message)
 	}
 }
 
@@ -3054,6 +3097,25 @@ func runEventsContain(events []vscode.RunEvent, event, id string) bool {
 		}
 	}
 	return false
+}
+
+func runEventCount(events []vscode.RunEvent, event, id string) int {
+	count := 0
+	for _, got := range events {
+		if got.Event == event && got.TestID == id {
+			count++
+		}
+	}
+	return count
+}
+
+func runEventFor(events []vscode.RunEvent, event, id string) vscode.RunEvent {
+	for _, got := range events {
+		if got.Event == event && got.TestID == id {
+			return got
+		}
+	}
+	return vscode.RunEvent{}
 }
 
 func stringSlicesEqual(got, want []string) bool {

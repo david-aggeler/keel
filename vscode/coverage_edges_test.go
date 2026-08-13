@@ -57,9 +57,9 @@ func TestGoSelectionFiltersAndResultIDs(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-23
+// DHF-TEST: keel/requirement-23, keel/requirement-116
 func TestSharedProjectorHelpersCoverFallbacks(t *testing.T) {
-	if StatusEventName("pending") != "skipped" || StatusEventName("weird") != "failed" {
+	if StatusEventName("pending") != "skipped" || StatusEventName("weird") != "errored" {
 		t.Fatal("status fallback mapping drifted")
 	}
 	if MergedStatusEvent("skipped", "passed") != "passed" || MergedStatusEvent("passed", "skipped") != "passed" || MergedStatusEvent("errored", "failed") != "failed" {

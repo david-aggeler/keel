@@ -75,6 +75,26 @@ func TestGoEventPackageRel(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-116
+func TestGoBuildEventPackage(t *testing.T) {
+	const pkg = "github.com/david-aggeler/keel/log"
+	cases := []struct {
+		name  string
+		event GoTestJSONEvent
+		want  string
+	}{
+		{"build event carries only ImportPath", GoTestJSONEvent{Action: "build-fail", ImportPath: pkg + " [" + pkg + ".test]"}, pkg},
+		{"import path without test-binary suffix", GoTestJSONEvent{Action: "build-fail", ImportPath: pkg}, pkg},
+		{"Package wins when present", GoTestJSONEvent{Action: "fail", Package: pkg, ImportPath: "other.com/x"}, pkg},
+		{"neither present", GoTestJSONEvent{Action: "build-fail"}, ""},
+	}
+	for _, tc := range cases {
+		if got := GoBuildEventPackage(tc.event); got != tc.want {
+			t.Errorf("%s: GoBuildEventPackage() = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 // DHF-TEST: keel/requirement-23
 func TestGoPackageArg(t *testing.T) {
 	cases := []struct{ pkg, want string }{
