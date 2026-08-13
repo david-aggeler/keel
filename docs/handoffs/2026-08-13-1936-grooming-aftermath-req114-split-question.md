@@ -23,7 +23,7 @@ Analysis already in this session (re-derive with `get_requirement keel
 requirement-114` and its inbound ACs): the statement carries four independent
 "shall" obligations — verb-family exposure, CLI-invariant conformance,
 single-implementation canonicality, catalog-path independence, branch-removal
-shape — against the template's one-sentence rule. That compoundness is why every
+shape — against the template's one-sentence rule. That compound shape is why every
 worktree AC (10 active) lands in one bucket and every worktree `fix` unit inherits
 all of them. Of the three consolidated defects in `keel/issue-133`, only the
 tear-down-policy divergence violates an approved clause (single-implementation);
@@ -37,7 +37,7 @@ docs-tier path if approved. **Do not start this while iteration-40 is mid-drain*
 - **keel/issue-132** (`blocked`): combo — fix spans repo prose
   (`openbrain-client.yaml:65-68`, `CLAUDE.md:68-69`) AND the gold record
   `keel/requirement-89` ("Where the gate runs" + amendment history). Needs the
-  owner to split it into one issue per bucket before it is groomable. Stale
+  owner to split it into one issue per bucket before it can be groomed. Stale
   `iteration` pointer (keel/iteration-39, closed) could not be cleared — empty-ref
   rejected, `remove_fields` needs the maintenance token.
 - **keel/issue-135** (`blocked`): owner decision — amend `keel/ac-428` to five
@@ -61,7 +61,7 @@ docs-tier path if approved. **Do not start this while iteration-40 is mid-drain*
    statement. (Its Resolution text still reasons from my superseded "requirement
    is the unit of work" framing rather than from `kind`; iteration-40's body flags
    this. Optional cleanup, low priority.)
-2. **The fix shape is `CR → Issue → 1 Req → 1..n AC`; feature is `CR → n Reqs`.**
+2. **The fix shape is `CR → Issue → 1 Req → 1..n AC`; feature is `CR → n Requirements`.**
    `kind` decides where the contract lives (structural leg every write, state leg
    at approved+, frozen at approval). Owner directed "fix the structure" over my
    proposed fix/feature split: the consolidated chain stands as one fix.
@@ -104,7 +104,7 @@ on resume.
   cr-173/174/175 (173/174 since superseded), requirement-117 (since deleted);
   amended requirement-113/114/115, issue-121/122/123/124/132/133/134/135, cr-163,
   iteration-40. All current-state consistent per the end-of-session audit; the
-  clean approvable chain is cr-163 → issue-124 → requirement-115 → ac-422/423/424/438.
+  clean approval chain is cr-163 → issue-124 → requirement-115 → ac-422/423/424/438.
 - ac-438 (deterministic failed-refresh tree state) was added to requirement-115
   and folded into cr-163's contract via an amendment note in its body.
 - Verify-issues note for later: ac-436's live reproduction is recorded in
