@@ -1168,17 +1168,35 @@ process.exit(2);
       await vscode.commands.executeCommand('keel.tests.refresh');
       assert.ok(publishedTestItemIds().includes('case::lane'), 'successful refresh publishes the baseline item');
 
-      restoreBound = setDiscoveryOutputMaxBufferBytesForTest(testBound);
-      for (const mode of ['oversized', 'nonzero', 'malformed']) {
+      for (const mode of ['oversized', 'nonzero', 'malformed', 'missing-binary']) {
         fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
           version: currentConfigVersion,
-          command: mode === 'oversized' ? nodeExecutableForTest() : process.execPath,
+          command: process.execPath,
           args: [fake],
+          displayName: 'Refresh Producer',
+          env: { KEEL_REFRESH_FAILURE_MODE: 'ok' }
+        }, null, 2) + '\n');
+        await vscode.commands.executeCommand('keel.tests.refresh');
+        assert.ok(publishedTestItemIds().includes('case::lane'), `${mode} setup must publish the baseline item`);
+
+        if (mode === 'oversized') {
+          restoreBound = setDiscoveryOutputMaxBufferBytesForTest(testBound);
+        }
+        fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+          version: currentConfigVersion,
+          command: mode === 'oversized'
+            ? nodeExecutableForTest()
+            : mode === 'missing-binary'
+              ? path.join(root, 'absent-refresh-producer')
+              : process.execPath,
+          args: mode === 'missing-binary' ? [] : [fake],
           displayName: 'Refresh Producer',
           env: { KEEL_REFRESH_FAILURE_MODE: mode }
         }, null, 2) + '\n');
         await vscode.commands.executeCommand('keel.tests.refresh');
         assert.deepEqual(publishedTestItemIds(), [], `${mode} discovery failure must clear the tree`);
+        restoreBound?.();
+        restoreBound = undefined;
       }
 
       const oversizedMessage = shownErrors.find((message) => message.includes(`${testBound}`));
