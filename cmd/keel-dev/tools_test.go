@@ -123,7 +123,7 @@ func TestVerifyToolPin_PresenceOnly(t *testing.T) {
 // fails via the version gate before it ever spawns the tool.
 func TestRunStepToolGate_Missing(t *testing.T) {
 	scrubPATH(t)
-	// deadcode is a real pinnedTools entry; on a scrubbed PATH it is absent.
+	// deadcode is a real keel-dev config pin; on a scrubbed PATH it is absent.
 	err := runStep(context.Background(), discardLogger(), ".", step{
 		name: "deadcode", tool: "deadcode", program: "deadcode", args: []string{"-test", "./..."}, advisory: true,
 	})
@@ -346,9 +346,9 @@ func TestGitleaksStep_DetectsSecret(t *testing.T) {
 // TestGitleaksPinPresenceOnly guards that gitleaks is registered as a
 // presence-only pin (no version probe): go install does not stamp its version.
 func TestGitleaksPinPresenceOnly(t *testing.T) {
-	pin, ok := pinnedTools["gitleaks"]
+	pin, ok := defaultKeelDevConfig().toolPins()["gitleaks"]
 	if !ok {
-		t.Fatal("gitleaks must be registered in pinnedTools")
+		t.Fatal("gitleaks must be registered in keel-dev config")
 	}
 	if pin.want != "" || len(pin.versionArgs) != 0 {
 		t.Fatalf("gitleaks pin must be presence-only, got want=%q versionArgs=%v", pin.want, pin.versionArgs)
@@ -511,14 +511,14 @@ func TestCspellGateExcludesCommittedGatePathsWithoutToolIgnore(t *testing.T) {
 
 	dir := t.TempDir()
 	mustRun(t, dir, "git", "init")
-	writeFile(t, dir, "keel-dev-gate-excludes.txt", ".claude/**\n")
+	writeFile(t, dir, keelDevConfigFile, "gate:\n  excludes:\n    - .claude/**\n")
 	writeFile(t, dir, "cspell.json", "{\"version\":\"0.2\",\"language\":\"en-US\",\"words\":[]}\n")
 	writeFile(t, dir, "tracked.md", "# tracked\n")
 	if err := os.MkdirAll(filepath.Join(dir, ".claude", "skills"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	writeFile(t, dir, ".claude/skills/generated.md", "catalog spelling offender\n")
-	mustRun(t, dir, "git", "add", "keel-dev-gate-excludes.txt", "cspell.json", "tracked.md", ".claude/skills/generated.md")
+	mustRun(t, dir, "git", "add", keelDevConfigFile, "cspell.json", "tracked.md", ".claude/skills/generated.md")
 
 	bin := t.TempDir()
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))

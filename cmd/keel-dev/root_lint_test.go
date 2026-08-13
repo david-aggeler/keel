@@ -333,7 +333,7 @@ func TestParseCoverageTotal(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-22
+// DHF-TEST: keel/requirement-22, keel/requirement-118 (keel/ac-452)
 func TestLogCoreDependencyQuarantineRejectsOpenTelemetryReachability(t *testing.T) {
 	bin := t.TempDir()
 	callsFile := filepath.Join(bin, "calls.log")
@@ -349,23 +349,52 @@ exit 0`)
 	}
 
 	err := runLogCoreDependencyQuarantine(context.Background(), discardLogger(), dir)
-	if err == nil || !strings.Contains(err.Error(), "log core dependency quarantine failed") || !strings.Contains(err.Error(), "go.opentelemetry.io/otel/sdk/log") {
+	if err == nil || !strings.Contains(err.Error(), "core dependency quarantine failed") || !strings.Contains(err.Error(), "go.opentelemetry.io/otel/sdk/log") {
 		t.Fatalf("want OTel dependency quarantine failure, got %v", err)
 	}
 }
 
-// DHF-TEST: keel/requirement-22
+// DHF-TEST: keel/requirement-118 (keel/ac-452)
+func TestCoreDependencyQuarantineRejectsYAMLReachability(t *testing.T) {
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", `
+case "$1 $2 $3" in
+  "list -deps ./log") printf '%s\n' "errors" "log/slog" "`+modulePath+`/log" ;;
+  "list -deps ./exec") printf '%s\n' "errors" "log/slog" "`+modulePath+`/exec" "gopkg.in/yaml.v3" ;;
+esac
+exit 0`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "log"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "exec"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runLogCoreDependencyQuarantine(context.Background(), discardLogger(), dir)
+	if err == nil || !strings.Contains(err.Error(), "./exec") || !strings.Contains(err.Error(), "YAML package") {
+		t.Fatalf("want YAML dependency quarantine failure for ./exec, got %v", err)
+	}
+}
+
+// DHF-TEST: keel/requirement-22, keel/requirement-118 (keel/ac-452)
 func TestLogCoreDependencyQuarantineAllowsStdlibAndOwnModule(t *testing.T) {
 	bin := t.TempDir()
 	callsFile := filepath.Join(bin, "calls.log")
 	stub(t, bin, callsFile, "go", `
 case "$1 $2 $3" in
   "list -deps ./log") printf '%s\n' "errors" "log/slog" "`+modulePath+`/log" ;;
+  "list -deps ./exec") printf '%s\n' "errors" "log/slog" "`+modulePath+`/exec" ;;
 esac
 exit 0`)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	dir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(dir, "log"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "exec"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 

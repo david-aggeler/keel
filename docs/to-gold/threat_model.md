@@ -88,7 +88,7 @@ Walking interface_spec §2 plus the non-interface vectors:
   with caller-controlled args); GitHub (release path); **the pinned
   static-tool battery** (golangci-lint, govulncheck, cspell, gitleaks,
   shellcheck, shfmt, deadcode) — third-party binaries executed on the
-  dev/release host by every gate run, version-pinned via the `pinnedTools`
+  dev/release host by every gate run, version-pinned via the `keel-dev.yaml`
   manifest, adjacent to crown jewels #2/#3.
 - **OTLP egress (`log/otel`)** — the product's only network egress besides
   GitHub: structured log content leaves the host toward a consumer-configured
