@@ -41,7 +41,10 @@ import (
 //     devtool surfaces must not reintroduce the retired pre-rename vocabulary
 //     (keel/requirement-77).
 //
-// DHF-REQ: keel/requirement-10, keel/requirement-11
+//   - keel-dev-config-docs: every property in the keel-dev config object and
+//     committed config file carries explanatory commentary (keel/ac-450).
+//
+// DHF-REQ: keel/requirement-10, keel/requirement-11, keel/requirement-118 (keel/ac-450)
 func runLint(dir string) error {
 	var violations []string
 
@@ -70,6 +73,12 @@ func runLint(dir string) error {
 	violations = append(violations, v...)
 
 	v, err = scanNoRetiredDesiredStateVocabulary(dir)
+	if err != nil {
+		return err
+	}
+	violations = append(violations, v...)
+
+	v, err = scanKeelDevConfigDocumentation(dir)
 	if err != nil {
 		return err
 	}

@@ -3,44 +3,13 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
 
-// DHF-TEST: keel/requirement-114 (keel/ac-433), keel/requirement-85 (keel/ac-435)
-func TestCommittedGateExcludeListOwnsCatalogMaterializedPaths(t *testing.T) {
-	root, err := findModuleRoot(".")
-	if err != nil {
-		t.Fatalf("findModuleRoot: %v", err)
-	}
-	patterns, err := readGateExcludePatterns(root)
-	if err != nil {
-		t.Fatalf("readGateExcludePatterns: %v", err)
-	}
-	if !gatePathExcluded(".claude/skills/change-request/SKILL.md", patterns) {
-		t.Fatal("committed gate exclude list must exclude catalog-materialized .claude paths")
-	}
-	if gatePathExcluded("docs/.claude-notes.md", patterns) {
-		t.Fatal("committed gate exclude list must not exclude unrelated paths that merely contain .claude")
-	}
-}
-
-// DHF-TEST: keel/requirement-85 (keel/ac-435)
-func TestGateExcludeListAbsentMeansNoExcludes(t *testing.T) {
-	patterns, err := readGateExcludePatterns(t.TempDir())
-	if err != nil {
-		t.Fatalf("readGateExcludePatterns: %v", err)
-	}
-	if len(patterns) != 0 {
-		t.Fatalf("patterns = %v, want none", patterns)
-	}
-	if gatePathExcluded(".claude/skills/generated.md", patterns) {
-		t.Fatal("absent gate exclude list must not exclude any path")
-	}
-}
-
-// DHF-TEST: keel/requirement-85 (keel/ac-435)
-func TestGateExcludeListRejectsMalformedPatterns(t *testing.T) {
+// DHF-TEST: keel/requirement-118 (keel/ac-449)
+func TestGateExcludeConfigRejectsMalformedPatterns(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		pattern string
@@ -53,12 +22,12 @@ func TestGateExcludeListRejectsMalformedPatterns(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(dir, gateExcludeFile), []byte(tc.pattern), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, keelDevConfigFile), []byte("gate:\n  excludes:\n    - "+strconv.Quote(strings.TrimSpace(tc.pattern))+"\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			_, err := readGateExcludePatterns(dir)
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("readGateExcludePatterns error = %v, want containing %q", err, tc.want)
+			_, err := loadKeelDevConfig(dir)
+			if err == nil || !strings.Contains(err.Error(), "gate.excludes") || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("loadKeelDevConfig error = %v, want gate.excludes and %q", err, tc.want)
 			}
 		})
 	}
