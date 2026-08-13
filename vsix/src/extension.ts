@@ -406,9 +406,8 @@ async function refreshNow(controller: vscode.TestController): Promise<void> {
   const workspaceRoot = getWorkspaceRoot();
   output.appendLine(`[${new Date().toISOString()}] refresh requested`);
   if (!workspaceRoot) {
-    controller.invalidateTestResults();
-    output.appendLine('No workspace root is open; clearing Keel test tree.');
-    controller.items.replace([]);
+    clearPublishedTestTree(controller);
+    output.appendLine('No workspace root is open; cleared Keel test tree.');
     return;
   }
   try {
@@ -419,9 +418,17 @@ async function refreshNow(controller: vscode.TestController): Promise<void> {
     void externalRunMirror?.syncWorkspace();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    output.appendLine(`Discovery failed: ${message}`);
-    void vscode.window.showErrorMessage(`Keel test discovery failed: ${message}. Run just build-dev if bin/keel-dev is missing.`);
+    clearPublishedTestTree(controller);
+    output.appendLine(`Discovery failed; cleared Keel test tree: ${message}`);
+    void vscode.window.showErrorMessage(`Keel test discovery failed: ${message}`);
   }
+}
+
+// DHF-REQ: keel/requirement-115
+function clearPublishedTestTree(controller: vscode.TestController): void {
+  tree = undefined;
+  controller.invalidateTestResults();
+  controller.items.replace([]);
 }
 
 async function resetKeelTestResults(controller: vscode.TestController): Promise<void> {

@@ -28,6 +28,14 @@ flowchart LR
 
 The 4-group Test Explorer tree as a flat item list linked by `parent_id`.
 
+The VS Code Test Bridge reads the discovery document and desired-state document
+through bounded stdout. The bound is **16777216 bytes**. A producer document that
+exceeds that bound is rejected by the consumer. The failed refresh state is also
+defined: on any failed discovery refresh, including a size-bound breach, non-zero
+producer exit, malformed discovery JSON, or missing producer binary, the consumer
+clears the published Test Explorer tree instead of leaving the previous item set
+visible.
+
 ```mermaid
 classDiagram
     class discovery {
