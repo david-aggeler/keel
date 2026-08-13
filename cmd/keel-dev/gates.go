@@ -32,10 +32,15 @@ type step struct {
 	// fn, when set, runs in-process instead of spawning a subprocess (used for
 	// the compiled-in lint policies; keeps CI hermetic — no external lint binary).
 	fn func(ctx context.Context, logger *slog.Logger, dir string) error
-	// tool, when set, names an entry in pinnedTools whose presence and exact
-	// version are verified before the subprocess runs (keel/ac-42) — a missing
-	// or drifted external tool fails the gate loud, never a silent skip.
+	// tool, when set, names an entry in the keel-dev config's tool pins whose
+	// presence and exact version are verified before the subprocess runs
+	// (keel/ac-42) — a missing or drifted external tool fails the gate loud,
+	// never a silent skip.
 	tool string
+	// toolPins is the already-loaded config's pin map. CI sets this when it
+	// builds the step list so one gate process does not reread keel-dev.yaml
+	// between file selection and subprocess execution.
+	toolPins map[string]toolPin
 	// advisory marks a step whose output is surfaced through keel/log but whose
 	// failure (non-zero exit) never fails the gate (keel/ac-41: deadcode).
 	advisory bool
@@ -43,8 +48,6 @@ type step struct {
 	// for noisy tools whose progress stream is not itself a failure signal.
 	quietStderr bool
 }
-
-const gateExcludeFile = "keel-dev-gate-excludes.txt"
 
 type runLogLocator interface {
 	RunLogPath() string
@@ -58,17 +61,25 @@ type runLogLocator interface {
 // the sole verification.
 //
 // The static-tool battery (golangci-lint, govulncheck, cspell, shellcheck,
-// shfmt, advisory deadcode) is version-pinned via pinnedTools and runs after
+// shfmt, advisory deadcode) is version-pinned via keel-dev.yaml and runs after
 // the in-process checks. Each external tool is presence/version-verified before
 // it runs (keel/ac-42) so a missing or drifted tool fails loud.
 //
-// DHF-REQ: keel/requirement-10, keel/requirement-11, keel/requirement-12, keel/requirement-107
+// DHF-REQ: keel/requirement-10, keel/requirement-11, keel/requirement-12, keel/requirement-107, keel/requirement-118 (keel/ac-451)
 func ciSteps(ctx context.Context, logger *slog.Logger, dir string) []step {
+	cfg, err := loadKeelDevConfig(dir)
+	if err != nil {
+		return []step{{name: "config", fn: func(context.Context, *slog.Logger, string) error { return err }}}
+	}
+	return ciStepsWithConfig(ctx, logger, dir, cfg)
+}
+
+func ciStepsWithConfig(ctx context.Context, logger *slog.Logger, dir string, cfg keelDevConfig) []step {
 	// Shell scripts are enumerated up front so shellcheck/shfmt receive explicit
 	// paths (no shell is involved to expand a glob). Sorted for stable output.
 	scripts, _ := filepath.Glob(filepath.Join(dir, "scripts", "*.sh"))
-	gofmtFiles, gofmtListErr := trackedFilesWithExt(ctx, logger, dir, ".go")
-	cspellFiles, cspellListErr := trackedFilesWithExt(ctx, logger, dir, ".go", ".md")
+	gofmtFiles, gofmtListErr := trackedFilesWithExt(ctx, logger, dir, cfg.Gate.Excludes, ".go")
+	cspellFiles, cspellListErr := trackedFilesWithExt(ctx, logger, dir, cfg.Gate.Excludes, ".go", ".md")
 	gofmtStep := step{
 		name:    "gofmt",
 		program: "gofmt",
@@ -118,7 +129,7 @@ func ciSteps(ctx context.Context, logger *slog.Logger, dir string) []step {
 		// secret from being echoed through keel/log. The .gitleaks.toml at the
 		// repo root (auto-loaded from the source path) supplies the ruleset +
 		// keel's test-fixture allowlist. Version pin is enforced at install time
-		// (presence-only here — see pinnedTools), so this only fails loud if the
+		// (presence-only here — see keel-dev.yaml), so this only fails loud if the
 		// tool is missing (keel/ac-45).
 		// DHF-REQ: keel/requirement-13 (keel/ac-45), keel/requirement-8
 		{name: "gitleaks", tool: "gitleaks", program: "gitleaks", args: []string{"detect", "--no-banner", "--redact"}, quietStderr: true},
@@ -153,7 +164,16 @@ func ciSteps(ctx context.Context, logger *slog.Logger, dir string) []step {
 	// The coverage-floored test suite runs last: it is the most expensive step
 	// and the fast static checks should fail before it does.
 	steps = append(steps, step{name: "test", fn: runTestWithCoverage})
+	attachToolPins(steps, cfg.toolPins())
 	return steps
+}
+
+func attachToolPins(steps []step, pins map[string]toolPin) {
+	for i := range steps {
+		if steps[i].tool != "" {
+			steps[i].toolPins = pins
+		}
+	}
 }
 
 // trackedFilesWithExt returns git-tracked, non-excluded repo-relative paths with
@@ -161,8 +181,8 @@ func ciSteps(ctx context.Context, logger *slog.Logger, dir string) []step {
 // of record so untracked, gitignored, or keel-declared excluded scratch in the
 // checkout cannot red the gate.
 //
-// DHF-REQ: keel/requirement-85 (keel/ac-435)
-func trackedFilesWithExt(ctx context.Context, logger *slog.Logger, dir string, exts ...string) ([]string, error) {
+// DHF-REQ: keel/requirement-85 (keel/ac-435), keel/requirement-118 (keel/ac-451)
+func trackedFilesWithExt(ctx context.Context, logger *slog.Logger, dir string, excludes gateExcludePatterns, exts ...string) ([]string, error) {
 	proc, err := procexec.ProcessStart(ctx, procexec.Request{
 		Program: "git",
 		Args:    []string{"ls-files"},
@@ -178,10 +198,6 @@ func trackedFilesWithExt(ctx context.Context, logger *slog.Logger, dir string, e
 	}
 	if res.ExitCode != 0 {
 		return nil, fmt.Errorf("keel-dev: list git-tracked files: git ls-files exited %d", res.ExitCode)
-	}
-	excludes, err := readGateExcludePatterns(dir)
-	if err != nil {
-		return nil, fmt.Errorf("keel-dev: read %s: %w", gateExcludeFile, err)
 	}
 	want := make(map[string]bool, len(exts))
 	for _, ext := range exts {
@@ -201,62 +217,6 @@ func trackedFilesWithExt(ctx context.Context, logger *slog.Logger, dir string, e
 type gateExcludePattern struct {
 	raw             string
 	recursivePrefix string
-}
-
-func readGateExcludePatterns(dir string) ([]gateExcludePattern, error) {
-	data, err := os.ReadFile(filepath.Join(dir, gateExcludeFile))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	var patterns []gateExcludePattern
-	for i, line := range strings.Split(string(data), "\n") {
-		pattern := strings.TrimSpace(line)
-		if pattern == "" || strings.HasPrefix(pattern, "#") {
-			continue
-		}
-		parsed, err := parseGateExcludePattern(pattern)
-		if err != nil {
-			return nil, fmt.Errorf("line %d: %w", i+1, err)
-		}
-		patterns = append(patterns, parsed)
-	}
-	return patterns, nil
-}
-
-func parseGateExcludePattern(pattern string) (gateExcludePattern, error) {
-	if strings.Contains(pattern, "\\") {
-		return gateExcludePattern{}, fmt.Errorf("pattern %q must use slash separators", pattern)
-	}
-	if strings.HasPrefix(pattern, "/") || filepath.IsAbs(pattern) {
-		return gateExcludePattern{}, fmt.Errorf("pattern %q must be repo-relative", pattern)
-	}
-	if strings.HasPrefix(pattern, "!") {
-		return gateExcludePattern{}, fmt.Errorf("negated pattern %q is unsupported", pattern)
-	}
-	if strings.Contains(pattern, "..") {
-		clean := path.Clean(pattern)
-		if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
-			return gateExcludePattern{}, fmt.Errorf("pattern %q must stay inside the repository", pattern)
-		}
-	}
-	if strings.Contains(pattern, "**") {
-		if strings.Count(pattern, "**") != 1 || !strings.HasSuffix(pattern, "/**") {
-			return gateExcludePattern{}, fmt.Errorf("recursive pattern %q must end in /**", pattern)
-		}
-		prefix := strings.TrimSuffix(pattern, "/**")
-		if prefix == "" || strings.ContainsAny(prefix, "*?[") {
-			return gateExcludePattern{}, fmt.Errorf("recursive pattern %q must name a literal directory", pattern)
-		}
-		return gateExcludePattern{raw: pattern, recursivePrefix: prefix + "/"}, nil
-	}
-	if _, err := path.Match(pattern, ""); err != nil {
-		return gateExcludePattern{}, fmt.Errorf("invalid glob %q: %w", pattern, err)
-	}
-	return gateExcludePattern{raw: pattern}, nil
 }
 
 func gatePathExcluded(file string, patterns []gateExcludePattern) bool {
@@ -289,7 +249,7 @@ func runCI(ctx context.Context, logger *slog.Logger, dir string) error {
 // runCIWithRunLog runs the CI gate and, when a per-run JSONL sink is available,
 // wraps the first failing step in the structured OperationalError carrier.
 //
-// DHF-REQ: keel/requirement-18, keel/requirement-25
+// DHF-REQ: keel/requirement-18, keel/requirement-25, keel/requirement-118 (keel/ac-451)
 func runCIWithRunLog(ctx context.Context, logger *slog.Logger, runLog runLogLocator, dir string) error {
 	if runLogLogger, ok := runLog.(*logging.Logger); ok {
 		runLogLogger.Section("ci")
@@ -300,7 +260,11 @@ func runCIWithRunLog(ctx context.Context, logger *slog.Logger, runLog runLogLoca
 	if err := logExpectedRed(logger, dir); err != nil {
 		return gateOperationalError("expected-red", "", 0, err)
 	}
-	for _, s := range ciSteps(ctx, logger, dir) {
+	cfg, err := loadKeelDevConfig(dir)
+	if err != nil {
+		return gateOperationalError("config", "", 0, err)
+	}
+	for _, s := range ciStepsWithConfig(ctx, logger, dir, cfg) {
 		startLine := 0
 		logFile := ""
 		if runLog != nil {
@@ -366,7 +330,15 @@ func runStep(ctx context.Context, logger *slog.Logger, dir string, s step) error
 	// Verify the pinned external tool before shelling out to it: a missing or
 	// drifted gate tool fails loud, never a silent skip (keel/ac-42).
 	if s.tool != "" {
-		pin, ok := pinnedTools[s.tool]
+		pins := s.toolPins
+		if pins == nil {
+			cfg, err := loadKeelDevConfig(dir)
+			if err != nil {
+				return err
+			}
+			pins = cfg.toolPins()
+		}
+		pin, ok := pins[s.tool]
 		if !ok {
 			return fmt.Errorf("keel-dev: no version pin registered for gate tool %q", s.tool)
 		}
@@ -519,17 +491,27 @@ func stripANSI(line string) string {
 	return b.String()
 }
 
-// runLogCoreDependencyQuarantine proves that consumers building only keel/log do
-// not reach optional exporter dependencies such as the OpenTelemetry SDK.
+// runLogCoreDependencyQuarantine proves that consumers building only keel/log
+// or keel/exec do not reach optional exporter dependencies such as the
+// OpenTelemetry SDK, or the keel-dev YAML parser.
 //
-// DHF-REQ: keel/requirement-22
+// DHF-REQ: keel/requirement-22, keel/requirement-118 (keel/ac-452)
 func runLogCoreDependencyQuarantine(ctx context.Context, logger *slog.Logger, dir string) error {
-	if _, err := os.Stat(filepath.Join(dir, "log")); os.IsNotExist(err) {
+	for _, pkg := range []string{"./log", "./exec"} {
+		if err := runCoreDependencyQuarantine(ctx, logger, dir, pkg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func runCoreDependencyQuarantine(ctx context.Context, logger *slog.Logger, dir, pkg string) error {
+	if _, err := os.Stat(filepath.Join(dir, strings.TrimPrefix(pkg, "./"))); os.IsNotExist(err) {
 		return nil
 	}
 	proc, err := procexec.ProcessStart(ctx, procexec.Request{
 		Program: "go",
-		Args:    []string{"list", "-deps", "./log"},
+		Args:    []string{"list", "-deps", pkg},
 		Dir:     dir,
 		Logger:  logger,
 	})
@@ -545,9 +527,12 @@ func runLogCoreDependencyQuarantine(ctx context.Context, logger *slog.Logger, di
 		if dep == "" || dep == modulePath || strings.HasPrefix(dep, modulePath+"/") {
 			continue
 		}
+		if strings.Contains(dep, "yaml") {
+			return fmt.Errorf("keel-dev: core dependency quarantine failed: %s depends on YAML package %q", pkg, dep)
+		}
 		first, _, _ := strings.Cut(dep, "/")
 		if strings.Contains(first, ".") {
-			return fmt.Errorf("keel-dev: log core dependency quarantine failed: ./log depends on external package %q", dep)
+			return fmt.Errorf("keel-dev: core dependency quarantine failed: %s depends on external package %q", pkg, dep)
 		}
 	}
 	return nil

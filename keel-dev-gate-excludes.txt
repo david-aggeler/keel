@@ -1,6 +1,0 @@
-# keel-dev ci file-selection excludes.
-#
-# Patterns are repo-relative slash paths. A trailing /** excludes every tracked
-# file below that directory. The declaration is applied by keel-dev before each
-# file-selecting gate step filters by extension.
-.claude/**

@@ -17,7 +17,7 @@ Read `CLAUDE.md`. It is the rulebook. This file is the short version.
 - The gate is `go run ./cmd/keel-dev ci`, plus `keel-dev vsix ci` for the
   VSIX. Same commands for a developer, the release preflight, and a CR
   transition. Don't invent other gates.
-- Gate file-scope exclusions live in `keel-dev-gate-excludes.txt`. Do not make
+- Gate file-scope exclusions live in `keel-dev.yaml`. Do not make
   cspell config or rulebook prose the thing that keeps a path out of scope.
 - CR gates: the field is `transition_gate`, five cumulative rungs
   `prose|static|unit|integration|system`. Commands come

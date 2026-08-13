@@ -26,31 +26,6 @@ type toolPin struct {
 	want string
 }
 
-// pinnedTools is the authoritative manifest of the external tools the ci gate
-// shells out to, each pinned to an exact version. Bumping a pin is a CR-sized
-// decision: change it here AND in scripts/setup_user.sh (and
-// scripts/setup_as_root.sh for shellcheck) in lockstep.
-//
-// deadcode ships no stable --version flag, so its pin is presence-only; it is
-// an advisory step anyway (keel/ac-41).
-//
-// gitleaks is also presence-only: `go install` does not stamp its version
-// (`gitleaks version` prints "version is set by build process"), so a
-// version-substring probe is impossible. The version is pinned at the install
-// side instead (scripts/setup_user.sh installs @v8.21.2); the gate only asserts
-// presence and fails loud if it is missing (keel/ac-45, keel/requirement-13).
-//
-// DHF-REQ: keel/requirement-12 (keel/ac-42), keel/requirement-13
-var pinnedTools = map[string]toolPin{
-	"golangci-lint": {name: "golangci-lint", versionArgs: []string{"--version"}, want: "v2.0.2"},
-	"govulncheck":   {name: "govulncheck", versionArgs: []string{"--version"}, want: "v1.3.0"},
-	"cspell":        {name: "cspell", versionArgs: []string{"--version"}, want: "10.0.1"},
-	"shellcheck":    {name: "shellcheck", versionArgs: []string{"--version"}, want: "0.10.0"},
-	"shfmt":         {name: "shfmt", versionArgs: []string{"--version"}, want: "v3.10.0"},
-	"deadcode":      {name: "deadcode"},
-	"gitleaks":      {name: "gitleaks"},
-}
-
 // verifyToolPin confirms the pinned tool is on PATH and, unless the pin is
 // presence-only, that its version probe reports the pinned version. Every
 // failure is loud and names the tool plus the expected version — a gate tool

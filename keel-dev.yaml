@@ -1,0 +1,72 @@
+# The gate section owns keel-dev file-selection policy because generated agent
+# material and handoff prose are product workflow artifacts, not source files
+# that should block unrelated CI steps.
+gate:
+  # The excludes list is applied before file-selecting gate steps choose by
+  # extension, so catalog materialization and handoffs cannot reach cspell or
+  # gofmt while ordinary similarly named paths still stay in scope.
+  excludes:
+    # The .claude tree is generated from the catalog and can carry process prose
+    # that should be reviewed in gold rather than spell-checked as product text.
+    - .claude/**
+    # Handoff documents are written outside the CR implementation loop, so
+    # gating them would let session-transfer notes red an unrelated merge.
+    - docs/handoffs/**
+
+# The tools section owns external gate tool pins because the gate must prove it
+# is using the expected command versions before relying on their findings.
+tools:
+  # Pins list every external gate command. Empty version fields are deliberate
+  # presence-only pins for tools whose installed binary has no stable probe.
+  pins:
+    # golangci-lint is blocking static analysis, so the gate requires the same
+    # analyzer version everywhere before accepting its results.
+    - name: golangci-lint
+      # The version_args command prints the installed analyzer version in a
+      # stable format that the gate can match before running analysis.
+      version_args: [--version]
+      # The want substring pins the accepted golangci-lint release so analyzer
+      # rule drift cannot silently change gate behavior.
+      want: v2.0.2
+    # govulncheck is the vulnerability scanner, so its database client version
+    # is pinned before the gate trusts a clean report.
+    - name: govulncheck
+      # The version_args command asks govulncheck for its installed version
+      # without invoking a package scan.
+      version_args: [--version]
+      # The want substring pins the scanner release used for vulnerability
+      # evidence across developer and release runs.
+      want: v1.3.0
+    # cspell checks tracked prose and source tokens, so the dictionary engine
+    # version is pinned before spelling findings affect the gate.
+    - name: cspell
+      # The version_args command prints the cspell package version without
+      # scanning files, keeping the preflight cheap and deterministic.
+      version_args: [--version]
+      # The want substring pins cspell so dictionary and parser drift cannot
+      # silently change which checked files pass.
+      want: 10.0.1
+    # shellcheck validates committed shell scripts, so the script analyzer is
+    # pinned before its diagnostics can block CI.
+    - name: shellcheck
+      # The version_args command prints shellcheck's release identifier for the
+      # preflight version comparison.
+      version_args: [--version]
+      # The want substring pins the shellcheck release used for shell-script
+      # diagnostics in both developer and release gates.
+      want: 0.10.0
+    # shfmt reports shell formatting drift, so its formatter version is pinned
+    # before the gate treats a diff as evidence.
+    - name: shfmt
+      # The version_args command prints shfmt's release identifier before any
+      # formatting check is run.
+      version_args: [--version]
+      # The want substring pins shfmt so formatting output stays stable across
+      # machines and release preflights.
+      want: v3.10.0
+    # deadcode is advisory reachability analysis; it has no stable version
+    # probe, so presence is checked while its findings remain non-blocking.
+    - name: deadcode
+    # gitleaks is installed at a pinned version but go-install builds do not
+    # stamp that version into the binary, so the gate checks presence only.
+    - name: gitleaks
