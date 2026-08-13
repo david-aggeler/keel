@@ -4,11 +4,12 @@ import "path/filepath"
 
 // GoTestJSONEvent is one decoded line of `go test -json` output.
 type GoTestJSONEvent struct {
-	Action  string  `json:"Action"`
-	Package string  `json:"Package"`
-	Test    string  `json:"Test"`
-	Output  string  `json:"Output"`
-	Elapsed float64 `json:"Elapsed"`
+	Action     string  `json:"Action"`
+	Package    string  `json:"Package"`
+	ImportPath string  `json:"ImportPath"`
+	Test       string  `json:"Test"`
+	Output     string  `json:"Output"`
+	Elapsed    float64 `json:"Elapsed"`
 }
 
 // GoRunEventTestID resolves the VS Code test item id a `go test -json` event

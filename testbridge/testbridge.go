@@ -841,7 +841,7 @@ func handleRun(bridge Bridge, ids *[]string, dryRun *bool) cli.Handler {
 		if !bridgeLockExempt(bridge, selected) {
 			releaseLock, err := acquireRunLock(runtimeRoot(rt, bridge), selected, runID, rt.Log)
 			if err != nil {
-				writer(vscode.RunEvent{Event: "errored", Message: err.Error()})
+				vscode.EmitErroredForTestIDs(selected, err.Error(), writer)
 				writer(vscode.RunEvent{Event: "run_finished", ExitCode: &exitCode})
 				return err
 			}
@@ -854,12 +854,16 @@ func handleRun(bridge Bridge, ids *[]string, dryRun *bool) cli.Handler {
 
 		root := runtimeRoot(rt, bridge)
 		var remaining []runResolution
+		var erroredIDs []string
 		exitCode, remaining, runErr := runDesiredStateSelections(ctx, bridge, requests, writer)
+		if runErr != nil {
+			erroredIDs = runResolutionIDs(requests)
+		}
 		if runErr == nil && len(remaining) > 0 {
-			exitCode, runErr = runRemainingSelections(ctx, bridge, remaining, runID, root, writer)
+			exitCode, erroredIDs, runErr = runRemainingSelections(ctx, bridge, remaining, runID, root, writer)
 		}
 		if runErr != nil {
-			writer(vscode.RunEvent{Event: "errored", Message: runErr.Error()})
+			vscode.EmitErroredForTestIDs(erroredIDs, runErr.Error(), writer)
 		}
 		writer(vscode.RunEvent{Event: "run_finished", ExitCode: &exitCode})
 		if runErr != nil {
@@ -1004,34 +1008,34 @@ func emitExclusiveDesiredStateSiblingClears(ids []string, selectedID string, wri
 }
 
 // DHF-REQ: keel/requirement-86, keel/requirement-88
-func runRemainingSelections(ctx context.Context, bridge Bridge, requests []runResolution, runID, root string, writer vscode.RunEventWriter) (int, error) {
-	runBatch := func(batch []runResolution) (int, error) {
+func runRemainingSelections(ctx context.Context, bridge Bridge, requests []runResolution, runID, root string, writer vscode.RunEventWriter) (int, []string, error) {
+	runBatch := func(batch []runResolution) (int, []string, error) {
 		if len(batch) == 0 {
-			return 0, nil
-		}
-		if err := ctx.Err(); err != nil {
-			return 1, err
+			return 0, nil, nil
 		}
 		ids := runResolutionIDs(batch)
+		if err := ctx.Err(); err != nil {
+			return 1, ids, err
+		}
 		exitCode, err := bridge.Run(ctx, RunRequest{IDs: ids, RunID: runID, Root: root}, writer)
 		if err != nil || exitCode != 0 {
-			return exitCode, err
+			return exitCode, ids, err
 		}
 		for _, request := range batch {
 			emitExclusiveDesiredStateSiblingClears(request.ExclusiveSiblingIDs, request.Request.ID, writer)
 		}
-		return exitCode, nil
+		return exitCode, nil, nil
 	}
 
 	batch := make([]runResolution, 0, len(requests))
 	for _, request := range requests {
 		if bridgeHandlesMaintenanceRun(request.Request.ID) {
-			if exitCode, err := runBatch(batch); err != nil || exitCode != 0 {
-				return exitCode, err
+			if exitCode, ids, err := runBatch(batch); err != nil || exitCode != 0 {
+				return exitCode, ids, err
 			}
 			batch = batch[:0]
 			if exitCode, err := runBridgeMaintenance(ctx, bridge, root, runID, request.Request.ID, writer); err != nil || exitCode != 0 {
-				return exitCode, err
+				return exitCode, []string{request.Request.ID}, err
 			}
 			continue
 		}
@@ -1039,12 +1043,12 @@ func runRemainingSelections(ctx context.Context, bridge Bridge, requests []runRe
 			batch = append(batch, request)
 			continue
 		}
-		if exitCode, err := runBatch(batch); err != nil || exitCode != 0 {
-			return exitCode, err
+		if exitCode, ids, err := runBatch(batch); err != nil || exitCode != 0 {
+			return exitCode, ids, err
 		}
 		batch = batch[:0]
-		if exitCode, err := runBatch([]runResolution{request}); err != nil || exitCode != 0 {
-			return exitCode, err
+		if exitCode, ids, err := runBatch([]runResolution{request}); err != nil || exitCode != 0 {
+			return exitCode, ids, err
 		}
 	}
 	return runBatch(batch)

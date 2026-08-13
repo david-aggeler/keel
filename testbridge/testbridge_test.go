@@ -223,7 +223,7 @@ func TestBridgeDispatchLogsDryRunAndValidationFailures(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-78
+// DHF-TEST: keel/requirement-78, keel/requirement-116
 func TestBridgeTerminalLogIncludesRunLevelErrors(t *testing.T) {
 	root := t.TempDir()
 	fake := newFakeBridge(root)
@@ -238,9 +238,10 @@ func TestBridgeTerminalLogIncludesRunLevelErrors(t *testing.T) {
 		t.Fatalf("new logger: %v", err)
 	}
 	defer logger.Close()
+	var protocol bytes.Buffer
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{
 		Root:     root,
-		Protocol: io.Discard,
+		Protocol: &protocol,
 		Log:      logger.Slog(),
 		RunID:    func() string { return "run-level-error" },
 	})
@@ -251,8 +252,11 @@ func TestBridgeTerminalLogIncludesRunLevelErrors(t *testing.T) {
 		t.Fatalf("run dispatch err = %#v, want non-zero RunError", err)
 	}
 	records := capture.AllJSON()
-	if !hasBridgeTerminalMessageRecord(records, "", "errored", 1, "runner failed before test id") {
-		t.Fatalf("records = %+v, want run-level terminal error record", records)
+	if !hasBridgeTerminalMessageRecord(records, "demo::lane::fast", "errored", 1, "runner failed before test id") {
+		t.Fatalf("records = %+v, want keyed terminal error record", records)
+	}
+	if !eventsContain(decodeEvents(t, protocol.String()), "errored", "demo::lane::fast", "runner failed before test id") {
+		t.Fatalf("protocol = %s, want keyed errored event for requested id", protocol.String())
 	}
 }
 
@@ -2058,12 +2062,16 @@ func TestRunErrorsAndLockConflictsUsePackagePaths(t *testing.T) {
 	fake := newFakeBridge(root)
 	fake.runErr = errors.New("runner failed")
 	spec := testbridge.CommandSpec(fake)
-	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: io.Discard, RunID: func() string { return "run-error" }})
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return "run-error" }})
 
 	err := spec.Dispatch(ctx, []string{"test-bridge", "run", "--id", "demo::lane::fast"})
 	var runErr testbridge.RunError
 	if !errors.As(err, &runErr) || runErr.ExitCode != 1 || !strings.Contains(runErr.Error(), "runner failed") || runErr.Unwrap() == nil {
 		t.Fatalf("run error = %#v, want RunError wrapping runner failure", err)
+	}
+	if !eventsContain(decodeEvents(t, protocol.String()), "errored", "demo::lane::fast", "runner failed") {
+		t.Fatalf("run-error protocol = %s, want keyed errored event for requested id", protocol.String())
 	}
 
 	if err := os.MkdirAll(filepath.Dir(testbridge.RunLockPath(root)), 0o755); err != nil {
@@ -2072,9 +2080,13 @@ func TestRunErrorsAndLockConflictsUsePackagePaths(t *testing.T) {
 	if err := os.WriteFile(testbridge.RunLockPath(root), []byte(`{"pid":1,"created_at":"2026-07-13T00:00:00Z","ids":["x"],"token":"other"}`+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	protocol.Reset()
 	err = spec.Dispatch(ctx, []string{"test-bridge", "run", "--id", "demo::lane::fast"})
 	if err == nil || !strings.Contains(err.Error(), "keel/testbridge: run lock already exists") {
 		t.Fatalf("lock conflict err = %v, want package-prefixed lock refusal", err)
+	}
+	if !eventsContain(decodeEvents(t, protocol.String()), "errored", "demo::lane::fast", "run lock already exists") {
+		t.Fatalf("lock-conflict protocol = %s, want keyed errored event for requested id", protocol.String())
 	}
 }
 

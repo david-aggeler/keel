@@ -126,14 +126,14 @@ func TestNormalizeRunEvents_UnknownEventRenderedAsOutputAndLogged(t *testing.T) 
 	}
 }
 
-// DHF-TEST: keel/requirement-23
+// DHF-TEST: keel/requirement-23, keel/requirement-116
 func TestNormalizeRunEvents_ProducerCrashStillEmitsTerminalRunFinished(t *testing.T) {
 	in := strings.NewReader(strings.Join([]string{
 		`{"event":"run_started"}`,
 		`{"event":"test_started","test_id":"keel::lane::test-fast"}`,
 	}, "\n"))
 	emit, events := capture()
-	exit := NormalizeRunEvents(in, errors.New("signal: killed"), emit, nil)
+	exit := NormalizeRunEvents(in, errors.New("signal: killed"), emit, nil, "keel::lane::test-fast")
 	if exit == 0 {
 		t.Fatal("a crashed producer with no terminal must yield a non-zero exit code")
 	}
@@ -146,12 +146,12 @@ func TestNormalizeRunEvents_ProducerCrashStillEmitsTerminalRunFinished(t *testin
 	}
 	var sawErrored bool
 	for _, e := range *events {
-		if e.Event == "errored" && strings.Contains(e.Message, "signal: killed") {
+		if e.Event == "errored" && e.TestID == "keel::lane::test-fast" && strings.Contains(e.Message, "signal: killed") {
 			sawErrored = true
 		}
 	}
 	if !sawErrored {
-		t.Fatal("terminal run_finished was not preceded by an errored event describing the fault")
+		t.Fatal("terminal run_finished was not preceded by a keyed errored event describing the fault")
 	}
 }
 
