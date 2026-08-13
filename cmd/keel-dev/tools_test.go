@@ -550,6 +550,37 @@ exit 0
 	}
 }
 
+// DHF-TEST: keel/requirement-118 (keel/ac-451)
+func TestCIStepsReuseLoadedConfigForToolPins(t *testing.T) {
+	requireTool(t, "git")
+
+	dir := t.TempDir()
+	mustRun(t, dir, "git", "init")
+	writeFile(t, dir, keelDevConfigFile, "gate:\n  excludes:\n    - .claude/**\ntools:\n  pins:\n    - name: cspell\n      version_args: [--version]\n      want: 10.0.1\n")
+	writeFile(t, dir, "tracked.md", "# tracked\n")
+	mustRun(t, dir, "git", "add", keelDevConfigFile, "tracked.md")
+
+	bin := t.TempDir()
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cspell := `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "10.0.1"
+  exit 0
+fi
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(bin, "cspell"), []byte(cspell), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cspellStep := stepByName(t, ciSteps(context.Background(), discardLogger(), dir), "cspell")
+	writeFile(t, dir, keelDevConfigFile, "gate:\n  excludes:\n    - .claude/**\ntools:\n  pins:\n    - name: deadcode\n")
+
+	if err := runStep(context.Background(), discardLogger(), dir, cspellStep); err != nil {
+		t.Fatalf("cspell step reread mutated config instead of reusing the loaded pin: %v", err)
+	}
+}
+
 func stepByName(t *testing.T, steps []step, name string) step {
 	t.Helper()
 	for _, s := range steps {
