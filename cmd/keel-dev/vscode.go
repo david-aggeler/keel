@@ -237,6 +237,9 @@ func runVSCodeSelection(ctx context.Context, state runState, engine *vscode.Engi
 	}
 	exitCode, err := runVSCodeLane(ctx, state.logger, root, id, runID, profile.MaxOutputBytes(), observe)
 	if err != nil {
+		if settled {
+			return exitCode, nil
+		}
 		return exitCode, err
 	}
 	if !settled {
@@ -2108,8 +2111,10 @@ func goFileRelInNestedModule(root, rel string) bool {
 	return false
 }
 
+// DHF-REQ: keel/requirement-116
 func emitGoTestJSONEvents(raw string, selection vscode.GoSelection, selectedID, modulePath string, writer vscode.RunEventWriter) {
 	scanner := bufio.NewScanner(strings.NewReader(raw))
+	buildOutputByID := map[string]*strings.Builder{}
 	for scanner.Scan() {
 		var event vscode.GoTestJSONEvent
 		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
@@ -2132,6 +2137,21 @@ func emitGoTestJSONEvents(raw string, selection vscode.GoSelection, selectedID, 
 		case "output":
 			if vscode.OutputBelongsToGoSelection(selection, event) {
 				writer(vscode.RunEvent{Event: "output", TestID: testID, Message: event.Output})
+			}
+		case "build-output":
+			if vscode.GoJSONResultBelongsToSelection(selection, event) {
+				if buildOutputByID[testID] == nil {
+					buildOutputByID[testID] = &strings.Builder{}
+				}
+				buildOutputByID[testID].WriteString(event.Output)
+			}
+		case "build-fail":
+			if vscode.GoJSONResultBelongsToSelection(selection, event) {
+				message := ""
+				if b := buildOutputByID[testID]; b != nil {
+					message = b.String()
+				}
+				writer(vscode.RunEvent{Event: "errored", TestID: testID, Message: message})
 			}
 		}
 	}

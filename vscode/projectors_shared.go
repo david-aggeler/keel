@@ -55,7 +55,7 @@ func StableTitleSlug(title string) string {
 // StatusEventName maps a framework-reported status string to the neutral
 // run-event verb emitted on the wire.
 //
-// DHF-REQ: keel/requirement-23
+// DHF-REQ: keel/requirement-23, keel/requirement-116
 func StatusEventName(status string) string {
 	switch status {
 	case "passed", "pass", "expected":
@@ -65,7 +65,7 @@ func StatusEventName(status string) string {
 	case "skipped", "skip", "pending":
 		return "skipped"
 	default:
-		return "failed"
+		return "errored"
 	}
 }
 
