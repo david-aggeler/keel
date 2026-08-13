@@ -39,7 +39,8 @@ import {
   timestampedRunOutputLines,
   triggerWatcherEventForTest
 } from '../../extension';
-import { adapterConfig, configRelativePath, currentConfigVersion, defaultConfigTemplate, discoverTests, readDesiredState, readAdapterConfig, runTests, upgradeConfig } from '../../bridgeAdapter';
+import * as bridgeAdapterModule from '../../bridgeAdapter';
+import { adapterConfig, configRelativePath, currentConfigVersion, defaultConfigTemplate, discoveryOutputMaxBufferBytes, discoverTests, readDesiredState, readAdapterConfig, runTests, upgradeConfig } from '../../bridgeAdapter';
 import { publishDiscovery, replacePublishedTestItem } from '../../tree';
 import { DesiredStateGroup, DiscoveryItem, RunEvent } from '../../protocol';
 
@@ -306,6 +307,58 @@ suite('Keel Test Bridge config contract', () => {
       assert.equal(discovery.workspace, 'matched');
       assert.deepEqual(discovery.items, []);
     } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // DHF-TEST: keel/requirement-115
+  test('discovery and desired-state reads use one exported document-size bound', () => {
+    assert.equal(discoveryOutputMaxBufferBytes, 16 * 1024 * 1024);
+    const source = fs.readFileSync(path.resolve(__dirname, '../../../src/bridgeAdapter.ts'), 'utf8');
+    assert.equal((source.match(/export const discoveryOutputMaxBufferBytes/g) ?? []).length, 1);
+    assert.equal((source.match(/maxBuffer: discoveryOutputMaxBufferBytes/g) ?? []).length, 1);
+    assert.doesNotMatch(source, /maxBuffer:\s*16\s*\*\s*1024\s*\*\s*1024/);
+  });
+
+  // DHF-TEST: keel/requirement-115
+  test('oversized discovery output is diagnosed with the published byte bound', async function () {
+    this.timeout(10_000);
+    const testBound = 64;
+    const restoreBound = setDiscoveryOutputMaxBufferBytesForTest(testBound);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-discovery-size-bound-'));
+    const fake = path.join(root, 'oversized-adapter.cjs');
+    fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+    fs.writeFileSync(fake, [
+      "const args = process.argv.slice(2);",
+      "if (args.includes('--version')) { console.log('dev'); process.exit(0); }",
+      "if (args.join(' ') === 'test-bridge discover --format json') {",
+      `  process.stdout.write('x'.repeat(${testBound + 1}));`,
+      "  process.exit(0);",
+      "}",
+      "process.exit(2);"
+    ].join('\n'));
+    fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+      version: currentConfigVersion,
+      command: nodeExecutableForTest(),
+      args: [fake],
+      displayName: 'Oversized Producer'
+    }, null, 2) + '\n');
+
+    try {
+      await assert.rejects(
+        discoverTests(root),
+        (err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          assert.match(message, new RegExp(`${testBound}`));
+          assert.match(message, /producer/i);
+          assert.match(message, /document size/i);
+          assert.doesNotMatch(message, /stdout maxBuffer length exceeded/);
+          assert.doesNotMatch(message, /just build-dev/i);
+          return true;
+        }
+      );
+    } finally {
+      restoreBound();
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
@@ -1065,6 +1118,95 @@ process.exit(2);
       }
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  // DHF-TEST: keel/requirement-115
+  test('failed discovery refresh clears the published tree and reports the bound-specific error', async function () {
+    this.timeout(10_000);
+    const testBound = 64;
+    let restoreBound: (() => void) | undefined;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-refresh-failure-state-'));
+    const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+    process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = root;
+    fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+    const fake = path.join(root, 'refresh-failure-adapter.cjs');
+    fs.writeFileSync(fake, [
+      "const args = process.argv.slice(2);",
+      "const mode = process.env.KEEL_REFRESH_FAILURE_MODE || 'ok';",
+      "if (args.includes('--version')) { console.log('dev'); process.exit(0); }",
+      "if (args.join(' ') === 'test-bridge discover --format json') {",
+      `  if (mode === 'oversized') { process.stdout.write('x'.repeat(${testBound + 1})); process.exit(0); }`,
+      "  if (mode === 'nonzero') { console.error('producer failed'); process.exit(3); }",
+      "  if (mode === 'malformed') { process.stdout.write('{not-json'); process.exit(0); }",
+      "  console.log(JSON.stringify({ version: 1, workspace: process.cwd(), generated_at: new Date().toISOString(), items: [{ id: 'case::lane', label: 'case lane', kind: 'lane', runnable: true, profiles: ['run'] }] }));",
+      "  process.exit(0);",
+      "}",
+      "process.exit(2);"
+    ].join('\n'));
+    fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+      version: currentConfigVersion,
+      command: process.execPath,
+      args: [fake],
+      displayName: 'Refresh Producer',
+      env: { KEEL_REFRESH_FAILURE_MODE: 'ok' }
+    }, null, 2) + '\n');
+
+    const windowWithSpy = vscode.window as typeof vscode.window & {
+      showErrorMessage: (message: string, ...items: string[]) => Thenable<string | undefined>;
+    };
+    const originalShowErrorMessage = windowWithSpy.showErrorMessage.bind(vscode.window);
+    const shownErrors: string[] = [];
+    windowWithSpy.showErrorMessage = ((message: string, ...items: unknown[]) => {
+      shownErrors.push(message);
+      return Promise.resolve(items.find((item): item is string => typeof item === 'string'));
+    }) as unknown as typeof windowWithSpy.showErrorMessage;
+
+    try {
+      const extension = vscode.extensions.getExtension('aggeler.keel-test-bridge');
+      assert.ok(extension, 'extension should be discoverable');
+      await extension.activate();
+      await vscode.commands.executeCommand('keel.tests.refresh');
+      assert.ok(publishedTestItemIds().includes('case::lane'), 'successful refresh publishes the baseline item');
+
+      restoreBound = setDiscoveryOutputMaxBufferBytesForTest(testBound);
+      for (const mode of ['oversized', 'nonzero', 'malformed']) {
+        fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+          version: currentConfigVersion,
+          command: mode === 'oversized' ? nodeExecutableForTest() : process.execPath,
+          args: [fake],
+          displayName: 'Refresh Producer',
+          env: { KEEL_REFRESH_FAILURE_MODE: mode }
+        }, null, 2) + '\n');
+        await vscode.commands.executeCommand('keel.tests.refresh');
+        assert.deepEqual(publishedTestItemIds(), [], `${mode} discovery failure must clear the tree`);
+      }
+
+      const oversizedMessage = shownErrors.find((message) => message.includes(`${testBound}`));
+      assert.ok(oversizedMessage, `expected a bound-specific error in ${JSON.stringify(shownErrors)}`);
+      assert.match(oversizedMessage, /producer/i);
+      assert.match(oversizedMessage, /document size/i);
+      assert.doesNotMatch(oversizedMessage, /stdout maxBuffer length exceeded/);
+      assert.doesNotMatch(oversizedMessage, /just build-dev/i);
+    } finally {
+      restoreBound?.();
+      windowWithSpy.showErrorMessage = originalShowErrorMessage;
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // DHF-TEST: keel/requirement-115
+  test('wire schema publishes the discovery size bound and failed-refresh state', () => {
+    const doc = fs.readFileSync(path.resolve(__dirname, '../../../../docs/wire-schema.md'), 'utf8');
+    assert.match(doc, new RegExp(`${discoveryOutputMaxBufferBytes}`));
+    assert.match(doc, /discovery document/i);
+    assert.match(doc, /reject/i);
+    assert.match(doc, /failed refresh/i);
+    assert.match(doc, /clear/i);
   });
 
   // DHF-TEST: keel/requirement-61
@@ -2289,6 +2431,24 @@ function realKeelDevBinary(): string {
 function realKeelDemoDevBinary(): string {
   const exe = process.platform === 'win32' ? 'keel-demo-dev.exe' : 'keel-demo-dev';
   return path.resolve(__dirname, '../../../../bin', exe);
+}
+
+function nodeExecutableForTest(): string {
+  for (const candidate of [process.env.npm_node_execpath, process.env.NODE, '/usr/bin/node', '/usr/local/bin/node']) {
+    if (candidate && path.isAbsolute(candidate) && fs.existsSync(candidate) && /^node(?:\.exe)?$/.test(path.basename(candidate))) {
+      return candidate;
+    }
+  }
+  return process.execPath;
+}
+
+function setDiscoveryOutputMaxBufferBytesForTest(bytes: number): () => void {
+  const mutable = bridgeAdapterModule as unknown as { discoveryOutputMaxBufferBytes: number };
+  const previous = mutable.discoveryOutputMaxBufferBytes;
+  mutable.discoveryOutputMaxBufferBytes = bytes;
+  return () => {
+    mutable.discoveryOutputMaxBufferBytes = previous;
+  };
 }
 
 function keelModuleRootFromTestLocation(): string {

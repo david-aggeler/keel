@@ -7,6 +7,7 @@ import { DiscoveryDocument, DesiredStateDocument } from './protocol';
 const execFile = promisify(cp.execFile);
 export const currentConfigVersion = 3;
 export const configRelativePath = path.join('.vscode', 'test-bridge.json');
+export const discoveryOutputMaxBufferBytes = 16 * 1024 * 1024;
 
 export interface BridgeAdapterConfig {
   version: number;
@@ -76,12 +77,8 @@ export function readAdapterConfig(workspaceRoot: string): BridgeAdapterConfig {
 export async function discoverTests(workspaceRoot: string): Promise<DiscoveryDocument> {
   const adapter = adapterConfig(workspaceRoot);
   await assertCompatibleBridgeVersion(adapter, workspaceRoot);
-  const { stdout } = await execFile(adapter.command, canonicalTestsArgs(adapter, 'discover', ['--format', 'json']), {
-    cwd: workspaceRoot,
-    env: adapterEnv(adapter),
-    maxBuffer: 16 * 1024 * 1024
-  });
-  const parsed = JSON.parse(stdout) as DiscoveryDocument;
+  const stdout = await readBoundedBridgeDocument(adapter, workspaceRoot, 'discover', canonicalTestsArgs(adapter, 'discover', ['--format', 'json']));
+  const parsed = parseBoundedBridgeDocument(adapter, 'discover', stdout) as DiscoveryDocument;
   if (parsed.version !== 1 || !Array.isArray(parsed.items)) {
     throw new Error(`${adapter.displayName} adapter returned an unsupported VS Code discovery document`);
   }
@@ -95,12 +92,8 @@ export async function readDesiredState(workspaceRoot: string, ids: string[]): Pr
   for (const id of ids) {
     args.push('--id', id);
   }
-  const { stdout } = await execFile(adapter.command, args, {
-    cwd: workspaceRoot,
-    env: adapterEnv(adapter),
-    maxBuffer: 16 * 1024 * 1024
-  });
-  const parsed = JSON.parse(stdout) as DesiredStateDocument;
+  const stdout = await readBoundedBridgeDocument(adapter, workspaceRoot, 'desired-state', args);
+  const parsed = parseBoundedBridgeDocument(adapter, 'desired-state', stdout) as DesiredStateDocument;
   if (parsed.version !== 3 || !Array.isArray(parsed.groups)) {
     throw new Error(`${adapter.displayName} adapter returned an unsupported VS Code desired-state document`);
   }
@@ -161,6 +154,54 @@ function resolveAdapterCommand(workspaceRoot: string, command: string): string {
 
 function adapterEnv(adapter: BridgeAdapterConfig): NodeJS.ProcessEnv {
   return adapter.env ? { ...process.env, ...adapter.env } : process.env;
+}
+
+// DHF-REQ: keel/requirement-115
+async function readBoundedBridgeDocument(adapter: BridgeAdapterConfig, cwd: string, documentKind: 'discover' | 'desired-state', args: string[]): Promise<string> {
+  try {
+    const { stdout } = await execFile(adapter.command, args, {
+      cwd,
+      env: adapterEnv(adapter),
+      maxBuffer: discoveryOutputMaxBufferBytes
+    });
+    if (Buffer.byteLength(stdout) > discoveryOutputMaxBufferBytes) {
+      throw new Error(formatDocumentSizeBoundError(adapter, documentKind, stdout));
+    }
+    return stdout;
+  } catch (err) {
+    if (isStdoutMaxBufferError(err)) {
+      throw new Error(formatDocumentSizeBoundError(adapter, documentKind, err));
+    }
+    throw err;
+  }
+}
+
+function isStdoutMaxBufferError(err: unknown): err is Error & { code?: string; stdout?: string | Buffer } {
+  return err instanceof Error && (err as { code?: unknown }).code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+}
+
+function formatDocumentSizeBoundError(adapter: BridgeAdapterConfig, documentKind: 'discover' | 'desired-state', output: (Error & { stdout?: string | Buffer }) | string | Buffer): string {
+  const capturedBytes = output instanceof Error ? capturedStdoutBytes(output.stdout) : capturedStdoutBytes(output);
+  const capturedText = capturedBytes === undefined ? 'the output exceeded' : `captured ${capturedBytes} bytes before rejecting`;
+  return `${adapter.displayName} producer ${documentKind} document size exceeded the ${discoveryOutputMaxBufferBytes}-byte Test Bridge stdout bound; ${capturedText} the document. Reduce the producer's document size or split the discovery surface.`;
+}
+
+function capturedStdoutBytes(stdout: string | Buffer | undefined): number | undefined {
+  if (typeof stdout === 'string') {
+    return Buffer.byteLength(stdout);
+  }
+  return stdout?.byteLength;
+}
+
+function parseBoundedBridgeDocument(adapter: BridgeAdapterConfig, documentKind: 'discover' | 'desired-state', stdout: string): unknown {
+  try {
+    return JSON.parse(stdout);
+  } catch (err) {
+    if (Buffer.byteLength(stdout) >= discoveryOutputMaxBufferBytes) {
+      throw new Error(formatDocumentSizeBoundError(adapter, documentKind, stdout));
+    }
+    throw err;
+  }
 }
 
 // DHF-REQ: keel/requirement-64
