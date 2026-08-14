@@ -263,17 +263,17 @@ type worktreeBinding struct {
 	out                 io.Writer
 }
 
-// worktreeBaseDefault is the worktrees parent used when no marker file declares
-// one, matching the shell contract the skill scripts established.
+// worktreeBaseDefault is the repo-local worktrees parent used when no marker
+// file declares an override.
 const worktreeBaseDefault = "worktrees/"
 
 // worktreeMarkerFile is the optional marker whose placeholders.worktree_base
 // row relocates the worktrees parent.
 const worktreeMarkerFile = "openbrain-client.local.yaml"
 
-// newWorktreeBinding resolves the primary checkout and the worktrees parent the
-// same way the skill scripts do, so a delegated wrapper addresses exactly the
-// paths its shell predecessor addressed.
+// newWorktreeBinding resolves the primary checkout first, then the marker-based
+// worktrees parent, so every worktree verb in this process addresses one shared
+// path convention.
 func newWorktreeBinding(ctx context.Context, baseRef string) (*worktreeBinding, error) {
 	state := stateFrom(ctx)
 	primary, err := primaryCheckout(ctx, state.logger, state.root)
@@ -644,8 +644,9 @@ func (b *worktreeBinding) compare(ctx context.Context, name string) error {
 }
 
 // reportPath returns the path the reports name. The manager's path is used
-// whenever the worktrees parent exists; when it does not, nothing can be there,
-// and the report names the sibling path the shell contract named.
+// whenever the worktrees parent exists; when it does not, no managed child can
+// be present there, so the report keeps the stable absent-checkout spelling
+// beside the primary checkout.
 func (b *worktreeBinding) reportPath(name, managed string) string {
 	if b.worktreesDirPresent {
 		return managed
@@ -694,25 +695,22 @@ func gitProbe(ctx context.Context, logger *slog.Logger, dir string, args ...stri
 // "epic" is has stopped being neutral. keel-dev may know keel's vocabulary.
 var worktreeWorkItemKinds = []string{"cr", "epic", "story"}
 
-// worktreeSlugMaxLen bounds the slug, matching the length the wrapper scripts
-// enforced in shell before this became the single decider.
+// worktreeSlugMaxLen bounds operator-facing names so generated paths and result
+// tokens stay readable.
 const worktreeSlugMaxLen = 100
 
 // validateWorkItemName decides whether a name is a well-formed work item —
 // <kind>-<seq> with an optional -<slug> — and is the ONE implementation of that
-// judgement. The delegating wrapper scripts carry none of their own; they
-// compose a name and hand it here, so a violation is refused once, with the
-// invalid-argument status 64 the shell contract established (keel/ac-409).
+// judgement in keel-dev. The worktree package stays consumer-neutral, while
+// invalid worktree argv is refused with the in-family invalid-argument status.
 //
-// The checks run in the order the scripts ran them — kind, slug charset, slug
-// length, seq — so a name wrong in more than one way is refused for the same
-// reason it always was.
+// The checks run in deterministic order — kind, slug charset, slug length, seq
+// — so a name wrong in more than one way gets a stable primary diagnostic.
 //
 // The slug is optional because the autonomous run-queue tail owns worktrees
-// named cr-<seq> with no slug (CLAUDE.md); the three-argument wrappers can never
-// compose such a name, so the set of names THEY can get accepted is unchanged.
+// named cr-<seq> with no slug (CLAUDE.md).
 //
-// DHF-REQ: keel/requirement-114 (keel/ac-421, keel/ac-409, keel/ac-399)
+// DHF-REQ: keel/requirement-113, keel/requirement-114 (keel/ac-399, keel/ac-414, keel/ac-437)
 func validateWorkItemName(op, name string) error {
 	parts := strings.SplitN(name, "-", 3)
 	if !worktreeWorkItemKind(parts[0]) {
@@ -749,7 +747,7 @@ func worktreeWorkItemKind(kind string) bool {
 	return false
 }
 
-// validWorktreeSlug accepts the slug charset the skill scripts accepted:
+// validWorktreeSlug keeps slugs lowercase and path-token friendly:
 // ^[a-z0-9][a-z0-9-]*$.
 func validWorktreeSlug(slug string) bool {
 	if slug == "" {
@@ -767,7 +765,7 @@ func validWorktreeSlug(slug string) bool {
 	return true
 }
 
-// validWorktreeSeq accepts the sequence charset the skill scripts accepted:
+// validWorktreeSeq requires the sequence segment to be decimal digits only:
 // ^[0-9]+$.
 func validWorktreeSeq(seq string) bool {
 	if seq == "" {
@@ -781,8 +779,9 @@ func validWorktreeSeq(seq string) bool {
 	return true
 }
 
-// validWorktreeGlob accepts the pattern charset the skill scripts accept, so a
-// pattern that would have been refused in shell is still refused here.
+// validWorktreeGlob allows one basename pattern with simple work-item
+// characters and '*'. It excludes path separators, dot expressions, whitespace,
+// and character classes before the pattern reaches filepath.Match.
 func validWorktreeGlob(pattern string) bool {
 	if pattern == "" {
 		return false
