@@ -51,6 +51,51 @@ case ":$PATH:" in
 *) export PATH="${HOME_DIR}/.local/bin:$PATH" ;;
 esac
 
+ensure_versioned_go_tool() {
+	local name="$1" version="$2" bin="$3" package="$4" want="$5"
+	shift 5
+	local version_args=("$@")
+	local current=""
+	if [[ -x "$bin" ]]; then
+		current="$("$bin" "${version_args[@]}" 2>&1 || true)"
+		if grep -qF "$want" <<<"$current"; then
+			echo "${name} already installed: $(head -n1 <<<"$current") (${bin})"
+			return 0
+		fi
+		echo "Updating ${name} to ${version}; current version output:"
+		printf '%s\n' "$current"
+	else
+		echo "Installing ${name} ${version} into $(dirname "$bin")..."
+	fi
+	go install "${package}@${version}"
+	current="$("$bin" "${version_args[@]}" 2>&1 || true)"
+	if ! grep -qF "$want" <<<"$current"; then
+		echo "ERROR: ${name} install did not report expected version substring ${want}." >&2
+		printf '%s\n' "$current" >&2
+		exit 1
+	fi
+	echo "${name} installed: $(head -n1 <<<"$current") (${bin})"
+}
+
+ensure_local_bin_link() {
+	local name="$1" target="$2"
+	local link="${HOME_DIR}/.local/bin/${name}"
+	if [[ "$link" == "$target" ]]; then
+		return 0
+	fi
+	if [[ -e "$link" || -L "$link" ]]; then
+		local resolved
+		resolved="$(readlink -f "$link" 2>/dev/null || true)"
+		if [[ "$resolved" == "$target" ]]; then
+			return 0
+		fi
+		echo "Linking ${link} -> ${target} so PATH does not resolve a stale ${name} first."
+	else
+		echo "Linking ${link} -> ${target}."
+	fi
+	ln -sfn "$target" "$link"
+}
+
 # ---------------------------------------------------------------------------
 # Go tools — Go gate baseline (all via `go install`; land in $GOBIN).
 # Pinned versions mirror the openbrain fleet pins where shared. See
@@ -76,54 +121,41 @@ else
 	# staticcheck. Config is .golangci.yml v2 schema.
 	GOLANGCI_LINT_VERSION="v2.12.2"
 	GOLANGCI_LINT_BIN="${GO_BIN_DIR}/golangci-lint"
-	if [[ -x "$GOLANGCI_LINT_BIN" ]]; then
-		echo "golangci-lint already installed: $("$GOLANGCI_LINT_BIN" --version | head -n1) (${GOLANGCI_LINT_BIN})"
-	else
-		echo "Installing golangci-lint ${GOLANGCI_LINT_VERSION} into ${GO_BIN_DIR}..."
-		go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}"
-	fi
+	ensure_versioned_go_tool "golangci-lint" "$GOLANGCI_LINT_VERSION" "$GOLANGCI_LINT_BIN" \
+		"github.com/golangci/golangci-lint/v2/cmd/golangci-lint" "2.12.2" --version
+	ensure_local_bin_link "golangci-lint" "$GOLANGCI_LINT_BIN"
 
 	# --- govulncheck — stdlib/dependency vulnerability scan ---
 	GOVULNCHECK_VERSION="v1.7.0"
 	GOVULNCHECK_BIN="${GO_BIN_DIR}/govulncheck"
-	if [[ -x "$GOVULNCHECK_BIN" ]]; then
-		echo "govulncheck already installed: $("$GOVULNCHECK_BIN" --version | head -n1) (${GOVULNCHECK_BIN})"
-	else
-		echo "Installing govulncheck ${GOVULNCHECK_VERSION} into ${GO_BIN_DIR}..."
-		go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
-	fi
+	ensure_versioned_go_tool "govulncheck" "$GOVULNCHECK_VERSION" "$GOVULNCHECK_BIN" \
+		"golang.org/x/vuln/cmd/govulncheck" "$GOVULNCHECK_VERSION" --version
+	ensure_local_bin_link "govulncheck" "$GOVULNCHECK_BIN"
 
 	# --- gofumpt — stricter gofmt superset ---
 	GOFUMPT_VERSION="v0.7.0"
 	GOFUMPT_BIN="${GO_BIN_DIR}/gofumpt"
-	if [[ -x "$GOFUMPT_BIN" ]]; then
-		echo "gofumpt already installed: $("$GOFUMPT_BIN" --version) (${GOFUMPT_BIN})"
-	else
-		echo "Installing gofumpt ${GOFUMPT_VERSION} into ${GO_BIN_DIR}..."
-		go install "mvdan.cc/gofumpt@${GOFUMPT_VERSION}"
-	fi
+	ensure_versioned_go_tool "gofumpt" "$GOFUMPT_VERSION" "$GOFUMPT_BIN" \
+		"mvdan.cc/gofumpt" "$GOFUMPT_VERSION" --version
+	ensure_local_bin_link "gofumpt" "$GOFUMPT_BIN"
 
 	# --- shfmt — shell formatter (lints/formats these bootstrap scripts) ---
 	SHFMT_VERSION="v3.13.1"
 	SHFMT_BIN="${GO_BIN_DIR}/shfmt"
-	if [[ -x "$SHFMT_BIN" ]]; then
-		echo "shfmt already installed: $("$SHFMT_BIN" --version) (${SHFMT_BIN})"
-	else
-		echo "Installing shfmt ${SHFMT_VERSION} into ${GO_BIN_DIR}..."
-		go install "mvdan.cc/sh/v3/cmd/shfmt@${SHFMT_VERSION}"
-	fi
+	ensure_versioned_go_tool "shfmt" "$SHFMT_VERSION" "$SHFMT_BIN" \
+		"mvdan.cc/sh/v3/cmd/shfmt" "$SHFMT_VERSION" --version
+	ensure_local_bin_link "shfmt" "$SHFMT_BIN"
 
 	# --- gitleaks — secret scanner (enforces keel/requirement-8: no secrets) ---
 	GITLEAKS_VERSION="v8.30.1"
 	GITLEAKS_BIN="${GO_BIN_DIR}/gitleaks"
-	if [[ -x "$GITLEAKS_BIN" ]]; then
-		echo "gitleaks already installed: $("$GITLEAKS_BIN" version) (${GITLEAKS_BIN})"
-	else
-		echo "Installing gitleaks ${GITLEAKS_VERSION} into ${GO_BIN_DIR}..."
-		# Module path is github.com/zricethezav/gitleaks — the GitHub repo moved
-		# to github.com/gitleaks but the Go module path never did.
-		go install "github.com/zricethezav/gitleaks/v8@${GITLEAKS_VERSION}"
-	fi
+	# Module path is github.com/zricethezav/gitleaks — the GitHub repo moved
+	# to github.com/gitleaks but the Go module path never did. Go-installed
+	# gitleaks does not expose a stable version probe, so reinstall the pinned
+	# module every run and link it ahead of stale PATH shadows.
+	echo "Installing gitleaks ${GITLEAKS_VERSION} into ${GO_BIN_DIR}..."
+	go install "github.com/zricethezav/gitleaks/v8@${GITLEAKS_VERSION}"
+	ensure_local_bin_link "gitleaks" "$GITLEAKS_BIN"
 
 	# --- deadcode — advisory unreachable-function report (golang.org/x/tools) ---
 	DEADCODE_VERSION="v0.28.0"
@@ -134,6 +166,7 @@ else
 		echo "Installing deadcode ${DEADCODE_VERSION} into ${GO_BIN_DIR}..."
 		go install "golang.org/x/tools/cmd/deadcode@${DEADCODE_VERSION}"
 	fi
+	ensure_local_bin_link "deadcode" "$DEADCODE_BIN"
 
 	# PATH check — surface remediation if the bin dir is not on PATH.
 	case ":${PATH}:" in

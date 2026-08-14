@@ -1,6 +1,6 @@
 module github.com/david-aggeler/keel
 
-go 1.25.1
+go 1.26.6
 
 require (
 	go.opentelemetry.io/contrib/bridges/otelslog v0.20.0
