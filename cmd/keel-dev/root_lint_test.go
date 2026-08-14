@@ -153,15 +153,66 @@ func TestLintNoStdlibLog(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, dir, "bad.go", "package p\n\nimport \"log\"\n\nvar _ = log.Default\n")
-	err := runLint(dir)
+	err := runLint(dir, lintFixtureFiles(t, dir))
 	if err == nil || !strings.Contains(err.Error(), "no-stdlib-log") {
 		t.Fatalf("stdlib log import should fail lint, got %v", err)
 	}
 
 	// log/slog is allowed.
 	writeFile(t, dir, "bad.go", "package p\n\nimport \"log/slog\"\n\nvar _ = slog.Default\n")
-	if err := runLint(dir); err != nil {
+	if err := runLint(dir, lintFixtureFiles(t, dir)); err != nil {
 		t.Fatalf("log/slog should pass lint, got %v", err)
+	}
+}
+
+// DHF-TEST: keel/requirement-85 (keel/ac-453, keel/ac-454, keel/ac-455)
+func TestCILintUsesTrackedNonExcludedFiles(t *testing.T) {
+	stubTools(t, false, false)
+	root := moduleFixture(t)
+	t.Chdir(root)
+
+	if err := os.MkdirAll(filepath.Join(root, "scratchpad", "openbrain"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "docs", "handoffs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join("scratchpad", "openbrain", "go.mod"), "module example.com/scratch\n\ngo 1.25\n")
+	writeFile(t, root, filepath.Join("scratchpad", "openbrain", "bad.go"), "package scratch\n\nimport \"log\"\n\nvar _ = log.Default\n")
+	writeFile(t, root, filepath.Join("docs", "handoffs", "bad.go"), "package handoffs\n\nimport \"log\"\n\nvar _ = log.Default\n")
+	writeFile(t, root, ".stub-git-ls-files", strings.Join([]string{
+		"go.mod",
+		"VERSION",
+		"p.go",
+		filepath.ToSlash(filepath.Join("docs", "handoffs", "bad.go")),
+		filepath.ToSlash(filepath.Join("vsix", "package.json")),
+	}, "\n")+"\n")
+
+	stdout, stderr := captureProcessStreams(t, func() {
+		if code := run([]string{"--no-header", "ci"}); code != 0 {
+			t.Fatalf("ci with untracked and excluded lint offenders exit = %d, want 0", code)
+		}
+	})
+	if !strings.Contains(stdout, "ci gate green") || stderr != "" {
+		t.Fatalf("ci with untracked and excluded lint offenders stdout=%q stderr=%q, want green stdout and empty stderr", stdout, stderr)
+	}
+
+	writeFile(t, root, "tracked_bad.go", "package p\n\nimport \"log\"\n\nvar _ = log.Default\n")
+	writeFile(t, root, ".stub-git-ls-files", strings.Join([]string{
+		"go.mod",
+		"VERSION",
+		"p.go",
+		"tracked_bad.go",
+		filepath.ToSlash(filepath.Join("vsix", "package.json")),
+	}, "\n")+"\n")
+
+	stdout, stderr = captureProcessStreams(t, func() {
+		if code := run([]string{"--no-header", "ci"}); code == 0 {
+			t.Fatal("ci with tracked lint offender exit = 0, want non-zero")
+		}
+	})
+	if !strings.Contains(stdout+stderr, "no-stdlib-log") || !strings.Contains(stdout+stderr, "tracked_bad.go") {
+		t.Fatalf("tracked lint offender should fail with no-stdlib-log, stdout=%q stderr=%q", stdout, stderr)
 	}
 }
 
@@ -174,7 +225,7 @@ func TestLintNoRawFmtOutput(t *testing.T) {
 	writeFile(t, dir, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, keeldev, "out.go",
 		"package main\n\nimport \"fmt\"\n\nfunc x() { fmt.Println(\"run output\") }\n")
-	err := runLint(dir)
+	err := runLint(dir, lintFixtureFiles(t, dir))
 	if err == nil || !strings.Contains(err.Error(), "no-raw-fmt-output") {
 		t.Fatalf("raw fmt output in keel-dev should fail lint, got %v", err)
 	}
@@ -182,7 +233,7 @@ func TestLintNoRawFmtOutput(t *testing.T) {
 	// fmt.Sprintf constructs a value — allowed.
 	writeFile(t, keeldev, "out.go",
 		"package main\n\nimport \"fmt\"\n\nvar _ = fmt.Sprintf(\"x\")\n")
-	if err := runLint(dir); err != nil {
+	if err := runLint(dir, lintFixtureFiles(t, dir)); err != nil {
 		t.Fatalf("fmt.Sprintf should pass lint, got %v", err)
 	}
 }
@@ -198,7 +249,7 @@ func TestLintNoRawFmtOutputScansLibrarySurface(t *testing.T) {
 		}
 		writeFile(t, pkgDir, "out.go",
 			"package "+strings.ReplaceAll(sub, "-", "")+"\n\nimport \"fmt\"\n\nfunc x() { fmt.Println(\"diagnostic bypass\") }\n")
-		err := runLint(dir)
+		err := runLint(dir, lintFixtureFiles(t, dir))
 		if err == nil || !strings.Contains(err.Error(), "no-raw-fmt-output") || !strings.Contains(err.Error(), sub+"/out.go") {
 			t.Fatalf("raw fmt output in %s should fail lint with package path, got %v", sub, err)
 		}
@@ -217,7 +268,7 @@ func TestLintNoRawStdoutStream(t *testing.T) {
 	writeFile(t, dir, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, keeldev, "stream.go",
 		"package main\n\nimport (\n\t\"io\"\n\t\"os\"\n)\n\nfunc handOff() io.Writer { return os.Stdout }\n")
-	err := runLint(dir)
+	err := runLint(dir, lintFixtureFiles(t, dir))
 	if err == nil || !strings.Contains(err.Error(), "no-raw-stdout-stream") || !strings.Contains(err.Error(), "handOff") {
 		t.Fatalf("raw stdout handoff should fail lint naming the function, got %v", err)
 	}
@@ -227,7 +278,7 @@ func TestLintNoRawStdoutStream(t *testing.T) {
 		"package main\n\nimport \"io\"\n\nvar _ io.Writer\n")
 	writeFile(t, keeldev, "main.go",
 		"package main\n\nimport (\n\t\"io\"\n\t\"os\"\n)\n\nfunc newLogger() io.Writer { return os.Stdout }\n")
-	if err := runLint(dir); err != nil {
+	if err := runLint(dir, lintFixtureFiles(t, dir)); err != nil {
 		t.Fatalf("allowlisted os.Stdout in newLogger should pass, got %v", err)
 	}
 }
@@ -243,7 +294,7 @@ func TestLintRejectsRetiredDesiredStateVocabulary(t *testing.T) {
 	retiredType := string([]byte{83, 101, 116, 117, 112, 80, 108, 97, 110})
 	writeFile(t, keeldev, "desired_state.go", "package main\n\ntype "+retiredType+" struct{}\n")
 
-	err := runLint(dir)
+	err := runLint(dir, lintFixtureFiles(t, dir))
 	if err == nil || !strings.Contains(err.Error(), "no-retired-desired-state-vocabulary") || !strings.Contains(err.Error(), filepath.Join("cmd", "keel-dev", "desired_state.go")) {
 		t.Fatalf("retired desired-state vocabulary should fail lint naming the file, got %v", err)
 	}
@@ -260,7 +311,7 @@ func TestLintRejectsRetiredDesiredStateVocabularyInVSIXJavaScript(t *testing.T) 
 	retiredWireLabel := string([]byte{115, 101, 116, 117, 112, 45, 112, 108, 97, 110})
 	writeFile(t, fixtures, "fake-adapter.js", "const documentType = '"+retiredWireLabel+"';\n")
 
-	err := runLint(dir)
+	err := runLint(dir, lintFixtureFiles(t, dir))
 	if err == nil || !strings.Contains(err.Error(), "no-retired-desired-state-vocabulary") || !strings.Contains(err.Error(), filepath.Join("vsix", "src", "test", "fixtures", "fake-adapter.js")) {
 		t.Fatalf("retired desired-state vocabulary in VSIX JavaScript should fail lint naming the file, got %v", err)
 	}
@@ -277,7 +328,7 @@ func TestLintRejectsRetiredDesiredStateVocabularyInVSIXTypeScriptTests(t *testin
 	retiredType := string([]byte{83, 101, 116, 117, 112, 80, 108, 97, 110})
 	writeFile(t, suite, "extension.test.ts", "const doc = { kind: '"+retiredType+"' };\n")
 
-	err := runLint(dir)
+	err := runLint(dir, lintFixtureFiles(t, dir))
 	if err == nil || !strings.Contains(err.Error(), "no-retired-desired-state-vocabulary") || !strings.Contains(err.Error(), filepath.Join("vsix", "src", "test", "suite", "extension.test.ts")) {
 		t.Fatalf("retired desired-state vocabulary in VSIX TypeScript test file should fail lint naming the file, got %v", err)
 	}
@@ -409,7 +460,18 @@ func TestLintSelf(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runLint(root); err != nil {
+	cfg, err := loadKeelDevConfig(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := trackedLintFiles(context.Background(), discardLogger(), root, cfg.Gate.Excludes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) == 0 {
+		t.Fatal("tracked lint file set is empty")
+	}
+	if err := runLint(root, files); err != nil {
 		t.Fatalf("keel fails its own lint:\n%v", err)
 	}
 }

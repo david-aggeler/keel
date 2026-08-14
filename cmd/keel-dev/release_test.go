@@ -29,6 +29,7 @@ func stubTools(t *testing.T, dirtyTree bool, tagExists bool) (callsFile string) 
 
 	stub(t, bin, callsFile, "git", `
 case "$*" in
+  "ls-files") if [ -f .stub-git-ls-files ]; then cat .stub-git-ls-files; fi ;;
   "status --porcelain") printf '%s' '`+gitStatus+`' ;;
   "status --porcelain -- vsix/package.json") printf '%s' ' M vsix/package.json' ;;
   "tag --list"*) printf '%s' '`+gitTagList+`' ;;
@@ -119,6 +120,7 @@ func moduleFixture(t *testing.T) string {
 	writeFile(t, dir, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, dir, "VERSION", "9.9.9\n")
 	writeFile(t, dir, "p.go", "package p\n\nfunc One() int {\n\treturn 1\n}\n")
+	writeFile(t, dir, ".stub-git-ls-files", "go.mod\nVERSION\np.go\nvsix/package.json\n")
 	if err := os.MkdirAll(filepath.Join(dir, "vsix"), 0o755); err != nil {
 		t.Fatal(err)
 	}
