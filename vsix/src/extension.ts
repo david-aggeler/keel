@@ -988,6 +988,7 @@ export interface ApplyRunEventOptions {
   modulePath?: string;
 }
 
+// DHF-REQ: keel/requirement-116
 export function applyRunEvent(
   run: vscode.TestRun,
   line: string,
@@ -1028,15 +1029,6 @@ export function applyRunEvent(
         // See keel/ac-428.
         run.skipped(item);
         resultItemIds.add(item.id);
-      }
-      for (const item of neutralAncestorItemsForRunEvent(items, event.test_id, selectedItemIds)) {
-        // skipped reason (c), by the widest reading: an intermediate ancestor
-        // between the selection and the result item. It is in the run's scope
-        // and never executes — but unlike every other (c) site it is a
-        // non-runnable group item, which F12 says an extension does not stamp
-        // at all. Flagged as a candidate FIFTH reason by keel/ac-428's audit;
-        // see keel/issue-135 before adding another stamp of this shape.
-        run.skipped(item);
       }
       appendRunOutput(run, `passed ${event.test_id ?? 'unknown'}${event.duration_ms !== undefined ? ` (${event.duration_ms} ms)` : ''}`);
       return { resetResults: shouldInvalidateResultsForEvent(event), finished: false };
@@ -1120,7 +1112,6 @@ export function applyRunEvent(
 export interface RunEventApplicationSnapshot {
   resultIds: string[];
   skippedSiblingIds: string[];
-  neutralAncestorIds: string[];
 }
 
 export function runEventApplicationSnapshot(
@@ -1131,8 +1122,7 @@ export function runEventApplicationSnapshot(
   const items = testItemsForRunEvent(testId);
   return {
     resultIds: resultItemsForRunEvent(items, testId).map(protocolIDForTestItem),
-    skippedSiblingIds: skippedSiblingItemsForRunEvent(items, testId, selectedItemIds, resultItemIds).map(protocolIDForTestItem),
-    neutralAncestorIds: neutralAncestorItemsForRunEvent(items, testId, selectedItemIds).map(protocolIDForTestItem)
+    skippedSiblingIds: skippedSiblingItemsForRunEvent(items, testId, selectedItemIds, resultItemIds).map(protocolIDForTestItem)
   };
 }
 
@@ -1202,31 +1192,6 @@ function hasSelectedAncestorOrSelf(item: vscode.TestItem, selectedItemIds: Reado
     current = tree?.parentByItemId.get(current.id);
   }
   return false;
-}
-
-function neutralAncestorItemsForRunEvent(
-  items: readonly vscode.TestItem[],
-  explicitResultId: string | undefined,
-  selectedItemIds: ReadonlySet<string>
-): vscode.TestItem[] {
-  if (!explicitResultId) {
-    return [];
-  }
-  const neutral = new Map<string, vscode.TestItem>();
-  for (const item of items) {
-    if (item.children.size > 0 || !resultExplicitlyTargetsItem(explicitResultId, item)) {
-      continue;
-    }
-    let parent = tree?.parentByItemId.get(item.id);
-    while (parent) {
-      if (selectedItemIds.has(parent.id) || resultExplicitlyTargetsItem(explicitResultId, parent)) {
-        break;
-      }
-      neutral.set(parent.id, parent);
-      parent = tree?.parentByItemId.get(parent.id);
-    }
-  }
-  return Array.from(neutral.values());
 }
 
 function descendantsOf(item: vscode.TestItem): vscode.TestItem[] {
