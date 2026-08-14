@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -121,6 +122,7 @@ func ciStepsWithConfig(ctx context.Context, logger *slog.Logger, dir string, cfg
 		lintStep,
 		// DHF-REQ: keel/requirement-22
 		{name: "log-core-deps", fn: runLogCoreDependencyQuarantine},
+		{name: "module-hygiene", fn: runModuleHygiene},
 		// --- static-tool battery (keel/requirement-12) ---
 		// DHF-REQ: keel/requirement-12 (keel/ac-38)
 		{name: "golangci-lint", tool: "golangci-lint", program: "golangci-lint", args: []string{"run", "./..."}, quietStderr: true},
@@ -546,4 +548,150 @@ func runCoreDependencyQuarantine(ctx context.Context, logger *slog.Logger, dir, 
 		}
 	}
 	return nil
+}
+
+// DHF-REQ: keel/requirement-120 (keel/ac-460, keel/ac-461)
+func runModuleHygiene(ctx context.Context, logger *slog.Logger, dir string) error {
+	originals, err := readManifestFiles(dir)
+	if err != nil {
+		return err
+	}
+	scratchParent, err := os.MkdirTemp("", "keel-dev-module-hygiene-*")
+	if err != nil {
+		return fmt.Errorf("keel-dev: create module-hygiene scratch dir: %w", err)
+	}
+	defer os.RemoveAll(scratchParent)
+
+	scratch := filepath.Join(scratchParent, "repo")
+	if err := copyModuleHygieneTree(dir, scratch); err != nil {
+		return err
+	}
+	proc, err := procexec.ProcessStart(ctx, procexec.Request{
+		Program: "go",
+		Args:    []string{"mod", "tidy"},
+		Dir:     scratch,
+		Logger:  logger,
+	})
+	if err != nil {
+		return fmt.Errorf("keel-dev: module-hygiene run go mod tidy: %w", err)
+	}
+	res, waitErr := proc.Wait()
+	if waitErr != nil {
+		return fmt.Errorf("keel-dev: module-hygiene go mod tidy: %w", waitErr)
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf("keel-dev: module-hygiene go mod tidy exited %d", res.ExitCode)
+	}
+
+	scratchManifests, err := readManifestFiles(scratch)
+	if err != nil {
+		return err
+	}
+	var offenders []string
+	for _, name := range []string{"go.mod", "go.sum"} {
+		if !manifestFileEqual(originals[name], scratchManifests[name]) {
+			offenders = append(offenders, name)
+		}
+	}
+	if len(offenders) > 0 {
+		return fmt.Errorf("keel-dev: module-hygiene failed: go mod tidy would change %s", strings.Join(offenders, ", "))
+	}
+	return nil
+}
+
+type manifestFile struct {
+	data   []byte
+	exists bool
+}
+
+func readManifestFiles(dir string) (map[string]manifestFile, error) {
+	files := make(map[string]manifestFile, 2)
+	for _, name := range []string{"go.mod", "go.sum"} {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) && name == "go.sum" {
+				files[name] = manifestFile{}
+				continue
+			}
+			return nil, fmt.Errorf("keel-dev: module-hygiene read %s: %w", name, err)
+		}
+		files[name] = manifestFile{data: data, exists: true}
+	}
+	return files, nil
+}
+
+func manifestFileEqual(a, b manifestFile) bool {
+	return a.exists == b.exists && string(a.data) == string(b.data)
+}
+
+func copyModuleHygieneTree(src, dst string) error {
+	src, err := filepath.Abs(src)
+	if err != nil {
+		return err
+	}
+	return filepath.WalkDir(src, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return os.MkdirAll(dst, 0o755)
+		}
+		if d.IsDir() && moduleHygieneSkipDir(filepath.ToSlash(rel)) {
+			return filepath.SkipDir
+		}
+		target := filepath.Join(dst, rel)
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return os.MkdirAll(target, info.Mode().Perm())
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			linkTarget, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			return os.Symlink(linkTarget, target)
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		return copyModuleHygieneFile(path, target, info.Mode().Perm())
+	})
+}
+
+func moduleHygieneSkipDir(rel string) bool {
+	switch rel {
+	case ".git", ".logs", ".devtools", "bin", "worktrees", "node_modules",
+		"out", "dist", ".vscode-test", "vsix/node_modules", "vsix/out",
+		"vsix/dist", "vsix/.vscode-test":
+		return true
+	default:
+		return false
+	}
+}
+
+func copyModuleHygieneFile(src, dst string, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }
