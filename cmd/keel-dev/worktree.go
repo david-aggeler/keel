@@ -565,7 +565,7 @@ func (b *worktreeBinding) status(ctx context.Context, name string) error {
 // statusGlob reports every directory under the worktrees parent whose name
 // matches the pattern. A missing parent is zero matches, not a failure.
 //
-// DHF-REQ: keel/requirement-113, keel/requirement-114 (keel/ac-409, keel/ac-420)
+// DHF-REQ: keel/requirement-113, keel/requirement-114 (keel/ac-420, keel/ac-436)
 func (b *worktreeBinding) statusGlob(ctx context.Context, pattern string) error {
 	if !validWorktreeGlob(pattern) {
 		return worktreeFailure("status", worktree.CodeInvalidArgument, "invalid glob pattern %q", pattern)
@@ -593,6 +593,14 @@ func (b *worktreeBinding) statusGlob(ctx context.Context, pattern string) error 
 		path := filepath.Join(b.worktreesDir, name)
 		exists, err := b.manager.BranchExists(ctx, name)
 		if err != nil {
+			if worktree.CodeOf(err) == worktree.CodeInvalidArgument {
+				b.logger.Error("worktree glob entry could not be resolved",
+					"worktree", path,
+					"name", name,
+					"err", err,
+				)
+				continue
+			}
 			return worktreeExit("status", err)
 		}
 		registered, err := b.registered(ctx, name)

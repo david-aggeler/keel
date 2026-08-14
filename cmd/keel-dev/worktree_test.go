@@ -511,6 +511,22 @@ func TestWorktreeStatusVerb(t *testing.T) {
 	assertVerb(t, "status refuses both forms", out, code, "", 64)
 }
 
+// DHF-TEST: keel/requirement-114 (keel/ac-436)
+func TestWorktreeStatusGlobReportsConformingEntriesAfterBadName(t *testing.T) {
+	env := newWorktreeVerbEnv(t)
+	if err := os.MkdirAll(env.path("probe@1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(env.path("probeb"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	out, logs, code := env.runWithLogs(t, "worktree", "status", "--glob", "probe*")
+	assertVerb(t, "glob status continues after a bad entry", out, code,
+		"status probeb "+env.path("probeb")+" branch=false worktree=false\n", 0)
+	assertLogHas(t, "glob status reports the bad entry", logs, "probe@1")
+}
+
 // DHF-TEST: keel/requirement-114 (keel/ac-414)
 func TestWorktreeMalformedArgvExitsInvalidArgument(t *testing.T) {
 	env := newWorktreeVerbEnv(t)
