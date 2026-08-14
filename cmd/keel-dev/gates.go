@@ -80,6 +80,7 @@ func ciStepsWithConfig(ctx context.Context, logger *slog.Logger, dir string, cfg
 	scripts, _ := filepath.Glob(filepath.Join(dir, "scripts", "*.sh"))
 	gofmtFiles, gofmtListErr := trackedFilesWithExt(ctx, logger, dir, cfg.Gate.Excludes, ".go")
 	cspellFiles, cspellListErr := trackedFilesWithExt(ctx, logger, dir, cfg.Gate.Excludes, ".go", ".md")
+	lintFiles, lintListErr := trackedLintFiles(ctx, logger, dir, cfg.Gate.Excludes)
 	gofmtStep := step{
 		name:    "gofmt",
 		program: "gofmt",
@@ -103,6 +104,12 @@ func ciStepsWithConfig(ctx context.Context, logger *slog.Logger, dir string, cfg
 	} else if len(cspellFiles) == 0 {
 		cspellStep = step{name: "cspell", fn: func(context.Context, *slog.Logger, string) error { return nil }}
 	}
+	lintStep := step{name: "lint", fn: func(_ context.Context, _ *slog.Logger, dir string) error {
+		return runLint(dir, lintFiles)
+	}}
+	if lintListErr != nil {
+		lintStep = step{name: "lint", fn: func(context.Context, *slog.Logger, string) error { return lintListErr }}
+	}
 
 	steps := []step{
 		{name: "command-tree", fn: func(context.Context, *slog.Logger, string) error {
@@ -111,9 +118,7 @@ func ciStepsWithConfig(ctx context.Context, logger *slog.Logger, dir string, cfg
 		gofmtStep,
 		{name: "build", program: "go", args: []string{"build", "./..."}},
 		{name: "vet", program: "go", args: []string{"vet", "./..."}},
-		{name: "lint", fn: func(_ context.Context, _ *slog.Logger, dir string) error {
-			return runLint(dir)
-		}},
+		lintStep,
 		// DHF-REQ: keel/requirement-22
 		{name: "log-core-deps", fn: runLogCoreDependencyQuarantine},
 		// --- static-tool battery (keel/requirement-12) ---
@@ -174,6 +179,11 @@ func attachToolPins(steps []step, pins map[string]toolPin) {
 			steps[i].toolPins = pins
 		}
 	}
+}
+
+// DHF-REQ: keel/requirement-85 (keel/ac-454)
+func trackedLintFiles(ctx context.Context, logger *slog.Logger, dir string, excludes gateExcludePatterns) ([]string, error) {
+	return trackedFilesWithExt(ctx, logger, dir, excludes, ".go", ".js", ".ts", ".json")
 }
 
 // trackedFilesWithExt returns git-tracked, non-excluded repo-relative paths with
