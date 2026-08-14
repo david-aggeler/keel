@@ -25,9 +25,10 @@
 #     The pins are stated in keel-dev.yaml, in the compiled defaults in
 #     cmd/keel-dev/config.go, and in scripts/setup_user.sh — all three must
 #     agree. Versions here mirror those pins as of keel/change_request-177.
-#   - deadcode and gitleaks are PRESENCE-ONLY pins: their binaries expose no
-#     stable version probe (a go-installed gitleaks reports "version is set by
-#     build process"), so the gate checks that they exist and nothing more.
+#   - deadcode and gitleaks are PRESENCE-ONLY gate pins: their binaries expose
+#     no stable version probe in the current install path, so the gate checks
+#     that they exist and nothing more. setup_user.sh still reinstalls gitleaks
+#     from the pinned module version and links it ahead of stale PATH shadows.
 
 tools:
   - name: go
@@ -55,8 +56,8 @@ tools:
     source: https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck
 
   - name: gitleaks
-    version: "v8.30.1"
-    purpose: Blocking gate step — secret scan enforcing keel/requirement-8 (no credentials on any build path). Presence-only pin.
+    version: "presence-only; installed from module v8.30.1"
+    purpose: Blocking gate step — secret scan enforcing keel/requirement-8 (no credentials on any build path). setup_user.sh reinstalls the pinned module source and links the binary ahead of stale PATH shadows, but the gate verifies presence only.
     license: MIT
     source: https://github.com/gitleaks/gitleaks
 
