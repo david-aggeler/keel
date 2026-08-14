@@ -355,6 +355,54 @@ func TestGitleaksPinPresenceOnly(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-120 (keel/ac-460)
+func TestModuleHygieneStepFailsOnUntidyGoMod(t *testing.T) {
+	requireTool(t, "go")
+
+	dir := moduleHygieneFixture(t)
+	step := stepByName(t, ciSteps(context.Background(), discardLogger(), dir), "module-hygiene")
+
+	err := runStep(context.Background(), discardLogger(), dir, step)
+	if err == nil {
+		t.Fatal("module-hygiene should fail when go mod tidy would change go.mod")
+	}
+	if !strings.Contains(err.Error(), "go.mod") {
+		t.Fatalf("module-hygiene error should name go.mod, got %v", err)
+	}
+}
+
+// DHF-TEST: keel/requirement-120 (keel/ac-461)
+func TestModuleHygieneStepDoesNotMutateManifestFiles(t *testing.T) {
+	requireTool(t, "go")
+
+	tidy := moduleHygieneFixture(t)
+	mustRun(t, tidy, "go", "mod", "tidy")
+	beforeGoMod := mustReadFile(t, tidy, "go.mod")
+	beforeGoSum := mustReadFile(t, tidy, "go.sum")
+	if err := runStep(context.Background(), discardLogger(), tidy, stepByName(t, ciSteps(context.Background(), discardLogger(), tidy), "module-hygiene")); err != nil {
+		t.Fatalf("module-hygiene should pass on a tidy module, got %v", err)
+	}
+	if got := mustReadFile(t, tidy, "go.mod"); got != beforeGoMod {
+		t.Fatalf("module-hygiene mutated tidy go.mod:\n%s", got)
+	}
+	if got := mustReadFile(t, tidy, "go.sum"); got != beforeGoSum {
+		t.Fatalf("module-hygiene mutated tidy go.sum:\n%s", got)
+	}
+
+	untidy := moduleHygieneFixture(t)
+	beforeGoMod = mustReadFile(t, untidy, "go.mod")
+	beforeGoSum = mustReadFile(t, untidy, "go.sum")
+	if err := runStep(context.Background(), discardLogger(), untidy, stepByName(t, ciSteps(context.Background(), discardLogger(), untidy), "module-hygiene")); err == nil {
+		t.Fatal("module-hygiene should fail on an untidy module")
+	}
+	if got := mustReadFile(t, untidy, "go.mod"); got != beforeGoMod {
+		t.Fatalf("module-hygiene mutated untidy go.mod:\n%s", got)
+	}
+	if got := mustReadFile(t, untidy, "go.sum"); got != beforeGoSum {
+		t.Fatalf("module-hygiene mutated untidy go.sum:\n%s", got)
+	}
+}
+
 // TestCiStepsHasStaticBattery asserts the gate wiring includes every pinned
 // static tool and marks deadcode advisory, so a refactor cannot silently drop a
 // step.
@@ -386,6 +434,21 @@ func TestCiStepsHasStaticBattery(t *testing.T) {
 	if byName["golangci-lint"].advisory {
 		t.Error("golangci-lint must be blocking, not advisory")
 	}
+}
+
+func moduleHygieneFixture(t *testing.T) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	writeFile(t, dir, "go.mod", "module example.com/main\n\ngo 1.25\n\nrequire example.com/dep v0.0.0 // indirect\n\nreplace example.com/dep => ./dep\n")
+	writeFile(t, dir, "go.sum", "")
+	writeFile(t, dir, "main.go", "package main\n\nimport _ \"example.com/dep\"\n")
+	if err := os.MkdirAll(filepath.Join(dir, "dep"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, filepath.Join("dep", "go.mod"), "module example.com/dep\n\ngo 1.25\n")
+	writeFile(t, dir, filepath.Join("dep", "dep.go"), "package dep\n")
+	return dir
 }
 
 // DHF-TEST: keel/requirement-85
