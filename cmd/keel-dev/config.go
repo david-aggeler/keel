@@ -75,15 +75,21 @@ func defaultKeelDevConfig() keelDevConfig {
 			Excludes: mustDefaultGateExcludePatterns(
 				".claude/**",
 				"docs/handoffs/**",
+				// Regenerated wholesale from the dependency graph; its vocabulary
+				// is third-party module paths, not product prose.
+				"docs/auto-generated/**",
 			),
 		},
 		Tools: toolsConfig{
 			Pins: []toolPinConfig{
-				{Name: "golangci-lint", VersionArgs: []string{"--version"}, Want: "v2.0.2"},
-				{Name: "govulncheck", VersionArgs: []string{"--version"}, Want: "v1.3.0"},
+				// golangci-lint carries no leading "v": the v2.12 line prints
+				// "has version 2.12.2" where v2.0.2 printed "has version v2.0.2",
+				// and Want is matched as a plain substring.
+				{Name: "golangci-lint", VersionArgs: []string{"--version"}, Want: "2.12.2"},
+				{Name: "govulncheck", VersionArgs: []string{"--version"}, Want: "v1.7.0"},
 				{Name: "cspell", VersionArgs: []string{"--version"}, Want: "10.0.1"},
 				{Name: "shellcheck", VersionArgs: []string{"--version"}, Want: "0.10.0"},
-				{Name: "shfmt", VersionArgs: []string{"--version"}, Want: "v3.10.0"},
+				{Name: "shfmt", VersionArgs: []string{"--version"}, Want: "v3.13.1"},
 				{Name: "deadcode"},
 				{Name: "gitleaks"},
 			},

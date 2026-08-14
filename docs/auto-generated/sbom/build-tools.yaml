@@ -1,0 +1,158 @@
+# Build tools used by this project.
+#
+# This file is hand-curated. The `sbom` skill renders it into
+# docs/auto-generated/sbom/build-tools.md but never overwrites it.
+#
+# Add anything used to build/lint/test/release the software that is NOT
+# linked into the produced binaries. Runtime services (postgres, redis,
+# gitea, etc.) belong in runtime-components.md and are populated
+# automatically from container-image scans — do not list them here.
+#
+# Schema (all fields optional except `name`):
+#   name:    canonical tool name
+#   version: pinned version, or "system" if it tracks the OS package
+#   purpose: one-line description of why this tool is in the build
+#   license: SPDX ID where known
+#   source:  URL or note pointing at the upstream / install source
+#
+# keel-specific notes:
+#   - keel produces ONE Go module plus the Keel Test Bridge VSIX under vsix/.
+#     There are no container images and no `docker compose` stack, so
+#     runtime-components.md is empty by design, not by omission.
+#   - The gate tools below are version-PINNED and the pin is enforced at run
+#     time: `keel-dev ci` calls verifyToolPin before each step and fails loud
+#     on a missing binary or a version mismatch (keel/requirement-12, ac-42).
+#     The pins are stated in keel-dev.yaml, in the compiled defaults in
+#     cmd/keel-dev/config.go, and in scripts/setup_user.sh — all three must
+#     agree. Versions here mirror those pins as of keel/change_request-177.
+#   - deadcode and gitleaks are PRESENCE-ONLY gate pins: their binaries expose
+#     no stable version probe in the current install path, so the gate checks
+#     that they exist and nothing more. setup_user.sh still reinstalls gitleaks
+#     from the pinned module version and links it ahead of stale PATH shadows.
+
+tools:
+  - name: go
+    version: "1.26.6"
+    purpose: Go toolchain used to compile the module and every binary. Pinned in scripts/install_go.sh; moved off 1.26.5 under keel/change_request-177 because govulncheck found four reachable stdlib vulnerabilities there (keel/issue-139).
+    license: BSD-3-Clause
+    source: https://go.dev
+
+  - name: just
+    version: "1.40.0"
+    purpose: Task runner. Recipes wrap the canonical keel-dev commands; they never re-define them.
+    license: CC0-1.0
+    source: https://github.com/casey/just
+
+  - name: golangci-lint
+    version: "2.12.2"
+    purpose: Blocking gate step — aggregator running errcheck, govet, ineffassign, staticcheck, unused against the curated .golangci.yml battery.
+    license: GPL-3.0-only
+    source: https://golangci-lint.run
+
+  - name: govulncheck
+    version: "v1.7.0"
+    purpose: Blocking gate step — call-graph-aware vulnerability scan over the stdlib and the module graph.
+    license: BSD-3-Clause
+    source: https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck
+
+  - name: gitleaks
+    version: "presence-only; installed from module v8.30.1"
+    purpose: Blocking gate step — secret scan enforcing keel/requirement-8 (no credentials on any build path). setup_user.sh reinstalls the pinned module source and links the binary ahead of stale PATH shadows, but the gate verifies presence only.
+    license: MIT
+    source: https://github.com/gitleaks/gitleaks
+
+  - name: cspell
+    version: "10.0.1"
+    purpose: Blocking gate step — spell check over tracked markdown and Go sources. Installed as an npm/pnpm global, not a Go tool.
+    license: MIT
+    source: https://cspell.org
+
+  - name: shellcheck
+    version: "0.10.0"
+    purpose: Blocking gate step — static analysis of the committed bootstrap shell scripts. Tracks the OS package; Debian's candidate is 0.10.0-1 even though upstream is at 0.11.0.
+    license: GPL-3.0-or-later
+    source: https://www.shellcheck.net
+
+  - name: shfmt
+    version: "v3.13.1"
+    purpose: Blocking gate step — shell formatter; the gate checks -d (diff) against tracked .sh files.
+    license: BSD-3-Clause
+    source: https://github.com/mvdan/sh
+
+  - name: deadcode
+    version: "v0.28.0"
+    purpose: ADVISORY gate step — unreachable-function report, run with -test so library packages do not produce false positives. Findings are printed; they never fail the gate. Presence-only pin.
+    license: BSD-3-Clause
+    source: https://pkg.go.dev/golang.org/x/tools/cmd/deadcode
+
+  - name: gofumpt
+    version: "v0.7.0"
+    purpose: Stricter gofmt superset, installed for developer use. The gate itself enforces plain gofmt.
+    license: BSD-3-Clause
+    source: https://github.com/mvdan/gofumpt
+
+  - name: gopls
+    version: latest
+    purpose: Go language server — symbol-aware navigation and refactors for developers and coding agents. Not part of the gate.
+    license: BSD-3-Clause
+    source: https://pkg.go.dev/golang.org/x/tools/gopls
+
+  - name: node
+    version: "24.18.1"
+    purpose: JavaScript runtime for the VSIX sibling gate. The core `keel-dev ci` gate is deliberately node-free.
+    license: MIT
+    source: https://nodejs.org
+
+  - name: pnpm
+    version: "11.0.9"
+    purpose: Package manager for the vsix/ workspace; drives the build, lint, and headless test suite behind `keel-dev vsix ci`.
+    license: MIT
+    source: https://pnpm.io
+
+  - name: typescript
+    version: "5.9.3"
+    purpose: Compiler for the Keel Test Bridge extension sources under vsix/src. Held on the 5.x line — see keel/change_request-177 for why TS 7 is not yet adoptable.
+    license: Apache-2.0
+    source: https://www.typescriptlang.org
+
+  - name: "@vscode/vsce"
+    version: "3.9.2"
+    purpose: Packages the Keel Test Bridge extension into the .vsix release asset attached by `keel-dev release`.
+    license: MIT
+    source: https://github.com/microsoft/vscode-vsce
+
+  - name: "@vscode/test-electron"
+    version: "3.1.0"
+    purpose: Downloads and drives a real VS Code instance for the headless extension test suite.
+    license: MIT
+    source: https://github.com/microsoft/vscode-test
+
+  - name: "@vscode/test-cli"
+    version: "0.0.15"
+    purpose: Test runner front end for the VS Code extension suite.
+    license: MIT
+    source: https://github.com/microsoft/vscode-test-cli
+
+  - name: mocha
+    version: "11.8.0"
+    purpose: Test framework backing the VSIX headless suite.
+    license: MIT
+    source: https://mochajs.org
+
+  - name: gh
+    version: system
+    purpose: GitHub CLI — `keel-dev release` uses `gh release create` to publish the release and attach the VSIX asset.
+    license: MIT
+    source: https://cli.github.com
+
+  - name: syft
+    version: "1.44.0"
+    purpose: SBOM generator — produces this very document.
+    license: Apache-2.0
+    source: https://github.com/anchore/syft
+
+  - name: grype
+    version: "0.112.0"
+    purpose: CVE scanner run against the generated SBOM.
+    license: Apache-2.0
+    source: https://github.com/anchore/grype

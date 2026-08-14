@@ -33,9 +33,16 @@ linters:
       # (quickfix) category; v2 unified them so QF suggestions now fire. Keep
       # v1's effective check set across this tool bump — turning quickfix
       # suggestions on is a separate lint-policy decision, not this migration.
+      #
+      # QF1012 is excluded for a second, stronger reason: it advises
+      # `fmt.Fprintf(&b, ...)` in place of `b.WriteString(fmt.Sprintf(...))`,
+      # and keel's own in-process no-raw-fmt-output lint forbids fmt.Fprintf
+      # on the library surface (keel/change_request-15). Taking the analyzer's
+      # advice at log/logging.go:1169 makes the keel gate red. The two rules
+      # genuinely contradict; keel's own invariant wins.
       - linters:
           - staticcheck
-        text: "QF1001"
+        text: "QF1001|QF1012"
     paths:
       - third_party$
       - builtin$
