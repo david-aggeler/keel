@@ -698,31 +698,20 @@ func TestWorktreeVerbsRefuseAnAbsoluteWorktreeBase(t *testing.T) {
 	assertVerb(t, "an absolute base is refused", out, code, "", 65)
 }
 
-// DHF-TEST: keel/requirement-114 (keel/ac-409)
-func TestWorktreeDownBlockersFilterByPolicy(t *testing.T) {
-	report := worktree.StaleReport{Blockers: []worktree.Blocker{
-		{Kind: worktree.BlockerUncommittedChange, Path: "a.txt"},
-		{Kind: worktree.BlockerUntrackedFile, Path: "b.txt"},
-		{Kind: worktree.BlockerUnpushedCommit, Commit: "deadbeef"},
-		{Kind: worktree.BlockerUndeletableContent, Path: "c.txt"},
-	}}
-
-	blocking := worktreeDownBlockers(report, false)
-	if len(blocking) != 3 {
-		t.Fatalf("unforced tear-down kept %d blockers, want 3: %v", len(blocking), blocking)
+// DHF-TEST: keel/requirement-114 (keel/ac-439)
+func TestWorktreeDownUsesNamedPackagePolicy(t *testing.T) {
+	srcBytes, err := os.ReadFile("worktree.go")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, blocker := range blocking {
-		if blocker.Kind == worktree.BlockerUnpushedCommit {
-			t.Error("commits absent from every remote must not block tear-down")
+	src := string(srcBytes)
+	if !strings.Contains(src, "Policy: worktree.DownPolicyKeepBranchCommits") {
+		t.Fatal("worktree down does not select the named package policy")
+	}
+	for _, forbidden := range []string{"worktreeDownBlockerKinds", "worktreeDownBlockers", "DownOptions{Force: true}"} {
+		if strings.Contains(src, forbidden) {
+			t.Fatalf("worktree down still owns policy shape %q", forbidden)
 		}
-	}
-	if got := summarizeBlockers(blocking); got != "uncommitted_change x1, untracked_file x1, undeletable_content x1" {
-		t.Errorf("summary = %q", got)
-	}
-
-	forced := worktreeDownBlockers(report, true)
-	if len(forced) != 1 || forced[0].Kind != worktree.BlockerUndeletableContent {
-		t.Errorf("forced tear-down kept %v, want only undeletable content", forced)
 	}
 }
 
