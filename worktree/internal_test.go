@@ -35,10 +35,10 @@ func TestBlockingItemsForceScope(t *testing.T) {
 		{Kind: BlockerStaleRegistration},
 		{Kind: BlockerInspectionFailed},
 	}}
-	if got := blockingItems(report, false); len(got.Blockers) != len(report.Blockers) {
+	if got := blockingItems(report, DownPolicyDefault, false); len(got.Blockers) != len(report.Blockers) {
 		t.Errorf("unforced blockers = %d, want all %d", len(got.Blockers), len(report.Blockers))
 	}
-	forced := blockingItems(report, true)
+	forced := blockingItems(report, DownPolicyDefault, true)
 	if forced.HoldsWork() {
 		t.Error("a force left a held-work blocker standing")
 	}
@@ -49,6 +49,15 @@ func TestBlockingItemsForceScope(t *testing.T) {
 	}
 	if forced.Has(BlockerCurrentDirectory) {
 		t.Error("a force did not clear the caller's own working directory")
+	}
+	keptBranchCommits := blockingItems(report, DownPolicyKeepBranchCommits, false)
+	if keptBranchCommits.Has(BlockerUnpushedCommit) {
+		t.Error("the keep-branch-commits policy left unpushed commits blocking")
+	}
+	for _, kind := range []BlockerKind{BlockerUncommittedChange, BlockerUntrackedFile, BlockerCurrentDirectory} {
+		if !keptBranchCommits.Has(kind) {
+			t.Errorf("the keep-branch-commits policy wrongly cleared %q without force", kind)
+		}
 	}
 	var empty StaleReport
 	if !empty.Empty() {

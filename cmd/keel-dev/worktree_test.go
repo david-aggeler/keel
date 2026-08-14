@@ -511,6 +511,22 @@ func TestWorktreeStatusVerb(t *testing.T) {
 	assertVerb(t, "status refuses both forms", out, code, "", 64)
 }
 
+// DHF-TEST: keel/requirement-114 (keel/ac-436)
+func TestWorktreeStatusGlobReportsConformingEntriesAfterBadName(t *testing.T) {
+	env := newWorktreeVerbEnv(t)
+	if err := os.MkdirAll(env.path("probe@1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(env.path("probeb"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	out, logs, code := env.runWithLogs(t, "worktree", "status", "--glob", "probe*")
+	assertVerb(t, "glob status continues after a bad entry", out, code,
+		"status probeb "+env.path("probeb")+" branch=false worktree=false\n", 0)
+	assertLogHas(t, "glob status reports the bad entry", logs, "probe@1")
+}
+
 // DHF-TEST: keel/requirement-114 (keel/ac-414)
 func TestWorktreeMalformedArgvExitsInvalidArgument(t *testing.T) {
 	env := newWorktreeVerbEnv(t)
@@ -698,31 +714,34 @@ func TestWorktreeVerbsRefuseAnAbsoluteWorktreeBase(t *testing.T) {
 	assertVerb(t, "an absolute base is refused", out, code, "", 65)
 }
 
-// DHF-TEST: keel/requirement-114 (keel/ac-409)
-func TestWorktreeDownBlockersFilterByPolicy(t *testing.T) {
-	report := worktree.StaleReport{Blockers: []worktree.Blocker{
-		{Kind: worktree.BlockerUncommittedChange, Path: "a.txt"},
-		{Kind: worktree.BlockerUntrackedFile, Path: "b.txt"},
-		{Kind: worktree.BlockerUnpushedCommit, Commit: "deadbeef"},
-		{Kind: worktree.BlockerUndeletableContent, Path: "c.txt"},
-	}}
-
-	blocking := worktreeDownBlockers(report, false)
-	if len(blocking) != 3 {
-		t.Fatalf("unforced tear-down kept %d blockers, want 3: %v", len(blocking), blocking)
+// DHF-TEST: keel/requirement-114 (keel/ac-439)
+func TestWorktreeDownUsesNamedPackagePolicy(t *testing.T) {
+	srcBytes, err := os.ReadFile("worktree.go")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, blocker := range blocking {
-		if blocker.Kind == worktree.BlockerUnpushedCommit {
-			t.Error("commits absent from every remote must not block tear-down")
+	src := string(srcBytes)
+	if !strings.Contains(src, "Policy: worktree.DownPolicyKeepBranchCommits") {
+		t.Fatal("worktree down does not select the named package policy")
+	}
+	for _, forbidden := range []string{"worktreeDownBlockerKinds", "worktreeDownBlockers", "DownOptions{Force: true}"} {
+		if strings.Contains(src, forbidden) {
+			t.Fatalf("worktree down still owns policy shape %q", forbidden)
 		}
 	}
-	if got := summarizeBlockers(blocking); got != "uncommitted_change x1, untracked_file x1, undeletable_content x1" {
-		t.Errorf("summary = %q", got)
-	}
+}
 
-	forced := worktreeDownBlockers(report, true)
-	if len(forced) != 1 || forced[0].Kind != worktree.BlockerUndeletableContent {
-		t.Errorf("forced tear-down kept %v, want only undeletable content", forced)
+// DHF-TEST: keel/requirement-114 (keel/ac-437)
+func TestWorktreeCommentsStateLiveConstraintReasons(t *testing.T) {
+	srcBytes, err := os.ReadFile("worktree.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(srcBytes)
+	for _, stale := range []string{"skill scripts", "shell contract", "worktree-*.sh", ".claude/skills"} {
+		if strings.Contains(src, stale) {
+			t.Fatalf("worktree.go still justifies a live constraint through %q", stale)
+		}
 	}
 }
 

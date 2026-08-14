@@ -26,8 +26,28 @@ const (
 	DownPruned DownOutcome = "pruned"
 )
 
+// DownPolicy names which safety gates count as blockers for tear-down.
+//
+// DHF-REQ: keel/requirement-114 (keel/ac-439)
+type DownPolicy string
+
+const (
+	// DownPolicyDefault is the package default: any uncommitted change,
+	// untracked file, or commit absent from every remote blocks tear-down,
+	// preserving the ac-401 safety contract for callers that opt into nothing.
+	DownPolicyDefault DownPolicy = ""
+	// DownPolicyKeepBranchCommits waives only [BlockerUnpushedCommit]. Down
+	// never deletes the branch, so callers using this policy treat commits on
+	// the branch as still reachable while uncommitted and untracked work remain
+	// blockers unless the caller also chooses [DownOptions.Force].
+	DownPolicyKeepBranchCommits DownPolicy = "keep_branch_commits"
+)
+
 // DownOptions carries the caller's tear-down policy.
 type DownOptions struct {
+	// Policy selects the named tear-down safety policy. The zero value is
+	// [DownPolicyDefault].
+	Policy DownPolicy
 	// Force removes the checkout even though it holds work — uncommitted
 	// changes, untracked files, or commits on no remote. It is deliberately
 	// per-condition and never cascades: it does not delete the branch, and it
@@ -86,8 +106,11 @@ func (m *Manager) Down(ctx context.Context, name string, opts DownOptions) (Down
 		return result, wrapError(op, CodeGit, path, statErr, "inspect %s", path)
 	}
 
+	if !validDownPolicy(opts.Policy) {
+		return result, newError(op, CodeInvalidArgument, path, "unknown down policy %q", opts.Policy)
+	}
 	report := m.inspect(ctx, path, reg, registered)
-	if blocking := blockingItems(report, opts.Force); !blocking.Empty() {
+	if blocking := blockingItems(report, opts.Policy, opts.Force); !blocking.Empty() {
 		err := newError(op, CodeBlocked, path, "%s cannot be removed: %s", path, summarize(blocking))
 		err.Report = &blocking
 		return result, err
@@ -141,23 +164,36 @@ func (m *Manager) pruneAbsent(ctx context.Context, op string, result DownResult,
 }
 
 // blockingItems filters a report down to what still stands in the way given the
-// caller's force. Force covers held work only: a bad registration is a git-side
-// problem to fix, standing inside the checkout is a caller-side one, and content
-// that cannot be unlinked is a filesystem fact no permission changes.
-func blockingItems(report StaleReport, force bool) StaleReport {
-	if !force {
+// caller's policy and force. Force covers held work only: a bad registration is
+// a git-side problem to fix, standing inside the checkout is a caller-side one,
+// and content that cannot be unlinked is a filesystem fact no permission
+// changes.
+func blockingItems(report StaleReport, policy DownPolicy, force bool) StaleReport {
+	if policy == DownPolicyDefault && !force {
 		return report
 	}
 	var kept StaleReport
 	for _, b := range report.Blockers {
-		switch b.Kind {
-		case BlockerUncommittedChange, BlockerUntrackedFile, BlockerUnpushedCommit, BlockerCurrentDirectory:
-			// Deliberately overridden.
-		default:
+		if !downPolicyWaives(policy, force, b.Kind) {
 			kept.add(b)
 		}
 	}
 	return kept
+}
+
+func validDownPolicy(policy DownPolicy) bool {
+	return policy == DownPolicyDefault || policy == DownPolicyKeepBranchCommits
+}
+
+func downPolicyWaives(policy DownPolicy, force bool, kind BlockerKind) bool {
+	switch kind {
+	case BlockerUnpushedCommit:
+		return force || policy == DownPolicyKeepBranchCommits
+	case BlockerUncommittedChange, BlockerUntrackedFile, BlockerCurrentDirectory:
+		return force
+	default:
+		return false
+	}
 }
 
 func summarize(report StaleReport) string {

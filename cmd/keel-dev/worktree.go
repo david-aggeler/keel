@@ -263,17 +263,17 @@ type worktreeBinding struct {
 	out                 io.Writer
 }
 
-// worktreeBaseDefault is the worktrees parent used when no marker file declares
-// one, matching the shell contract the skill scripts established.
+// worktreeBaseDefault is the repo-local worktrees parent used when no marker
+// file declares an override.
 const worktreeBaseDefault = "worktrees/"
 
 // worktreeMarkerFile is the optional marker whose placeholders.worktree_base
 // row relocates the worktrees parent.
 const worktreeMarkerFile = "openbrain-client.local.yaml"
 
-// newWorktreeBinding resolves the primary checkout and the worktrees parent the
-// same way the skill scripts do, so a delegated wrapper addresses exactly the
-// paths its shell predecessor addressed.
+// newWorktreeBinding resolves the primary checkout first, then the marker-based
+// worktrees parent, so every worktree verb in this process addresses one shared
+// path convention.
 func newWorktreeBinding(ctx context.Context, baseRef string) (*worktreeBinding, error) {
 	state := stateFrom(ctx)
 	primary, err := primaryCheckout(ctx, state.logger, state.root)
@@ -460,11 +460,11 @@ func (b *worktreeBinding) resume(ctx context.Context, name string) error {
 // registration git cannot be trusted with, is refused with every offending item
 // named.
 //
-// Commits absent from every remote are deliberately NOT blocking: tear-down
-// never deletes the branch, so the branch ref keeps them reachable, and the
-// shell contract this verb backs tore such a checkout down without complaint.
+// Commits absent from every remote are deliberately NOT blocking under this
+// verb's selected policy: tear-down never deletes the branch, so the branch ref
+// keeps them reachable.
 //
-// DHF-REQ: keel/requirement-114 (keel/ac-409)
+// DHF-REQ: keel/requirement-114 (keel/ac-439)
 func (b *worktreeBinding) down(ctx context.Context, name string, force bool) error {
 	path, branch, err := b.manager.Resolve(name)
 	if err != nil {
@@ -490,18 +490,10 @@ func (b *worktreeBinding) down(ctx context.Context, name string, force bool) err
 		return b.emit("down-noop", name, path)
 	}
 
-	if blocking := worktreeDownBlockers(state.Stale, force); len(blocking) > 0 {
-		for _, blocker := range blocking {
-			b.logBlocker(blocker)
-		}
-		return worktreeFailure("down", worktree.CodeBlocked,
-			"worktree %s cannot be removed: %s", path, summarizeBlockers(blocking))
-	}
-
-	// Every condition this verb refuses on has been checked above, so the
-	// removal is forced past keel/worktree's own remote-comparison gate, which
-	// the shell contract never had.
-	removed, err := b.manager.Down(ctx, name, worktree.DownOptions{Force: true})
+	removed, err := b.manager.Down(ctx, name, worktree.DownOptions{
+		Policy: worktree.DownPolicyKeepBranchCommits,
+		Force:  force,
+	})
 	if err != nil {
 		b.reportBlockers(err)
 		return worktreeExit("down", err)
@@ -532,61 +524,6 @@ func (b *worktreeBinding) branchDelete(ctx context.Context, name string, force b
 	}
 	b.logger.Info("worktree branch deleted", "branch", branch, "outcome", "deleted")
 	return b.write(fmt.Sprintf("branch-delete %s", name))
-}
-
-// worktreeDownBlockerKinds are the blocker kinds this verb refuses on. Commits
-// absent from every remote are excluded deliberately (see [worktreeBinding.down]).
-var worktreeDownBlockerKinds = map[worktree.BlockerKind]bool{
-	worktree.BlockerUncommittedChange:  true,
-	worktree.BlockerUntrackedFile:      true,
-	worktree.BlockerLockedRegistration: true,
-	worktree.BlockerStaleRegistration:  true,
-	worktree.BlockerUndeletableContent: true,
-	worktree.BlockerCurrentDirectory:   true,
-	worktree.BlockerInspectionFailed:   true,
-}
-
-// worktreeForcedBlockerKinds are the kinds --force clears. A bad registration,
-// content the process cannot unlink, and a check that could not be evaluated all
-// survive a force: none of them is a safety gate the caller can simply overrule.
-var worktreeForcedBlockerKinds = map[worktree.BlockerKind]bool{
-	worktree.BlockerUncommittedChange: true,
-	worktree.BlockerUntrackedFile:     true,
-	worktree.BlockerCurrentDirectory:  true,
-}
-
-// worktreeDownBlockers filters an inspection down to the items this verb refuses
-// on, honoring the caller's force.
-func worktreeDownBlockers(report worktree.StaleReport, force bool) []worktree.Blocker {
-	var blocking []worktree.Blocker
-	for _, blocker := range report.Blockers {
-		if !worktreeDownBlockerKinds[blocker.Kind] {
-			continue
-		}
-		if force && worktreeForcedBlockerKinds[blocker.Kind] {
-			continue
-		}
-		blocking = append(blocking, blocker)
-	}
-	return blocking
-}
-
-// summarizeBlockers renders one "kind xN" term per distinct kind, in inspection
-// order, for the single-line refusal message.
-func summarizeBlockers(blockers []worktree.Blocker) string {
-	counts := make(map[worktree.BlockerKind]int, len(blockers))
-	var order []worktree.BlockerKind
-	for _, blocker := range blockers {
-		if _, seen := counts[blocker.Kind]; !seen {
-			order = append(order, blocker.Kind)
-		}
-		counts[blocker.Kind]++
-	}
-	terms := make([]string, 0, len(order))
-	for _, kind := range order {
-		terms = append(terms, fmt.Sprintf("%s x%d", kind, counts[kind]))
-	}
-	return strings.Join(terms, ", ")
 }
 
 // status reports one work item's checkout: the machine-readable line the skill
@@ -628,7 +565,7 @@ func (b *worktreeBinding) status(ctx context.Context, name string) error {
 // statusGlob reports every directory under the worktrees parent whose name
 // matches the pattern. A missing parent is zero matches, not a failure.
 //
-// DHF-REQ: keel/requirement-113, keel/requirement-114 (keel/ac-409, keel/ac-420)
+// DHF-REQ: keel/requirement-113, keel/requirement-114 (keel/ac-420, keel/ac-436)
 func (b *worktreeBinding) statusGlob(ctx context.Context, pattern string) error {
 	if !validWorktreeGlob(pattern) {
 		return worktreeFailure("status", worktree.CodeInvalidArgument, "invalid glob pattern %q", pattern)
@@ -656,6 +593,14 @@ func (b *worktreeBinding) statusGlob(ctx context.Context, pattern string) error 
 		path := filepath.Join(b.worktreesDir, name)
 		exists, err := b.manager.BranchExists(ctx, name)
 		if err != nil {
+			if worktree.CodeOf(err) == worktree.CodeInvalidArgument {
+				b.logger.Error("worktree glob entry could not be resolved",
+					"worktree", path,
+					"name", name,
+					"err", err,
+				)
+				continue
+			}
 			return worktreeExit("status", err)
 		}
 		registered, err := b.registered(ctx, name)
@@ -699,8 +644,9 @@ func (b *worktreeBinding) compare(ctx context.Context, name string) error {
 }
 
 // reportPath returns the path the reports name. The manager's path is used
-// whenever the worktrees parent exists; when it does not, nothing can be there,
-// and the report names the sibling path the shell contract named.
+// whenever the worktrees parent exists; when it does not, no managed child can
+// be present there, so the report keeps the stable absent-checkout spelling
+// beside the primary checkout.
 func (b *worktreeBinding) reportPath(name, managed string) string {
 	if b.worktreesDirPresent {
 		return managed
@@ -749,25 +695,22 @@ func gitProbe(ctx context.Context, logger *slog.Logger, dir string, args ...stri
 // "epic" is has stopped being neutral. keel-dev may know keel's vocabulary.
 var worktreeWorkItemKinds = []string{"cr", "epic", "story"}
 
-// worktreeSlugMaxLen bounds the slug, matching the length the wrapper scripts
-// enforced in shell before this became the single decider.
+// worktreeSlugMaxLen bounds operator-facing names so generated paths and result
+// tokens stay readable.
 const worktreeSlugMaxLen = 100
 
 // validateWorkItemName decides whether a name is a well-formed work item —
 // <kind>-<seq> with an optional -<slug> — and is the ONE implementation of that
-// judgement. The delegating wrapper scripts carry none of their own; they
-// compose a name and hand it here, so a violation is refused once, with the
-// invalid-argument status 64 the shell contract established (keel/ac-409).
+// judgement in keel-dev. The worktree package stays consumer-neutral, while
+// invalid worktree argv is refused with the in-family invalid-argument status.
 //
-// The checks run in the order the scripts ran them — kind, slug charset, slug
-// length, seq — so a name wrong in more than one way is refused for the same
-// reason it always was.
+// The checks run in deterministic order — kind, slug charset, slug length, seq
+// — so a name wrong in more than one way gets a stable primary diagnostic.
 //
 // The slug is optional because the autonomous run-queue tail owns worktrees
-// named cr-<seq> with no slug (CLAUDE.md); the three-argument wrappers can never
-// compose such a name, so the set of names THEY can get accepted is unchanged.
+// named cr-<seq> with no slug (CLAUDE.md).
 //
-// DHF-REQ: keel/requirement-114 (keel/ac-421, keel/ac-409, keel/ac-399)
+// DHF-REQ: keel/requirement-113, keel/requirement-114 (keel/ac-399, keel/ac-414, keel/ac-437)
 func validateWorkItemName(op, name string) error {
 	parts := strings.SplitN(name, "-", 3)
 	if !worktreeWorkItemKind(parts[0]) {
@@ -804,7 +747,7 @@ func worktreeWorkItemKind(kind string) bool {
 	return false
 }
 
-// validWorktreeSlug accepts the slug charset the skill scripts accepted:
+// validWorktreeSlug keeps slugs lowercase and path-token friendly:
 // ^[a-z0-9][a-z0-9-]*$.
 func validWorktreeSlug(slug string) bool {
 	if slug == "" {
@@ -822,7 +765,7 @@ func validWorktreeSlug(slug string) bool {
 	return true
 }
 
-// validWorktreeSeq accepts the sequence charset the skill scripts accepted:
+// validWorktreeSeq requires the sequence segment to be decimal digits only:
 // ^[0-9]+$.
 func validWorktreeSeq(seq string) bool {
 	if seq == "" {
@@ -836,8 +779,9 @@ func validWorktreeSeq(seq string) bool {
 	return true
 }
 
-// validWorktreeGlob accepts the pattern charset the skill scripts accept, so a
-// pattern that would have been refused in shell is still refused here.
+// validWorktreeGlob allows one basename pattern with simple work-item
+// characters and '*'. It excludes path separators, dot expressions, whitespace,
+// and character classes before the pattern reaches filepath.Match.
 func validWorktreeGlob(pattern string) bool {
 	if pattern == "" {
 		return false
