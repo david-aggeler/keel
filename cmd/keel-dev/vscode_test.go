@@ -66,6 +66,15 @@ func TestVSCodeHandlersDispatchDiscoveryDesiredStateAndLintRun(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, root, "go.sum", "")
+	writeFile(t, root, "p.go", "package p\n\nfunc One() int { return 1 }\n")
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "git", `
+case "$*" in
+  "ls-files") printf '%s\n' "go.mod" "go.sum" "p.go" ;;
+esac
+exit 0`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	seedDetectedLanes(t, root)
 
 	var discover bytes.Buffer
@@ -3148,13 +3157,13 @@ func TestVSCodeProtocolWriterIsOnlyStdoutAllowlistGrowth(t *testing.T) {
 	writeFile(t, dir, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, keeldev, "main.go",
 		"package main\n\nimport (\n\t\"io\"\n\t\"os\"\n)\n\nfunc newLogger() io.Writer { return os.Stdout }\nfunc newProtocolStream() io.Writer { return os.Stdout }\n")
-	if err := runLint(dir); err != nil {
+	if err := runLint(dir, lintFixtureFiles(t, dir)); err != nil {
 		t.Fatalf("newProtocolStream should be the one protocol stdout allowlist entry: %v", err)
 	}
 
 	writeFile(t, keeldev, "main.go",
 		"package main\n\nimport (\n\t\"io\"\n\t\"os\"\n)\n\nfunc newLogger() io.Writer { return os.Stdout }\nfunc newProtocolStream() io.Writer { return os.Stdout }\nfunc extraProtocolStream() io.Writer { return os.Stdout }\n")
-	err := runLint(dir)
+	err := runLint(dir, lintFixtureFiles(t, dir))
 	if err == nil || !strings.Contains(err.Error(), "extraProtocolStream") {
 		t.Fatalf("unexpected stdout allowlist growth should fail, got %v", err)
 	}
@@ -3163,7 +3172,7 @@ func TestVSCodeProtocolWriterIsOnlyStdoutAllowlistGrowth(t *testing.T) {
 		"package main\n\nimport (\n\t\"io\"\n\t\"os\"\n)\n\nfunc newLogger() io.Writer { return os.Stdout }\n")
 	writeFile(t, keeldev, "stream.go",
 		"package main\n\nimport (\n\t\"io\"\n\t\"os\"\n)\n\nfunc newProtocolStream() io.Writer { return os.Stdout }\n")
-	err = runLint(dir)
+	err = runLint(dir, lintFixtureFiles(t, dir))
 	if err == nil || !strings.Contains(err.Error(), "newProtocolStream") || !strings.Contains(err.Error(), "stream.go") {
 		t.Fatalf("stdout allowlist must include file and function, got %v", err)
 	}

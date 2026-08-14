@@ -1722,7 +1722,18 @@ func runVSCodeLane(ctx context.Context, logger *slog.Logger, root, laneID, runID
 	}
 	switch laneID {
 	case vscodeLaneLint:
-		if err := runLint(root); err != nil {
+		if logger == nil {
+			logger = vscodeDiscardLogger()
+		}
+		cfg, err := loadKeelDevConfig(root)
+		if err != nil {
+			return 1, err
+		}
+		files, err := trackedLintFiles(ctx, logger, root, cfg.Gate.Excludes)
+		if err != nil {
+			return 1, err
+		}
+		if err := runLint(root, files); err != nil {
 			return 1, err
 		}
 	case vscodeLaneTestFast:

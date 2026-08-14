@@ -11,12 +11,12 @@ import (
 	"strings"
 )
 
-func scanKeelDevConfigDocumentation(root string) ([]string, error) {
-	if _, err := os.Stat(filepath.Join(root, "cmd", "keel-dev", "config.go")); errors.Is(err, os.ErrNotExist) {
+func scanKeelDevConfigDocumentation(root string, files []string) ([]string, error) {
+	if !listedLintFile(files, filepath.Join("cmd", "keel-dev", "config.go")) {
 		return nil, nil
 	}
 	var violations []string
-	v, err := scanConfigStructFieldDocs(filepath.Join(root, "cmd", "keel-dev"))
+	v, err := scanConfigStructFieldDocs(root, files)
 	if err != nil {
 		return nil, err
 	}
@@ -37,12 +37,9 @@ func scanKeelDevConfigDocumentation(root string) ([]string, error) {
 	return violations, nil
 }
 
-func scanConfigStructFieldDocs(dir string) ([]string, error) {
-	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
+func scanConfigStructFieldDocs(root string, files []string) ([]string, error) {
 	var violations []string
-	err := walkGoFiles(dir, func(path string, file *ast.File, fset *token.FileSet) {
+	err := visitGoFiles(root, filesWithPrefix(files, filepath.Join("cmd", "keel-dev")), func(path string, file *ast.File, fset *token.FileSet) {
 		for _, decl := range file.Decls {
 			gen, ok := decl.(*ast.GenDecl)
 			if !ok || gen.Tok != token.TYPE {
@@ -65,7 +62,7 @@ func scanConfigStructFieldDocs(dir string) ([]string, error) {
 					if comment == "" {
 						for _, name := range field.Names {
 							pos := fset.Position(field.Pos())
-							violations = append(violations, fmt.Sprintf("  keel-dev-config-docs: %s:%d field %s.%s has no config doc comment (keel/ac-450)", relPath(dir, path), pos.Line, ts.Name.Name, name.Name))
+							violations = append(violations, fmt.Sprintf("  keel-dev-config-docs: %s:%d field %s.%s has no config doc comment (keel/ac-450)", path, pos.Line, ts.Name.Name, name.Name))
 						}
 					}
 				}
@@ -73,6 +70,16 @@ func scanConfigStructFieldDocs(dir string) ([]string, error) {
 		}
 	})
 	return violations, err
+}
+
+func listedLintFile(files []string, want string) bool {
+	want = filepath.ToSlash(want)
+	for _, file := range files {
+		if filepath.ToSlash(file) == want {
+			return true
+		}
+	}
+	return false
 }
 
 func yamlTag(field *ast.Field) string {
