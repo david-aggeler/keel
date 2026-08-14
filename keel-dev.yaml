@@ -12,6 +12,12 @@ gate:
     # Handoff documents are written outside the CR implementation loop, so
     # gating them would let session-transfer notes red an unrelated merge.
     - docs/handoffs/**
+    # The SBOM tree is regenerated wholesale from the dependency graph, so its
+    # vocabulary is whatever third-party module paths happen to be present
+    # (otelslog, cenkalti, xxhash, ...). Spell-checking it would red the gate on
+    # every regeneration and would force vendor identifiers into the shared
+    # word list, weakening the check for real product prose.
+    - docs/auto-generated/**
 
 # The tools section owns external gate tool pins because the gate must prove it
 # is using the expected command versions before relying on their findings.

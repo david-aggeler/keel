@@ -75,6 +75,9 @@ func defaultKeelDevConfig() keelDevConfig {
 			Excludes: mustDefaultGateExcludePatterns(
 				".claude/**",
 				"docs/handoffs/**",
+				// Regenerated wholesale from the dependency graph; its vocabulary
+				// is third-party module paths, not product prose.
+				"docs/auto-generated/**",
 			),
 		},
 		Tools: toolsConfig{
