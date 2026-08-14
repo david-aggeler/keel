@@ -74,7 +74,7 @@ else
 	# --- golangci-lint (errcheck, govet, staticcheck, unused, ineffassign) ---
 	# v2 line: the module path gained a /v2 suffix and gosimple folded into
 	# staticcheck. Config is .golangci.yml v2 schema.
-	GOLANGCI_LINT_VERSION="v2.0.2"
+	GOLANGCI_LINT_VERSION="v2.12.2"
 	GOLANGCI_LINT_BIN="${GO_BIN_DIR}/golangci-lint"
 	if [[ -x "$GOLANGCI_LINT_BIN" ]]; then
 		echo "golangci-lint already installed: $("$GOLANGCI_LINT_BIN" --version | head -n1) (${GOLANGCI_LINT_BIN})"
@@ -84,7 +84,7 @@ else
 	fi
 
 	# --- govulncheck — stdlib/dependency vulnerability scan ---
-	GOVULNCHECK_VERSION="v1.3.0"
+	GOVULNCHECK_VERSION="v1.7.0"
 	GOVULNCHECK_BIN="${GO_BIN_DIR}/govulncheck"
 	if [[ -x "$GOVULNCHECK_BIN" ]]; then
 		echo "govulncheck already installed: $("$GOVULNCHECK_BIN" --version | head -n1) (${GOVULNCHECK_BIN})"
@@ -104,7 +104,7 @@ else
 	fi
 
 	# --- shfmt — shell formatter (lints/formats these bootstrap scripts) ---
-	SHFMT_VERSION="v3.10.0"
+	SHFMT_VERSION="v3.13.1"
 	SHFMT_BIN="${GO_BIN_DIR}/shfmt"
 	if [[ -x "$SHFMT_BIN" ]]; then
 		echo "shfmt already installed: $("$SHFMT_BIN" --version) (${SHFMT_BIN})"
@@ -114,7 +114,7 @@ else
 	fi
 
 	# --- gitleaks — secret scanner (enforces keel/requirement-8: no secrets) ---
-	GITLEAKS_VERSION="v8.21.2"
+	GITLEAKS_VERSION="v8.30.1"
 	GITLEAKS_BIN="${GO_BIN_DIR}/gitleaks"
 	if [[ -x "$GITLEAKS_BIN" ]]; then
 		echo "gitleaks already installed: $("$GITLEAKS_BIN" version) (${GITLEAKS_BIN})"
