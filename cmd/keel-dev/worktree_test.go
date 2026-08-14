@@ -731,6 +731,20 @@ func TestWorktreeDownUsesNamedPackagePolicy(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-114 (keel/ac-437)
+func TestWorktreeCommentsStateLiveConstraintReasons(t *testing.T) {
+	srcBytes, err := os.ReadFile("worktree.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(srcBytes)
+	for _, stale := range []string{"skill scripts", "shell contract", "worktree-*.sh", ".claude/skills"} {
+		if strings.Contains(src, stale) {
+			t.Fatalf("worktree.go still justifies a live constraint through %q", stale)
+		}
+	}
+}
+
 // DHF-TEST: keel/requirement-114 (keel/ac-409)
 func TestValidWorktreeGlob(t *testing.T) {
 	valid := []string{"cr*", "cr-1-alpha", "epic_2", "a"}
