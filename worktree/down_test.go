@@ -129,6 +129,54 @@ func TestDownRefusesUnpushedCommits(t *testing.T) {
 	}
 }
 
+// TestDownPolicyKeepsBranchCommitsReachable proves callers can name the
+// tear-down policy that treats branch-reachable commits as preserved by the
+// surviving branch instead of reassembling blocker sets or forcing every held
+// work gate.
+//
+// DHF-TEST: keel/requirement-114 (keel/ac-439)
+func TestDownPolicyKeepsBranchCommitsReachable(t *testing.T) {
+	root, _ := newRepoWithRemote(t)
+	m := newManager(t, worktree.Config{RepoRoot: root, Base: "main"})
+	ctx := context.Background()
+	keepBranchCommits := worktree.DownOptions{Policy: worktree.DownPolicyKeepBranchCommits}
+
+	for _, name := range []string{"unit-1", "unit-2"} {
+		wt, err := m.Up(ctx, name)
+		if err != nil {
+			t.Fatalf("%s up: %v", name, err)
+		}
+		writeFile(t, filepath.Join(wt.Path, "work.txt"), name+"\n")
+		git(t, wt.Path, "add", "work.txt")
+		git(t, wt.Path, "commit", "-m", name+" local work")
+
+		res, err := m.Down(ctx, name, keepBranchCommits)
+		if err != nil {
+			t.Fatalf("%s down with named policy: %v", name, err)
+		}
+		if res.Outcome != worktree.DownRemoved {
+			t.Errorf("%s outcome = %q, want %q", name, res.Outcome, worktree.DownRemoved)
+		}
+		if _, statErr := os.Stat(wt.Path); !os.IsNotExist(statErr) {
+			t.Errorf("%s checkout still present after named-policy down: %v", name, statErr)
+		}
+		if out, err := gitTry(root, "show-ref", "--verify", "--quiet", "refs/heads/"+name); err != nil {
+			t.Errorf("%s branch was destroyed by tear-down: %v\n%s", name, err, out)
+		}
+	}
+
+	wt, err := m.Up(ctx, "unit-3")
+	if err != nil {
+		t.Fatalf("unit-3 up: %v", err)
+	}
+	writeFile(t, filepath.Join(wt.Path, "README.md"), "dirty\n")
+	_, err = m.Down(ctx, "unit-3", keepBranchCommits)
+	report := blockedReport(t, err)
+	if !report.Has(worktree.BlockerUncommittedChange) {
+		t.Fatalf("named policy blockers = %+v, want uncommitted change to remain blocking", report.Blockers)
+	}
+}
+
 // TestDownCleanNeverMergedSucceedsWithoutMergeQuery is the abandoned-branch
 // case: nothing was ever merged, nothing ever will be, and the checkout is
 // still reclaimable — with no merge-status or ahead/behind query anywhere in
