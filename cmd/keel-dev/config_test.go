@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"go/ast"
 	"go/parser"
@@ -93,7 +94,15 @@ func TestKeelDevConfigPropertiesAreDocumentedInTypeAndFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("findModuleRoot: %v", err)
 	}
-	if violations, err := scanKeelDevConfigDocumentation(root); err != nil {
+	cfg, err := loadKeelDevConfig(root)
+	if err != nil {
+		t.Fatalf("loadKeelDevConfig: %v", err)
+	}
+	files, err := trackedLintFiles(context.Background(), discardLogger(), root, cfg.Gate.Excludes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if violations, err := scanKeelDevConfigDocumentation(root, files); err != nil {
 		t.Fatal(err)
 	} else if len(violations) != 0 {
 		t.Fatalf("config documentation violations:\n%s", strings.Join(violations, "\n"))
@@ -169,8 +178,12 @@ func toolPinsEqual(a, b map[string]toolPin) bool {
 
 func TestKeelDevConfigStructFieldDocScanCatchesMissingComment(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "config.go", "package main\n\ntype sample struct {\n\tGood string `yaml:\"good\"` // explains what and why\n\tBad string `yaml:\"bad\"`\n}\n")
-	violations, err := scanConfigStructFieldDocs(dir)
+	keeldev := filepath.Join(dir, "cmd", "keel-dev")
+	if err := os.MkdirAll(keeldev, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, keeldev, "config.go", "package main\n\ntype sample struct {\n\tGood string `yaml:\"good\"` // explains what and why\n\tBad string `yaml:\"bad\"`\n}\n")
+	violations, err := scanConfigStructFieldDocs(dir, lintFixtureFiles(t, dir))
 	if err != nil {
 		t.Fatal(err)
 	}

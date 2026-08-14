@@ -5,7 +5,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -44,41 +43,41 @@ import (
 //   - keel-dev-config-docs: every property in the keel-dev config object and
 //     committed config file carries explanatory commentary (keel/ac-450).
 //
-// DHF-REQ: keel/requirement-10, keel/requirement-11, keel/requirement-118 (keel/ac-450)
-func runLint(dir string) error {
+// DHF-REQ: keel/requirement-10, keel/requirement-11, keel/requirement-85 (keel/ac-453, keel/ac-454, keel/ac-455), keel/requirement-118 (keel/ac-450)
+func runLint(dir string, files []string) error {
 	var violations []string
 
-	v, err := scanNoStdlibLog(dir)
+	v, err := scanNoStdlibLog(dir, files)
 	if err != nil {
 		return err
 	}
 	violations = append(violations, v...)
 
-	v, err = scanNoRawFmtOutput(dir)
+	v, err = scanNoRawFmtOutput(dir, files)
 	if err != nil {
 		return err
 	}
 	violations = append(violations, v...)
 
-	v, err = scanNoRawStdoutStream(filepath.Join(dir, "cmd", "keel-dev"))
+	v, err = scanNoRawStdoutStream(dir, files)
 	if err != nil {
 		return err
 	}
 	violations = append(violations, v...)
 
-	v, err = scanNoUndocumentedExports(dir)
+	v, err = scanNoUndocumentedExports(dir, files)
 	if err != nil {
 		return err
 	}
 	violations = append(violations, v...)
 
-	v, err = scanNoRetiredDesiredStateVocabulary(dir)
+	v, err = scanNoRetiredDesiredStateVocabulary(dir, files)
 	if err != nil {
 		return err
 	}
 	violations = append(violations, v...)
 
-	v, err = scanKeelDevConfigDocumentation(dir)
+	v, err = scanKeelDevConfigDocumentation(dir, files)
 	if err != nil {
 		return err
 	}
@@ -111,48 +110,31 @@ var retiredDesiredStateVocabularyTerms = []string{
 // guard never has a literal to trip on.
 //
 // DHF-REQ: keel/requirement-77
-func scanNoRetiredDesiredStateVocabulary(root string) ([]string, error) {
+func scanNoRetiredDesiredStateVocabulary(root string, files []string) ([]string, error) {
 	var violations []string
-	for _, sub := range retiredDesiredStateVocabularyDirs {
-		dir := filepath.Join(root, sub)
-		if _, err := os.Stat(dir); os.IsNotExist(err) {
+	for _, file := range files {
+		if !retiredDesiredStateVocabularyPath(file) {
 			continue
 		}
-		err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() {
-				name := d.Name()
-				if name != "." && (strings.HasPrefix(name, ".") || name == "vendor" || name == "testdata" || name == "bin" || name == "node_modules") {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if !retiredDesiredStateVocabularyFile(path) {
-				return nil
-			}
-			body, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			text := string(body)
-			for _, term := range retiredDesiredStateVocabularyTerms {
-				if line := firstLineContaining(text, term); line > 0 {
-					violations = append(violations, fmt.Sprintf("  no-retired-desired-state-vocabulary: %s:%d contains %q — use DesiredState-rooted naming only (keel/requirement-77)", relPath(root, path), line, term))
-				}
-			}
-			return nil
-		})
+		body, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(file)))
 		if err != nil {
 			return nil, err
+		}
+		text := string(body)
+		for _, term := range retiredDesiredStateVocabularyTerms {
+			if line := firstLineContaining(text, term); line > 0 {
+				violations = append(violations, fmt.Sprintf("  no-retired-desired-state-vocabulary: %s:%d contains %q — use DesiredState-rooted naming only (keel/requirement-77)", filepath.FromSlash(file), line, term))
+			}
 		}
 	}
 	return violations, nil
 }
 
-func retiredDesiredStateVocabularyFile(path string) bool {
-	switch filepath.Ext(path) {
+func retiredDesiredStateVocabularyPath(file string) bool {
+	if !hasAnyPathPrefix(file, retiredDesiredStateVocabularyDirs...) {
+		return false
+	}
+	switch filepath.Ext(file) {
 	case ".go", ".js", ".ts", ".json":
 		return true
 	default:
@@ -172,14 +154,14 @@ func firstLineContaining(text, term string) int {
 // scanNoStdlibLog reports every import of the stdlib "log" package in the
 // module. keel/log is the logging surface; stdlib log bypasses redaction and
 // the G1 schema.
-func scanNoStdlibLog(root string) ([]string, error) {
+func scanNoStdlibLog(root string, files []string) ([]string, error) {
 	var violations []string
-	err := walkGoFiles(root, func(path string, file *ast.File, fset *token.FileSet) {
+	err := visitGoFiles(root, files, func(path string, file *ast.File, fset *token.FileSet) {
 		for _, imp := range file.Imports {
 			if p, err := strconv.Unquote(imp.Path.Value); err == nil && p == "log" {
 				pos := fset.Position(imp.Pos())
 				violations = append(violations,
-					fmt.Sprintf("  no-stdlib-log: %s:%d imports stdlib log — use keel/log (log/slog is allowed)", relPath(root, path), pos.Line))
+					fmt.Sprintf("  no-stdlib-log: %s:%d imports stdlib log — use keel/log (log/slog is allowed)", path, pos.Line))
 			}
 		}
 	})
@@ -198,18 +180,14 @@ var rawFmtDirs = []string{filepath.Join("cmd", "keel-dev"), "log", "exec"}
 // scanNoRawFmtOutput reports fmt print calls in keel-dev and library packages
 // outside the usage-text allowlist (printUsage in main.go, which emits static
 // help, not run output). Missing roots are ignored for small lint fixtures.
-func scanNoRawFmtOutput(root string) ([]string, error) {
+func scanNoRawFmtOutput(root string, files []string) ([]string, error) {
 	var violations []string
 	for _, sub := range rawFmtDirs {
-		dir := filepath.Join(root, sub)
-		if _, err := os.Stat(dir); os.IsNotExist(err) {
-			continue
-		}
-		err := walkGoFiles(dir, func(path string, file *ast.File, fset *token.FileSet) {
+		err := visitGoFiles(root, filesWithPrefix(files, sub), func(path string, file *ast.File, fset *token.FileSet) {
 			ast.Inspect(file, func(n ast.Node) bool {
 				// Allowlist: the printUsage function and the unknown-flag refusal
 				// in run() are static help/diagnostic text, not run output.
-				if fn, ok := n.(*ast.FuncDecl); ok && relPath(root, path) == filepath.Join("cmd", "keel-dev", "main.go") &&
+				if fn, ok := n.(*ast.FuncDecl); ok && path == filepath.Join("cmd", "keel-dev", "main.go") &&
 					(fn.Name.Name == "printUsage" || fn.Name.Name == "run") {
 					return false
 				}
@@ -227,7 +205,7 @@ func scanNoRawFmtOutput(root string) ([]string, error) {
 				}
 				pos := fset.Position(call.Pos())
 				violations = append(violations,
-					fmt.Sprintf("  no-raw-fmt-output: %s:%d calls fmt.%s — route run output through keel/log", relPath(root, path), pos.Line, sel.Sel.Name))
+					fmt.Sprintf("  no-raw-fmt-output: %s:%d calls fmt.%s — route run output through keel/log", path, pos.Line, sel.Sel.Name))
 				return true
 			})
 		})
@@ -254,12 +232,9 @@ var stdoutAllowlist = map[string]bool{
 // scanNoRawStdoutStream reports os.Stdout/os.Stderr references in cmd/keel-dev
 // outside the allowlist (keel/ac-36). A tree without cmd/keel-dev has nothing
 // to scan.
-func scanNoRawStdoutStream(dir string) ([]string, error) {
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return nil, nil
-	}
+func scanNoRawStdoutStream(root string, files []string) ([]string, error) {
 	var violations []string
-	err := walkGoFiles(dir, func(path string, file *ast.File, fset *token.FileSet) {
+	err := visitGoFiles(root, filesWithPrefix(files, filepath.Join("cmd", "keel-dev")), func(path string, file *ast.File, fset *token.FileSet) {
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok {
@@ -303,15 +278,11 @@ var libraryDocDirs = []string{"log", "exec", "cli", "worktree"}
 // packages that lacks a doc comment. go doc is the sole behavioral contract keel
 // offers its consumers (keel/ac-46), so an undocumented export is a hole in that
 // contract; this machine-enforces the floor that a comment exists (keel/ac-49).
-// Comment quality remains a review concern. Test files are skipped by walkGoFiles.
-func scanNoUndocumentedExports(root string) ([]string, error) {
+// Comment quality remains a review concern. Test files are skipped by visitGoFiles.
+func scanNoUndocumentedExports(root string, files []string) ([]string, error) {
 	var violations []string
 	for _, sub := range libraryDocDirs {
-		dir := filepath.Join(root, sub)
-		if _, err := os.Stat(dir); os.IsNotExist(err) {
-			continue
-		}
-		err := walkGoFiles(dir, func(path string, file *ast.File, fset *token.FileSet) {
+		err := visitGoFiles(root, filesWithPrefix(files, sub), func(path string, file *ast.File, fset *token.FileSet) {
 			for _, decl := range file.Decls {
 				violations = append(violations, undocumentedInDecl(root, path, fset, decl)...)
 			}
@@ -330,7 +301,7 @@ func undocumentedInDecl(root, path string, fset *token.FileSet, decl ast.Decl) [
 	report := func(pos token.Pos, kind, name string) {
 		p := fset.Position(pos)
 		out = append(out, fmt.Sprintf("  no-undocumented-exports: %s:%d exported %s %s has no doc comment — go doc is keel's consumer contract (keel/ac-46, keel/ac-49)",
-			relPath(root, path), p.Line, kind, name))
+			path, p.Line, kind, name))
 	}
 	switch d := decl.(type) {
 	case *ast.FuncDecl:
@@ -404,7 +375,7 @@ func undocumentedFields(root, path string, fset *token.FileSet, typeName string,
 			}
 			p := fset.Position(name.Pos())
 			out = append(out, fmt.Sprintf("  no-undocumented-exports: %s:%d exported field %s.%s has no doc comment — go doc is keel's consumer contract (keel/ac-46, keel/ac-49)",
-				relPath(root, path), p.Line, typeName, name.Name))
+				path, p.Line, typeName, name.Name))
 		}
 	}
 	return out
@@ -451,36 +422,40 @@ func receiverTypeName(recv *ast.FieldList) string {
 	return ""
 }
 
-// walkGoFiles parses every non-test .go file under root (skipping vendor,
-// testdata, and hidden directories) and hands the AST to visit.
-func walkGoFiles(root string, visit func(path string, file *ast.File, fset *token.FileSet)) error {
+// visitGoFiles parses every listed non-test .go file and hands the AST to visit.
+func visitGoFiles(root string, files []string, visit func(path string, file *ast.File, fset *token.FileSet)) error {
 	fset := token.NewFileSet()
-	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+	for _, file := range files {
+		if !strings.HasSuffix(file, ".go") || strings.HasSuffix(file, "_test.go") {
+			continue
 		}
-		if d.IsDir() {
-			name := d.Name()
-			if name != "." && (strings.HasPrefix(name, ".") || name == "vendor" || name == "testdata" || name == "bin") {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+		path := filepath.Join(root, filepath.FromSlash(file))
+		parsed, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
 		if err != nil {
 			return fmt.Errorf("lint: parse %s: %w", path, err)
 		}
-		visit(path, file, fset)
-		return nil
-	})
+		visit(filepath.FromSlash(file), parsed, fset)
+	}
+	return nil
 }
 
-func relPath(root, path string) string {
-	if rel, err := filepath.Rel(root, path); err == nil {
-		return rel
+func filesWithPrefix(files []string, prefix string) []string {
+	var out []string
+	for _, file := range files {
+		if hasAnyPathPrefix(file, prefix) {
+			out = append(out, file)
+		}
 	}
-	return path
+	return out
+}
+
+func hasAnyPathPrefix(file string, prefixes ...string) bool {
+	file = filepath.ToSlash(file)
+	for _, prefix := range prefixes {
+		prefix = filepath.ToSlash(prefix)
+		if file == prefix || strings.HasPrefix(file, prefix+"/") {
+			return true
+		}
+	}
+	return false
 }
