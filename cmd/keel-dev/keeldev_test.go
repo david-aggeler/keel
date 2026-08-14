@@ -406,6 +406,15 @@ func writeFile(t *testing.T, dir, name, content string) {
 	}
 }
 
+func mustReadFile(t *testing.T, dir, name string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
 func lintFixtureFiles(t *testing.T, root string) []string {
 	t.Helper()
 	var files []string
