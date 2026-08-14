@@ -108,6 +108,9 @@ else
 	[[ -z "$GO_BIN_DIR" ]] && GO_BIN_DIR="$(go env GOPATH)/bin"
 
 	# --- gopls — Go LSP server (Go-aware refactors, e.g. `gopls rename`) ---
+	# DHF-REQ: keel/requirement-12
+	# deliberately floating at @latest: gopls is developer LSP tooling, not part of the gate,
+	# so it cannot make gate verdicts differ across machines.
 	GOPLS_BIN="${GO_BIN_DIR}/gopls"
 	if [[ -x "$GOPLS_BIN" ]]; then
 		echo "gopls already installed: $("$GOPLS_BIN" version | head -n1) (${GOPLS_BIN})"
@@ -158,14 +161,13 @@ else
 	ensure_local_bin_link "gitleaks" "$GITLEAKS_BIN"
 
 	# --- deadcode — advisory unreachable-function report (golang.org/x/tools) ---
+	# DHF-REQ: keel/requirement-12
 	DEADCODE_VERSION="v0.28.0"
 	DEADCODE_BIN="${GO_BIN_DIR}/deadcode"
-	if [[ -x "$DEADCODE_BIN" ]]; then
-		echo "deadcode already installed (${DEADCODE_BIN})"
-	else
-		echo "Installing deadcode ${DEADCODE_VERSION} into ${GO_BIN_DIR}..."
-		go install "golang.org/x/tools/cmd/deadcode@${DEADCODE_VERSION}"
-	fi
+	# deadcode has no CLI version probe. Reinstall the pinned module every run
+	# so an already-present off-pin binary still converges to the declared pin.
+	echo "Installing deadcode ${DEADCODE_VERSION} into ${GO_BIN_DIR}..."
+	go install "golang.org/x/tools/cmd/deadcode@${DEADCODE_VERSION}"
 	ensure_local_bin_link "deadcode" "$DEADCODE_BIN"
 
 	# PATH check — surface remediation if the bin dir is not on PATH.
