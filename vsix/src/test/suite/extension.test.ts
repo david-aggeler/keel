@@ -1392,7 +1392,7 @@ process.exit(2);
     }
   });
 
-  // DHF-TEST: keel/requirement-71, keel/requirement-88
+  // DHF-TEST: keel/requirement-71, keel/requirement-88, keel/requirement-116
   test('run-event application covers aliases, siblings, locations, and run control fallbacks', () => {
     const controller = vscode.tests.createTestController(`keelRunEventBranches-${Date.now()}`, 'Keel Run Event Branches');
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-run-event-branches-'));
@@ -1440,9 +1440,20 @@ process.exit(2);
       const snapshot = runEventApplicationSnapshot('case::test::a', selected, resultIds);
       assert.deepEqual(snapshot.resultIds.sort(), ['case::alias::a', 'case::test::a']);
       assert.deepEqual(snapshot.skippedSiblingIds.sort(), ['case::alias::a', 'case::test::a', 'case::test::b']);
-      assert.deepEqual(runEventApplicationSnapshot('case::test::a', new Set(['case::test::a']), resultIds).neutralAncestorIds, ['case::suite']);
+      assert.deepEqual(Object.keys(runEventApplicationSnapshot('case::test::a', new Set(['case::test::a']), resultIds)).sort(), ['resultIds', 'skippedSiblingIds']);
       assert.equal(shouldApplyResultToItem(tree.itemsById.get('case::suite') as vscode.TestItem, new Set(), new Set(['case::test::a', 'case::test::b', 'case::alias::a'])), true);
       assert.deepEqual(resultItemsForRunEvent([tree.itemsById.get('case::test::a') as vscode.TestItem, tree.itemsById.get('case::test::a') as vscode.TestItem]).map((item) => item.id), ['case::test::a']);
+
+      const leafSelectedPassed: string[] = [];
+      const leafSelectedSkipped: string[] = [];
+      const leafSelectedRun = {
+        passed(item: vscode.TestItem) { leafSelectedPassed.push(item.id); },
+        skipped(item: vscode.TestItem) { leafSelectedSkipped.push(item.id); },
+        appendOutput() { /* no-op */ }
+      };
+      applyRunEvent(leafSelectedRun as unknown as vscode.TestRun, JSON.stringify(runEvent({ event: 'passed', test_id: 'case::test::a' })), new Set(['case::test::a']), new Set());
+      assert.deepEqual(leafSelectedPassed.sort(), ['case::alias::a', 'case::test::a'], 'targeted leaf pass is applied before run end');
+      assert.deepEqual(leafSelectedSkipped, [], 'post-pass, pre-run.end targeted-leaf replay leaves ancestor state to VS Code rollup');
 
       applyRunEvent(run as unknown as vscode.TestRun, 'not-json', selected, resultIds);
       applyRunEvent(run as unknown as vscode.TestRun, JSON.stringify(runEvent({ event: 'test_started', test_id: 'case::test::a' })), selected, resultIds);
@@ -1943,6 +1954,64 @@ process.exit(2);
     }
   });
 
+  // DHF-TEST: keel/requirement-116
+  test('external run mirror leaves targeted leaf ancestors unstamped after pass before run end', async function () {
+    this.timeout(10_000);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-external-leaf-ancestor-'));
+    const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+    process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = root;
+    const controller = vscode.tests.createTestController(`keelExternalLeafAncestor-${Date.now()}`, 'Keel External Leaf Ancestor');
+    const tree = publishDiscovery(controller, root, {
+      version: 1,
+      workspace: root,
+      generated_at: new Date().toISOString(),
+      items: [
+        { id: 'case::suite', label: 'suite', kind: 'suite', runnable: true, profiles: ['run'] },
+        { id: 'case::test::a', parent_id: 'case::suite', label: 'a', kind: 'test', runnable: true, profiles: ['run'] }
+      ]
+    });
+    setCurrentTreeForTest(tree);
+    const spyTarget = controller as vscode.TestController & {
+      createTestRun: (request: vscode.TestRunRequest, name?: string, persist?: boolean) => vscode.TestRun;
+    };
+    const originalCreateTestRun = spyTarget.createTestRun.bind(controller);
+    const stamps: StateStamp[] = [];
+    spyTarget.createTestRun = (request: vscode.TestRunRequest, name?: string, persist?: boolean): vscode.TestRun => {
+      const run = originalCreateTestRun(request, name, persist);
+      recordStateStamps(run, stamps);
+      return run;
+    };
+    const mirror = new ExternalRunMirror(controller);
+    const runsDir = path.join(root, '.devtools', 'vscode-runs');
+    fs.mkdirSync(runsDir, { recursive: true });
+    const runFile = path.join(runsDir, `external-leaf-ancestor-${process.pid}-${Date.now()}.jsonl`);
+    fs.writeFileSync(runFile, [
+      JSON.stringify(runEvent({ event: 'run_started', run_id: 'external-leaf-ancestor', test_id: 'case::test::a' })),
+      JSON.stringify(runEvent({ event: 'test_started', run_id: 'external-leaf-ancestor', test_id: 'case::test::a' })),
+      JSON.stringify(runEvent({ event: 'passed', run_id: 'external-leaf-ancestor', test_id: 'case::test::a' }))
+    ].join('\n') + '\n');
+
+    try {
+      await mirror.syncWorkspace();
+      assert.ok(stamps.some((stamp) => stamp.id === 'case::test::a' && stamp.state === 'passed'), 'targeted leaf pass is replayed before run end');
+      assert.ok(
+        !stamps.some((stamp) => stamp.id === 'case::suite' && ['passed', 'failed', 'errored', 'skipped'].includes(stamp.state)),
+        `post-pass, pre-run.end ancestor state is left to VS Code rollup; stamps=${JSON.stringify(stamps)}`
+      );
+    } finally {
+      spyTarget.createTestRun = originalCreateTestRun;
+      fs.rmSync(root, { recursive: true, force: true });
+      mirror.dispose();
+      setCurrentTreeForTest(undefined);
+      controller.dispose();
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
+    }
+  });
+
   // DHF-TEST: keel/requirement-88
   test('external run mirror invalidates exclusive-group siblings cleared by imported streams', async function () {
     this.timeout(10_000);
@@ -2345,7 +2414,7 @@ process.exit(2);
     }
   });
 
-  // DHF-TEST: keel/requirement-88
+  // DHF-TEST: keel/requirement-88, keel/requirement-116
   test('exclusive-group cleared events leave siblings with no result (not skipped) and invalidate them', () => {
     const controller = vscode.tests.createTestController(`keelExclusiveClear-${Date.now()}`, 'Keel Exclusive Clear');
     const tree = publishDiscovery(controller, process.cwd(), {
