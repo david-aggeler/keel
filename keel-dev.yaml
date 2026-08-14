@@ -12,6 +12,12 @@ gate:
     # Handoff documents are written outside the CR implementation loop, so
     # gating them would let session-transfer notes red an unrelated merge.
     - docs/handoffs/**
+    # The SBOM tree is regenerated wholesale from the dependency graph, so its
+    # vocabulary is whatever third-party module paths happen to be present
+    # (otelslog, cenkalti, xxhash, ...). Spell-checking it would red the gate on
+    # every regeneration and would force vendor identifiers into the shared
+    # word list, weakening the check for real product prose.
+    - docs/auto-generated/**
 
 # The tools section owns external gate tool pins because the gate must prove it
 # is using the expected command versions before relying on their findings.
@@ -26,8 +32,10 @@ tools:
       # stable format that the gate can match before running analysis.
       version_args: [--version]
       # The want substring pins the accepted golangci-lint release so analyzer
-      # rule drift cannot silently change gate behavior.
-      want: v2.0.2
+      # rule drift cannot silently change gate behavior. No leading "v": the
+      # v2.12 line prints "has version 2.12.2" where v2.0.2 printed "has
+      # version v2.0.2", and this value is matched as a plain substring.
+      want: 2.12.2
     # govulncheck is the vulnerability scanner, so its database client version
     # is pinned before the gate trusts a clean report.
     - name: govulncheck
@@ -36,7 +44,7 @@ tools:
       version_args: [--version]
       # The want substring pins the scanner release used for vulnerability
       # evidence across developer and release runs.
-      want: v1.3.0
+      want: v1.7.0
     # cspell checks tracked prose and source tokens, so the dictionary engine
     # version is pinned before spelling findings affect the gate.
     - name: cspell
@@ -63,7 +71,7 @@ tools:
       version_args: [--version]
       # The want substring pins shfmt so formatting output stays stable across
       # machines and release preflights.
-      want: v3.10.0
+      want: v3.13.1
     # deadcode is advisory reachability analysis; it has no stable version
     # probe, so presence is checked while its findings remain non-blocking.
     - name: deadcode

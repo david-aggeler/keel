@@ -39,7 +39,7 @@ func TestKeelDevConfigPartialFileOverlaysDefaults(t *testing.T) {
 		t.Fatal("partial config did not override gate.excludes")
 	}
 	pins := cfg.toolPins()
-	if pins["golangci-lint"].want != "v2.0.2" {
+	if pins["golangci-lint"].want != "2.12.2" {
 		t.Fatalf("partial config zeroed tools.pins; golangci-lint pin = %#v", pins["golangci-lint"])
 	}
 	if pins["deadcode"].want != "" || len(pins["deadcode"].versionArgs) != 0 {

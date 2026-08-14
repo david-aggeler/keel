@@ -1,3 +1,10 @@
 allowBuilds:
   '@vscode/vsce-sign': false
   keytar: false
+# Force the two mocha transitives that grype flags up to their fixed releases.
+# Both are dev-only (mocha -> serialize-javascript / diff) and neither ships in
+# the packaged extension, but keeping the SBOM's CVE table empty is cheaper than
+# re-explaining why a High finding is benign on every future read.
+overrides:
+  serialize-javascript: '>=7.0.5'
+  diff: '>=8.0.3'
