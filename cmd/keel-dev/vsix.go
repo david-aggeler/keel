@@ -8,12 +8,23 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/david-aggeler/keel/cli"
 )
 
 const vsixCoverageFloorPercent = 76.3
+const vsixSupportPolicyRel = "vsix/SUPPORTED_VSCODE.md"
+
+var vsixHeldDependencyBaselines = []struct {
+	name    string
+	current string
+}{
+	{name: "@types/vscode", current: "1.125.0"},
+	{name: "@types/node", current: "26.2.0"},
+	{name: "typescript", current: "7.0.2"},
+}
 
 func vsixCommandSpec() *cli.CommandSpec {
 	return &cli.CommandSpec{
@@ -40,6 +51,9 @@ func runVSIXGate(ctx context.Context, logger *slog.Logger, dir string) error {
 		if _, err := exec.LookPath(tool); err != nil {
 			return fmt.Errorf("keel-dev vsix ci: required tool %q not found on PATH", tool)
 		}
+	}
+	if err := validateVSIXSupportPolicy(dir); err != nil {
+		return err
 	}
 	if err := runStep(ctx, logger, dir, step{
 		name:    "vsix:ci",
@@ -97,4 +111,216 @@ func evaluateVSIXCoverageSummary(logger *slog.Logger, path string) error {
 		return fmt.Errorf("total statement coverage %.1f%% is below the %.1f%% floor (keel/requirement-79)", total, vsixCoverageFloorPercent)
 	}
 	return nil
+}
+
+// DHF-REQ: keel/requirement-119
+func validateVSIXSupportPolicy(dir string) error {
+	policyPath := filepath.Join(dir, filepath.FromSlash(vsixSupportPolicyRel))
+	policy, err := os.ReadFile(policyPath)
+	if err != nil {
+		return fmt.Errorf("keel-dev vsix policy: read %s: %w", policyPath, err)
+	}
+	policyText := string(policy)
+	declaredMinimum, ok := policyLineValue(policyText, "Minimum supported VS Code:")
+	if !ok {
+		return fmt.Errorf("keel-dev vsix policy: %s missing Minimum supported VS Code", policyPath)
+	}
+	if _, ok := policyLineValue(policyText, "Reason:"); !ok {
+		return fmt.Errorf("keel-dev vsix policy: %s missing Reason", policyPath)
+	}
+	nodeMajorRaw, ok := policyLineValue(policyText, "VS Code runtime Node major:")
+	if !ok {
+		return fmt.Errorf("keel-dev vsix policy: %s missing VS Code runtime Node major", policyPath)
+	}
+	nodeMajor, err := strconv.Atoi(nodeMajorRaw)
+	if err != nil || nodeMajor < 1 {
+		return fmt.Errorf("keel-dev vsix policy: VS Code runtime Node major %q is not a positive integer", nodeMajorRaw)
+	}
+	engineFloor, err := parseCaretSemver("Minimum supported VS Code", declaredMinimum)
+	if err != nil {
+		return err
+	}
+
+	manifestPath := filepath.Join(dir, "vsix", "package.json")
+	body, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return fmt.Errorf("keel-dev vsix policy: read %s: %w", manifestPath, err)
+	}
+	var manifest struct {
+		Engines struct {
+			VSCode string `json:"vscode"`
+		} `json:"engines"`
+		DevDependencies map[string]string `json:"devDependencies"`
+	}
+	if err := json.Unmarshal(body, &manifest); err != nil {
+		return fmt.Errorf("keel-dev vsix policy: parse %s: %w", manifestPath, err)
+	}
+	if manifest.Engines.VSCode != declaredMinimum {
+		return fmt.Errorf("keel-dev vsix policy: engines.vscode %q does not match declared minimum %q", manifest.Engines.VSCode, declaredMinimum)
+	}
+	typesVSCode, err := parsePackageSemver("@types/vscode", manifest.DevDependencies["@types/vscode"])
+	if err != nil {
+		return err
+	}
+	if compareSemver(typesVSCode, engineFloor) > 0 {
+		return fmt.Errorf("keel-dev vsix policy: @types/vscode %q is above declared engine minimum %q", manifest.DevDependencies["@types/vscode"], declaredMinimum)
+	}
+	typesNode, err := parsePackageSemver("@types/node", manifest.DevDependencies["@types/node"])
+	if err != nil {
+		return err
+	}
+	if typesNode.major > nodeMajor {
+		return fmt.Errorf("keel-dev vsix policy: @types/node %q is above VS Code runtime Node major %d", manifest.DevDependencies["@types/node"], nodeMajor)
+	}
+	if err := validateVSIXDependencyHoldNotes(policyText, manifest.DevDependencies); err != nil {
+		return err
+	}
+	return nil
+}
+
+// DHF-REQ: keel/requirement-119 (keel/ac-459)
+func validateVSIXDependencyHoldNotes(policyText string, devDependencies map[string]string) error {
+	notes := dependencyHoldNoteBlocks(policyText)
+	for _, dependency := range vsixHeldDependencyBaselines {
+		declared, ok := devDependencies[dependency.name]
+		if !ok {
+			continue
+		}
+		declaredVersion, err := parsePackageSemver(dependency.name, declared)
+		if err != nil {
+			return err
+		}
+		currentVersion, err := parseSemver(dependency.name+" current release", dependency.current)
+		if err != nil {
+			return err
+		}
+		if compareSemver(declaredVersion, currentVersion) >= 0 {
+			continue
+		}
+		if len(notes) == 0 {
+			return fmt.Errorf("keel-dev vsix policy: Dependency hold notes missing for held dependency %s", dependency.name)
+		}
+		note, ok := notes[dependency.name]
+		if !ok {
+			return fmt.Errorf("keel-dev vsix policy: Dependency hold notes missing entry for held dependency %s", dependency.name)
+		}
+		installed := strings.TrimPrefix(strings.TrimSpace(declared), "^")
+		if !strings.Contains(note, "`"+installed+"`") {
+			return fmt.Errorf("keel-dev vsix policy: Dependency hold note for %s does not state installed version %s", dependency.name, installed)
+		}
+		if !strings.Contains(note, "current: `"+dependency.current+"`") {
+			return fmt.Errorf("keel-dev vsix policy: Dependency hold note for %s does not state current release %s", dependency.name, dependency.current)
+		}
+		if !strings.Contains(strings.ToLower(note), "reason:") {
+			return fmt.Errorf("keel-dev vsix policy: Dependency hold note for %s missing reason", dependency.name)
+		}
+		if !strings.Contains(strings.ToLower(note), "release condition:") {
+			return fmt.Errorf("keel-dev vsix policy: Dependency hold note for %s missing release condition", dependency.name)
+		}
+	}
+	return nil
+}
+
+func dependencyHoldNoteBlocks(policyText string) map[string]string {
+	notes := map[string]string{}
+	var currentName string
+	var currentLines []string
+	inSection := false
+	flush := func() {
+		if currentName == "" {
+			return
+		}
+		notes[currentName] = strings.Join(currentLines, "\n")
+		currentName = ""
+		currentLines = nil
+	}
+	for _, line := range strings.Split(policyText, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !inSection {
+			inSection = trimmed == "Dependency hold notes:"
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#") {
+			break
+		}
+		if strings.HasPrefix(trimmed, "- ") {
+			flush()
+			for _, dependency := range vsixHeldDependencyBaselines {
+				if strings.Contains(trimmed, "`"+dependency.name+"`") {
+					currentName = dependency.name
+					currentLines = append(currentLines, trimmed)
+					break
+				}
+			}
+			continue
+		}
+		if currentName != "" {
+			currentLines = append(currentLines, trimmed)
+		}
+	}
+	flush()
+	return notes
+}
+
+func policyLineValue(body, prefix string) (string, bool) {
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, prefix) {
+			value := strings.TrimSpace(strings.TrimPrefix(line, prefix))
+			return value, value != ""
+		}
+	}
+	return "", false
+}
+
+type simpleSemver struct {
+	major int
+	minor int
+	patch int
+}
+
+func parseCaretSemver(field, value string) (simpleSemver, error) {
+	if !strings.HasPrefix(value, "^") {
+		return simpleSemver{}, fmt.Errorf("keel-dev vsix policy: %s %q must use a caret semver floor", field, value)
+	}
+	return parseSemver(field, strings.TrimPrefix(value, "^"))
+}
+
+func parsePackageSemver(name, value string) (simpleSemver, error) {
+	if value == "" {
+		return simpleSemver{}, fmt.Errorf("keel-dev vsix policy: missing %s devDependency", name)
+	}
+	value = strings.TrimPrefix(strings.TrimSpace(value), "^")
+	return parseSemver(name, value)
+}
+
+func parseSemver(field, value string) (simpleSemver, error) {
+	parts := strings.Split(value, ".")
+	if len(parts) != 3 {
+		return simpleSemver{}, fmt.Errorf("keel-dev vsix policy: %s version %q is not major.minor.patch", field, value)
+	}
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return simpleSemver{}, fmt.Errorf("keel-dev vsix policy: %s version %q has invalid major", field, value)
+	}
+	minor, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return simpleSemver{}, fmt.Errorf("keel-dev vsix policy: %s version %q has invalid minor", field, value)
+	}
+	patch, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return simpleSemver{}, fmt.Errorf("keel-dev vsix policy: %s version %q has invalid patch", field, value)
+	}
+	return simpleSemver{major: major, minor: minor, patch: patch}, nil
+}
+
+func compareSemver(a, b simpleSemver) int {
+	switch {
+	case a.major != b.major:
+		return a.major - b.major
+	case a.minor != b.minor:
+		return a.minor - b.minor
+	default:
+		return a.patch - b.patch
+	}
 }
