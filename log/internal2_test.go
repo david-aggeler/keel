@@ -45,7 +45,7 @@ func TestBuildIdentity(t *testing.T) {
 
 func TestStartDailyBuildIdentityStops(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	startDailyBuildIdentity(ctx, discard(), "v1", "c")
+	startDailyBuildIdentity(ctx, Discard(), "v1", "c")
 	cancel() // goroutine must exit on ctx.Done without firing
 	time.Sleep(10 * time.Millisecond)
 
