@@ -1,0 +1,14 @@
+# DHF-REQ: keel/requirement-123
+#
+# raw/filesystem.cyclonedx.json is generated, not committed.
+#
+# syft records the absolute path of every component it catalogued, so the file
+# states the directory of the checkout that produced it. Committing it makes the
+# SBOM non-convergent: a refresh from a different worktree rewrites those paths
+# with no inventory change, and a 545 KB artifact that always churns stops being
+# read — which is how a real inventory change passes unexamined (keel/issue-149).
+#
+# Nothing downstream reads the committed copy. grype re-scans a freshly generated
+# one, and linked-components.md / cve.md are what review consumes. The two CVE
+# artifacts beside it carry no host paths and stay tracked.
+raw/filesystem.cyclonedx.json
