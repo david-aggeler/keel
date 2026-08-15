@@ -813,13 +813,15 @@ process.exit(2);
 
   // ac-311 (requirement-97 / design_decision-5): the VSIX applies bridge
   // decisions verbatim and must not branch on the mutually_exclusive wire
-  // flag. Allowed occurrences in production sources: the protocol.ts type
-  // declaration and the display passthrough in formatDesiredStateGroup.
+  // flag. Allowed occurrences in production sources: two protocol.ts type
+  // declarations — the desired-state group and the typed discovery-item facts
+  // that replaced the k=v limitations encoding (requirement-127) — and the
+  // display passthrough in formatDesiredStateGroup.
   //
-  // DHF-TEST: keel/requirement-97
+  // DHF-TEST: keel/requirement-97, keel/requirement-127
   test('production sources do not branch on mutually_exclusive', () => {
     const srcDir = path.resolve(__dirname, '../../../src');
-    const allowed = new Map([['protocol.ts', 1], ['extension.ts', 1]]);
+    const allowed = new Map([['protocol.ts', 2], ['extension.ts', 1]]);
     const offenders: string[] = [];
     for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.endsWith('.ts')) {
