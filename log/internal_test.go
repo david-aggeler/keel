@@ -30,7 +30,7 @@ func TestFromContextAndWithLogger(t *testing.T) {
 }
 
 func TestDiscard(t *testing.T) {
-	l := discard()
+	l := Discard()
 	if l == nil {
 		t.Fatal("Discard returned nil")
 	}
