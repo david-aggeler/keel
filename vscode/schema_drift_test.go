@@ -2,6 +2,7 @@ package vscode
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
@@ -9,8 +10,17 @@ import (
 	"time"
 )
 
+// desiredStateRowFactsRef is where the discovery schema describes the typed
+// desired-state facts a row item carries.
+const desiredStateRowFactsRef = "#/$defs/test_item/properties/desired_state_row"
+
+// desiredStateGroupFactsRef is where the discovery schema describes the typed
+// desired-state facts a group item carries.
+const desiredStateGroupFactsRef = "#/$defs/test_item/properties/desired_state_group"
+
 type jsonSchema struct {
 	ID                   string                `json:"$id"`
+	Type                 string                `json:"type"`
 	AdditionalProperties json.RawMessage       `json:"additionalProperties"`
 	Required             []string              `json:"required"`
 	Properties           map[string]jsonSchema `json:"properties"`
@@ -32,6 +42,8 @@ func TestSchemasDriftAgainstGoTypes(t *testing.T) {
 		{"discovery reconcile result", reflect.TypeOf(ReconcileResult{}), "#/$defs/capabilities/properties/reconcile_results/items"},
 		{"discovery test item", reflect.TypeOf(TestItem{}), "#/$defs/test_item"},
 		{"discovery range", reflect.TypeOf(Range{}), "#/$defs/test_item/properties/range"},
+		{"discovery desired-state group facts", reflect.TypeOf(DesiredStateGroupFacts{}), desiredStateGroupFactsRef},
+		{"discovery desired-state row facts", reflect.TypeOf(DesiredStateRowFacts{}), desiredStateRowFactsRef},
 		{"desired-state", reflect.TypeOf(DesiredStateDocument{}), ""},
 		{"desired-state devtool", reflect.TypeOf(DevtoolMetadata{}), "#/properties/devtool"},
 		{"desired-state group", reflect.TypeOf(DesiredStateGroup{}), "#/$defs/group"},
@@ -43,6 +55,30 @@ func TestSchemasDriftAgainstGoTypes(t *testing.T) {
 		{"test-bridge-config", reflect.TypeOf(TestBridgeConfig{}), ""},
 	}
 
+	loaded := loadSchemas(t)
+
+	for _, check := range checks {
+		root := loaded[schemaNameForCheck(check.name)]
+		schema := schemaAtRef(root, check.ref)
+		if !additionalPropertiesClosed(schema.AdditionalProperties) {
+			t.Fatalf("%s does not set additionalProperties:false", check.name)
+		}
+		if err := compareSchemaToType(schema, check.typ); err != nil {
+			t.Fatalf("%s drift: %v", check.name, err)
+		}
+	}
+
+	assertEnumMatches(t, loaded["run-event"].Properties["event"].Enum, sortedKeys(knownRunEvents))
+	assertEnumMatches(t, loaded["run-event"].Properties["source"].Enum, sortedKeys(runEventSources))
+	assertEnumMatches(t, loaded["run-event"].Properties["artifact"].Properties["kind"].Enum, sortedKeys(artifactKinds))
+	assertEnumMatches(t, schemaAtRef(loaded["discovery"], desiredStateRowFactsRef).Properties["action"].Enum, sortedKeys(desiredStateActions))
+	assertEnumMatches(t, schemaAtRef(loaded["desired-state"], "#/$defs/desired_state").Properties["action"].Enum, sortedKeys(desiredStateActions))
+}
+
+// loadSchemas parses every embedded schema and asserts the whole-document
+// invariants that hold for all of them.
+func loadSchemas(t *testing.T) map[string]jsonSchema {
+	t.Helper()
 	loaded := map[string]jsonSchema{}
 	for _, name := range []SchemaName{SchemaDiscovery, SchemaDesiredState, SchemaRunEvent, SchemaRunLock, SchemaTestBridgeConfig} {
 		body, err := SchemaBytes(name)
@@ -61,28 +97,38 @@ func TestSchemasDriftAgainstGoTypes(t *testing.T) {
 		}
 		loaded[string(name)] = schema
 	}
+	return loaded
+}
 
-	for _, check := range checks {
-		root := loaded[schemaNameForCheck(check.name)]
-		schema := schemaAtRef(root, check.ref)
-		if !additionalPropertiesClosed(schema.AdditionalProperties) {
-			t.Fatalf("%s does not set additionalProperties:false", check.name)
+// compareSchemaToType reports the structural drift between one schema object
+// and the Go wire struct it describes: property names, required-vs-omitempty,
+// and the JSON type each property carries. A renamed or retyped Go field is a
+// non-nil error.
+//
+// DHF-REQ: keel/requirement-127
+func compareSchemaToType(schema jsonSchema, typ reflect.Type) error {
+	wantProps, wantRequired := jsonFields(typ)
+	gotProps := sortedKeys(schema.Properties)
+	gotRequired := append([]string(nil), schema.Required...)
+	sort.Strings(gotRequired)
+	if strings.Join(gotProps, ",") != strings.Join(wantProps, ",") {
+		return fmt.Errorf("property drift:\n got: %v\nwant: %v", gotProps, wantProps)
+	}
+	if strings.Join(gotRequired, ",") != strings.Join(wantRequired, ",") {
+		return fmt.Errorf("required drift:\n got: %v\nwant: %v", gotRequired, wantRequired)
+	}
+	for name, want := range jsonFieldTypes(typ) {
+		got := schema.Properties[name].Type
+		if got == "" {
+			// The property constrains its values by enum or $ref instead of by
+			// a declared type; there is nothing to compare.
+			continue
 		}
-		wantProps, wantRequired := jsonFields(check.typ)
-		gotProps := sortedKeys(schema.Properties)
-		gotRequired := append([]string(nil), schema.Required...)
-		sort.Strings(gotRequired)
-		if strings.Join(gotProps, ",") != strings.Join(wantProps, ",") {
-			t.Fatalf("%s property drift:\n got: %v\nwant: %v", check.name, gotProps, wantProps)
-		}
-		if strings.Join(gotRequired, ",") != strings.Join(wantRequired, ",") {
-			t.Fatalf("%s required drift:\n got: %v\nwant: %v", check.name, gotRequired, wantRequired)
+		if got != want {
+			return fmt.Errorf("type drift on %q: schema says %q, Go type is %q", name, got, want)
 		}
 	}
-
-	assertEnumMatches(t, loaded["run-event"].Properties["event"].Enum, sortedKeys(knownRunEvents))
-	assertEnumMatches(t, loaded["run-event"].Properties["source"].Enum, sortedKeys(runEventSources))
-	assertEnumMatches(t, loaded["run-event"].Properties["artifact"].Properties["kind"].Enum, sortedKeys(artifactKinds))
+	return nil
 }
 
 func additionalPropertiesClosed(raw json.RawMessage) bool {
@@ -175,6 +221,45 @@ func jsonFields(typ reflect.Type) ([]string, []string) {
 	sort.Strings(props)
 	sort.Strings(required)
 	return props, required
+}
+
+// jsonFieldTypes maps each JSON property name of a wire struct to the JSON
+// type its Go field serializes as.
+func jsonFieldTypes(typ reflect.Type) map[string]string {
+	types := map[string]string{}
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		tag := field.Tag.Get("json")
+		if tag == "-" || tag == "" {
+			continue
+		}
+		name, _, _ := strings.Cut(tag, ",")
+		types[name] = jsonTypeOf(field.Type)
+	}
+	return types
+}
+
+func jsonTypeOf(typ reflect.Type) string {
+	if typ == reflect.TypeOf(time.Time{}) {
+		return "string"
+	}
+	switch typ.Kind() {
+	case reflect.Pointer:
+		return jsonTypeOf(typ.Elem())
+	case reflect.Bool:
+		return "boolean"
+	case reflect.String:
+		return "string"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return "integer"
+	case reflect.Float32, reflect.Float64:
+		return "number"
+	case reflect.Slice, reflect.Array:
+		return "array"
+	default:
+		return "object"
+	}
 }
 
 func sortedKeys[K ~string, V any](m map[K]V) []string {

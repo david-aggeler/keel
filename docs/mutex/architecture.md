@@ -23,7 +23,7 @@ flowchart TB
     end
 
     subgraph wire["Protocol documents (docs/wire-schema.md)"]
-        D1["discovery.json v1<br/>items[].limitations"]
+        D1["discovery.json v1<br/>items[].desired_state_group<br/>items[].desired_state_row"]
         D2["desired-state.json v3<br/>groups[].mutually_exclusive<br/>rows[].active"]
         D3["run-event.json v1 JSONL<br/>passed / failed / cleared"]
     end
@@ -64,7 +64,7 @@ of telling a different story, none authoritative.
 | # | Surface | Producer | Where it lives | Salience to the user | Reconciled when |
 |---|---|---|---|---|---|
 | 1 | Desired-state rows (`active`, `status`, `action`) | `deriveDesiredStateGroupRows` re-executes probes | `desired-state.json` v3; Test Results output text | Low (text panel) | Every `desired-state` call |
-| 2 | Discovery metadata (`Limitations`: `current=`, `action=`, `active=`, `mutually_exclusive=`) | `desiredStateDeclarationDiscoveryItems` (testbridge.go:436,473) | `discovery.json` → `TestItem.description` (tree.ts:171) | **Low** — small grey text | Every refresh |
+| 2 | Discovery metadata (`desired_state_group.mutually_exclusive`; `desired_state_row.current`/`.action`/`.active`) | `desiredStateDeclarationDiscoveryItems` (testbridge.go:436,473) | `discovery.json`, typed and schema-covered (requirement-127) | **None** — no longer rendered; `Limitations` → `TestItem.description` (tree.ts:171) carries prose only | Every refresh |
 | 3 | Run-event stream (`passed` winner, `cleared` siblings) | `runDesiredStateSelections` + `emitExclusiveDesiredStateSiblingClears` (testbridge.go:804,854) | JSONL during a run | Transient | Only **during a run** |
 | 4 | VS Code result icons | `run.passed/failed` + `invalidateTestResults` + item replacement | TestController result store — **sticky, survives refresh** (issue_fix-47/CR-78) | **Highest** — the green/red badge | Only after a run (`refreshMutexStates`, CR-119). **Never at rest** — `keel/issue-86` |
 
@@ -104,7 +104,7 @@ stateDiagram-v2
         → desired-state verb FAILS validation
         (validate.go:126) → VSIX shows an error.
         Discovery path does NOT validate this —
-        it renders both rows active=true.
+        it emits both rows with active: true.
     end note
 ```
 
@@ -119,7 +119,7 @@ it is the "deactivate everything" action — it passes itself and emits
 
 | Invariant | Source | Enforced by | Gaps |
 |---|---|---|---|
-| Exactly one `active=true` row per exclusive group | wire-schema.md; requirement-88 | `validateDesiredStateDocument` (validate.go:126) — desired-state verb only | Discovery path never validates it; ambiguity renders as two `active=true` descriptions instead of an explicit error state (rca-3 root #4 — fail-closed on one surface, silent on the other) |
+| Exactly one active row per exclusive group | wire-schema.md; requirement-88 | `validateDesiredStateDocument` (validate.go:126) — desired-state verb only | Discovery path never validates it; ambiguity travels as two rows with `desired_state_row.active: true` instead of an explicit error state (rca-3 root #4 — fail-closed on one surface, silent on the other) |
 | At most one member carries a result after activation | requirement-88 | `cleared` events → `invalidateClearedResults` + `replacePublishedTestItem` (extension.ts:419, tree.ts:70) | Fires **only** on an activation run. At rest / plain refresh: nothing (issue-86) |
 | Exclusive groups are not group-runnable | requirement-83/84, dd-4 | `runnable = !MutuallyExclusive && …` (testbridge.go:423); `resolveRunRequests` rejects non-runnable groups | — |
 | Non-exclusive groups ARE group-runnable (expand to rows) | requirement-83/84 | `resolveRunRequests` group expansion (testbridge.go:1020) | — |
@@ -137,11 +137,12 @@ it is the "deactivate everything" action — it passes itself and emits
 - The group item id is `<parent>::group::<slug>`; the Unknown peer is
   `<group>::unknown` (testbridge.go:682).
 - The bridge detects "is this a desired-state group / an exclusive
-  group" by **parsing its own `Limitations` strings back**
-  (`desiredStateGroupItem`, testbridge.go:1065; `hasLimitation
-  mutually_exclusive=true`, testbridge.go:1104). The exclusivity flag is
-  tunneled through a human-readable string list that doubles as the
-  VSIX's `description` — a stringly-typed self-contract.
+  group" from the **typed facts on the item** — `desiredStateGroupItem`
+  tests for `DesiredStateGroup != nil`, and exclusivity reads
+  `DesiredStateGroup.MutuallyExclusive` (requirement-127). Until
+  change_request-194 both answers were recovered by parsing the bridge's
+  own `Limitations` strings back, tunneling the flag through the
+  human-readable list that doubles as the VSIX's `description`.
 
 ## Design tensions
 

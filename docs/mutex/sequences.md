@@ -53,7 +53,7 @@ sequenceDiagram
     EXT->>DEV: tests desired-state --id … (pre-run report, ext:516)
     DEV-->>EXT: v3 document → Test Results text
     EXT->>DEV: tests run --id <run_id>
-    DEV->>DEV: resolveRunRequests: discovery (probes again)<br/>+ ExclusiveSiblingIDs from<br/>mutually_exclusive=true limitation (tb:984,1099)
+    DEV->>DEV: resolveRunRequests: discovery (probes again)<br/>+ ExclusiveSiblingIDs from typed<br/>desired_state_group.mutually_exclusive (tb:984,1099)
     DEV->>DEV: acquire run.lock (tb:1507)
     DEV-->>EXT: run_started
 
@@ -121,7 +121,7 @@ sequenceDiagram
     O->>TC: activate member A (run) — A green, B cleared ✅
     ENV->>ENV: state drifts outside the editor<br/>(reconcile elsewhere, backend swap,<br/>window reload restores old results)
     O->>EXT: refresh (or just look)
-    EXT->>TC: republish tree — descriptions say active=false on A
+    EXT->>TC: republish tree — typed facts say desired_state_row.active=false on A
     Note over TC: Icons unchanged: A green, maybe B green too.<br/>Exclusive group reads "all green".
     O->>O: sees contradiction #1 (icons vs description)
     Note over O: Every fix so far verified surfaces the owner<br/>doesn't look at (maps, events, JSON) — gates<br/>green, editor wrong. rca-3 reopen; issue-86.
