@@ -149,9 +149,12 @@ func moduleFixture(t *testing.T) string {
 	writeFile(t, dir, "VERSION", "9.9.9\n")
 	writeFile(t, dir, "p.go", "package p\n\nfunc One() int {\n\treturn 1\n}\n")
 	writeFile(t, dir, ".stub-git-ls-files", "go.mod\nVERSION\np.go\nvsix/package.json\nvsix/SUPPORTED_VSCODE.md\n")
-	if err := os.MkdirAll(filepath.Join(dir, "vsix"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "vsix", "src"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// The VSIX gate pins protocol.ts to the embedded schemas, so the fixture
+	// carries the committed declarations rather than a stub of them.
+	writeFile(t, dir, filepath.Join("vsix", "src", "protocol.ts"), committedProtocolSource(t))
 	writeFile(t, dir, filepath.Join("vsix", "package.json"),
 		"{\n  \"name\": \"keel-test-bridge\",\n  \"version\": \"0.0.0\",\n  \"engines\": {\n    \"vscode\": \"^1.125.0\"\n  },\n  \"scripts\": {\n    \"package:vsix\": \"true\",\n    \"ci\": \"true\",\n    \"test:coverage\": \"true\"\n  },\n  \"devDependencies\": {\n    \"@types/node\": \"^22.20.1\",\n    \"@types/vscode\": \"1.102.0\",\n    \"typescript\": \"^5.9.3\"\n  }\n}\n")
 	writeFile(t, dir, filepath.Join("vsix", "SUPPORTED_VSCODE.md"),
