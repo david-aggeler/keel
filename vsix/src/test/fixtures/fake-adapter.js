@@ -76,7 +76,10 @@ if (command === 'test-bridge discover --format') {
     },
     items: [
       { id: 'testbridge::maintenance', label: 'A - Test Bridge Maintenance', sort_text: 'a', kind: 'group', runnable: false, profiles: [] },
-      { id: 'testbridge::desired-state', label: 'B - Desired State', sort_text: 'b', kind: 'group', runnable: false, profiles: [] },
+      // The anchor's label is deliberately not the one keel-dev ships: the
+      // extension keys the desired-state root on its id, never on the row text
+      // (keel/requirement-126).
+      { id: 'testbridge::desired-state', label: 'b - fixture desired state', sort_text: 'b', kind: 'group', runnable: false, profiles: [] },
       { id: 'testbridge::desired-state::group::test-preconditions', parent_id: 'testbridge::desired-state', label: 'Test Preconditions', sort_text: 'b.010', kind: 'group', runnable: false, profiles: [], limitations: ['mutually_exclusive=false'] },
       { id: 'testbridge::desired-state::test-preconditions::python::available::reuse', parent_id: 'testbridge::desired-state::group::test-preconditions', label: 'python satisfied: available -> available', sort_text: 'b.010.001', kind: 'group', runnable: false, profiles: [], limitations: ['action=reuse', 'active=false'] },
       pythonVenvDiscoveryItem(),

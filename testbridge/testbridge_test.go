@@ -348,13 +348,7 @@ func intFromJSONNumber(raw any) int {
 func TestDiscoverDerivesDesiredStateGroupsFromProvider(t *testing.T) {
 	root := t.TempDir()
 	fake := newFakeBridge(root)
-	fake.extraItems = []vscode.TestItem{{
-		ID:       "demo::desired-state",
-		Label:    "B - Desired State",
-		Kind:     "group",
-		Runnable: false,
-		Profiles: []string{},
-	}, {
+	fake.extraItems = []vscode.TestItem{desiredStateGroupItem(), {
 		ID:       "demo::desired-state::legacy-child",
 		ParentID: "demo::desired-state",
 		Label:    "legacy consumer-authored B child",
@@ -402,17 +396,102 @@ func TestDiscoverDerivesDesiredStateGroupsFromProvider(t *testing.T) {
 	}
 }
 
+// TestDesiredStateDerivationIgnoresGroupDisplayLabel is the proof that the
+// desired-state anchor is identified by the exported marker and not by the row
+// a human reads: two consumers whose group labels differ — and neither of which
+// is the label keel-dev happens to ship — derive byte-identical trees.
+//
+// DHF-TEST: keel/requirement-126
+func TestDesiredStateDerivationIgnoresGroupDisplayLabel(t *testing.T) {
+	discoverWithLabel := func(label string) vscode.DiscoveryDocument {
+		t.Helper()
+		root := t.TempDir()
+		fake := newFakeBridge(root)
+		fake.extraItems = []vscode.TestItem{{
+			ID:       testbridge.DesiredStateGroupID(fixtureConsumerNode),
+			Label:    label,
+			Kind:     "group",
+			Runnable: false,
+			Profiles: []string{},
+		}}
+		fake.desiredGroups = []testbridge.DesiredStateGroup{{
+			Label: "Provisioning",
+			Order: 20,
+			Rows: []testbridge.DesiredStateRow{
+				probedRow("demo::action::seed-small", "db-small", "fixture-data", "small", "empty", false, "seed small", false, true),
+			},
+		}}
+		var protocol bytes.Buffer
+		ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol})
+		if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "discover", "--format", "json"}); err != nil {
+			t.Fatalf("discover dispatch: %v", err)
+		}
+		var doc vscode.DiscoveryDocument
+		decodeJSON(t, &protocol, &doc)
+		return doc
+	}
+
+	renamed := discoverWithLabel("renamed anchor row")
+	derived, ok := testItemByID(renamed.Items, "demo::desired-state::group::provisioning")
+	if !ok {
+		t.Fatalf("renamed desired-state group was not derived — derivation still keys on the display label: %+v", renamed.Items)
+	}
+	if derived.ParentID != testbridge.DesiredStateGroupID(fixtureConsumerNode) {
+		t.Fatalf("derived group parent = %q, want the marker-identified anchor", derived.ParentID)
+	}
+	if row, ok := testItemByID(renamed.Items, "demo::action::seed-small"); !ok || row.ParentID != derived.ID {
+		t.Fatalf("derived row = %+v ok=%v, want a child of the derived group", row, ok)
+	}
+
+	relabeled := discoverWithLabel("anything at all")
+	if len(relabeled.Items) != len(renamed.Items) {
+		t.Fatalf("item count changed with the label: %d vs %d", len(relabeled.Items), len(renamed.Items))
+	}
+	for i, want := range renamed.Items {
+		got := relabeled.Items[i]
+		if got.ID == testbridge.DesiredStateGroupID(fixtureConsumerNode) {
+			continue // the anchor's own label is the thing being varied
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("item %d differs across group labels:\n got %+v\nwant %+v", i, got, want)
+		}
+	}
+}
+
+// TestDesiredStateGroupMarkerExcludesDerivedDescendants pins the marker's
+// boundary: only a consumer's single-segment anchor id is the desired-state
+// group. Rows and the failure diagnostic live under it and must never be
+// mistaken for a second anchor.
+//
+// DHF-TEST: keel/requirement-126
+func TestDesiredStateGroupMarkerExcludesDerivedDescendants(t *testing.T) {
+	anchor := testbridge.DesiredStateGroupID(fixtureConsumerNode)
+	if anchor != fixtureConsumerNode+testbridge.DesiredStateGroupIDSuffix {
+		t.Fatalf("DesiredStateGroupID(%q) = %q, want node + suffix", fixtureConsumerNode, anchor)
+	}
+	for _, tc := range []struct {
+		id   string
+		want bool
+	}{
+		{anchor, true},
+		{"keel" + testbridge.DesiredStateGroupIDSuffix, true},
+		{anchor + "::group::provisioning", false},
+		{anchor + "::diagnostic::desired-state", false},
+		{testbridge.DesiredStateGroupIDSuffix, false},
+		{"demo::lanes", false},
+		{"", false},
+	} {
+		if got := testbridge.IsDesiredStateGroupID(tc.id); got != tc.want {
+			t.Fatalf("IsDesiredStateGroupID(%q) = %v, want %v", tc.id, got, tc.want)
+		}
+	}
+}
+
 // DHF-TEST: keel/requirement-97
 func TestDiscoveryServesReconcileResultsForExclusiveGroups(t *testing.T) {
 	root := t.TempDir()
 	fake := newFakeBridge(root)
-	fake.extraItems = []vscode.TestItem{{
-		ID:       "demo::desired-state",
-		Label:    "B - Desired State",
-		Kind:     "group",
-		Runnable: false,
-		Profiles: []string{},
-	}}
+	fake.extraItems = []vscode.TestItem{desiredStateGroupItem()}
 	calls := map[string]int{}
 	smallID := "demo::desired-state::dataset::small"
 	fullID := "demo::desired-state::dataset::full"
@@ -485,13 +564,7 @@ func equalReconcileResults(got, want []vscode.ReconcileResult) bool {
 func TestExclusiveDesiredStateGroupsDeriveUnknownAndSingleActiveMember(t *testing.T) {
 	root := t.TempDir()
 	fake := newFakeBridge(root)
-	fake.extraItems = []vscode.TestItem{{
-		ID:       "demo::desired-state",
-		Label:    "B - Desired State",
-		Kind:     "group",
-		Runnable: false,
-		Profiles: []string{},
-	}}
+	fake.extraItems = []vscode.TestItem{desiredStateGroupItem()}
 	calls := map[string]int{}
 	fake.desiredGroups = []testbridge.DesiredStateGroup{{
 		Label:             "Data Set",
@@ -560,13 +633,7 @@ func TestExclusiveDesiredStateGroupsDeriveUnknownAndSingleActiveMember(t *testin
 func TestExclusiveUnknownRunIsBridgeOwnedAndDoesNotInvokeConsumer(t *testing.T) {
 	root := t.TempDir()
 	fake := newFakeBridge(root)
-	fake.extraItems = []vscode.TestItem{{
-		ID:       "demo::desired-state",
-		Label:    "B - Desired State",
-		Kind:     "group",
-		Runnable: false,
-		Profiles: []string{},
-	}}
+	fake.extraItems = []vscode.TestItem{desiredStateGroupItem()}
 	fake.desiredGroups = []testbridge.DesiredStateGroup{{
 		Label:             "Data Set",
 		Order:             20,
@@ -600,13 +667,7 @@ func TestExclusiveUnknownRunIsBridgeOwnedAndDoesNotInvokeConsumer(t *testing.T) 
 func TestExclusiveDesiredStateSingleSelectionClearsSiblingResults(t *testing.T) {
 	root := t.TempDir()
 	fake := newFakeBridge(root)
-	fake.extraItems = []vscode.TestItem{{
-		ID:       "demo::desired-state",
-		Label:    "B - Desired State",
-		Kind:     "group",
-		Runnable: false,
-		Profiles: []string{},
-	}}
+	fake.extraItems = []vscode.TestItem{desiredStateGroupItem()}
 	fake.desiredGroups = []testbridge.DesiredStateGroup{{
 		Label:             "Data Set",
 		Order:             20,
@@ -659,13 +720,7 @@ func TestExclusiveDesiredStateSingleSelectionClearsSiblingResults(t *testing.T) 
 func TestExclusiveDesiredStateReconcileSelectionClearsSiblingResults(t *testing.T) {
 	root := t.TempDir()
 	fake := newFakeBridge(root)
-	fake.extraItems = []vscode.TestItem{{
-		ID:       "demo::desired-state",
-		Label:    "B - Desired State",
-		Kind:     "group",
-		Runnable: false,
-		Profiles: []string{},
-	}}
+	fake.extraItems = []vscode.TestItem{desiredStateGroupItem()}
 	fake.desiredStateEmptyForSelectedIDs = true
 	marker := filepath.Join(root, ".devtools", "selected-full")
 	fake.mutateDuringRun = marker
@@ -957,12 +1012,7 @@ func TestBridgeInjectedRunnableMaintenanceIDsHaveDefinedRunPaths(t *testing.T) {
 func TestDiscoverDesiredStateRowUsesProbeDerivedCurrentAndAction(t *testing.T) {
 	root := t.TempDir()
 	fake := newFakeBridge(root)
-	fake.extraItems = []vscode.TestItem{{
-		ID:       "demo::desired-state",
-		Label:    "B - Desired State",
-		Kind:     "group",
-		Profiles: []string{},
-	}}
+	fake.extraItems = []vscode.TestItem{desiredStateGroupItem()}
 	fake.desiredGroups = []testbridge.DesiredStateGroup{{
 		Label:             "Data Set",
 		Order:             10,
@@ -1007,12 +1057,7 @@ func TestDiscoverDesiredStateRowUsesProbeDerivedCurrentAndAction(t *testing.T) {
 func TestDiscoverAnonymousDesiredStateRowIDIgnoresProbeDerivedAction(t *testing.T) {
 	root := t.TempDir()
 	fake := newFakeBridge(root)
-	fake.extraItems = []vscode.TestItem{{
-		ID:       "demo::desired-state",
-		Label:    "B - Desired State",
-		Kind:     "group",
-		Profiles: []string{},
-	}}
+	fake.extraItems = []vscode.TestItem{desiredStateGroupItem()}
 	current := "empty"
 	satisfied := false
 	fake.desiredGroups = []testbridge.DesiredStateGroup{{
@@ -1065,12 +1110,7 @@ func TestDiscoverAnonymousDesiredStateRowIDIgnoresProbeDerivedAction(t *testing.
 func TestDiscoverServesRunnableNonExclusiveDesiredStateGroups(t *testing.T) {
 	root := t.TempDir()
 	fake := newFakeBridge(root)
-	fake.extraItems = []vscode.TestItem{{
-		ID:       "demo::desired-state",
-		Label:    "B - Desired State",
-		Kind:     "group",
-		Profiles: []string{},
-	}}
+	fake.extraItems = []vscode.TestItem{desiredStateGroupItem()}
 	fake.desiredGroups = []testbridge.DesiredStateGroup{{
 		Label:             "Test Preconditions",
 		Order:             10,
@@ -1129,12 +1169,7 @@ func TestDiscoverServesRunnableNonExclusiveDesiredStateGroups(t *testing.T) {
 func TestRunDryRunResolvesDerivedDesiredStateRunIDsReadOnly(t *testing.T) {
 	root := t.TempDir()
 	fake := newFakeBridge(root)
-	fake.extraItems = []vscode.TestItem{{
-		ID:       "demo::desired-state",
-		Label:    "B - Desired State",
-		Kind:     "group",
-		Profiles: []string{},
-	}}
+	fake.extraItems = []vscode.TestItem{desiredStateGroupItem()}
 	fake.desiredGroups = []testbridge.DesiredStateGroup{{
 		Label: "Provisioning",
 		Order: 10,
@@ -1157,12 +1192,7 @@ func TestRunDryRunResolvesDerivedDesiredStateRunIDsReadOnly(t *testing.T) {
 func TestDiscoverRejectsDuplicateDerivedDesiredStateIDs(t *testing.T) {
 	root := t.TempDir()
 	fake := newFakeBridge(root)
-	fake.extraItems = []vscode.TestItem{{
-		ID:       "demo::desired-state",
-		Label:    "B - Desired State",
-		Kind:     "group",
-		Profiles: []string{},
-	}}
+	fake.extraItems = []vscode.TestItem{desiredStateGroupItem()}
 	fake.desiredGroups = []testbridge.DesiredStateGroup{{
 		Label: "Provisioning",
 		Order: 10,
@@ -1184,12 +1214,7 @@ func TestDiscoverRejectsDuplicateDerivedDesiredStateIDs(t *testing.T) {
 func TestDiscoverDegradesDesiredStateProviderFailure(t *testing.T) {
 	root := t.TempDir()
 	fake := newFakeBridge(root)
-	fake.extraItems = []vscode.TestItem{{
-		ID:       "demo::desired-state",
-		Label:    "B - Desired State",
-		Kind:     "group",
-		Profiles: []string{},
-	}}
+	fake.extraItems = []vscode.TestItem{desiredStateGroupItem()}
 	fake.desiredErr = errors.New("desired provider exploded")
 	var protocol bytes.Buffer
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol})
@@ -1432,12 +1457,7 @@ func TestRunExpandsRunnableDesiredStateGroupToRows(t *testing.T) {
 	root := t.TempDir()
 	fake := newFakeBridge(root)
 	calls := map[string]int{}
-	fake.extraItems = []vscode.TestItem{{
-		ID:       "demo::desired-state",
-		Label:    "B - Desired State",
-		Kind:     "group",
-		Profiles: []string{},
-	}}
+	fake.extraItems = []vscode.TestItem{desiredStateGroupItem()}
 	fake.desiredGroups = []testbridge.DesiredStateGroup{{
 		Label:             "Test Preconditions",
 		Order:             10,
@@ -1479,12 +1499,7 @@ func TestDesiredStateExpandsRunnableGroupSelectionBeforeProviderFilter(t *testin
 	root := t.TempDir()
 	fake := newFakeBridge(root)
 	fake.filterDesiredStateByIDs = true
-	fake.extraItems = []vscode.TestItem{{
-		ID:       "demo::desired-state",
-		Label:    "B - Desired State",
-		Kind:     "group",
-		Profiles: []string{},
-	}}
+	fake.extraItems = []vscode.TestItem{desiredStateGroupItem()}
 	fake.desiredGroups = []testbridge.DesiredStateGroup{{
 		Label:             "Test Preconditions",
 		Order:             10,
@@ -1523,12 +1538,7 @@ func TestRunGroupSelectionDoesNotDuplicateExplicitMemberRows(t *testing.T) {
 	root := t.TempDir()
 	fake := newFakeBridge(root)
 	calls := map[string]int{}
-	fake.extraItems = []vscode.TestItem{{
-		ID:       "demo::desired-state",
-		Label:    "B - Desired State",
-		Kind:     "group",
-		Profiles: []string{},
-	}}
+	fake.extraItems = []vscode.TestItem{desiredStateGroupItem()}
 	fake.desiredGroups = []testbridge.DesiredStateGroup{{
 		Label:             "Test Preconditions",
 		Order:             10,
@@ -1565,12 +1575,7 @@ func TestRunGroupSelectionDoesNotDuplicateExplicitMemberRows(t *testing.T) {
 func TestRunDesiredStateGroupWithNoRunnableRowsFailsLoudly(t *testing.T) {
 	root := t.TempDir()
 	fake := newFakeBridge(root)
-	fake.extraItems = []vscode.TestItem{{
-		ID:       "demo::desired-state",
-		Label:    "B - Desired State",
-		Kind:     "group",
-		Profiles: []string{},
-	}}
+	fake.extraItems = []vscode.TestItem{desiredStateGroupItem()}
 	fake.desiredGroups = []testbridge.DesiredStateGroup{{
 		Label:             "Informational Checks",
 		Order:             10,
@@ -2638,6 +2643,25 @@ func newFakeBridge(root string) *fakeBridge {
 	return &fakeBridge{root: root}
 }
 
+// fixtureConsumerNode is the node the fixtures emit their desired-state anchor
+// under. Anchor ids are built from it through the exported marker, never spelled
+// out, so no fixture can re-introduce the label coupling these tests guard.
+const fixtureConsumerNode = "demo"
+
+// desiredStateGroupItem is the fixture consumer's desired-state anchor. Its
+// label is deliberately unlike any label a shipped consumer uses: a fixture that
+// constructed the anchor by label would exercise a coupling the bridge no longer
+// has.
+func desiredStateGroupItem() vscode.TestItem {
+	return vscode.TestItem{
+		ID:       testbridge.DesiredStateGroupID(fixtureConsumerNode),
+		Label:    "fixture desired-state anchor",
+		Kind:     "group",
+		Runnable: false,
+		Profiles: []string{},
+	}
+}
+
 func (f *fakeBridge) Metadata() vscode.DevtoolMetadata {
 	return vscode.DevtoolMetadata{Name: "demo-dev", Version: "v0.0.0", Commit: "abc123", BuiltAt: "test"}
 }
@@ -2963,13 +2987,7 @@ func (r *resetterBridge) ResetExclusiveGroup(_ context.Context, req testbridge.E
 func TestUnknownRunDispatchesConsumerResetHook(t *testing.T) {
 	newResetFixture := func(root string) *resetterBridge {
 		fake := newFakeBridge(root)
-		fake.extraItems = []vscode.TestItem{{
-			ID:       "demo::desired-state",
-			Label:    "B - Desired State",
-			Kind:     "group",
-			Runnable: false,
-			Profiles: []string{},
-		}}
+		fake.extraItems = []vscode.TestItem{desiredStateGroupItem()}
 		fake.desiredGroups = []testbridge.DesiredStateGroup{{
 			Label:             "Data Set",
 			Order:             20,
@@ -3110,13 +3128,7 @@ func (l *lifecycleBridge) ResetExclusiveGroup(_ context.Context, req testbridge.
 func TestMutexLifecycleGuard(t *testing.T) {
 	root := t.TempDir()
 	fake := newFakeBridge(root)
-	fake.extraItems = []vscode.TestItem{{
-		ID:       "demo::desired-state",
-		Label:    "B - Desired State",
-		Kind:     "group",
-		Runnable: false,
-		Profiles: []string{},
-	}}
+	fake.extraItems = []vscode.TestItem{desiredStateGroupItem()}
 	bridge := &lifecycleBridge{fakeBridge: fake}
 
 	step := 0

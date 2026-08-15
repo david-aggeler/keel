@@ -184,6 +184,34 @@ const (
 	MaintenanceClearStateID   = MaintenanceGroupID + "::clear-state"
 )
 
+// DesiredStateGroupIDSuffix is the stable marker that identifies a consumer's
+// desired-state anchor — the group the bridge derives desired-state rows under.
+// A consumer names its anchor DesiredStateGroupID(<node>); the bridge matches
+// that id. The anchor's Label is presentation only and carries no protocol
+// meaning, so renaming or localizing the row cannot change derivation.
+//
+// DHF-REQ: keel/requirement-126
+const DesiredStateGroupIDSuffix = "::desired-state"
+
+// DesiredStateGroupID returns the desired-state anchor id for a consumer node:
+// the node, then DesiredStateGroupIDSuffix.
+//
+// DHF-REQ: keel/requirement-126
+func DesiredStateGroupID(node string) string {
+	return node + DesiredStateGroupIDSuffix
+}
+
+// IsDesiredStateGroupID reports whether id is a consumer's desired-state
+// anchor: a non-empty single-segment node followed by
+// DesiredStateGroupIDSuffix. Ids derived beneath an anchor — group rows and the
+// provider-failure diagnostic — are descendants, never a second anchor.
+//
+// DHF-REQ: keel/requirement-126
+func IsDesiredStateGroupID(id string) bool {
+	node, ok := strings.CutSuffix(id, DesiredStateGroupIDSuffix)
+	return ok && node != "" && !strings.Contains(node, "::")
+}
+
 // ClearStateProvider supplies the only consumer-owned action behind the
 // bridge-owned Group-A vocabulary: clearing local devtool state.
 type ClearStateProvider interface {
@@ -424,9 +452,13 @@ func withoutDesiredStateChildren(items []vscode.TestItem, parentID string) []vsc
 	return filtered
 }
 
+// desiredStateParent resolves the anchor the consumer emitted, keyed on the
+// exported marker. The anchor's Label never enters the decision.
+//
+// DHF-REQ: keel/requirement-126
 func desiredStateParent(items []vscode.TestItem) (vscode.TestItem, bool) {
 	for _, item := range items {
-		if item.Label == "B - Desired State" && item.Kind == "group" {
+		if item.Kind == "group" && IsDesiredStateGroupID(item.ID) {
 			return item, true
 		}
 	}
@@ -771,7 +803,7 @@ func desiredStateRootID(bridge Bridge) string {
 	if node == "" {
 		node = "testbridge"
 	}
-	return node + "::desired-state"
+	return DesiredStateGroupID(node)
 }
 
 func isExclusiveUnknownRunID(id string) bool {
