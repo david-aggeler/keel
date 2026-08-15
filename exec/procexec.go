@@ -61,7 +61,9 @@ type Request struct {
 	// [DefaultMaxOutputBytes]; no value disables the ceiling.
 	MaxOutputBytes int
 	// Logger receives the START/END lifecycle and per-line output records. Nil
-	// uses slog.Default.
+	// produces no output at all — keel/exec never reaches for a sink the caller
+	// did not supply. Inject a logger to get records, or [keel/log.Discard] to
+	// state the silence deliberately.
 	Logger processLogger
 	// SensitiveArgs marks argv indices whose values must be masked as [REDACTED]
 	// in the logged command line (e.g. a token passed positionally).
