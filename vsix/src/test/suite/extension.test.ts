@@ -72,8 +72,11 @@ suite('Keel Test Bridge config contract', () => {
     assert.ok(!commands.has('vela.tests.refresh'));
   });
 
-  // DHF-TEST: keel/requirement-119
-  test('vsix toolchain types follow the declared VS Code floor', () => {
+  // The pair is asserted as a *relation*, never as two literals. Two literals only
+  // prove the lines agree with each other, which stays green through any coordinated
+  // edit — the blind spot keel/issue-147 records.
+  // DHF-TEST: keel/requirement-119 (keel/ac-458, keel/ac-459, keel/ac-466)
+  test('the declared runtime Node major is cited, and @types/node stays under it', () => {
     const manifestPath = path.resolve(__dirname, '../../../package.json');
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {
       engines: { vscode: string };
@@ -83,10 +86,29 @@ suite('Keel Test Bridge config contract', () => {
 
     assert.equal(manifest.engines.vscode, '^1.125.0');
     assert.equal(manifest.devDependencies['@types/vscode'], '1.125.0');
-    assert.equal(manifest.devDependencies['@types/node'], '^26.2.0');
-    assert.equal(manifest.devDependencies.typescript, '^7.0.2');
-    assert.match(supportPolicy, /VS Code runtime Node major: 26/);
-    assert.doesNotMatch(supportPolicy, /is held at/);
+
+    const declaredMajor = Number(/^VS Code runtime Node major: (\d+)$/m.exec(supportPolicy)?.[1]);
+    const citation = /^VS Code runtime Node major source: (.+)$/m.exec(supportPolicy)?.[1] ?? '';
+    const pinnedMajor = Number(/^\^?(\d+)\./.exec(manifest.devDependencies['@types/node'] ?? '')?.[1]);
+
+    assert.ok(Number.isInteger(declaredMajor), 'the policy declares a runtime Node major');
+    assert.ok(Number.isInteger(pinnedMajor), '@types/node is pinned to a readable major');
+    assert.ok(
+      pinnedMajor <= declaredMajor,
+      `@types/node major ${pinnedMajor} must not exceed the declared runtime major ${declaredMajor}`
+    );
+
+    // keel/ac-466: the reference value is re-derivable from outside this repository.
+    assert.ok(citation.includes(manifest.engines.vscode.replace('^', '')), 'the citation names the declared VS Code release');
+    assert.match(citation, /Electron \d+\.\d+\.\d+/);
+    assert.match(citation, new RegExp(`Node(?:\\.js)? ${declaredMajor}\\.\\d+\\.\\d+`));
+    assert.ok(citation.includes('https://'), 'the citation names an external source');
+
+    // keel/ac-459: a hold is legitimate, an unexplained hold is not.
+    if (/is held at/.test(supportPolicy)) {
+      assert.match(supportPolicy, /Reason:/);
+      assert.match(supportPolicy, /Release condition:/);
+    }
   });
 
   // DHF-TEST: keel/requirement-44
