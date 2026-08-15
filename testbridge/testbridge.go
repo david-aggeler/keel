@@ -36,6 +36,11 @@ type Runtime struct {
 	Log      *slog.Logger
 	Now      func() time.Time
 	RunID    func() string
+	// ProbeDeadline bounds one desired-state probe execution. Zero selects
+	// DefaultDesiredStateProbeDeadline.
+	//
+	// DHF-REQ: keel/requirement-129
+	ProbeDeadline time.Duration
 }
 
 const externalRunStreamRetentionLimit = 32
@@ -315,6 +320,7 @@ func handleDiscover(bridge Bridge, format *string) cli.Handler {
 		rt := runtimeOrDefault(ctx, bridge)
 		_ = format
 		logBridgeDispatch(rt, "discover", bridgeDispatchLog{Args: args})
+		ctx = withProbePass(ctx, rt.ProbeDeadline)
 		doc, err := discoverWithDerivedDesiredState(ctx, bridge)
 		if err != nil {
 			return err
@@ -620,6 +626,7 @@ func handleDesiredState(bridge Bridge, format *string, ids *[]string) cli.Handle
 		_ = format
 		selected := append([]string(nil), (*ids)...)
 		logBridgeDispatch(rt, "desired-state", bridgeDispatchLog{Args: args, IDs: selected})
+		ctx = withProbePass(ctx, rt.ProbeDeadline)
 		doc, err := deriveDesiredStateDeclaration(ctx, bridge, selected)
 		if err != nil {
 			return err
@@ -814,11 +821,20 @@ func isExclusiveUnknownRunID(id string) bool {
 	return strings.Contains(id, "::desired-state::group::") && strings.HasSuffix(id, "::unknown")
 }
 
+// DHF-REQ: keel/requirement-129
 func deriveDesiredStateRow(ctx context.Context, root string, row DesiredStateRow) (vscode.DesiredState, error) {
 	if row.Probe == nil {
 		return vscode.DesiredState{}, fmt.Errorf("keel/testbridge: desired-state row %q has no probe", row.Resource)
 	}
-	result := row.Probe(ctx, DesiredStateProbeRequest{RunID: row.RunID, Root: root})
+	result, err := executeDesiredStateProbe(ctx, root, row)
+	if err != nil {
+		var bound probeBoundError
+		if !errors.As(err, &bound) {
+			return vscode.DesiredState{}, err
+		}
+		logDesiredStateProbeAbandoned(ctx, bound)
+		return abandonedDesiredState(row, bound), nil
+	}
 	current := result.Current
 	if current == "" {
 		current = "unknown"
@@ -857,6 +873,7 @@ func handleRun(bridge Bridge, ids *[]string, dryRun *bool) cli.Handler {
 		selected := append([]string(nil), (*ids)...)
 		strict := *dryRun
 		logBridgeDispatch(rt, "run", bridgeDispatchLog{Args: args, IDs: selected, DryRun: boolPtr(*dryRun)})
+		ctx = withProbePass(ctx, rt.ProbeDeadline)
 		requests, err := resolveRunRequests(ctx, bridge, selected, strict)
 		if err != nil {
 			logBridgeDispatch(rt, "run", bridgeDispatchLog{Args: args, IDs: selected, DryRun: boolPtr(*dryRun), Err: err})
