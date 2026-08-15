@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"strings"
 	"testing"
 )
@@ -22,36 +23,41 @@ const desiredStateConstructionPrefix = "buildVSCodeDesiredState"
 //
 // DHF-TEST: keel/requirement-125 (keel/ac-476)
 func TestDesiredStateConstructionFunctionsHaveNonTestCallers(t *testing.T) {
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", nil, 0)
+	entries, err := os.ReadDir(".")
 	if err != nil {
-		t.Fatalf("parse cmd/keel-dev: %v", err)
+		t.Fatalf("read cmd/keel-dev: %v", err)
 	}
 
+	fset := token.NewFileSet()
 	constructors := map[string]token.Pos{}
 	nonTestRefs := map[string]int{}
-	for _, pkg := range pkgs {
-		for path, file := range pkg.Files {
-			isTest := strings.HasSuffix(path, "_test.go")
-			for _, decl := range file.Decls {
-				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Recv != nil || !strings.HasPrefix(fn.Name.Name, desiredStateConstructionPrefix) {
-					continue
-				}
-				constructors[fn.Name.Name] = fn.Name.Pos()
-			}
-			if isTest {
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv != nil || !strings.HasPrefix(fn.Name.Name, desiredStateConstructionPrefix) {
 				continue
 			}
-			ast.Inspect(file, func(node ast.Node) bool {
-				ident, ok := node.(*ast.Ident)
-				if !ok || !strings.HasPrefix(ident.Name, desiredStateConstructionPrefix) {
-					return true
-				}
-				nonTestRefs[ident.Name]++
-				return true
-			})
+			constructors[fn.Name.Name] = fn.Name.Pos()
 		}
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			ident, ok := node.(*ast.Ident)
+			if !ok || !strings.HasPrefix(ident.Name, desiredStateConstructionPrefix) {
+				return true
+			}
+			nonTestRefs[ident.Name]++
+			return true
+		})
 	}
 
 	if len(constructors) == 0 {
