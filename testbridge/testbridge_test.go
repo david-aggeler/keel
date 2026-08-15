@@ -431,7 +431,7 @@ func TestDesiredStateDerivationIgnoresGroupDisplayLabel(t *testing.T) {
 		return doc
 	}
 
-	renamed := discoverWithLabel("Vorbedingungen")
+	renamed := discoverWithLabel("renamed anchor row")
 	derived, ok := testItemByID(renamed.Items, "demo::desired-state::group::provisioning")
 	if !ok {
 		t.Fatalf("renamed desired-state group was not derived — derivation still keys on the display label: %+v", renamed.Items)
