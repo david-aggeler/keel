@@ -15,6 +15,7 @@ import (
 
 	procexec "github.com/david-aggeler/keel/exec"
 	logging "github.com/david-aggeler/keel/log"
+	zip "golang.org/x/mod/zip"
 )
 
 // step is one gate in the ci pipeline: either a labelled subprocess or an
@@ -123,6 +124,11 @@ func ciStepsWithConfig(ctx context.Context, logger *slog.Logger, dir string, cfg
 		// DHF-REQ: keel/requirement-22
 		{name: "log-core-deps", fn: runLogCoreDependencyQuarantine},
 		{name: "module-hygiene", fn: runModuleHygiene},
+		// This intentionally checks the git-tracked tree directly instead of the
+		// gate.excludes-filtered file lists above: generated docs can be excluded
+		// from prose/spell checks while still being part of the published module.
+		// DHF-REQ: keel/requirement-8 (keel/ac-464)
+		{name: "module-zip", fn: runModuleZipCheck},
 		// --- static-tool battery (keel/requirement-12) ---
 		// DHF-REQ: keel/requirement-12 (keel/ac-38)
 		{name: "golangci-lint", tool: "golangci-lint", program: "golangci-lint", args: []string{"run", "./..."}, quietStderr: true},
@@ -597,6 +603,70 @@ func runModuleHygiene(ctx context.Context, logger *slog.Logger, dir string) erro
 		return fmt.Errorf("keel-dev: module-hygiene failed: go mod tidy would change %s", strings.Join(offenders, ", "))
 	}
 	return nil
+}
+
+// DHF-REQ: keel/requirement-8 (keel/ac-464)
+func runModuleZipCheck(ctx context.Context, logger *slog.Logger, dir string) error {
+	files, err := listTrackedModuleZipFiles(ctx, logger, dir)
+	if err != nil {
+		return err
+	}
+	checked, err := zip.CheckFiles(files)
+	if err == nil {
+		return nil
+	}
+	if len(checked.Invalid) == 0 {
+		return fmt.Errorf("keel-dev: module-zip failed: %w", err)
+	}
+	var offenders []string
+	for _, invalid := range checked.Invalid {
+		offenders = append(offenders, invalid.Error())
+	}
+	return fmt.Errorf("keel-dev: module-zip failed: tracked tree cannot be packaged as a Go module zip:\n%s", strings.Join(offenders, "\n"))
+}
+
+func listTrackedModuleZipFiles(ctx context.Context, logger *slog.Logger, dir string) ([]zip.File, error) {
+	proc, err := procexec.ProcessStart(ctx, procexec.Request{
+		Program: "git",
+		Args:    []string{"ls-files", "-z"},
+		Dir:     dir,
+		Logger:  logger,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("keel-dev: module-zip list tracked files: %w", err)
+	}
+	res, waitErr := proc.Wait()
+	if waitErr != nil {
+		return nil, fmt.Errorf("keel-dev: module-zip list tracked files: %w", waitErr)
+	}
+	if res.ExitCode != 0 {
+		return nil, fmt.Errorf("keel-dev: module-zip list tracked files: git ls-files exited %d", res.ExitCode)
+	}
+	var files []zip.File
+	for _, rel := range strings.Split(res.Stdout, "\x00") {
+		if rel == "" {
+			continue
+		}
+		files = append(files, trackedZipFile{root: dir, rel: filepath.ToSlash(rel)})
+	}
+	return files, nil
+}
+
+type trackedZipFile struct {
+	root string
+	rel  string
+}
+
+func (f trackedZipFile) Path() string {
+	return f.rel
+}
+
+func (f trackedZipFile) Lstat() (os.FileInfo, error) {
+	return os.Lstat(filepath.Join(f.root, filepath.FromSlash(f.rel)))
+}
+
+func (f trackedZipFile) Open() (io.ReadCloser, error) {
+	return os.Open(filepath.Join(f.root, filepath.FromSlash(f.rel)))
 }
 
 type manifestFile struct {
