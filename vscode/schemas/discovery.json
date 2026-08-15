@@ -188,6 +188,34 @@
             "type": "string",
             "minLength": 1
           }
+        },
+        "desired_state_group": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mutually_exclusive"],
+          "properties": {
+            "mutually_exclusive": {
+              "type": "boolean"
+            }
+          }
+        },
+        "desired_state_row": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["current", "action", "active"],
+          "properties": {
+            "current": {
+              "type": "string",
+              "minLength": 1
+            },
+            "action": {
+              "type": "string",
+              "enum": ["reuse", "manual_setup_required", "reconcile", "reconcile_during_run"]
+            },
+            "active": {
+              "type": "boolean"
+            }
+          }
         }
       }
     }

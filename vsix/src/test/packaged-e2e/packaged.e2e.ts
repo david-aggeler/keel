@@ -5,7 +5,10 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 
 interface PublishedTreeSnapshot {
-  discoveryItemsById: Map<string, { id: string; parent_id?: string; limitations?: string[] }>;
+  discoveryItemsById: Map<
+    string,
+    { id: string; parent_id?: string; limitations?: string[]; desired_state_row?: { active: boolean } }
+  >;
 }
 
 interface ExtensionAPI {
@@ -140,7 +143,7 @@ function assertOneActiveDataSet(tree: PublishedTreeSnapshot, activeID: string): 
     // deactivates. Including it here proves both halves of that toggle.
     'keel-demo-dev::desired-state::group::app-db-data-set::unknown'
   ];
-  const active = rows.filter((id) => (tree.discoveryItemsById.get(id)?.limitations ?? []).includes('active=true'));
+  const active = rows.filter((id) => tree.discoveryItemsById.get(id)?.desired_state_row?.active === true);
   assert.deepEqual(active, [activeID]);
 }
 

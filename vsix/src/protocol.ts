@@ -47,8 +47,29 @@ export interface DiscoveryItem {
   playwright_project?: string;
   canonical_id?: string;
   required_resources?: string[];
+  /**
+   * Human-readable prose only — lane descriptions, remediation hints, lint
+   * findings, error text. Safe to render verbatim. Machine-readable facts
+   * travel in the typed fields below (keel/requirement-127).
+   */
   limitations?: string[];
+  desired_state_group?: DesiredStateGroupFacts;
+  desired_state_row?: DesiredStateRowFacts;
 }
+
+/** Typed desired-state facts a discovery item carries when it is a group. */
+export interface DesiredStateGroupFacts {
+  mutually_exclusive: boolean;
+}
+
+/** Typed desired-state facts a discovery item carries when it is a row. */
+export interface DesiredStateRowFacts {
+  current: string;
+  action: DesiredStateAction;
+  active: boolean;
+}
+
+export type DesiredStateAction = 'reuse' | 'manual_setup_required' | 'reconcile' | 'reconcile_during_run';
 
 export interface DiscoveryRange {
   start_line: number;

@@ -279,7 +279,8 @@ Around that content, the document carries its **envelope and mechanics**:
   `parent_id`, `label`, `sort_text` (VS Code has no sort concept — order is
   data), `kind`, `runnable` + `profiles` (run/debug/coverage), `lane_id`,
   `canonical_id` (alias → canonical result mirroring), `required_resources`
-  (rendered as tags), `limitations` (rendered as description).
+  (rendered as tags), `limitations` (prose, rendered as description), and the
+  typed `desired_state_group` / `desired_state_row` facts.
 
 The devtool discovers all of this **fresh on every invocation** — the VSIX
 caches nothing across refreshes (a generation counter discards stale
