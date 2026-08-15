@@ -8,6 +8,17 @@
 # All Go tools land in $GOBIN (or $GOPATH/bin); cspell via npm install -g.
 # Pinned versions — bumps are CR-sized decisions. Run scripts/setup_as_root.sh
 # first so `go` is on PATH.
+#
+# WHERE THE GATE LOOKS (keel/ac-465, keel/issue-142): `keel-dev ci` does NOT run
+# these $GOBIN binaries for its go-installed pins. It resolves each pinned tool
+# from a version-keyed cache —
+#   ${KEEL_DEV_TOOL_CACHE:-$HOME/.cache/keel-dev/tools}/<tool>/<version>/<tool>
+# — installing it on demand from the pin declared in that branch's keel-dev.yaml,
+# so two worktrees pinning different versions are both gateable on one host. The
+# installs below stay for interactive use (editors, direct shell invocation) and
+# for the pins keel cannot install itself (cspell, shellcheck), which the gate
+# does still resolve from PATH. Bumping a pin therefore does NOT require
+# re-running this script.
 
 set -euo pipefail
 
@@ -227,6 +238,8 @@ report() {
 
 echo ""
 echo "User setup complete."
+echo "keel-dev ci resolves go-installed gate tools from ${KEEL_DEV_TOOL_CACHE:-${HOME_DIR}/.cache/keel-dev/tools}/<tool>/<version>/,"
+echo "installing them on demand from the branch's keel-dev.yaml pins; cspell and shellcheck stay on PATH."
 report gopls "${GOPLS_BIN:-}"
 report golangci-lint "${GOLANGCI_LINT_BIN:-}"
 report govulncheck "${GOVULNCHECK_BIN:-}"
