@@ -9,7 +9,8 @@
     "strict": true,
     "moduleResolution": "Node16",
     "esModuleInterop": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "types": ["node", "mocha"]
   },
   "include": ["src"]
 }
