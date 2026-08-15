@@ -562,6 +562,7 @@ func decodeRunEvents(t *testing.T, raw string) []vscode.RunEvent {
 	return events
 }
 
+// DHF-TEST: keel/requirement-125 (keel/ac-477)
 func TestVSCodeDiscoveryAndDesiredStateExposeKeelLaneSet(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
@@ -590,13 +591,9 @@ func TestVSCodeDiscoveryAndDesiredStateExposeKeelLaneSet(t *testing.T) {
 		}
 	}
 
-	built1, buildErr1 := buildVSCodeDesiredStateDocument(root, []string{"keel::lane::test-fast"})
-	if buildErr1 != nil {
-		t.Fatalf("buildVSCodeDesiredStateDocument: %v", buildErr1)
-	}
 	var desiredStateOut bytes.Buffer
-	if err := testbridge.EncodeDocument(&desiredStateOut, built1); err != nil {
-		t.Fatalf("encode protocol document: %v", err)
+	if err := dispatchTestBridgeDesiredState(contextWithVSCodeTestState(root, &desiredStateOut), "--format", "json", "--id", "keel::lane::test-fast"); err != nil {
+		t.Fatalf("canonical desired-state for lane selection: %v", err)
 	}
 	var desiredState vscode.DesiredStateDocument
 	if err := json.Unmarshal(desiredStateOut.Bytes(), &desiredState); err != nil {
@@ -2093,7 +2090,7 @@ func TestVSCodeDiscoveryReportsPackageParseErrorsAsDiagnosticFileItems(t *testin
 	}
 }
 
-// DHF-TEST: keel/requirement-43
+// DHF-TEST: keel/requirement-43, keel/requirement-125 (keel/ac-477)
 func TestVSCodeRunGoTestSelectionUsesRunFilterAndSelectedID(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
@@ -2141,13 +2138,9 @@ exit 0`)
 		t.Fatalf("terminal event = %+v, want run_finished exit 0", events[len(events)-1])
 	}
 
-	built13, buildErr13 := buildVSCodeDesiredStateDocument(root, []string{"go::test::log::TestLog"})
-	if buildErr13 != nil {
-		t.Fatalf("buildVSCodeDesiredStateDocument for go test: %v", buildErr13)
-	}
 	var desiredStateOut bytes.Buffer
-	if err := testbridge.EncodeDocument(&desiredStateOut, built13); err != nil {
-		t.Fatalf("encode protocol document: %v", err)
+	if err := dispatchTestBridgeDesiredState(contextWithVSCodeTestState(root, &desiredStateOut), "--format", "json", "--id", "go::test::log::TestLog"); err != nil {
+		t.Fatalf("canonical desired-state for go test selection: %v", err)
 	}
 	var desiredState vscode.DesiredStateDocument
 	if err := json.Unmarshal(desiredStateOut.Bytes(), &desiredState); err != nil {
@@ -2364,7 +2357,7 @@ exit 2`)
 	}
 }
 
-// DHF-TEST: keel/requirement-43
+// DHF-TEST: keel/requirement-43, keel/requirement-125 (keel/ac-477)
 func TestVSCodeRunGoPackageSelectionRunsPackageWithoutRunFilter(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
@@ -2402,13 +2395,9 @@ exit 0`)
 		t.Fatalf("run events missing package pass: %+v", events)
 	}
 
-	built14, buildErr14 := buildVSCodeDesiredStateDocument(root, []string{"go::pkg::log", "go::root"})
-	if buildErr14 != nil {
-		t.Fatalf("buildVSCodeDesiredStateDocument for go package/root: %v", buildErr14)
-	}
 	var desiredStateOut bytes.Buffer
-	if err := testbridge.EncodeDocument(&desiredStateOut, built14); err != nil {
-		t.Fatalf("encode protocol document: %v", err)
+	if err := dispatchTestBridgeDesiredState(contextWithVSCodeTestState(root, &desiredStateOut), "--format", "json", "--id", "go::pkg::log", "--id", "go::root"); err != nil {
+		t.Fatalf("canonical desired-state for go package/root selection: %v", err)
 	}
 	var desiredState vscode.DesiredStateDocument
 	if err := json.Unmarshal(desiredStateOut.Bytes(), &desiredState); err != nil {

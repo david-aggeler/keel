@@ -371,49 +371,6 @@ func groupItem(id, parentID, label, sortText string) vscode.TestItem {
 	}
 }
 
-// DHF-REQ: keel/requirement-60, keel/requirement-75
-func buildVSCodeDesiredStateDocument(root string, ids []string) (vscode.DesiredStateDocument, error) {
-	declared, err := buildVSCodeDesiredStateDeclaration(root, ids)
-	if err != nil {
-		return vscode.DesiredStateDocument{}, err
-	}
-	groups := make([]vscode.DesiredStateGroup, 0, len(declared.Groups))
-	for _, group := range declared.Groups {
-		rows := make([]vscode.DesiredState, 0, len(group.Rows))
-		for _, row := range group.Rows {
-			result := row.Probe(context.Background(), testbridge.DesiredStateProbeRequest{RunID: row.RunID, Root: root})
-			status := "reconcilable"
-			action := "reconcile_during_run"
-			if result.Satisfied {
-				status = "satisfied"
-				action = "reuse"
-			}
-			rows = append(rows, vscode.DesiredState{
-				RunID:    row.RunID,
-				Resource: row.Resource,
-				Kind:     row.Kind,
-				Desired:  row.Desired,
-				Current:  result.Current,
-				Status:   status,
-				Action:   action,
-				Message:  result.Message,
-				Detail:   row.Detail,
-				Reusable: row.Reusable,
-				Owned:    row.Owned,
-				Active:   row.Active,
-			})
-		}
-		groups = append(groups, vscode.DesiredStateGroup{Label: group.Label, Order: group.Order, MutuallyExclusive: group.MutuallyExclusive, Rows: rows})
-	}
-	return vscode.DesiredStateDocument{
-		Version:     3,
-		Devtool:     vscode.DevtoolMetadata{Name: "keel-dev", Version: versionString(), Commit: buildCommit(), BuiltAt: buildTime()},
-		Workspace:   newKeelWorkspaceProfile(root).Node(),
-		GeneratedAt: time.Now().UTC(),
-		Groups:      groups,
-	}, nil
-}
-
 // DHF-REQ: keel/requirement-75
 func buildVSCodeDesiredStateDeclaration(root string, ids []string) (testbridge.DesiredStateDeclaration, error) {
 	return testbridge.DesiredStateDeclaration{
