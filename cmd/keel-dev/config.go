@@ -49,7 +49,7 @@ type toolsConfig struct {
 // both omitted for tools whose installers pin versions but binaries cannot
 // report a stable version string.
 type toolPinConfig struct {
-	// Name is the executable resolved on PATH so diagnostics can name exactly
+	// Name is the executable the gate runs, so diagnostics can name exactly
 	// which gate dependency is absent or drifted.
 	Name string `yaml:"name"`
 	// VersionArgs is the argv suffix used to print a version when the tool has
@@ -58,6 +58,27 @@ type toolPinConfig struct {
 	// Want is the exact substring that must appear in the version probe output;
 	// empty pairs with empty version_args for a presence-only pin.
 	Want string `yaml:"want,omitempty"`
+	// Install declares how this pin is materialized, so the branch-committed pin
+	// and the binary verified against it share a scope (keel/ac-465).
+	Install toolInstallConfig `yaml:"install"`
+}
+
+// toolInstallConfig is the serialized install declaration of one pin. It is
+// required on every pin: a tool that declared nothing would silently resolve
+// from host-global PATH, which is the defect keel/issue-142 records.
+type toolInstallConfig struct {
+	// Method selects how the binary is obtained: "go" installs Package@Version
+	// into the version-keyed cache on demand; "path" declares the tool as
+	// host-global because keel cannot install it (npm/system packages).
+	Method string `yaml:"method"`
+	// Package is the go-installable package path, required by method "go" and
+	// rejected otherwise.
+	Package string `yaml:"package,omitempty"`
+	// Version is the exact module version installed and used as the cache key,
+	// required by method "go" and rejected otherwise. It is distinct from Want:
+	// Want matches the binary's self-reported string, which not every tool
+	// spells the same way as its module version.
+	Version string `yaml:"version,omitempty"`
 }
 
 // gateExcludePatterns is the parsed exclude-pattern list. Its YAML decoder
@@ -84,14 +105,30 @@ func defaultKeelDevConfig() keelDevConfig {
 			Pins: []toolPinConfig{
 				// golangci-lint carries no leading "v": the v2.12 line prints
 				// "has version 2.12.2" where v2.0.2 printed "has version v2.0.2",
-				// and Want is matched as a plain substring.
-				{Name: "golangci-lint", VersionArgs: []string{"--version"}, Want: "2.12.2"},
-				{Name: "govulncheck", VersionArgs: []string{"--version"}, Want: "v1.7.0"},
-				{Name: "cspell", VersionArgs: []string{"--version"}, Want: "10.0.1"},
-				{Name: "shellcheck", VersionArgs: []string{"--version"}, Want: "0.10.0"},
-				{Name: "shfmt", VersionArgs: []string{"--version"}, Want: "v3.13.1"},
-				{Name: "deadcode"},
-				{Name: "gitleaks"},
+				// and Want is matched as a plain substring. The install version is
+				// the module version, which does carry the "v".
+				{
+					Name: "golangci-lint", VersionArgs: []string{"--version"}, Want: "2.12.2",
+					Install: toolInstallConfig{Method: toolInstallGo, Package: "github.com/golangci/golangci-lint/v2/cmd/golangci-lint", Version: "v2.12.2"},
+				},
+				{
+					Name: "govulncheck", VersionArgs: []string{"--version"}, Want: "v1.7.0",
+					Install: toolInstallConfig{Method: toolInstallGo, Package: "golang.org/x/vuln/cmd/govulncheck", Version: "v1.7.0"},
+				},
+				// cspell is an npm package, not a Go binary: keel does not install
+				// it, so it stays host-global and is verified where it is found.
+				{Name: "cspell", VersionArgs: []string{"--version"}, Want: "10.0.1", Install: toolInstallConfig{Method: toolInstallPath}},
+				// shellcheck ships as a distro/static release, not go-installable.
+				{Name: "shellcheck", VersionArgs: []string{"--version"}, Want: "0.10.0", Install: toolInstallConfig{Method: toolInstallPath}},
+				{
+					Name: "shfmt", VersionArgs: []string{"--version"}, Want: "v3.13.1",
+					Install: toolInstallConfig{Method: toolInstallGo, Package: "mvdan.cc/sh/v3/cmd/shfmt", Version: "v3.13.1"},
+				},
+				// deadcode and gitleaks have no stable version probe, so the pin is
+				// presence-only — but the cache key is still the exact installed
+				// module version, so a branch gets the version it declares.
+				{Name: "deadcode", Install: toolInstallConfig{Method: toolInstallGo, Package: "golang.org/x/tools/cmd/deadcode", Version: "v0.28.0"}},
+				{Name: "gitleaks", Install: toolInstallConfig{Method: toolInstallGo, Package: "github.com/zricethezav/gitleaks/v8", Version: "v8.30.1"}},
 			},
 		},
 	}
@@ -169,6 +206,34 @@ func (c keelDevConfig) validate() error {
 				return fmt.Errorf("%s.version_args[%d] must not be empty", prefix, j)
 			}
 		}
+		if err := pin.Install.validate(prefix); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validate rejects install declarations that cannot resolve a binary. Every pin
+// must say how it is materialized: an absent method would leave the tool on
+// host-global PATH by omission, which is the defect keel/issue-142 records.
+func (i toolInstallConfig) validate(prefix string) error {
+	switch i.Method {
+	case toolInstallGo:
+		if strings.TrimSpace(i.Package) == "" {
+			return fmt.Errorf("%s.install.package is required when install.method is %q", prefix, toolInstallGo)
+		}
+		if strings.TrimSpace(i.Version) == "" {
+			return fmt.Errorf("%s.install.version is required when install.method is %q", prefix, toolInstallGo)
+		}
+	case toolInstallPath:
+		if i.Package != "" {
+			return fmt.Errorf("%s.install.package must be empty when install.method is %q", prefix, toolInstallPath)
+		}
+		if i.Version != "" {
+			return fmt.Errorf("%s.install.version must be empty when install.method is %q", prefix, toolInstallPath)
+		}
+	default:
+		return fmt.Errorf("%s.install.method must be %q or %q, got %q", prefix, toolInstallGo, toolInstallPath, i.Method)
 	}
 	return nil
 }
@@ -176,7 +241,12 @@ func (c keelDevConfig) validate() error {
 func (c keelDevConfig) toolPins() map[string]toolPin {
 	out := make(map[string]toolPin, len(c.Tools.Pins))
 	for _, pin := range c.Tools.Pins {
-		out[pin.Name] = toolPin{name: pin.Name, versionArgs: append([]string(nil), pin.VersionArgs...), want: pin.Want}
+		out[pin.Name] = toolPin{
+			name:        pin.Name,
+			versionArgs: append([]string(nil), pin.VersionArgs...),
+			want:        pin.Want,
+			install:     toolInstall{method: pin.Install.Method, pkg: pin.Install.Package, version: pin.Install.Version},
+		}
 	}
 	return out
 }

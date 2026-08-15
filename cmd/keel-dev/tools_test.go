@@ -63,8 +63,8 @@ func TestVerifyToolPin_Match(t *testing.T) {
 	dir := scrubPATH(t)
 	writeExecStub(t, dir, "faketool", "faketool version v9.9.9 built ok", 0)
 
-	pin := toolPin{name: "faketool", versionArgs: []string{"--version"}, want: "v9.9.9"}
-	if err := verifyToolPin(context.Background(), discardLogger(), pin); err != nil {
+	pin := pathToolPin("faketool", "v9.9.9")
+	if _, err := resolveOne(t, pin); err != nil {
 		t.Fatalf("matching version should verify, got %v", err)
 	}
 }
@@ -75,8 +75,8 @@ func TestVerifyToolPin_VersionMismatch(t *testing.T) {
 	dir := scrubPATH(t)
 	writeExecStub(t, dir, "faketool", "faketool version v1.0.0", 0)
 
-	pin := toolPin{name: "faketool", versionArgs: []string{"--version"}, want: "v9.9.9"}
-	err := verifyToolPin(context.Background(), discardLogger(), pin)
+	pin := pathToolPin("faketool", "v9.9.9")
+	_, err := resolveOne(t, pin)
 	if err == nil {
 		t.Fatal("version mismatch should fail, got nil")
 	}
@@ -90,8 +90,8 @@ func TestVerifyToolPin_VersionMismatch(t *testing.T) {
 func TestVerifyToolPin_MissingTool(t *testing.T) {
 	scrubPATH(t) // no stub written: the tool is absent
 
-	pin := toolPin{name: "definitely-absent-tool", versionArgs: []string{"--version"}, want: "v2.3.4"}
-	err := verifyToolPin(context.Background(), discardLogger(), pin)
+	pin := pathToolPin("definitely-absent-tool", "v2.3.4")
+	_, err := resolveOne(t, pin)
 	if err == nil {
 		t.Fatal("missing tool should fail, got nil")
 	}
@@ -107,14 +107,14 @@ func TestVerifyToolPin_MissingTool(t *testing.T) {
 // the binary exists and fails loud when it does not.
 func TestVerifyToolPin_PresenceOnly(t *testing.T) {
 	dir := scrubPATH(t)
-	pin := toolPin{name: "presencetool"}
+	pin := toolPin{name: "presencetool", install: toolInstall{method: toolInstallPath}}
 
-	if err := verifyToolPin(context.Background(), discardLogger(), pin); err == nil {
+	if _, err := resolveOne(t, pin); err == nil {
 		t.Fatal("presence-only pin should fail when binary is absent")
 	}
 
 	writeExecStub(t, dir, "presencetool", "", 0)
-	if err := verifyToolPin(context.Background(), discardLogger(), pin); err != nil {
+	if _, err := resolveOne(t, pin); err != nil {
 		t.Fatalf("presence-only pin should pass when binary exists, got %v", err)
 	}
 }
@@ -122,6 +122,7 @@ func TestVerifyToolPin_PresenceOnly(t *testing.T) {
 // TestRunStepToolGate_Missing: a subprocess step whose pinned tool is absent
 // fails via the version gate before it ever spawns the tool.
 func TestRunStepToolGate_Missing(t *testing.T) {
+	t.Setenv(toolCacheEnv, t.TempDir())
 	scrubPATH(t)
 	// deadcode is a real keel-dev config pin; on a scrubbed PATH it is absent.
 	err := runStep(context.Background(), discardLogger(), ".", step{
@@ -644,7 +645,7 @@ func TestCIStepsReuseLoadedConfigForToolPins(t *testing.T) {
 
 	dir := t.TempDir()
 	mustRun(t, dir, "git", "init")
-	writeFile(t, dir, keelDevConfigFile, "gate:\n  excludes:\n    - .claude/**\ntools:\n  pins:\n    - name: cspell\n      version_args: [--version]\n      want: 10.0.1\n")
+	writeFile(t, dir, keelDevConfigFile, "gate:\n  excludes:\n    - .claude/**\ntools:\n  pins:\n    - name: cspell\n      version_args: [--version]\n      want: 10.0.1\n      install:\n        method: path\n")
 	writeFile(t, dir, "tracked.md", "# tracked\n")
 	mustRun(t, dir, "git", "add", keelDevConfigFile, "tracked.md")
 
@@ -662,7 +663,7 @@ exit 0
 	}
 
 	cspellStep := stepByName(t, ciSteps(context.Background(), discardLogger(), dir), "cspell")
-	writeFile(t, dir, keelDevConfigFile, "gate:\n  excludes:\n    - .claude/**\ntools:\n  pins:\n    - name: deadcode\n")
+	writeFile(t, dir, keelDevConfigFile, "gate:\n  excludes:\n    - .claude/**\ntools:\n  pins:\n    - name: deadcode\n      install:\n        method: path\n")
 
 	if err := runStep(context.Background(), discardLogger(), dir, cspellStep); err != nil {
 		t.Fatalf("cspell step reread mutated config instead of reusing the loaded pin: %v", err)

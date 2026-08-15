@@ -1,3 +1,4 @@
+absenttool
 aggeler
 ambig
 autonumber
@@ -8,6 +9,7 @@ codespell
 codex
 CODEXCLI
 corepack
+coreutils
 covermode
 coverpkg
 coverprofile
@@ -34,6 +36,7 @@ frobnicate
 frontmatter
 fset
 funcs
+gateable
 gitea
 gitleaks
 GOAUTH
@@ -48,6 +51,7 @@ gomodcache
 GOMODCACHE
 GONOSUMCHECK
 GONOSUMDB
+goodtool
 gopath
 GOPATHS
 gopls
@@ -86,6 +90,7 @@ otlplog
 otlploghttp
 pathspec
 pathspecs
+pathtool
 pipx
 pnpm
 Prereq
@@ -155,3 +160,4 @@ vscodeui
 webdav
 worktree
 worktrees
+zricethezav
