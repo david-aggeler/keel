@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"os/exec"
 	"strconv"
@@ -128,7 +127,10 @@ func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 
 	logger := req.Logger
 	if logger == nil {
-		logger = slog.Default()
+		// A library handed no sink stays silent: reaching for slog.Default()
+		// would emit outside the caller's formatter, file sinks, and redaction.
+		// DHF-REQ: keel/requirement-122
+		logger = logging.Discard()
 	}
 	workingDir := req.Dir
 	if workingDir == "" {
