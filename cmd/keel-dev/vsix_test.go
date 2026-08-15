@@ -83,7 +83,7 @@ func TestEvaluateVSIXCoverageSummaryValidatesFixtureAndTotals(t *testing.T) {
 // DHF-TEST: keel/requirement-119
 func TestValidateVSIXSupportPolicyBindsPolicyManifestAndTypeCeilings(t *testing.T) {
 	root := t.TempDir()
-	writeVSIXPolicyFixture(t, root, "^1.125.0", "22", "^1.125.0", "1.102.0", "^22.20.1")
+	writeVSIXPolicyFixture(t, root, "^1.125.0", "24", "^1.125.0", "1.102.0", "^22.20.1")
 	if err := validateVSIXSupportPolicy(root); err != nil {
 		t.Fatalf("validateVSIXSupportPolicy valid fixture: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestValidateVSIXSupportPolicyBindsPolicyManifestAndTypeCeilings(t *testing.
 		{
 			name:          "manifest does not match policy",
 			policyEngine:  "^1.125.0",
-			nodeMajor:     "22",
+			nodeMajor:     "24",
 			manifestFloor: "^1.102.0",
 			typesVSCode:   "1.102.0",
 			typesNode:     "^22.20.1",
@@ -109,7 +109,7 @@ func TestValidateVSIXSupportPolicyBindsPolicyManifestAndTypeCeilings(t *testing.
 		{
 			name:          "vscode types are ahead of declared engine",
 			policyEngine:  "^1.125.0",
-			nodeMajor:     "22",
+			nodeMajor:     "24",
 			manifestFloor: "^1.125.0",
 			typesVSCode:   "1.126.0",
 			typesNode:     "^22.20.1",
@@ -118,7 +118,7 @@ func TestValidateVSIXSupportPolicyBindsPolicyManifestAndTypeCeilings(t *testing.
 		{
 			name:          "vscode types patch is ahead of declared engine",
 			policyEngine:  "^1.125.0",
-			nodeMajor:     "22",
+			nodeMajor:     "24",
 			manifestFloor: "^1.125.0",
 			typesVSCode:   "1.125.1",
 			typesNode:     "^22.20.1",
@@ -127,7 +127,7 @@ func TestValidateVSIXSupportPolicyBindsPolicyManifestAndTypeCeilings(t *testing.
 		{
 			name:          "node types are ahead of declared runtime",
 			policyEngine:  "^1.125.0",
-			nodeMajor:     "22",
+			nodeMajor:     "24",
 			manifestFloor: "^1.125.0",
 			typesVSCode:   "1.125.0",
 			typesNode:     "^26.2.0",
@@ -156,12 +156,12 @@ func TestValidateVSIXSupportPolicyBindsPolicyManifestAndTypeCeilings(t *testing.
 // DHF-TEST: keel/requirement-119 (keel/ac-459)
 func TestValidateVSIXSupportPolicyRequiresHeldDependencyNotes(t *testing.T) {
 	root := t.TempDir()
-	writeVSIXPolicyFixture(t, root, "^1.125.0", "22", "^1.125.0", "1.102.0", "^22.20.1")
+	writeVSIXPolicyFixture(t, root, "^1.125.0", "24", "^1.125.0", "1.102.0", "^22.20.1")
 
 	policy := "# Keel Test Bridge Supported VS Code\n\n" +
 		"DHF-REQ: keel/requirement-119\n\n" +
 		"Minimum supported VS Code: ^1.125.0\n" +
-		"VS Code runtime Node major: 22\n\n" +
+		"VS Code runtime Node major: 24\n\n" +
 		"Reason: fixture\n"
 	if err := os.WriteFile(filepath.Join(root, "vsix", "SUPPORTED_VSCODE.md"), []byte(policy), 0o644); err != nil {
 		t.Fatal(err)
@@ -170,6 +170,62 @@ func TestValidateVSIXSupportPolicyRequiresHeldDependencyNotes(t *testing.T) {
 	err := validateVSIXSupportPolicy(root)
 	if err == nil || !strings.Contains(err.Error(), "Dependency hold notes") {
 		t.Fatalf("validateVSIXSupportPolicy err = %v, want dependency hold note failure", err)
+	}
+}
+
+// DHF-TEST: keel/requirement-119 (keel/ac-466)
+func TestValidateVSIXSupportPolicyRequiresRuntimeNodeCitation(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		citation string
+		want     string
+	}{
+		{
+			name:     "citation line absent",
+			citation: "",
+			want:     "VS Code runtime Node major source",
+		},
+		{
+			name:     "citation names no VS Code release",
+			citation: "Electron 42.3.0 with Node.js 24.15.0 — https://github.com/ewanharris/vscode-versions",
+			want:     "declared VS Code release 1.125.0",
+		},
+		{
+			name:     "citation names no Electron version",
+			citation: "VS Code 1.125.0 ships Node.js 24.15.0 — https://github.com/ewanharris/vscode-versions",
+			want:     "Electron version",
+		},
+		{
+			name:     "citation names no Node version",
+			citation: "VS Code 1.125.0 ships Electron 42.3.0 — https://github.com/ewanharris/vscode-versions",
+			want:     "Node version",
+		},
+		{
+			name:     "cited Node major contradicts the declared value",
+			citation: "VS Code 1.125.0 ships Electron 42.3.0 with Node.js 26.2.0 — https://github.com/ewanharris/vscode-versions",
+			want:     "does not match the declared VS Code runtime Node major 24",
+		},
+		{
+			name:     "citation cites no external URL",
+			citation: "VS Code 1.125.0 ships Electron 42.3.0 with Node.js 24.15.0",
+			want:     "external source URL",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeVSIXPolicyFixtureWithCitation(t, root, "24", tc.citation)
+			err := validateVSIXSupportPolicy(root)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("validateVSIXSupportPolicy err = %v, want containing %q", err, tc.want)
+			}
+		})
+	}
+
+	root := t.TempDir()
+	writeVSIXPolicyFixtureWithCitation(t, root, "24",
+		"VS Code 1.125.0 ships Electron 42.3.0 with Node.js 24.15.0 — https://github.com/ewanharris/vscode-versions")
+	if err := validateVSIXSupportPolicy(root); err != nil {
+		t.Fatalf("validateVSIXSupportPolicy with a well-formed citation: %v", err)
 	}
 }
 
@@ -191,13 +247,13 @@ func TestValidateVSIXSupportPolicyRejectsMalformedPolicyAndManifest(t *testing.T
 	}{
 		{
 			name:   "missing minimum",
-			policy: "Reason: fixture\nVS Code runtime Node major: 22\n",
+			policy: "Reason: fixture\nVS Code runtime Node major: 24\n",
 			pkg:    validVSIXPolicyPackage("^1.125.0", "1.125.0", "^22.20.1"),
 			want:   "Minimum supported VS Code",
 		},
 		{
 			name:   "missing reason",
-			policy: "Minimum supported VS Code: ^1.125.0\nVS Code runtime Node major: 22\n",
+			policy: "Minimum supported VS Code: ^1.125.0\nVS Code runtime Node major: 24\n",
 			pkg:    validVSIXPolicyPackage("^1.125.0", "1.125.0", "^22.20.1"),
 			want:   "Reason",
 		},
@@ -209,19 +265,19 @@ func TestValidateVSIXSupportPolicyRejectsMalformedPolicyAndManifest(t *testing.T
 		},
 		{
 			name:   "minimum is not caret semver",
-			policy: "Minimum supported VS Code: 1.125.0\nVS Code runtime Node major: 22\nReason: fixture\n",
+			policy: "Minimum supported VS Code: 1.125.0\nVS Code runtime Node major: 24\nReason: fixture\n",
 			pkg:    validVSIXPolicyPackage("1.125.0", "1.125.0", "^22.20.1"),
 			want:   "caret semver",
 		},
 		{
 			name:   "minimum has invalid minor",
-			policy: "Minimum supported VS Code: ^1.x.0\nVS Code runtime Node major: 22\nReason: fixture\n",
+			policy: "Minimum supported VS Code: ^1.x.0\nVS Code runtime Node major: 24\nReason: fixture\n",
 			pkg:    validVSIXPolicyPackage("^1.x.0", "1.125.0", "^22.20.1"),
 			want:   "invalid minor",
 		},
 		{
 			name:   "minimum has invalid patch",
-			policy: "Minimum supported VS Code: ^1.125.x\nVS Code runtime Node major: 22\nReason: fixture\n",
+			policy: "Minimum supported VS Code: ^1.125.x\nVS Code runtime Node major: 24\nReason: fixture\n",
 			pkg:    validVSIXPolicyPackage("^1.125.x", "1.125.0", "^22.20.1"),
 			want:   "invalid patch",
 		},
@@ -229,37 +285,37 @@ func TestValidateVSIXSupportPolicyRejectsMalformedPolicyAndManifest(t *testing.T
 			name:  "missing manifest",
 			noPkg: true,
 			policy: "Minimum supported VS Code: ^1.125.0\n" +
-				"VS Code runtime Node major: 22\nReason: fixture\n",
+				"VS Code runtime Node major: 24\nReason: fixture\n",
 			want: "package.json",
 		},
 		{
 			name:    "malformed manifest json",
 			badJSON: true,
 			policy: "Minimum supported VS Code: ^1.125.0\n" +
-				"VS Code runtime Node major: 22\nReason: fixture\n",
+				"VS Code runtime Node major: 24\nReason: fixture\n",
 			want: "parse",
 		},
 		{
 			name:   "missing vscode types",
-			policy: "Minimum supported VS Code: ^1.125.0\nVS Code runtime Node major: 22\nReason: fixture\n",
+			policy: "Minimum supported VS Code: ^1.125.0\nVS Code runtime Node major: 24\nReason: fixture\n",
 			pkg:    `{"engines":{"vscode":"^1.125.0"},"devDependencies":{"@types/node":"^22.20.1"}}`,
 			want:   "missing @types/vscode",
 		},
 		{
 			name:   "missing node types",
-			policy: "Minimum supported VS Code: ^1.125.0\nVS Code runtime Node major: 22\nReason: fixture\n",
+			policy: "Minimum supported VS Code: ^1.125.0\nVS Code runtime Node major: 24\nReason: fixture\n",
 			pkg:    `{"engines":{"vscode":"^1.125.0"},"devDependencies":{"@types/vscode":"1.125.0"}}`,
 			want:   "missing @types/node",
 		},
 		{
 			name:   "vscode type version has invalid major",
-			policy: "Minimum supported VS Code: ^1.125.0\nVS Code runtime Node major: 22\nReason: fixture\n",
+			policy: "Minimum supported VS Code: ^1.125.0\nVS Code runtime Node major: 24\nReason: fixture\n",
 			pkg:    validVSIXPolicyPackage("^1.125.0", "x.125.0", "^22.20.1"),
 			want:   "invalid major",
 		},
 		{
 			name:   "node type version has too few components",
-			policy: "Minimum supported VS Code: ^1.125.0\nVS Code runtime Node major: 22\nReason: fixture\n",
+			policy: "Minimum supported VS Code: ^1.125.0\nVS Code runtime Node major: 24\nReason: fixture\n",
 			pkg:    validVSIXPolicyPackage("^1.125.0", "1.125.0", "^22"),
 			want:   "major.minor.patch",
 		},
@@ -302,7 +358,9 @@ func writeVSIXPolicyFixture(t *testing.T, root, policyEngine, nodeMajor, manifes
 		"DHF-REQ: keel/requirement-119\n\n" +
 		"Minimum supported VS Code: " + policyEngine + "\n"
 	if nodeMajor != "" {
-		policy += "VS Code runtime Node major: " + nodeMajor + "\n"
+		policy += "VS Code runtime Node major: " + nodeMajor + "\n" +
+			"VS Code runtime Node major source: VS Code " + strings.TrimPrefix(policyEngine, "^") +
+			" ships Electron 42.3.0 with Node.js " + nodeMajor + ".15.0 — https://github.com/ewanharris/vscode-versions\n"
 	}
 	policy += "\nReason: owner decision on 2026-08-14 raised the floor so the VSIX toolchain can track current releases.\n"
 	policy += "\nDependency hold notes:\n\n" +
@@ -319,6 +377,32 @@ func writeVSIXPolicyFixture(t *testing.T, root, policyEngine, nodeMajor, manifes
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "vsix", "package.json"), []byte(validVSIXPolicyPackage(manifestFloor, typesVSCode, typesNode)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writeVSIXPolicyFixtureWithCitation writes an otherwise-valid policy fixture whose
+// runtime-Node-major citation line is replaced by citation, or omitted when citation
+// is empty.
+func writeVSIXPolicyFixtureWithCitation(t *testing.T, root, nodeMajor, citation string) {
+	t.Helper()
+	writeVSIXPolicyFixture(t, root, "^1.125.0", nodeMajor, "^1.125.0", "1.125.0", "^"+nodeMajor+".15.0")
+	path := filepath.Join(root, "vsix", "SUPPORTED_VSCODE.md")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	for _, line := range strings.Split(string(body), "\n") {
+		if strings.HasPrefix(line, "VS Code runtime Node major source:") {
+			if citation == "" {
+				continue
+			}
+			line = "VS Code runtime Node major source: " + citation
+		}
+		kept = append(kept, line)
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(kept, "\n")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }

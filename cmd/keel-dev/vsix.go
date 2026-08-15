@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -174,6 +175,46 @@ func validateVSIXSupportPolicy(dir string) error {
 	}
 	if err := validateVSIXDependencyHoldNotes(policyText, manifest.DevDependencies); err != nil {
 		return err
+	}
+	return validateVSIXRuntimeNodeCitation(policyPath, policyText, declaredMinimum, nodeMajor)
+}
+
+var (
+	electronVersionPattern = regexp.MustCompile(`(?i)\belectron\s+v?\d+\.\d+\.\d+\b`)
+	nodeVersionPattern     = regexp.MustCompile(`(?i)\bnode(?:\.js)?\s+v?(\d+)\.\d+\.\d+\b`)
+)
+
+// validateVSIXRuntimeNodeCitation keeps the runtime Node major derivable from outside
+// this repository. Without it the value the @types/node ceiling is checked against is a
+// hand-edited line, and the cheapest way to clear that ceiling is to move the line —
+// which is what keel/issue-147 records happening.
+//
+// DHF-REQ: keel/requirement-119 (keel/ac-466)
+func validateVSIXRuntimeNodeCitation(policyPath, policyText, declaredMinimum string, nodeMajor int) error {
+	citation, ok := policyLineValue(policyText, "VS Code runtime Node major source:")
+	if !ok {
+		return fmt.Errorf("keel-dev vsix policy: %s missing VS Code runtime Node major source", policyPath)
+	}
+	release := strings.TrimPrefix(declaredMinimum, "^")
+	if !strings.Contains(citation, release) {
+		return fmt.Errorf("keel-dev vsix policy: VS Code runtime Node major source %q does not name the declared VS Code release %s", citation, release)
+	}
+	if !electronVersionPattern.MatchString(citation) {
+		return fmt.Errorf("keel-dev vsix policy: VS Code runtime Node major source %q does not name an Electron version", citation)
+	}
+	match := nodeVersionPattern.FindStringSubmatch(citation)
+	if match == nil {
+		return fmt.Errorf("keel-dev vsix policy: VS Code runtime Node major source %q does not name a Node version", citation)
+	}
+	citedMajor, err := strconv.Atoi(match[1])
+	if err != nil {
+		return fmt.Errorf("keel-dev vsix policy: VS Code runtime Node major source %q has an unreadable Node version", citation)
+	}
+	if citedMajor != nodeMajor {
+		return fmt.Errorf("keel-dev vsix policy: VS Code runtime Node major source cites Node %d, which does not match the declared VS Code runtime Node major %d", citedMajor, nodeMajor)
+	}
+	if !strings.Contains(citation, "https://") {
+		return fmt.Errorf("keel-dev vsix policy: VS Code runtime Node major source %q does not cite an external source URL", citation)
 	}
 	return nil
 }
