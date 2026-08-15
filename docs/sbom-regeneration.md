@@ -74,7 +74,7 @@ keel's own dependency set. That split between the two code paths is why the defe
 survived `9ba9df0`, the commit that added the syft exclusion.
 
 The generator is a chezmoi-managed user-level skill, outside keel's change control
-(`keel/change_request-184`). Keel's defence is this procedure plus the post-run
+(`keel/change_request-184`). Keel's guard is this procedure plus the post-run
 check in section 4 — not a fix to the script. The upstream shape (read the
 exclusion list from `.syft.yaml` so both code paths share one control point) is
 recorded in `keel/issue-149` for whoever changes the dotfile repo.
