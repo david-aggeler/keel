@@ -4,6 +4,7 @@ ambig
 autonumber
 canonicality
 checksummed
+chezmoi
 CLAUDECLI
 codespell
 codex
@@ -17,6 +18,7 @@ creds
 cret
 cspell
 custodied
+cyclonedx
 dbname
 deadcode
 DEBU
@@ -128,6 +130,7 @@ stringly
 STUBEOF
 Subpackages
 supersecretvalue
+syft
 SYSFILE
 testbridge
 testdata
