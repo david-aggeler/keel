@@ -889,6 +889,17 @@ func runDesiredStateSelections(ctx context.Context, bridge Bridge, requests []ru
 	ids := runResolutionIDs(requests)
 	declared, err := bridge.DesiredState(ctx, ids)
 	if err != nil {
+		// A failed resolution degrades visibly rather than aborting the run
+		// (the symmetric choice with the discovery path's diagnostic item):
+		// the selections still fall through to the remaining-selection path,
+		// but the failure is stated in the event stream and in the log
+		// instead of sharing the no-rows-matched return shape.
+		// DHF-REQ: keel/requirement-124
+		logDesiredStateResolutionFailure(runtimeOrDefault(ctx, bridge), ids, err)
+		writer(vscode.RunEvent{
+			Event:   "errored",
+			Message: fmt.Sprintf("desired-state resolution failed for %s: %s", strings.Join(ids, ", "), err.Error()),
+		})
 		return 0, append([]runResolution{}, requests...), nil
 	}
 	rt := runtimeOrDefault(ctx, bridge)
@@ -1490,6 +1501,20 @@ func runtimeOrDefault(ctx context.Context, bridge Bridge) Runtime {
 		rt.Protocol = io.Discard
 	}
 	return rt
+}
+
+// logDesiredStateResolutionFailure records a failed bridge.DesiredState call
+// for the selected ids, so a degraded run states its cause.
+//
+// DHF-REQ: keel/requirement-124
+func logDesiredStateResolutionFailure(rt Runtime, ids []string, err error) {
+	if rt.Log == nil {
+		return
+	}
+	rt.Log.Warn("testbridge desired-state resolution failed",
+		"ids", append([]string{}, ids...),
+		"error", err.Error(),
+	)
 }
 
 // DHF-REQ: keel/requirement-78

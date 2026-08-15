@@ -1211,6 +1211,93 @@ func TestDiscoverDegradesDesiredStateProviderFailure(t *testing.T) {
 	}
 }
 
+// runDesiredStateSelectionDispatch runs one selection through the bridge run
+// verb and returns the emitted event stream plus the dispatch error.
+func runDesiredStateSelectionDispatch(t *testing.T, selection string, configure func(*fakeBridge)) ([]vscode.RunEvent, error) {
+	t.Helper()
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	configure(fake)
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{
+		Root:     root,
+		Protocol: &protocol,
+		RunID:    func() string { return "run-desired-state-resolution" },
+	})
+	err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--id", selection})
+	return decodeEvents(t, protocol.String()), err
+}
+
+// DHF-TEST: keel/requirement-124
+func TestRunDesiredStateResolutionFailureDiffersFromNoRowsSelection(t *testing.T) {
+	const selection = "demo::lane::fast"
+	const providerFailure = "desired provider exploded"
+
+	cleanEvents, cleanErr := runDesiredStateSelectionDispatch(t, selection, func(f *fakeBridge) {
+		f.desiredStateEmptyForSelectedIDs = true
+	})
+	if cleanErr != nil {
+		t.Fatalf("clean no-rows run dispatch: %v", cleanErr)
+	}
+	failEvents, failErr := runDesiredStateSelectionDispatch(t, selection, func(f *fakeBridge) {
+		f.desiredErr = errors.New(providerFailure)
+	})
+
+	if eventsContain(cleanEvents, "errored", "", providerFailure) {
+		t.Fatalf("clean no-rows run emitted a resolution-failure event: %+v", cleanEvents)
+	}
+	if !eventsContain(failEvents, "errored", "", providerFailure) {
+		t.Fatalf("failing desired-state resolution events = %+v, want an errored event naming %q (err=%v)", failEvents, providerFailure, failErr)
+	}
+	// The selection must still execute — a failed resolution may not silently
+	// drop the rows the caller asked for.
+	for _, events := range [][]vscode.RunEvent{cleanEvents, failEvents} {
+		if !eventsContain(events, "passed", selection, "") {
+			t.Fatalf("run events = %+v, want the selection to still execute", events)
+		}
+	}
+}
+
+// DHF-TEST: keel/requirement-124
+func TestRunDesiredStateResolutionFailureReachesLogSink(t *testing.T) {
+	const providerFailure = "desired provider detonated"
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.desiredErr = errors.New(providerFailure)
+	capture := logtest.NewCapture()
+	logger, err := logging.New(logging.Config{
+		Service:  "testbridge-test",
+		Console:  logging.ConsoleNone,
+		Handlers: []slog.Handler{capture},
+	})
+	if err != nil {
+		t.Fatalf("new logger: %v", err)
+	}
+	defer logger.Close()
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{
+		Root:     root,
+		Protocol: &protocol,
+		Log:      logger.Slog(),
+		RunID:    func() string { return "run-desired-state-log" },
+	})
+
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--id", "demo::lane::fast"}); err != nil {
+		t.Fatalf("run dispatch: %v", err)
+	}
+
+	for _, record := range capture.AllJSON() {
+		level, _ := record["level"].(string)
+		if level != "WARN" && level != "ERROR" {
+			continue
+		}
+		if strings.Contains(fmt.Sprint(record), providerFailure) {
+			return
+		}
+	}
+	t.Fatalf("captured records = %+v, want a WARN/ERROR record naming %q", capture.AllJSON(), providerFailure)
+}
+
 // DHF-TEST: keel/requirement-75
 func TestDesiredStateRowsExposeDeclaredStructurePlusProbeOnly(t *testing.T) {
 	rowType := reflect.TypeOf(testbridge.DesiredStateRow{})
