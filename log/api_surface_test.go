@@ -27,7 +27,6 @@ func TestPublicAPISurfaceMatchesMinimalLoggerContract(t *testing.T) {
 		"RecordCapture",
 		"DefaultRecentCapacity",
 		"LogBuildIdentity",
-		"Discard",
 		"ParseLevel",
 		"Metric",
 		"MetricKind",
@@ -58,7 +57,11 @@ func TestPublicAPISurfaceMatchesMinimalLoggerContract(t *testing.T) {
 		t.Error("Config.Level is still exported; use Config.ConsoleVerbosity and Config.FileVerbosity")
 	}
 
+	// Discard moved from rejected to required under keel/requirement-122
+	// (keel/ac-470): it is no longer a speculative export — keel/exec's
+	// nil-Logger fallback is its in-repo consumer.
 	requiredExports := []string{
+		"Discard",
 		"FromContext",
 		"LevelFromString",
 		"LevelToString",

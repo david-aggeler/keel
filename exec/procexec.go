@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"os/exec"
 	"strconv"
@@ -62,7 +61,9 @@ type Request struct {
 	// [DefaultMaxOutputBytes]; no value disables the ceiling.
 	MaxOutputBytes int
 	// Logger receives the START/END lifecycle and per-line output records. Nil
-	// uses slog.Default.
+	// produces no output at all — keel/exec never reaches for a sink the caller
+	// did not supply. Inject a logger to get records, or [keel/log.Discard] to
+	// state the silence deliberately.
 	Logger processLogger
 	// SensitiveArgs marks argv indices whose values must be masked as [REDACTED]
 	// in the logged command line (e.g. a token passed positionally).
@@ -128,7 +129,10 @@ func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 
 	logger := req.Logger
 	if logger == nil {
-		logger = slog.Default()
+		// A library handed no sink stays silent: reaching for slog.Default()
+		// would emit outside the caller's formatter, file sinks, and redaction.
+		// DHF-REQ: keel/requirement-122
+		logger = logging.Discard()
 	}
 	workingDir := req.Dir
 	if workingDir == "" {
