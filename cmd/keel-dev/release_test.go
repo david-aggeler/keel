@@ -90,7 +90,35 @@ exit 0`)
 	stub(t, bin, callsFile, "xvfb-run", "exit 0")
 
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	seedStubToolCache(t, bin)
 	return callsFile
+}
+
+// seedStubToolCache points the version-keyed gate-tool cache at a temp dir and
+// fills it with the same stub binaries the PATH stubs use. Gate tools resolve
+// from that cache rather than PATH (keel/ac-465), so a stubbed gate run must
+// stub the cache entries too — otherwise the run would try to install the real
+// tools and stop being hermetic.
+func seedStubToolCache(t *testing.T, bin string) {
+	t.Helper()
+	cache := t.TempDir()
+	t.Setenv(toolCacheEnv, cache)
+	for name, pin := range defaultKeelDevConfig().toolPins() {
+		if pin.install.method != toolInstallGo {
+			continue
+		}
+		script, err := os.ReadFile(filepath.Join(bin, name))
+		if err != nil {
+			continue // this fixture does not stub that tool
+		}
+		dir := filepath.Join(cache, name, pin.install.version)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), script, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func stub(t *testing.T, bin, callsFile, name, body string) {

@@ -24,6 +24,12 @@ gate:
 tools:
   # Pins list every external gate command. Empty version fields are deliberate
   # presence-only pins for tools whose installed binary has no stable probe.
+  # Each pin also declares how it is installed: method "go" resolves the binary
+  # from the version-keyed cache at $KEEL_DEV_TOOL_CACHE (default
+  # ~/.cache/keel-dev/tools/<tool>/<version>/<tool>), installing it on demand,
+  # so a branch gets the versions IT declares and parallel worktrees pinning
+  # different versions are each gateable on one host (keel/ac-465). Method
+  # "path" is for tools keel cannot install itself; those stay host-global.
   pins:
     # golangci-lint is blocking static analysis, so the gate requires the same
     # analyzer version everywhere before accepting its results.
@@ -36,6 +42,16 @@ tools:
       # v2.12 line prints "has version 2.12.2" where v2.0.2 printed "has
       # version v2.0.2", and this value is matched as a plain substring.
       want: 2.12.2
+      # The install block gives this branch its own analyzer build in the
+      # version-keyed cache instead of whichever one PATH happens to hold.
+      install:
+        # The method selects go-install into the cache rather than PATH lookup.
+        method: go
+        # The package is the v2-suffixed command path of the analyzer module.
+        package: github.com/golangci/golangci-lint/v2/cmd/golangci-lint
+        # The version is the module version installed and the cache key; it
+        # carries the leading "v" that the reported want substring does not.
+        version: v2.12.2
     # govulncheck is the vulnerability scanner, so its database client version
     # is pinned before the gate trusts a clean report.
     - name: govulncheck
@@ -45,6 +61,15 @@ tools:
       # The want substring pins the scanner release used for vulnerability
       # evidence across developer and release runs.
       want: v1.7.0
+      # The install block keeps the scanner build per-version so a currency
+      # sweep on one branch cannot un-gate another branch on the same host.
+      install:
+        # The method selects go-install into the cache rather than PATH lookup.
+        method: go
+        # The package is the scanner command path inside golang.org/x/vuln.
+        package: golang.org/x/vuln/cmd/govulncheck
+        # The version is the module version installed and the cache key.
+        version: v1.7.0
     # cspell checks tracked prose and source tokens, so the dictionary engine
     # version is pinned before spelling findings affect the gate.
     - name: cspell
@@ -54,6 +79,11 @@ tools:
       # The want substring pins cspell so dictionary and parser drift cannot
       # silently change which checked files pass.
       want: 10.0.1
+      # The install block declares cspell host-global: it is an npm package, so
+      # keel does not install it and scripts/setup_user.sh remains its source.
+      install:
+        # The method keeps PATH resolution for a tool keel cannot install.
+        method: path
     # shellcheck validates committed shell scripts, so the script analyzer is
     # pinned before its diagnostics can block CI.
     - name: shellcheck
@@ -63,6 +93,11 @@ tools:
       # The want substring pins the shellcheck release used for shell-script
       # diagnostics in both developer and release gates.
       want: 0.10.0
+      # The install block declares shellcheck host-global: it ships as a distro
+      # or static release, not as a go-installable command.
+      install:
+        # The method keeps PATH resolution for a tool keel cannot install.
+        method: path
     # shfmt reports shell formatting drift, so its formatter version is pinned
     # before the gate treats a diff as evidence.
     - name: shfmt
@@ -72,9 +107,37 @@ tools:
       # The want substring pins shfmt so formatting output stays stable across
       # machines and release preflights.
       want: v3.13.1
+      # The install block keeps the formatter build per-version so branches that
+      # bump it do not rewrite what other worktrees format against.
+      install:
+        # The method selects go-install into the cache rather than PATH lookup.
+        method: go
+        # The package is the shfmt command path inside the mvdan.cc/sh module.
+        package: mvdan.cc/sh/v3/cmd/shfmt
+        # The version is the module version installed and the cache key.
+        version: v3.13.1
     # deadcode is advisory reachability analysis; it has no stable version
     # probe, so presence is checked while its findings remain non-blocking.
     - name: deadcode
+      # The install block still keys the cache by exact module version, so the
+      # missing version probe does not mean an unknown binary is accepted.
+      install:
+        # The method selects go-install into the cache rather than PATH lookup.
+        method: go
+        # The package is the deadcode command path inside golang.org/x/tools.
+        package: golang.org/x/tools/cmd/deadcode
+        # The version is the module version installed and the cache key.
+        version: v0.28.0
     # gitleaks is installed at a pinned version but go-install builds do not
     # stamp that version into the binary, so the gate checks presence only.
     - name: gitleaks
+      # The install block pins the scanner by module version in the cache, which
+      # is the only version evidence available for this binary.
+      install:
+        # The method selects go-install into the cache rather than PATH lookup.
+        method: go
+        # The package is the v8 module path; the GitHub repo moved but the Go
+        # module path did not, so it stays under zricethezav.
+        package: github.com/zricethezav/gitleaks/v8
+        # The version is the module version installed and the cache key.
+        version: v8.30.1

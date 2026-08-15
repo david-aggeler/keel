@@ -74,6 +74,12 @@ The merge is the git operation ONLY. It runs no gate and tears nothing down.
   in-process lint policies, tests with a total-coverage floor.
 - The local gate and the release preflight run the same command. Do not
   re-list checks anywhere else. keel runs no GitHub Actions CI.
+- Gate tools are resolved per pinned version, not from PATH: each
+  `tools.pins` entry declaring `install.method: go` resolves from
+  `${KEEL_DEV_TOOL_CACHE:-~/.cache/keel-dev/tools}/<tool>/<version>/<tool>`
+  and is installed on demand, so worktrees pinning different versions are
+  each gateable on one host. `install.method: path` tools (cspell,
+  shellcheck) stay host-global via `scripts/setup_user.sh`.
 - VSIX: `keel-dev vsix ci` is the Node-backed sibling gate for `vsix/`
   (pnpm build/lint/headless suite). Core `keel-dev ci` stays node-free.
 - Release: `keel-dev release vX.Y.Z`. It refuses on dirty tree, existing
