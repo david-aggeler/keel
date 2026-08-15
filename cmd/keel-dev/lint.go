@@ -43,7 +43,12 @@ import (
 //   - keel-dev-config-docs: every property in the keel-dev config object and
 //     committed config file carries explanatory commentary (keel/ac-450).
 //
-// DHF-REQ: keel/requirement-10, keel/requirement-11, keel/requirement-85 (keel/ac-453, keel/ac-454, keel/ac-455), keel/requirement-118 (keel/ac-450)
+//   - no-desired-state-label-coupling: the desired-state group's display label
+//     must not appear in keel/testbridge at all — derivation keys on the
+//     exported marker — and each consumer surface states it at most once
+//     (keel/requirement-126, keel/ac-479).
+//
+// DHF-REQ: keel/requirement-10, keel/requirement-11, keel/requirement-85 (keel/ac-453, keel/ac-454, keel/ac-455), keel/requirement-118 (keel/ac-450), keel/requirement-126 (keel/ac-479)
 func runLint(dir string, files []string) error {
 	var violations []string
 
@@ -78,6 +83,12 @@ func runLint(dir string, files []string) error {
 	violations = append(violations, v...)
 
 	v, err = scanKeelDevConfigDocumentation(dir, files)
+	if err != nil {
+		return err
+	}
+	violations = append(violations, v...)
+
+	v, err = scanDesiredStateGroupLabelCoupling(dir, files)
 	if err != nil {
 		return err
 	}
@@ -128,6 +139,78 @@ func scanNoRetiredDesiredStateVocabulary(root string, files []string) ([]string,
 		}
 	}
 	return violations, nil
+}
+
+// desiredStateGroupLabel is the display string of the desired-state group,
+// built from bytes: this policy lives inside a surface it scans, so a literal
+// here would count as an occurrence of what it forbids.
+var desiredStateGroupLabel = string([]byte{66, 32, 45, 32, 68, 101, 115, 105, 114, 101, 100, 32, 83, 116, 97, 116, 101})
+
+// desiredStateGroupLabelBudget bounds where the display label may appear.
+// keel/testbridge derives on DesiredStateGroupIDSuffix and must not mention the
+// label at all; each consumer surface declares it once and no more, so a rename
+// has exactly one site per surface (keel/ac-479).
+var desiredStateGroupLabelBudget = []struct {
+	dir   string
+	limit int
+}{
+	{dir: "testbridge", limit: 0},
+	{dir: "testdata", limit: 0},
+	{dir: filepath.Join("cmd", "keel-dev"), limit: 1},
+	{dir: filepath.Join("cmd", "keel-demo-dev"), limit: 1},
+	{dir: filepath.Join("vsix", "src"), limit: 1},
+}
+
+// scanDesiredStateGroupLabelCoupling reports surfaces that spend more of their
+// display-label budget than keel/ac-479 allows. It counts occurrences rather
+// than merely flagging them: the defect the policy guards is duplication — a
+// label stated in many places has no single point at which a rename is correct.
+//
+// DHF-REQ: keel/requirement-126
+func scanDesiredStateGroupLabelCoupling(root string, files []string) ([]string, error) {
+	counts := make(map[string]int, len(desiredStateGroupLabelBudget))
+	sites := make(map[string][]string, len(desiredStateGroupLabelBudget))
+	for _, file := range files {
+		surface, ok := desiredStateGroupLabelSurface(file)
+		if !ok {
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(file)))
+		if err != nil {
+			return nil, err
+		}
+		text := string(body)
+		found := strings.Count(text, desiredStateGroupLabel)
+		if found == 0 {
+			continue
+		}
+		counts[surface] += found
+		sites[surface] = append(sites[surface], fmt.Sprintf("%s:%d", filepath.FromSlash(file), firstLineContaining(text, desiredStateGroupLabel)))
+	}
+	var violations []string
+	for _, budget := range desiredStateGroupLabelBudget {
+		got := counts[budget.dir]
+		if got <= budget.limit {
+			continue
+		}
+		violations = append(violations, fmt.Sprintf(
+			"  no-desired-state-label-coupling: %s states the desired-state group's display label %d time(s), budget %d (%s) — derivation keys on testbridge.DesiredStateGroupIDSuffix; the label is display only (keel/requirement-126, keel/ac-479)",
+			budget.dir, got, budget.limit, strings.Join(sites[budget.dir], ", ")))
+	}
+	return violations, nil
+}
+
+// desiredStateGroupLabelSurface returns the budgeted surface a file belongs to.
+// The most specific budgeted directory wins, so cmd/keel-dev never absorbs a
+// cmd/keel-demo-dev occurrence.
+func desiredStateGroupLabelSurface(file string) (string, bool) {
+	best := ""
+	for _, budget := range desiredStateGroupLabelBudget {
+		if hasAnyPathPrefix(file, budget.dir) && len(budget.dir) > len(best) {
+			best = budget.dir
+		}
+	}
+	return best, best != ""
 }
 
 func retiredDesiredStateVocabularyPath(file string) bool {

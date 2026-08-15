@@ -648,7 +648,7 @@ func TestVSCodeDiscoveryEmitsStructuredOrderedTree(t *testing.T) {
 		sort  string
 	}{
 		"testbridge::maintenance": {label: "A - Test Bridge Maintenance", sort: "a"},
-		"keel::desired-state":     {label: "B - Desired State", sort: "b"},
+		vscodeGroupDesiredState:   {label: vscodeGroupDesiredStateLabel, sort: "b"},
 		"keel::lanes":             {label: "C - Lanes", sort: "c"},
 		"keel::frameworks":        {label: "D - Frameworks", sort: "d"},
 	}

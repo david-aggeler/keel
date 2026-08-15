@@ -44,6 +44,10 @@ suite('Keel Test Bridge expected-red specs', () => {
         const top = discovery.items
           .filter((item) => !item.parent_id)
           .sort((a, b) => (a.sort_text ?? '').localeCompare(b.sort_text ?? ''));
+        // Display assertion only: this is requirement-69's four-row tree as a
+        // human reads it. Nothing derives from these strings — the bridge keys
+        // the desired-state anchor on its id (keel/requirement-126), asserted
+        // separately below.
         assert.deepEqual(top.map((item) => ({ label: item.label, kind: item.kind })), [
           { label: 'A - Test Bridge Maintenance', kind: 'group' },
           { label: 'B - Desired State', kind: 'group' },
