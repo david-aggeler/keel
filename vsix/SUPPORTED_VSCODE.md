@@ -12,12 +12,16 @@ APIs older declared engines cannot provide. Users on VS Code versions before
 
 Dependency hold notes:
 
-- `@types/vscode` remains at `1.102.0` until `keel/change_request-180` raises
-  it to match this declared floor. It is valid only because it describes an API
-  surface older than the declared minimum, not a newer one.
-- `@types/node` remains on the 22 line until `keel/change_request-180` completes
-  the toolchain update. It must not move above the Node major shipped by the VS
-  Code release named above.
-- `typescript` remains on the 5 line until those type packages move together in
-  `keel/change_request-180`; TypeScript 7 cannot compile this workspace against
-  the old Node type line.
+- `@types/vscode` is held at `1.102.0` (current: `1.125.0`).
+  Reason: it must not describe APIs above the declared VS Code engine floor.
+  Release condition: `keel/change_request-180` raises it to the declared floor.
+- `@types/node` is held at `22.20.1` (current: `26.2.0`).
+  Reason: it must not describe a Node runtime above the VS Code release named by
+  the declared floor.
+  Release condition: `keel/change_request-180` completes the coupled VSIX
+  toolchain update.
+- `typescript` is held at `5.9.3` (current: `7.0.2`).
+  Reason: TypeScript 7 cannot compile this workspace against the old Node type
+  line.
+  Release condition: `keel/change_request-180` moves the type packages and
+  TypeScript together.
