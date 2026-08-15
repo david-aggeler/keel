@@ -17,6 +17,15 @@ import (
 const vsixCoverageFloorPercent = 76.3
 const vsixSupportPolicyRel = "vsix/SUPPORTED_VSCODE.md"
 
+var vsixHeldDependencyBaselines = []struct {
+	name    string
+	current string
+}{
+	{name: "@types/vscode", current: "1.125.0"},
+	{name: "@types/node", current: "26.2.0"},
+	{name: "typescript", current: "7.0.2"},
+}
+
 func vsixCommandSpec() *cli.CommandSpec {
 	return &cli.CommandSpec{
 		Name:        "vsix",
@@ -163,7 +172,94 @@ func validateVSIXSupportPolicy(dir string) error {
 	if typesNode.major > nodeMajor {
 		return fmt.Errorf("keel-dev vsix policy: @types/node %q is above VS Code runtime Node major %d", manifest.DevDependencies["@types/node"], nodeMajor)
 	}
+	if err := validateVSIXDependencyHoldNotes(policyText, manifest.DevDependencies); err != nil {
+		return err
+	}
 	return nil
+}
+
+// DHF-REQ: keel/requirement-119 (keel/ac-459)
+func validateVSIXDependencyHoldNotes(policyText string, devDependencies map[string]string) error {
+	notes := dependencyHoldNoteBlocks(policyText)
+	for _, dependency := range vsixHeldDependencyBaselines {
+		declared, ok := devDependencies[dependency.name]
+		if !ok {
+			continue
+		}
+		declaredVersion, err := parsePackageSemver(dependency.name, declared)
+		if err != nil {
+			return err
+		}
+		currentVersion, err := parseSemver(dependency.name+" current release", dependency.current)
+		if err != nil {
+			return err
+		}
+		if compareSemver(declaredVersion, currentVersion) >= 0 {
+			continue
+		}
+		if len(notes) == 0 {
+			return fmt.Errorf("keel-dev vsix policy: Dependency hold notes missing for held dependency %s", dependency.name)
+		}
+		note, ok := notes[dependency.name]
+		if !ok {
+			return fmt.Errorf("keel-dev vsix policy: Dependency hold notes missing entry for held dependency %s", dependency.name)
+		}
+		installed := strings.TrimPrefix(strings.TrimSpace(declared), "^")
+		if !strings.Contains(note, "`"+installed+"`") {
+			return fmt.Errorf("keel-dev vsix policy: Dependency hold note for %s does not state installed version %s", dependency.name, installed)
+		}
+		if !strings.Contains(note, "current: `"+dependency.current+"`") {
+			return fmt.Errorf("keel-dev vsix policy: Dependency hold note for %s does not state current release %s", dependency.name, dependency.current)
+		}
+		if !strings.Contains(strings.ToLower(note), "reason:") {
+			return fmt.Errorf("keel-dev vsix policy: Dependency hold note for %s missing reason", dependency.name)
+		}
+		if !strings.Contains(strings.ToLower(note), "release condition:") {
+			return fmt.Errorf("keel-dev vsix policy: Dependency hold note for %s missing release condition", dependency.name)
+		}
+	}
+	return nil
+}
+
+func dependencyHoldNoteBlocks(policyText string) map[string]string {
+	notes := map[string]string{}
+	var currentName string
+	var currentLines []string
+	inSection := false
+	flush := func() {
+		if currentName == "" {
+			return
+		}
+		notes[currentName] = strings.Join(currentLines, "\n")
+		currentName = ""
+		currentLines = nil
+	}
+	for _, line := range strings.Split(policyText, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !inSection {
+			inSection = trimmed == "Dependency hold notes:"
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#") {
+			break
+		}
+		if strings.HasPrefix(trimmed, "- ") {
+			flush()
+			for _, dependency := range vsixHeldDependencyBaselines {
+				if strings.Contains(trimmed, "`"+dependency.name+"`") {
+					currentName = dependency.name
+					currentLines = append(currentLines, trimmed)
+					break
+				}
+			}
+			continue
+		}
+		if currentName != "" {
+			currentLines = append(currentLines, trimmed)
+		}
+	}
+	flush()
+	return notes
 }
 
 func policyLineValue(body, prefix string) (string, bool) {

@@ -153,6 +153,26 @@ func TestValidateVSIXSupportPolicyBindsPolicyManifestAndTypeCeilings(t *testing.
 	}
 }
 
+// DHF-TEST: keel/requirement-119 (keel/ac-459)
+func TestValidateVSIXSupportPolicyRequiresHeldDependencyNotes(t *testing.T) {
+	root := t.TempDir()
+	writeVSIXPolicyFixture(t, root, "^1.125.0", "22", "^1.125.0", "1.102.0", "^22.20.1")
+
+	policy := "# Keel Test Bridge Supported VS Code\n\n" +
+		"DHF-REQ: keel/requirement-119\n\n" +
+		"Minimum supported VS Code: ^1.125.0\n" +
+		"VS Code runtime Node major: 22\n\n" +
+		"Reason: fixture\n"
+	if err := os.WriteFile(filepath.Join(root, "vsix", "SUPPORTED_VSCODE.md"), []byte(policy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := validateVSIXSupportPolicy(root)
+	if err == nil || !strings.Contains(err.Error(), "Dependency hold notes") {
+		t.Fatalf("validateVSIXSupportPolicy err = %v, want dependency hold note failure", err)
+	}
+}
+
 // DHF-TEST: keel/requirement-119
 func TestValidateVSIXSupportPolicyRejectsMalformedPolicyAndManifest(t *testing.T) {
 	root := t.TempDir()
@@ -285,6 +305,16 @@ func writeVSIXPolicyFixture(t *testing.T, root, policyEngine, nodeMajor, manifes
 		policy += "VS Code runtime Node major: " + nodeMajor + "\n"
 	}
 	policy += "\nReason: owner decision on 2026-08-14 raised the floor so the VSIX toolchain can track current releases.\n"
+	policy += "\nDependency hold notes:\n\n" +
+		"- `@types/vscode` is held at `" + strings.TrimPrefix(typesVSCode, "^") + "` (current: `1.125.0`).\n" +
+		"  Reason: it must not describe APIs above the declared VS Code engine floor.\n" +
+		"  Release condition: `keel/change_request-180` raises it to the declared floor.\n" +
+		"- `@types/node` is held at `" + strings.TrimPrefix(typesNode, "^") + "` (current: `26.2.0`).\n" +
+		"  Reason: it must not describe a Node runtime above the VS Code release named by the declared floor.\n" +
+		"  Release condition: `keel/change_request-180` completes the coupled VSIX toolchain update.\n" +
+		"- `typescript` is held at `5.9.3` (current: `7.0.2`).\n" +
+		"  Reason: TypeScript 7 cannot compile this workspace against the old Node type line.\n" +
+		"  Release condition: `keel/change_request-180` moves the type packages and TypeScript together.\n"
 	if err := os.WriteFile(filepath.Join(root, "vsix", "SUPPORTED_VSCODE.md"), []byte(policy), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +328,8 @@ func validVSIXPolicyPackage(manifestFloor, typesVSCode, typesNode string) string
   "engines": { "vscode": "` + manifestFloor + `" },
   "devDependencies": {
     "@types/node": "` + typesNode + `",
-    "@types/vscode": "` + typesVSCode + `"
+    "@types/vscode": "` + typesVSCode + `",
+    "typescript": "^5.9.3"
   }
 }`
 }
