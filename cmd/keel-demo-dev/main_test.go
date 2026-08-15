@@ -668,6 +668,13 @@ func demoCaseExprName(t *testing.T, expr ast.Expr) string {
 			}
 			return value
 		}
+	case *ast.BinaryExpr:
+		// Ids composed from an exported marker (keel/requirement-126) are
+		// concatenations. Folding both operands keeps a literal-only
+		// concatenation comparable against the forbidden id set.
+		if typed.Op == token.ADD {
+			return demoCaseExprName(t, typed.X) + demoCaseExprName(t, typed.Y)
+		}
 	}
 	t.Fatalf("unsupported runOne case expression %T", expr)
 	return ""

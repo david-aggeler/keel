@@ -334,6 +334,50 @@ func TestLintRejectsRetiredDesiredStateVocabularyInVSIXTypeScriptTests(t *testin
 	}
 }
 
+// TestLintBoundsDesiredStateGroupLabelOccurrences proves the ac-479 policy:
+// keel/testbridge may not mention the display label at all, and a consumer
+// surface may state it once — a second occurrence is the duplication that leaves
+// a rename with no single correct site.
+//
+// DHF-TEST: keel/requirement-126
+func TestLintBoundsDesiredStateGroupLabelOccurrences(t *testing.T) {
+	// Built from bytes: this file sits inside a budgeted surface, so a literal
+	// here would be an occurrence of the very string under test.
+	label := string([]byte{66, 32, 45, 32, 68, 101, 115, 105, 114, 101, 100, 32, 83, 116, 97, 116, 101})
+	dir := t.TempDir()
+	bridge := filepath.Join(dir, "testbridge")
+	keeldev := filepath.Join(dir, "cmd", "keel-dev")
+	for _, sub := range []string{bridge, keeldev} {
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, dir, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+
+	// One emit site in a consumer surface is within budget.
+	writeFile(t, keeldev, "vscode.go", "package main\n\nconst groupLabel = \""+label+"\"\n")
+	if err := runLint(dir, lintFixtureFiles(t, dir)); err != nil {
+		t.Fatalf("a single consumer emit site should pass, got %v", err)
+	}
+
+	// Derivation may not name it at all.
+	writeFile(t, bridge, "testbridge.go", "package testbridge\n\nfunc match(l string) bool { return l == \""+label+"\" }\n")
+	err := runLint(dir, lintFixtureFiles(t, dir))
+	if err == nil || !strings.Contains(err.Error(), "no-desired-state-label-coupling") || !strings.Contains(err.Error(), filepath.Join("testbridge", "testbridge.go")) {
+		t.Fatalf("the label in derivation should fail lint naming the file, got %v", err)
+	}
+
+	// A second consumer occurrence is over budget and names both sites.
+	writeFile(t, bridge, "testbridge.go", "package testbridge\n\nfunc match(string) bool { return false }\n")
+	writeFile(t, keeldev, "vscode_test.go", "package main\n\nconst wantLabel = \""+label+"\"\n")
+	err = runLint(dir, lintFixtureFiles(t, dir))
+	if err == nil || !strings.Contains(err.Error(), "no-desired-state-label-coupling") ||
+		!strings.Contains(err.Error(), filepath.Join("cmd", "keel-dev", "vscode.go")) ||
+		!strings.Contains(err.Error(), filepath.Join("cmd", "keel-dev", "vscode_test.go")) {
+		t.Fatalf("a duplicated consumer label should fail lint naming both sites, got %v", err)
+	}
+}
+
 // TestCoverageFloorFails proves the ac-37 gate rejects a total below the floor.
 func TestCoverageFloorFails(t *testing.T) {
 	bin := t.TempDir()
