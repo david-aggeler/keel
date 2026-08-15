@@ -170,13 +170,18 @@ Reason (c) is also delivered by VS Code itself, with no keel call site:
 `markTaskComplete` stamps Skipped on anything still Queued or Running at
 `run.end()` (F8).
 
-**One site does not fit cleanly.** The `neutralAncestorItemsForRunEvent`
-loop under `case 'passed'` stamps intermediate **ancestors** — group
-items between the selection and the result item. They are in scope and
-never execute, so (c) covers them on its widest reading, but every other
-(c) site is a runnable leaf, and F12 records that an extension does not
-stamp group items at all. Recorded as a candidate fifth reason in
-`keel/issue-135` rather than silently absorbed into (c).
+**One site did not fit cleanly, and was deleted.** The
+`neutralAncestorItemsForRunEvent` loop under `case 'passed'` stamped
+intermediate **ancestors** — group items between the selection and the
+result item. They were in scope and never executed, so (c) covered them
+on its widest reading, but every other (c) site is a runnable leaf, and
+F12 records that an extension does not stamp group items at all. It was
+recorded as a candidate fifth reason in `keel/issue-135` rather than
+silently absorbed into (c), and `keel/change_request-183` then deleted
+it (merge `43f38e9`; `rg 'neutralAncestor' vsix/src/` returns nothing at
+that SHA). The list above is therefore exhaustive: ac-428 stays at four
+reasons and F12 holds without exception. The normative account is
+`keel/interface_spec-7`.
 
 ### Known residual limitations (accepted, documented)
 
