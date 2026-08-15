@@ -502,14 +502,14 @@ func desiredStateDeclarationDiscoveryItems(ctx context.Context, root, parentID s
 			profiles = []string{"run"}
 		}
 		groupItem := vscode.TestItem{
-			ID:          groupID,
-			ParentID:    parentID,
-			Label:       group.Label,
-			SortText:    fmt.Sprintf("b.%03d", group.Order),
-			Kind:        "group",
-			Runnable:    runnable,
-			Profiles:    profiles,
-			Limitations: []string{fmt.Sprintf("mutually_exclusive=%t", group.MutuallyExclusive)},
+			ID:                groupID,
+			ParentID:          parentID,
+			Label:             group.Label,
+			SortText:          fmt.Sprintf("b.%03d", group.Order),
+			Kind:              "group",
+			Runnable:          runnable,
+			Profiles:          profiles,
+			DesiredStateGroup: &vscode.DesiredStateGroupFacts{MutuallyExclusive: group.MutuallyExclusive},
 		}
 		items = append(items, groupItem)
 		for rowIndex, row := range derivedRows {
@@ -581,14 +581,18 @@ func desiredStateDeclarationDiscoveryItem(parentID, parentSort string, rowIndex 
 		profiles = []string{"run"}
 	}
 	return vscode.TestItem{
-		ID:          id,
-		ParentID:    parentID,
-		Label:       fmt.Sprintf("%s: %s", row.Resource, row.Desired),
-		SortText:    fmt.Sprintf("%s.%03d", parentSort, rowIndex),
-		Kind:        "group",
-		Runnable:    row.RunID != "",
-		Profiles:    profiles,
-		Limitations: []string{"current=" + derived.Current, "action=" + action, fmt.Sprintf("active=%t", derived.Active)},
+		ID:       id,
+		ParentID: parentID,
+		Label:    fmt.Sprintf("%s: %s", row.Resource, row.Desired),
+		SortText: fmt.Sprintf("%s.%03d", parentSort, rowIndex),
+		Kind:     "group",
+		Runnable: row.RunID != "",
+		Profiles: profiles,
+		DesiredStateRow: &vscode.DesiredStateRowFacts{
+			Current: derived.Current,
+			Action:  action,
+			Active:  derived.Active,
+		},
 	}
 }
 
@@ -1360,16 +1364,13 @@ type runResolution struct {
 	ExclusiveSiblingIDs []string
 }
 
+// desiredStateGroupItem reports whether the item is a desired-state group. The
+// typed facts are the carrier: an item that declares them is one, and the
+// answer no longer depends on parsing a display string.
+//
+// DHF-REQ: keel/requirement-127
 func desiredStateGroupItem(item vscode.TestItem) bool {
-	if item.Kind != "group" || item.ParentID == "" || !strings.HasPrefix(item.ID, item.ParentID+"::group::") {
-		return false
-	}
-	for _, limitation := range item.Limitations {
-		if limitation == "mutually_exclusive=true" || limitation == "mutually_exclusive=false" {
-			return true
-		}
-	}
-	return false
+	return item.Kind == "group" && item.ParentID != "" && item.DesiredStateGroup != nil
 }
 
 func nonDesiredStateGroupItemWithDescendants(items []vscode.TestItem, item vscode.TestItem) bool {
@@ -1399,7 +1400,7 @@ func exclusiveDesiredStateSiblingIDs(items []vscode.TestItem, selected vscode.Te
 		return nil
 	}
 	parent, ok := testItemByID(items, selected.ParentID)
-	if !ok || !desiredStateGroupItem(parent) || !hasLimitation(parent.Limitations, "mutually_exclusive=true") {
+	if !ok || !desiredStateGroupItem(parent) || !parent.DesiredStateGroup.MutuallyExclusive {
 		return nil
 	}
 	siblings := make([]string, 0)
@@ -1434,15 +1435,6 @@ func nearestRunnableAncestor(items map[string]vscode.TestItem, item vscode.TestI
 		parentID = parent.ParentID
 	}
 	return vscode.TestItem{}, false
-}
-
-func hasLimitation(limitations []string, limitation string) bool {
-	for _, got := range limitations {
-		if got == limitation {
-			return true
-		}
-	}
-	return false
 }
 
 func runnableDescendantLeafItems(items []vscode.TestItem, groupID string) []vscode.TestItem {

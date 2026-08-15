@@ -674,7 +674,7 @@ func TestVSCodeDiscoveryEmitsStructuredOrderedTree(t *testing.T) {
 		t.Fatalf("top-level sorted ids = %v, want %v", topIDs, wantOrder)
 	}
 	desiredGroup, ok := discoveryItemByID(doc, "keel::desired-state::group::test-preconditions")
-	if !ok || desiredGroup.ParentID != "keel::desired-state" || desiredGroup.Label != "Test Preconditions" || desiredGroup.SortText != "b.010" || strings.Join(desiredGroup.Limitations, " ") != "mutually_exclusive=false" {
+	if !ok || desiredGroup.ParentID != "keel::desired-state" || desiredGroup.Label != "Test Preconditions" || desiredGroup.SortText != "b.010" || desiredGroup.DesiredStateGroup == nil || desiredGroup.DesiredStateGroup.MutuallyExclusive {
 		t.Fatalf("desired-state group = %+v, ok=%v", desiredGroup, ok)
 	}
 	var desiredRow vscode.TestItem
@@ -684,7 +684,7 @@ func TestVSCodeDiscoveryEmitsStructuredOrderedTree(t *testing.T) {
 			break
 		}
 	}
-	if desiredRow.ID == "" || desiredRow.SortText != "b.010.001" || desiredRow.Label != "go-toolchain: available" || !strings.Contains(strings.Join(desiredRow.Limitations, " "), "action=reuse") {
+	if desiredRow.ID == "" || desiredRow.SortText != "b.010.001" || desiredRow.Label != "go-toolchain: available" || desiredRow.DesiredStateRow == nil || desiredRow.DesiredStateRow.Action != "reuse" {
 		t.Fatalf("desired-state row = %+v", desiredRow)
 	}
 

@@ -73,7 +73,10 @@ classDiagram
         -string lane_id
         -string canonical_id
         -List~string~ required_resources
+        -List~string~ limitations
         -range range
+        -desired_state_group_facts desired_state_group
+        -desired_state_row_facts desired_state_row
     }
     class range {
         +int start_line
@@ -81,14 +84,26 @@ classDiagram
         +int end_line
         +int end_column
     }
+    class desired_state_group_facts {
+        +bool mutually_exclusive
+    }
+    class desired_state_row_facts {
+        +string current
+        +string action
+        +bool active
+    }
     discovery "1" --> "1" capabilities : capabilities
     capabilities "1" --> "0..*" reconcile_result : reconcile_results
     discovery "1" --> "0..*" test_item : items
     test_item "1" --> "0..1" range : range
+    test_item "1" --> "0..1" desired_state_group_facts : desired_state_group
+    test_item "1" --> "0..1" desired_state_row_facts : desired_state_row
 ```
 
 - `test_item.kind` — root, lane, package, file, suite, test, project, group, maintenance
 - `test_item.profiles` — run, debug, coverage
+- `test_item.limitations` — human-readable prose only (lane descriptions, remediation hints, lint findings, error text). A consumer may render any element verbatim; the VSIX joins them into `TestItem.description`. No machine-readable fact travels here and nothing parses it back (requirement-127)
+- `test_item.desired_state_group` / `test_item.desired_state_row` — the typed desired-state facts, present only on the item kind they describe. Their presence is what identifies an item as a desired-state group or row; `action` is a closed enum (reuse, manual_setup_required, reconcile, reconcile_during_run) shared with `desired_state.action`. Until v0.7.3 these four facts were formatted into `limitations` as `k=v` text and recovered by substring match — a breaking wire change under design_decision-11, landed with producer and consumer on one tag (requirement-127)
 - `capabilities.reconcile_results` — bridge-computed rendered truth for exclusive desired-state rows: one stamp per row with a run id — the derived-active row `state: passed`, every other row (incl. the Unknown State peer) `state: skipped` (closed enum). The consumer replays the entries verbatim through one non-persisted TestRun per discovery refresh, **overwriting** stale results (incl. persistence-restored ones after a window reload) — no consumer branching on `mutually_exclusive` (requirement-97; replaced the never-released `reconcile_no_result_test_ids` after its removal mechanism was falsified on a live editor)
 
 ---

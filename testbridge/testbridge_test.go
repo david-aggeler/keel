@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -377,7 +378,7 @@ func TestDiscoverDerivesDesiredStateGroupsFromProvider(t *testing.T) {
 	if !ok {
 		t.Fatalf("derived desired-state group missing: %+v", doc.Items)
 	}
-	if group.ParentID != "demo::desired-state" || group.Label != "Provisioning" || group.SortText != "b.020" || strings.Join(group.Limitations, " ") != "mutually_exclusive=true" {
+	if group.ParentID != "demo::desired-state" || group.Label != "Provisioning" || group.SortText != "b.020" || group.DesiredStateGroup == nil || !group.DesiredStateGroup.MutuallyExclusive {
 		t.Fatalf("derived group = %+v, want provider label/order/exclusivity under B", group)
 	}
 	runnable, ok := testItemByID(doc.Items, "demo::action::seed-small")
@@ -592,8 +593,8 @@ func TestExclusiveDesiredStateGroupsDeriveUnknownAndSingleActiveMember(t *testin
 	if unknownItem.ParentID != groupID || !unknownItem.Runnable || !equalStrings(unknownItem.Profiles, []string{"run"}) {
 		t.Fatalf("Unknown State discovery item = %+v, want runnable bridge-owned reset child under exclusive group", unknownItem)
 	}
-	if got := limitationValue(unknownItem.Limitations, "action"); got != "reuse" {
-		t.Fatalf("Unknown State action limitation = %q, want reuse", got)
+	if unknownItem.DesiredStateRow == nil || unknownItem.DesiredStateRow.Action != "reuse" {
+		t.Fatalf("Unknown State desired-state facts = %+v, want action reuse", unknownItem.DesiredStateRow)
 	}
 
 	protocol.Reset()
@@ -1043,10 +1044,13 @@ func TestDiscoverDesiredStateRowUsesProbeDerivedCurrentAndAction(t *testing.T) {
 		t.Fatalf("discovery row missing from items: %+v", discovery.Items)
 	}
 	documentRow := desiredState.Groups[0].Rows[0]
-	gotCurrent := limitationValue(discoveryRow.Limitations, "current")
-	gotAction := limitationValue(discoveryRow.Limitations, "action")
+	if discoveryRow.DesiredStateRow == nil {
+		t.Fatalf("discovery row carries no typed desired-state facts: %+v", discoveryRow)
+	}
+	gotCurrent := discoveryRow.DesiredStateRow.Current
+	gotAction := discoveryRow.DesiredStateRow.Action
 	if gotCurrent != documentRow.Current || gotAction != documentRow.Action {
-		t.Fatalf("discovery row limitations = %v, desired-state row = %+v; want matching current/action", discoveryRow.Limitations, documentRow)
+		t.Fatalf("discovery row facts = %+v, desired-state row = %+v; want matching current/action", discoveryRow.DesiredStateRow, documentRow)
 	}
 	if gotCurrent != "full" || gotAction != "reuse" {
 		t.Fatalf("discovery current/action = %q/%q, want probe-derived full/reuse", gotCurrent, gotAction)
@@ -1098,11 +1102,11 @@ func TestDiscoverAnonymousDesiredStateRowIDIgnoresProbeDerivedAction(t *testing.
 	if before.ID != after.ID {
 		t.Fatalf("anonymous row ID changed with probe-derived action: before=%q after=%q", before.ID, after.ID)
 	}
-	if got := limitationValue(before.Limitations, "action"); got != "reconcile_during_run" {
-		t.Fatalf("first discovery action = %q, want reconcile_during_run", got)
+	if before.DesiredStateRow == nil || before.DesiredStateRow.Action != "reconcile_during_run" {
+		t.Fatalf("first discovery facts = %+v, want action reconcile_during_run", before.DesiredStateRow)
 	}
-	if got := limitationValue(after.Limitations, "action"); got != "reuse" {
-		t.Fatalf("second discovery action = %q, want reuse", got)
+	if after.DesiredStateRow == nil || after.DesiredStateRow.Action != "reuse" {
+		t.Fatalf("second discovery facts = %+v, want action reuse", after.DesiredStateRow)
 	}
 }
 
@@ -1921,7 +1925,11 @@ func TestRunNonDesiredStateGroupCancellationStopsRemainingChildren(t *testing.T)
 	}
 }
 
-// DHF-TEST: keel/requirement-84
+// A limitation whose prose happens to read like the retired k=v encoding must
+// stay inert: desired-state group identity comes from the typed facts, so this
+// collision is now structurally impossible rather than merely guarded against.
+//
+// DHF-TEST: keel/requirement-84, keel/requirement-127
 func TestRunDoesNotTreatLimitationStringAloneAsDesiredStateGroup(t *testing.T) {
 	root := t.TempDir()
 	fake := newFakeBridge(root)
@@ -2686,16 +2694,6 @@ func equalStrings(got, want []string) bool {
 	return true
 }
 
-func limitationValue(limitations []string, key string) string {
-	prefix := key + "="
-	for _, limitation := range limitations {
-		if strings.HasPrefix(limitation, prefix) {
-			return strings.TrimPrefix(limitation, prefix)
-		}
-	}
-	return ""
-}
-
 func (f *fakeBridge) Discover(_ context.Context) (vscode.DiscoveryDocument, error) {
 	if f.discoverErr != nil {
 		return vscode.DiscoveryDocument{}, f.discoverErr
@@ -3194,6 +3192,128 @@ func TestMutexLifecycleGuard(t *testing.T) {
 	assertDerived("after Unknown reset", "Unknown State", map[string]string{
 		lifecycleSmallID: "skipped", lifecycleFullID: "skipped", lifecycleUnknownID: "passed",
 	})
+}
+
+// DHF-TEST: keel/requirement-127
+func TestDiscoveryCarriesDesiredStateFactsAsTypedFields(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{desiredStateGroupItem()}
+	fake.desiredGroups = []testbridge.DesiredStateGroup{{
+		Label:             "Data Set",
+		Order:             20,
+		MutuallyExclusive: true,
+		Rows: []testbridge.DesiredStateRow{
+			probedRow("demo::desired-state::dataset::full", "app-db-full", "fixture-data", "full", "full", true, "full active", false, true),
+		},
+	}}
+
+	var raw map[string]any
+	decodeJSON(t, dispatchRaw(t, fake, root, "discover"), &raw)
+	items := rawTestItemsByID(t, raw)
+
+	group, ok := items["demo::desired-state::group::data-set"]
+	if !ok {
+		t.Fatalf("discovery missing exclusive group item: %v", rawItemIDs(items))
+	}
+	facts, ok := group["desired_state_group"].(map[string]any)
+	if !ok {
+		t.Fatalf("group item carries no desired_state_group object: %+v", group)
+	}
+	if exclusive, ok := facts["mutually_exclusive"].(bool); !ok || !exclusive {
+		t.Fatalf("mutually_exclusive = %#v, want JSON boolean true", facts["mutually_exclusive"])
+	}
+
+	row, ok := items["demo::desired-state::dataset::full"]
+	if !ok {
+		t.Fatalf("discovery missing exclusive row item: %v", rawItemIDs(items))
+	}
+	rowFacts, ok := row["desired_state_row"].(map[string]any)
+	if !ok {
+		t.Fatalf("row item carries no desired_state_row object: %+v", row)
+	}
+	if active, ok := rowFacts["active"].(bool); !ok || !active {
+		t.Fatalf("active = %#v, want JSON boolean true", rowFacts["active"])
+	}
+	if current, ok := rowFacts["current"].(string); !ok || current != "full" {
+		t.Fatalf("current = %#v, want JSON string \"full\"", rowFacts["current"])
+	}
+	if action, ok := rowFacts["action"].(string); !ok || action != "reuse" {
+		t.Fatalf("action = %#v, want JSON string \"reuse\"", rowFacts["action"])
+	}
+}
+
+// DHF-TEST: keel/requirement-127
+func TestLimitationsCarryNoDesiredStateFactEncoding(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{desiredStateGroupItem()}
+	fake.desiredGroups = []testbridge.DesiredStateGroup{{
+		Label:             "Data Set",
+		Order:             20,
+		MutuallyExclusive: true,
+		Rows: []testbridge.DesiredStateRow{
+			probedRow("demo::desired-state::dataset::small", "app-db-small", "fixture-data", "small", "small", true, "small active", false, true),
+			probedRow("demo::desired-state::dataset::full", "app-db-full", "fixture-data", "full", "full", true, "full active", false, true),
+		},
+	}}
+
+	var discovery vscode.DiscoveryDocument
+	decodeJSON(t, dispatchRaw(t, fake, root, "discover"), &discovery)
+	for _, item := range discovery.Items {
+		for _, limitation := range item.Limitations {
+			for _, key := range []string{"mutually_exclusive", "active", "current", "action"} {
+				if strings.HasPrefix(limitation, key+"=") {
+					t.Fatalf("item %s limitation %q encodes desired-state fact %q; limitations carry prose only", item.ID, limitation, key)
+				}
+			}
+		}
+	}
+
+	// The read side must recover the exclusive-group relationship from the typed
+	// facts, not from a limitations element: sibling clears still fire.
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{
+		Root:     root,
+		Protocol: &protocol,
+		RunID:    func() string { return "run-typed-facts" },
+	})
+	fullID := "demo::desired-state::dataset::full"
+	smallID := "demo::desired-state::dataset::small"
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--id", fullID}); err != nil {
+		t.Fatalf("run concrete dispatch: %v\n%s", err, protocol.String())
+	}
+	events := decodeEvents(t, protocol.String())
+	if !eventMessageContainsAll(events, "cleared", smallID, smallID, fullID) {
+		t.Fatalf("exclusive sibling clear missing after limitations stopped carrying facts: %+v", events)
+	}
+}
+
+func rawTestItemsByID(t *testing.T, doc map[string]any) map[string]map[string]any {
+	t.Helper()
+	rawItems, ok := doc["items"].([]any)
+	if !ok {
+		t.Fatalf("discovery document has no items array: %+v", doc)
+	}
+	items := make(map[string]map[string]any, len(rawItems))
+	for _, entry := range rawItems {
+		item, ok := entry.(map[string]any)
+		if !ok {
+			t.Fatalf("discovery item is not an object: %#v", entry)
+		}
+		id, _ := item["id"].(string)
+		items[id] = item
+	}
+	return items
+}
+
+func rawItemIDs(items map[string]map[string]any) []string {
+	ids := make([]string, 0, len(items))
+	for id := range items {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func dispatchRaw(t *testing.T, bridge testbridge.Bridge, root, verb string) *bytes.Buffer {
