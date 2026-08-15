@@ -169,7 +169,7 @@ func toolPinsEqual(a, b map[string]toolPin) bool {
 	}
 	for k, av := range a {
 		bv, ok := b[k]
-		if !ok || av.name != bv.name || av.want != bv.want || !stringSliceEqual(av.versionArgs, bv.versionArgs) {
+		if !ok || av.name != bv.name || av.want != bv.want || av.install != bv.install || !stringSliceEqual(av.versionArgs, bv.versionArgs) {
 			return false
 		}
 	}

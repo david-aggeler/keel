@@ -39,10 +39,11 @@ type step struct {
 	// (keel/ac-42) — a missing or drifted external tool fails the gate loud,
 	// never a silent skip.
 	tool string
-	// toolPins is the already-loaded config's pin map. CI sets this when it
-	// builds the step list so one gate process does not reread keel-dev.yaml
-	// between file selection and subprocess execution.
-	toolPins map[string]toolPin
+	// resolver resolves pinned tools to concrete binaries from the
+	// already-loaded config. CI sets this when it builds the step list so one
+	// gate process does not reread keel-dev.yaml between file selection and
+	// subprocess execution, and so each tool is installed and probed once.
+	resolver *toolResolver
 	// advisory marks a step whose output is surfaced through keel/log but whose
 	// failure (non-zero exit) never fails the gate (keel/ac-41: deadcode).
 	advisory bool
@@ -177,16 +178,57 @@ func ciStepsWithConfig(ctx context.Context, logger *slog.Logger, dir string, cfg
 	// The coverage-floored test suite runs last: it is the most expensive step
 	// and the fast static checks should fail before it does.
 	steps = append(steps, step{name: "test", fn: runTestWithCoverage})
-	attachToolPins(steps, cfg.toolPins())
-	return steps
+
+	resolver := newToolResolver(cfg.toolPins())
+	attachToolResolver(steps, resolver)
+	// The pin preflight runs before the first external tool: it resolves and
+	// verifies EVERY pin in one pass, so a run enumerates all drifted or
+	// un-installable tools at once instead of one per gate run (keel/issue-142).
+	// DHF-REQ: keel/requirement-12 (keel/ac-42, keel/ac-465)
+	tools := stepToolNames(steps)
+	return insertStepBefore(steps, "golangci-lint", step{
+		name: "tool-pins",
+		fn: func(ctx context.Context, logger *slog.Logger, _ string) error {
+			return resolver.verifyPins(ctx, logger, tools)
+		},
+	})
 }
 
-func attachToolPins(steps []step, pins map[string]toolPin) {
-	for i := range steps {
-		if steps[i].tool != "" {
-			steps[i].toolPins = pins
+// stepToolNames lists the pinned tools this step list will actually run, so the
+// preflight verifies exactly those — no more, no less.
+func stepToolNames(steps []step) []string {
+	seen := map[string]bool{}
+	var names []string
+	for _, s := range steps {
+		if s.tool != "" && !seen[s.tool] {
+			seen[s.tool] = true
+			names = append(names, s.tool)
 		}
 	}
+	return names
+}
+
+func attachToolResolver(steps []step, resolver *toolResolver) {
+	for i := range steps {
+		if steps[i].tool != "" {
+			steps[i].resolver = resolver
+		}
+	}
+}
+
+// insertStepBefore places s immediately before the named step, or appends it
+// when that step is absent, so the pin preflight cannot silently vanish if the
+// battery is reordered.
+func insertStepBefore(steps []step, name string, s step) []step {
+	for i := range steps {
+		if steps[i].name == name {
+			out := make([]step, 0, len(steps)+1)
+			out = append(out, steps[:i]...)
+			out = append(out, s)
+			return append(out, steps[i:]...)
+		}
+	}
+	return append(steps, s)
 }
 
 // DHF-REQ: keel/requirement-85 (keel/ac-454)
@@ -345,28 +387,28 @@ func runStep(ctx context.Context, logger *slog.Logger, dir string, s step) error
 		return nil
 	}
 
-	// Verify the pinned external tool before shelling out to it: a missing or
-	// drifted gate tool fails loud, never a silent skip (keel/ac-42).
+	// Resolve and verify the pinned external tool before shelling out to it: the
+	// gate runs the binary its own branch pins, and a missing, un-installable, or
+	// drifted gate tool fails loud, never a silent skip (keel/ac-42, keel/ac-465).
+	program := s.program
 	if s.tool != "" {
-		pins := s.toolPins
-		if pins == nil {
+		resolver := s.resolver
+		if resolver == nil {
 			cfg, err := loadKeelDevConfig(dir)
 			if err != nil {
 				return err
 			}
-			pins = cfg.toolPins()
+			resolver = newToolResolver(cfg.toolPins())
 		}
-		pin, ok := pins[s.tool]
-		if !ok {
-			return fmt.Errorf("keel-dev: no version pin registered for gate tool %q", s.tool)
-		}
-		if err := verifyToolPin(ctx, logger, pin); err != nil {
+		resolved, err := resolver.resolve(ctx, logger, s.tool)
+		if err != nil {
 			return err
 		}
+		program = resolved
 	}
 
 	req := procexec.Request{
-		Program:        s.program,
+		Program:        program,
 		Args:           s.args,
 		Dir:            dir,
 		Logger:         logger,
