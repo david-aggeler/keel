@@ -33,7 +33,7 @@ import (
 
 const (
 	vscodeGroupMaintenance  = testbridge.MaintenanceGroupID
-	vscodeGroupDesiredState = "keel::desired-state"
+	vscodeGroupDesiredState = "keel" + testbridge.DesiredStateGroupIDSuffix
 	vscodeGroupLanes        = "keel::lanes"
 	vscodeGroupFrameworks   = "keel::frameworks"
 
@@ -48,6 +48,11 @@ const (
 	vscodeDesiredStateGoToolchain  = "keel::desired-state::go-toolchain"
 	vscodeDesiredStateModuleRoot   = "keel::desired-state::keel-module-root"
 	vscodeDesiredStateStubBinaries = "keel::desired-state::stub-binaries"
+
+	// vscodeGroupDesiredStateLabel is display only — the Test Explorer row text
+	// and its sort prefix. The bridge identifies the group by
+	// vscodeGroupDesiredState, so this string is free to change (keel/requirement-126).
+	vscodeGroupDesiredStateLabel = "B - Desired State"
 )
 
 var vscodeLaneIDs = []string{vscodeLaneLint, vscodeLaneTestFast, vscodeLaneTestCoverage, vscodeLaneVSIXGate, vscodeLaneCI}
@@ -326,7 +331,7 @@ func (keelTestBridge) Metadata() vscode.DevtoolMetadata {
 // DHF-REQ: keel/requirement-39, keel/requirement-43, keel/requirement-46, keel/requirement-48, keel/requirement-51, keel/requirement-65, keel/requirement-69
 func buildVSCodeDiscovery(root string) (vscode.DiscoveryDocument, error) {
 	items := []vscode.TestItem{
-		groupItem(vscodeGroupDesiredState, "", "B - Desired State", "b"),
+		groupItem(vscodeGroupDesiredState, "", vscodeGroupDesiredStateLabel, "b"),
 		groupItem(vscodeGroupLanes, "", "C - Lanes", "c"),
 		groupItem(vscodeGroupFrameworks, "", "D - Frameworks", "d"),
 	}

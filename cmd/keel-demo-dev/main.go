@@ -25,7 +25,7 @@ import (
 const (
 	idRoot        = "keel-demo-dev::root"
 	idMaintenance = testbridge.MaintenanceGroupID
-	idDesired     = "keel-demo-dev::desired-state"
+	idDesired     = "keel-demo-dev" + testbridge.DesiredStateGroupIDSuffix
 	idLanes       = "keel-demo-dev::lanes"
 	idFrameworks  = "keel-demo-dev::frameworks"
 	idGoFramework = "keel-demo-dev::frameworks::go"
