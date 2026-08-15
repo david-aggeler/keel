@@ -30,7 +30,7 @@ Rules for coding agents in this repo. Short and blunt on purpose.
 
 ## Keel Development Documents — Use Gold
 
-Keel's vision, change_request, issue, issue_fix, exploration, test_strategy, epic, story, formal_review, and every other HELIX01 type are owned by the **gold** instance (product `keel`) and authored only through `mcp__gold__*` — `create_<type>` / `update_<type>` / `draft_<type>`, `catalog_*` for the template and skill roots, and the product-plane tools (`admin_create_product`, `admin_create_product_version`, …) for products and versions. Never as local markdown. Every call takes `product: "keel"`, IDs are allocated server-side (never hand-pick a sequence number), and record status is live data — query it at time of use instead of caching it locally.
+Keel's vision, change_request, issue, issue_fix, exploration, test_strategy, epic, story, formal_review, and every other HELIX01 type are owned by the **gold** instance (product `keel`) and authored only through `mcp__gold__*` — `create_<type>` / `update_<type>` / `draft_<type>`, `catalog_*` (read-only from here — the catalog is OpenBrain's), and the product-plane tools (`admin_create_product`, `admin_create_product_version`, …) for products and versions. Never as local markdown. Every call takes `product: "keel"`, IDs are allocated server-side (never hand-pick a sequence number), and record status is live data — query it at time of use instead of caching it locally.
 
 **Scratchpad:** put working files (drafts, one-off scripts, intermediate outputs the user may want to read) in `/projects/keel/scratchpad/` — it is gitignored and survives the session. Session-private tmp dirs are fine only for files the user never needs to open.
 
@@ -50,7 +50,19 @@ The loop, always:
 5. Close the CR with the merge SHA. If an issue drove it, close the
    issue via an `issue_fix` that references the CR and the SHA.
 
-Small change? Still a CR. Docs-only? Still a CR (`transition_gate: prose`).
+Small change? Still a CR. Repo docs-only? Still a CR
+(`transition_gate: prose`).
+
+Scope of the rule: it covers the **repo working tree** — code, repo
+markdown, configs, scripts, the VSIX. It does NOT cover:
+
+- **SoR records.** Creating or updating a gold record (architecture
+  description, requirement, issue, review, …) needs no CR. The record
+  plane is its own change control.
+- **Catalog items.** Materialized skills, templates, methods, runbooks,
+  executors are owned by OpenBrain. Do not edit them here — fix them at
+  the source. Locally-authored skills under `.claude/skills/` that were
+  never materialized are repo files and follow the repo rule.
 
 ## Transition gates
 
