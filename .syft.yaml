@@ -1,0 +1,42 @@
+# syft configuration — scopes the SBOM to what keel actually publishes.
+#
+# syft walks the filesystem, so anything sitting in the checkout is catalogued
+# as keel's unless excluded. That is the same working-tree-vs-tracked-tree
+# defect keel/requirement-85 settled for the gate's file-selecting steps
+# (keel/issue-137, change_request-178); the SBOM has it one layer out, where it
+# corrupts a compliance artifact instead of reddening a gate.
+#
+# grype is run against the SBOM syft produces here
+# (`grype "sbom:.../raw/filesystem.cyclonedx.json"`), so these exclusions scope
+# the vulnerability scan too — one control point for both tools.
+#
+# Measured at 2026-08-15 on this checkout, scanning through this config:
+#   components            1675 -> 469
+#   github.com/david-aggeler/keel rows  16 -> 1  (the survivor is keel's own
+#                                                 go.mod, which is correct)
+#   pkg:nuget                           24 -> 0  (all were VS Code's bundled
+#                                                 PowerShell scripts)
+#   pkg:golang                               40  (the real dependency set)
+#   pkg:npm                                 398  (unchanged — see below)
+#
+# NOT excluded, deliberately: vsix/node_modules. It is gitignored, but it is the
+# dependency set the Keel Test Bridge VSIX actually ships and the only source of
+# npm license metadata — 398 components. Excluding it blanks every npm license
+# while looking like a routine cleanup (keel/issue-146).
+#
+# The rule here is "exclude what is not this product", NOT "exclude what git
+# ignores".
+exclude:
+  # openbrain reference clone — a different product's source tree, ~10 go.mod
+  # files that name keel as their dependency.
+  - ./.devtools/**
+  # Working files; holds clones of other products (CLAUDE.md directs agents here).
+  - ./scratchpad/**
+  # In-flight duplicate checkouts of keel itself, created per change request.
+  - ./worktrees/**
+  # Our own build output. syft reads the module metadata embedded in a Go binary,
+  # so these re-report keel as one of its own dependencies.
+  - ./bin/**
+  # VS Code builds downloaded by @vscode/test-electron for the headless suite.
+  # Source of the pkg:nuget/Microsoft.PowerShell.* rows.
+  - ./vsix/.vscode-test/**
