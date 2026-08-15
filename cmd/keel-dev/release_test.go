@@ -120,12 +120,14 @@ func moduleFixture(t *testing.T) string {
 	writeFile(t, dir, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, dir, "VERSION", "9.9.9\n")
 	writeFile(t, dir, "p.go", "package p\n\nfunc One() int {\n\treturn 1\n}\n")
-	writeFile(t, dir, ".stub-git-ls-files", "go.mod\nVERSION\np.go\nvsix/package.json\n")
+	writeFile(t, dir, ".stub-git-ls-files", "go.mod\nVERSION\np.go\nvsix/package.json\nvsix/SUPPORTED_VSCODE.md\n")
 	if err := os.MkdirAll(filepath.Join(dir, "vsix"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	writeFile(t, dir, filepath.Join("vsix", "package.json"),
-		"{\n  \"name\": \"keel-test-bridge\",\n  \"version\": \"0.0.0\",\n  \"scripts\": {\n    \"package:vsix\": \"true\",\n    \"ci\": \"true\",\n    \"test:coverage\": \"true\"\n  }\n}\n")
+		"{\n  \"name\": \"keel-test-bridge\",\n  \"version\": \"0.0.0\",\n  \"engines\": {\n    \"vscode\": \"^1.125.0\"\n  },\n  \"scripts\": {\n    \"package:vsix\": \"true\",\n    \"ci\": \"true\",\n    \"test:coverage\": \"true\"\n  },\n  \"devDependencies\": {\n    \"@types/node\": \"^22.20.1\",\n    \"@types/vscode\": \"1.102.0\"\n  }\n}\n")
+	writeFile(t, dir, filepath.Join("vsix", "SUPPORTED_VSCODE.md"),
+		"# Keel Test Bridge Supported VS Code\n\nMinimum supported VS Code: ^1.125.0\nVS Code runtime Node major: 22\n\nReason: fixture\n")
 	return dir
 }
 
