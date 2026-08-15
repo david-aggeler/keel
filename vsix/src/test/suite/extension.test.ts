@@ -72,6 +72,23 @@ suite('Keel Test Bridge config contract', () => {
     assert.ok(!commands.has('vela.tests.refresh'));
   });
 
+  // DHF-TEST: keel/requirement-119
+  test('vsix toolchain types follow the declared VS Code floor', () => {
+    const manifestPath = path.resolve(__dirname, '../../../package.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {
+      engines: { vscode: string };
+      devDependencies: Record<string, string>;
+    };
+    const supportPolicy = fs.readFileSync(path.resolve(__dirname, '../../../SUPPORTED_VSCODE.md'), 'utf8');
+
+    assert.equal(manifest.engines.vscode, '^1.125.0');
+    assert.equal(manifest.devDependencies['@types/vscode'], '1.125.0');
+    assert.equal(manifest.devDependencies['@types/node'], '^26.2.0');
+    assert.equal(manifest.devDependencies.typescript, '^7.0.2');
+    assert.match(supportPolicy, /VS Code runtime Node major: 26/);
+    assert.doesNotMatch(supportPolicy, /is held at/);
+  });
+
   // DHF-TEST: keel/requirement-44
   test('manifest surfaces only the frequent commands in Testing-view menus', () => {
     const manifestPath = path.resolve(__dirname, '../../../package.json');
