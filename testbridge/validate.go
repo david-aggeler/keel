@@ -149,7 +149,7 @@ func validateDesiredStateRow(state vscode.DesiredState) error {
 	if !in(state.Status, "satisfied", "blocked", "reconcilable") {
 		return fmt.Errorf("keel/testbridge: desired-state row %q has invalid status %q", state.Resource, state.Status)
 	}
-	if !in(state.Action, "reuse", "manual_setup_required", "reconcile", "reconcile_during_run") {
+	if !vscode.IsDesiredStateAction(state.Action) {
 		return fmt.Errorf("keel/testbridge: desired-state row %q has invalid action %q", state.Resource, state.Action)
 	}
 	return nil

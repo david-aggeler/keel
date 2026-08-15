@@ -623,8 +623,8 @@ suite('Keel Test Bridge config contract', () => {
       );
       const refreshed = currentTree()?.discoveryItemsById.get(runID);
       assert.ok(refreshed, 'post-run refresh should keep the selected desired-state row published');
-      assert.ok(refreshed.limitations?.includes('active=true'), `post-run row limitations = ${refreshed.limitations}`);
-      assert.ok(refreshed.limitations?.includes('action=reuse'), `post-run row limitations = ${refreshed.limitations}`);
+      assert.equal(refreshed.desired_state_row?.active, true, `post-run row facts = ${JSON.stringify(refreshed.desired_state_row)}`);
+      assert.equal(refreshed.desired_state_row?.action, 'reuse', `post-run row facts = ${JSON.stringify(refreshed.desired_state_row)}`);
     } finally {
       if (previousDevWorkspace === undefined) {
         delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
@@ -672,10 +672,10 @@ function discovery() {
       'demo::desired-state::dataset::unknown'
     ].map((id) => ({ test_id: id, state: id === active ? 'passed' : 'skipped', message: id === active ? 'active' : 'not active' })) },
     items: [
-      { id: 'demo::desired-state::dataset', label: 'Data Set', kind: 'group', runnable: false, profiles: [], limitations: ['mutually_exclusive=true'] },
-      { id: 'demo::desired-state::dataset::small', parent_id: 'demo::desired-state::dataset', label: 'small', kind: 'test', runnable: true, profiles: ['run'], limitations: ['active=' + (active === 'demo::desired-state::dataset::small')] },
-      { id: 'demo::desired-state::dataset::full', parent_id: 'demo::desired-state::dataset', label: 'full', kind: 'test', runnable: true, profiles: ['run'], limitations: ['active=' + (active === 'demo::desired-state::dataset::full')] },
-      { id: 'demo::desired-state::dataset::unknown', parent_id: 'demo::desired-state::dataset', label: 'Unknown State', kind: 'test', runnable: true, profiles: ['run'], limitations: ['active=' + (active === 'demo::desired-state::dataset::unknown')] }
+      { id: 'demo::desired-state::dataset', label: 'Data Set', kind: 'group', runnable: false, profiles: [], desired_state_group: { mutually_exclusive: true } },
+      { id: 'demo::desired-state::dataset::small', parent_id: 'demo::desired-state::dataset', label: 'small', kind: 'test', runnable: true, profiles: ['run'], desired_state_row: { current: 'small', action: 'reuse', active: active === 'demo::desired-state::dataset::small' } },
+      { id: 'demo::desired-state::dataset::full', parent_id: 'demo::desired-state::dataset', label: 'full', kind: 'test', runnable: true, profiles: ['run'], desired_state_row: { current: 'full', action: 'reuse', active: active === 'demo::desired-state::dataset::full' } },
+      { id: 'demo::desired-state::dataset::unknown', parent_id: 'demo::desired-state::dataset', label: 'Unknown State', kind: 'test', runnable: true, profiles: ['run'], desired_state_row: { current: 'unknown', action: 'reuse', active: active === 'demo::desired-state::dataset::unknown' } }
     ]
   };
 }
@@ -813,13 +813,15 @@ process.exit(2);
 
   // ac-311 (requirement-97 / design_decision-5): the VSIX applies bridge
   // decisions verbatim and must not branch on the mutually_exclusive wire
-  // flag. Allowed occurrences in production sources: the protocol.ts type
-  // declaration and the display passthrough in formatDesiredStateGroup.
+  // flag. Allowed occurrences in production sources: two protocol.ts type
+  // declarations — the desired-state group and the typed discovery-item facts
+  // that replaced the k=v limitations encoding (requirement-127) — and the
+  // display passthrough in formatDesiredStateGroup.
   //
-  // DHF-TEST: keel/requirement-97
+  // DHF-TEST: keel/requirement-97, keel/requirement-127
   test('production sources do not branch on mutually_exclusive', () => {
     const srcDir = path.resolve(__dirname, '../../../src');
-    const allowed = new Map([['protocol.ts', 1], ['extension.ts', 1]]);
+    const allowed = new Map([['protocol.ts', 2], ['extension.ts', 1]]);
     const offenders: string[] = [];
     for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.endsWith('.ts')) {

@@ -125,7 +125,50 @@ type TestItem struct {
 	PlaywrightProject string   `json:"playwright_project,omitempty"`
 	CanonicalID       string   `json:"canonical_id,omitempty"`
 	RequiredResources []string `json:"required_resources,omitempty"`
-	Limitations       []string `json:"limitations,omitempty"`
+	// Limitations carries human-readable prose only — lane descriptions,
+	// remediation hints, lint findings, error text. A consumer may render any
+	// element of it verbatim. Machine-readable facts belong in typed fields.
+	Limitations       []string                `json:"limitations,omitempty"`
+	DesiredStateGroup *DesiredStateGroupFacts `json:"desired_state_group,omitempty"`
+	DesiredStateRow   *DesiredStateRowFacts   `json:"desired_state_row,omitempty"`
+}
+
+// DesiredStateGroupFacts are the typed desired-state facts a discovery item
+// carries when it is a desired-state group. Its presence is what identifies
+// the item as one.
+//
+// DHF-REQ: keel/requirement-127
+type DesiredStateGroupFacts struct {
+	MutuallyExclusive bool `json:"mutually_exclusive"`
+}
+
+// DesiredStateRowFacts are the typed desired-state facts a discovery item
+// carries when it is a row inside a desired-state group. Its presence is what
+// identifies the item as one.
+//
+// DHF-REQ: keel/requirement-127
+type DesiredStateRowFacts struct {
+	Current string `json:"current"`
+	Action  string `json:"action"`
+	Active  bool   `json:"active"`
+}
+
+// desiredStateActions is the closed set of action values a desired-state row
+// may carry, on the desired-state document and on the discovery item alike.
+var desiredStateActions = map[string]struct{}{
+	"reuse":                 {},
+	"manual_setup_required": {},
+	"reconcile":             {},
+	"reconcile_during_run":  {},
+}
+
+// IsDesiredStateAction reports whether action is one of the closed enum values
+// the producer emits.
+//
+// DHF-REQ: keel/requirement-127
+func IsDesiredStateAction(action string) bool {
+	_, ok := desiredStateActions[action]
+	return ok
 }
 
 // Range is a zero-based source range in a test item.

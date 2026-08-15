@@ -54,9 +54,10 @@ per-consumer variation (lane sets, maintenance items) is data, not code.
 **Mechanics — wire contract.** Types and embedded JSON Schemas live in
 `keel/vscode` (`vscoderun.go`, `schemas/*.json`); the item model carries
 `sort_text` (VS Code has no sorting concept — order is encoded as label prefix
-plus sortText), `uri`/`range` (click-to-source), `limitations` (rendered as
-description), `required_resources` (tags), and `canonical_id` (alias items,
-the covers mechanism). Run events are projected onto canonical test ids by the
+plus sortText), `uri`/`range` (click-to-source), `limitations` (prose, rendered
+as description), `required_resources` (tags), `canonical_id` (alias items,
+the covers mechanism), and the typed `desired_state_group` /
+`desired_state_row` facts that carry desired-state state off the prose field. Run events are projected onto canonical test ids by the
 projectors in `keel/vscode`; the VSIX mirrors alias state via `canonical_id`.
 Detail contract: interface_spec §2 (schema'd documents) and §4 (lanes file).
 

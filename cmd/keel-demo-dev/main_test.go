@@ -145,7 +145,7 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	assertItem(t, discovery.Items, "go::test::failing::TestReferenceFailure", "test", true)
 	assertItem(t, discovery.Items, "keel-demo-dev::desired-state::group::test-preconditions", "group", true)
 	dataSetGroup := assertItem(t, discovery.Items, "keel-demo-dev::desired-state::group::app-db-data-set", "group", false)
-	if dataSetGroup.SortText != "b.020" || !strings.Contains(strings.Join(dataSetGroup.Limitations, " "), "mutually_exclusive=true") {
+	if dataSetGroup.SortText != "b.020" || dataSetGroup.DesiredStateGroup == nil || !dataSetGroup.DesiredStateGroup.MutuallyExclusive {
 		t.Fatalf("data-set discovery group = %+v, want order and exclusivity surfaced", dataSetGroup)
 	}
 	for _, id := range []string{"keel-demo-dev::desired-state::docker-env", "keel-demo-dev::desired-state::dataset::small"} {
