@@ -88,12 +88,12 @@
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
-    "@types/node": "^22.20.1",
-    "@types/vscode": "1.102.0",
+    "@types/node": "^26.2.0",
+    "@types/vscode": "1.125.0",
     "@vscode/test-cli": "^0.0.15",
     "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^3.9.2",
     "mocha": "^11.8.0",
-    "typescript": "^5.9.3"
+    "typescript": "^7.0.2"
   }
 }
