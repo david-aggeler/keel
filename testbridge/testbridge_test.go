@@ -1481,8 +1481,11 @@ func TestRunExpandsRunnableDesiredStateGroupToRows(t *testing.T) {
 	if len(fake.runIDs) != 0 {
 		t.Fatalf("consumer runner received group run ids: %v", fake.runIDs)
 	}
-	if calls["demo::desired-state::db"] != 2 || calls["demo::desired-state::cache"] != 2 {
-		t.Fatalf("probe calls = %+v, want plan-derivation probe plus row-run probe per runnable member row", calls)
+	// One run is one derivation pass, so the plan-derivation site and the
+	// row-run site share a single probe execution per member row
+	// (keel/requirement-129).
+	if calls["demo::desired-state::db"] != 1 || calls["demo::desired-state::cache"] != 1 {
+		t.Fatalf("probe calls = %+v, want one shared probe execution per runnable member row", calls)
 	}
 	events := decodeEvents(t, protocol.String())
 	wantRequested := []vscode.RunRequest{
@@ -1562,8 +1565,11 @@ func TestRunGroupSelectionDoesNotDuplicateExplicitMemberRows(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("mixed group run dispatch: %v\n%s", err, protocol.String())
 	}
-	if calls["demo::desired-state::db"] != 2 || calls["demo::desired-state::cache"] != 2 {
-		t.Fatalf("probe calls = %+v, want plan-derivation probe plus one deduplicated row-run probe per member row", calls)
+	// Same shared-pass accounting as the group-expansion case above
+	// (keel/requirement-129): one execution per member row, not one per
+	// derivation site.
+	if calls["demo::desired-state::db"] != 1 || calls["demo::desired-state::cache"] != 1 {
+		t.Fatalf("probe calls = %+v, want one deduplicated probe execution per member row", calls)
 	}
 	events := decodeEvents(t, protocol.String())
 	wantRequested := []vscode.RunRequest{
