@@ -403,6 +403,31 @@ func TestModuleHygieneStepDoesNotMutateManifestFiles(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-8 (keel/ac-464)
+func TestModuleZipStepFailsOnTrackedMalformedPath(t *testing.T) {
+	requireTool(t, "git")
+
+	dir := t.TempDir()
+	mustRun(t, dir, "git", "init")
+	writeFile(t, dir, "go.mod", "module example.com/main\n\ngo 1.25\n")
+	writeFile(t, dir, keelDevConfigFile, "gate:\n  excludes:\n    - docs/auto-generated/**\n")
+	badDir := filepath.Join(dir, "docs", "auto-generated", "sbom", "licenses", "go-.", "example.com", "dep")
+	if err := os.MkdirAll(badDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	badPath := filepath.Join("docs", "auto-generated", "sbom", "licenses", "go-.", "example.com", "dep", "LICENSE")
+	writeFile(t, dir, badPath, "license\n")
+	mustRun(t, dir, "git", "add", "go.mod", keelDevConfigFile, badPath)
+
+	err := runStep(context.Background(), discardLogger(), dir, stepByName(t, ciSteps(context.Background(), discardLogger(), dir), "module-zip"))
+	if err == nil {
+		t.Fatal("module-zip should fail on a tracked path rejected by module zip rules")
+	}
+	if !strings.Contains(err.Error(), filepath.ToSlash(badPath)) || !strings.Contains(err.Error(), "trailing dot") {
+		t.Fatalf("module-zip error should name the malformed tracked path and reason, got %v", err)
+	}
+}
+
 // TestCiStepsHasStaticBattery asserts the gate wiring includes every pinned
 // static tool and marks deadcode advisory, so a refactor cannot silently drop a
 // step.
