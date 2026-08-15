@@ -8,6 +8,7 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp v0.21.0
 	go.opentelemetry.io/otel/sdk v1.45.0
 	go.opentelemetry.io/otel/sdk/log v0.21.0
+	golang.org/x/mod v0.40.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
