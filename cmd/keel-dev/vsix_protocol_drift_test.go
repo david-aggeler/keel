@@ -560,8 +560,8 @@ func TestVSIXProtocolCoverageGapsRedOnAnUndecidedFamily(t *testing.T) {
 		t.Fatalf("committed coverage decision has gaps:\n  %s", strings.Join(gaps, "\n  "))
 	}
 
-	gaps := vsixProtocolCoverageGaps(append(families, "setup-plan"))
-	if len(gaps) != 1 || !strings.Contains(gaps[0], "setup-plan") {
+	gaps := vsixProtocolCoverageGaps(append(families, "unaccounted-family"))
+	if len(gaps) != 1 || !strings.Contains(gaps[0], "unaccounted-family") {
 		t.Fatalf("a new schema family did not red the coverage decision: %v", gaps)
 	}
 }
