@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -43,6 +44,12 @@ type Request struct {
 	// Bin is the claude binary to execute. Empty → "claude" (resolved via PATH).
 	// Tests point this at a stub.
 	Bin string
+	// MaxOutputBytes is the hard ceiling on combined captured stdout and stderr
+	// bytes for this run, passed through to keel/exec. A non-positive value uses
+	// [procexec.DefaultMaxOutputBytes]; no value disables the ceiling.
+	//
+	// DHF-REQ: keel/requirement-81
+	MaxOutputBytes int
 	// Logger receives the shared process lifecycle and curated claude progress
 	// records. Nil produces no output at all: a library handed no sink stays
 	// silent rather than emitting outside the caller's formatter, file sinks,
@@ -99,9 +106,12 @@ type resultEvent struct {
 // A non-zero exit with parseable JSON on stdout still returns the Result
 // (with an error when is_error is false — e.g. --max-turns exhaustion), so
 // callers can inspect partial metrics. A non-zero exit with empty stdout
-// returns only an error carrying stderr.
+// returns only an error carrying stderr. A run killed at the output ceiling
+// returns no Result and an error satisfying
+// errors.Is(err, [procexec.ErrOutputLimitExceeded]), whatever the result event
+// reported.
 //
-// DHF-REQ: keel/requirement-2, openbrain/requirement-615
+// DHF-REQ: keel/requirement-2, openbrain/requirement-615, keel/requirement-81
 func Run(ctx context.Context, req Request) (*Result, error) {
 	if req.Prompt == "" {
 		return nil, fmt.Errorf("keel/exec/claude: empty prompt")
@@ -144,19 +154,33 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 		logger = logging.Discard()
 	}
 	proc, startErr := procexec.ProcessStart(ctx, procexec.Request{
-		Program: bin,
-		Args:    args,
-		Dir:     req.Dir,
-		Env:     os.Environ(),
-		Stdout:  stdout,
-		Stderr:  &stderr,
-		Logger:  logger,
+		Program:        bin,
+		Args:           args,
+		Dir:            req.Dir,
+		Env:            os.Environ(),
+		Stdout:         stdout,
+		Stderr:         &stderr,
+		MaxOutputBytes: req.MaxOutputBytes,
+		Logger:         logger,
 	})
 	var runErr error
 	if startErr != nil {
 		runErr = startErr
 	} else {
 		_, runErr = proc.Wait()
+	}
+
+	// The output ceiling is an infrastructure verdict about the run: keel/exec
+	// killed the child for overrunning it, so it outranks the outcome policy
+	// below, which discards the wait error whenever the terminal result event
+	// carried is_error — the very event an overrunning child has usually already
+	// emitted. No Result is returned with it: the stream stops mid-flight at the
+	// ceiling and nothing on Result records that truncation (keel/issue-160).
+	//
+	// DHF-REQ: keel/requirement-81
+	if errors.Is(runErr, procexec.ErrOutputLimitExceeded) {
+		return nil, fmt.Errorf("keel/exec/claude: %s: %w — stderr: %s",
+			bin, runErr, bytes.TrimSpace(stderr.Bytes()))
 	}
 
 	if err := stdout.Err(); err != nil {

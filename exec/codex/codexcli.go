@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -65,6 +66,12 @@ type Request struct {
 	// ExtraArgs are caller passthrough flags (sandbox/approvals), placed
 	// before the prompt positional arg.
 	ExtraArgs []string
+	// MaxOutputBytes is the hard ceiling on combined captured stdout and stderr
+	// bytes for this run, passed through to keel/exec. A non-positive value uses
+	// [procexec.DefaultMaxOutputBytes]; no value disables the ceiling.
+	//
+	// DHF-REQ: keel/requirement-81
+	MaxOutputBytes int
 	// Env are additional "KEY=VALUE" environment assignments layered on top of
 	// the parent process environment for the codex child (and thus its own
 	// children, e.g. the merge-gate build). Later entries win over earlier ones
@@ -89,9 +96,11 @@ type Request struct {
 // A non-zero exit with at least one parsed event still returns the Result so
 // callers can inspect ExitCode and partial events. A non-zero exit with zero
 // parsed events returns only an error carrying stderr. A spawn failure returns
-// the error.
+// the error. A run killed at the output ceiling returns no Result and an error
+// satisfying errors.Is(err, [procexec.ErrOutputLimitExceeded]), whatever the
+// event stream held.
 //
-// DHF-REQ: keel/requirement-7, openbrain/requirement-181, keel/requirement-2
+// DHF-REQ: keel/requirement-7, openbrain/requirement-181, keel/requirement-2, keel/requirement-81
 func Run(ctx context.Context, req Request) (*Result, error) {
 	if req.Prompt == "" {
 		return nil, fmt.Errorf("keel/exec/codex: empty prompt")
@@ -133,10 +142,11 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 		// Layer caller-supplied assignments on top of the inherited environment;
 		// exec uses the last value for a duplicate key, so appending lets Env
 		// override an inherited TMPDIR (openbrain/requirement-181).
-		Env:    append(os.Environ(), req.Env...),
-		Stdin:  devNull,
-		Stdout: stdout,
-		Logger: req.Logger,
+		Env:            append(os.Environ(), req.Env...),
+		Stdin:          devNull,
+		Stdout:         stdout,
+		MaxOutputBytes: req.MaxOutputBytes,
+		Logger:         req.Logger,
 		Configure: func(cmd *exec.Cmd) {
 			// Put the child in its own process group so a cancel/timeout kill reaches
 			// codex's whole subprocess tree, not just the direct child.
@@ -160,6 +170,20 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 		res.Final = &res.Events[n-1]
 	}
 	scanErr := stdout.Err()
+
+	// The output ceiling is an infrastructure verdict about the run: keel/exec
+	// killed the child for overrunning it, so it outranks every outcome policy
+	// below — none of which can see it, because an overrunning child has by
+	// definition already produced events. No Result is returned with it: the
+	// stream stops mid-flight at the ceiling and nothing on Result records that
+	// truncation, so handing back the fragment would invite the very
+	// reads-as-success misuse this guard exists to stop (keel/issue-160).
+	//
+	// DHF-REQ: keel/requirement-81
+	if errors.Is(waitErr, procexec.ErrOutputLimitExceeded) {
+		return nil, fmt.Errorf("keel/exec/codex: %s: %w — stderr: %s",
+			bin, waitErr, strings.TrimSpace(processResult.Stderr))
+	}
 
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return res, fmt.Errorf("keel/exec/codex: %s: %w — stderr: %s",
