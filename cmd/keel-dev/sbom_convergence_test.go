@@ -87,11 +87,11 @@ func TestSBOMConvergenceAcceptsNOTICENamingTheProduct(t *testing.T) {
 }
 
 // A NOTICE whose banner the generator reshapes carries no occurrence this guard
-// recognises, so it would pass while asserting nothing. That silent pass is the
+// matches, so it would pass while asserting nothing. That silent pass is the
 // failure mode the criterion exists to prevent, so it is itself a violation.
 //
 // DHF-TEST: keel/requirement-123 (keel/ac-495)
-func TestSBOMConvergenceRejectsNOTICEWithNoRecognisableProductName(t *testing.T) {
+func TestSBOMConvergenceRejectsNOTICEWithNoProductNameLine(t *testing.T) {
 	dir, tracked := sbomFixture(t, map[string]string{
 		"NOTICE": "third-party software attributions\n\nnothing this guard can key on.\n",
 	})
@@ -102,7 +102,7 @@ func TestSBOMConvergenceRejectsNOTICEWithNoRecognisableProductName(t *testing.T)
 	}
 	joined := strings.Join(violations, "\n")
 	if !strings.Contains(joined, "sbom-notice-product-name") || !strings.Contains(joined, "no product-name line") {
-		t.Fatalf("an unrecognisable NOTICE must not pass silently, got:\n%s", joined)
+		t.Fatalf("a NOTICE with no product-name line must not pass silently, got:\n%s", joined)
 	}
 }
 

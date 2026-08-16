@@ -75,7 +75,7 @@ func runSBOMConvergence(ctx context.Context, logger *slog.Logger, dir string) er
 //
 //   - sbom-notice-product-name: every product-name occurrence in the committed
 //     NOTICE reads the product name, not the basename of the checkout that
-//     produced it (keel/ac-495). A NOTICE carrying no recognisable occurrence is
+//     produced it (keel/ac-495). A NOTICE carrying no matching occurrence is
 //     itself a violation — a guard that silently matches nothing asserts
 //     nothing.
 //
@@ -126,7 +126,7 @@ func noticeProductNameViolations(file string, lines []string) []string {
 	}
 	if found == 0 {
 		violations = append(violations, fmt.Sprintf(
-			"  sbom-notice-product-name: %s carries no product-name line this policy recognises — the guard would pass while asserting nothing; restate the banner or update the patterns (keel/ac-495)",
+			"  sbom-notice-product-name: %s carries no product-name line this policy matches — the guard would pass while asserting nothing; restate the banner or update the patterns (keel/ac-495)",
 			file))
 	}
 	return violations
