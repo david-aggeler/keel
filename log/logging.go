@@ -113,14 +113,6 @@ func FromContext(ctx context.Context) *slog.Logger {
 	return slog.Default()
 }
 
-func withLogger(ctx context.Context, l *slog.Logger) context.Context {
-	return WithLogger(ctx, l)
-}
-
-func fromContext(ctx context.Context) *slog.Logger {
-	return FromContext(ctx)
-}
-
 // DHF-REQ: keel/requirement-5, keel/requirement-20
 // replaceForOpenBrain renames "time" -> "ts" (RFC3339Nano), keeps slog-native
 // uppercase levels, drops "source", and redacts rendered string values before

@@ -70,10 +70,6 @@ func ResolveGitCommit(gitCommit string) string {
 	return unknownGitCommit
 }
 
-func resolveGitCommit(gitCommit string) string {
-	return ResolveGitCommit(gitCommit)
-}
-
 func versionOrDev(version string) string {
 	if version == "" {
 		return "dev"
