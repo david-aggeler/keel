@@ -204,7 +204,7 @@ classDiagram
 ```
 
 - `run_event.event` — run_started, test_started, output, passed, failed, errored, cancelled, skipped, cleared, artifact, run_finished (`cleared` drops the named item to no-result — bridge-owned exclusive-group sibling deactivation, requirement-88; the consumer invalidates the item rather than stamping a terminal state)
-- `run_event.source` — vscode, external
+- `run_event.source` — vscode, external, editor (two axes on one field, per keel/design_decision-14: `vscode` and `external` name which producer normalized the events; `editor` names the surface that initiated the run, and the extension's external-run mirror skips a stream carrying it. A stream with no recognized value is unattributed and is imported.)
 - `artifact.kind` — log, trace, screenshot, video, coverage, report, other
 
 ---

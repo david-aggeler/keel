@@ -440,7 +440,10 @@ suite('Keel Test Bridge config contract', () => {
       'test-bridge config-upgrade',
       'test-bridge discover --format json',
       'test-bridge desired-state --format json --id keel::lane::ci',
-      'test-bridge run --id keel::lane::ci'
+      // The run argv declares the initiating surface so the spooled stream
+      // carries it and the external-run mirror can skip its own run.
+      // DHF-TEST: keel/requirement-36
+      'test-bridge run --source editor --id keel::lane::ci'
     ]);
     assert.ok(protocolCalls.every((call) => !call.split(/\s+/).includes('vscode')));
     const retiredVerb = ['p', 'l', 'a', 'n'].join('');
@@ -571,7 +574,7 @@ suite('Keel Test Bridge config contract', () => {
         'refresh must render Desired State from discovery without a live empty-selection probe'
       );
       assert.ok(callsAfterRunnable.includes(`test-bridge desired-state --format json --id ${servedRunID}`));
-      assert.ok(callsAfterRunnable.includes(`test-bridge run --id ${servedRunID}`));
+      assert.ok(callsAfterRunnable.includes(`test-bridge run --source editor --id ${servedRunID}`));
 
       await runProfileHandlerForTest(informationalRowID);
       const callsAfterInformational = fs.readFileSync(path.join(root, '.devtools', 'fake-adapter-calls.log'), 'utf8')
@@ -900,9 +903,9 @@ process.exit(2);
       await vscode.commands.executeCommand('keel.tests.openArtifact', path.join(root, 'missing-artifact.txt'));
 
       const calls = fs.readFileSync(path.join(root, '.devtools', 'fake-adapter-calls.log'), 'utf8');
-      assert.match(calls, /test-bridge run --id testbridge::maintenance::clear-state/);
-      assert.match(calls, /test-bridge run --id testbridge::maintenance::unlock/);
-      assert.match(calls, /test-bridge run --id testbridge::maintenance::detect-lanes/);
+      assert.match(calls, /test-bridge run --source editor --id testbridge::maintenance::clear-state/);
+      assert.match(calls, /test-bridge run --source editor --id testbridge::maintenance::unlock/);
+      assert.match(calls, /test-bridge run --source editor --id testbridge::maintenance::detect-lanes/);
     } finally {
       if (previousDevWorkspace === undefined) {
         delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
@@ -1763,6 +1766,13 @@ process.exit(2);
       assert.ok(runEvents.some((event) => event.event === 'run_started'));
       assert.equal(runEvents.filter((event) => event.event === 'run_finished').length, 1);
       assert.doesNotMatch(fs.readFileSync(newStreams[0], 'utf8'), /unknown flag/);
+      // DHF-TEST: keel/requirement-36
+      // The editor started this run, so the stream it spooled says so. This is
+      // the wire value the external-run mirror reads to skip its own runs.
+      assert.ok(
+        runEvents.length > 0 && runEvents.every((event) => event.source === 'editor'),
+        `editor-driven run stream must declare the editor surface on every event; got ${JSON.stringify(runEvents.map((event) => event.source))}`
+      );
     } finally {
       if (previousDevWorkspace === undefined) {
         delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
@@ -1848,6 +1858,82 @@ process.exit(2);
       setCurrentTreeForTest(undefined);
       controller.dispose();
       setExternalRunStaleMsForTest(60_000);
+    }
+  });
+
+  // The mirror exists to surface runs started outside the editor. A run the
+  // editor itself started declares that surface on the wire, and the mirror
+  // leaves it alone; a stream that declares no recognized surface is still
+  // imported, which is what a pre-upgrade spool file and a third-party
+  // producer both look like.
+  //
+  // DHF-TEST: keel/requirement-36
+  test('external run mirror skips an editor-initiated stream and imports an unattributed one', async function () {
+    this.timeout(10_000);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-external-origin-'));
+    const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+    process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = root;
+    const controller = vscode.tests.createTestController(`keelExternalOrigin-${Date.now()}`, 'Keel External Origin');
+    const tree = publishDiscovery(controller, root, {
+      version: 1,
+      workspace: root,
+      generated_at: new Date().toISOString(),
+      items: [
+        { id: 'keel::lane::test-fast', label: 'test-fast', kind: 'lane', runnable: true, profiles: ['run'] },
+        { id: 'keel::lane::lint', label: 'lint', kind: 'lane', runnable: true, profiles: ['run'] }
+      ]
+    });
+    setCurrentTreeForTest(tree);
+    const runNames: string[] = [];
+    const passed: string[] = [];
+    const spyTarget = controller as vscode.TestController & {
+      createTestRun: (request: vscode.TestRunRequest, name?: string, persist?: boolean) => vscode.TestRun;
+    };
+    const originalCreateTestRun = spyTarget.createTestRun.bind(controller);
+    spyTarget.createTestRun = (request: vscode.TestRunRequest, name?: string, persist?: boolean): vscode.TestRun => {
+      runNames.push(name ?? '');
+      const run = originalCreateTestRun(request, name, persist);
+      const originalPassed = run.passed.bind(run);
+      run.passed = (item: vscode.TestItem, duration?: number) => {
+        passed.push(item.id);
+        originalPassed(item, duration);
+      };
+      return run;
+    };
+    const mirror = new ExternalRunMirror(controller);
+    const runsDir = path.join(root, '.devtools', 'vscode-runs');
+    fs.mkdirSync(runsDir, { recursive: true });
+    fs.writeFileSync(path.join(runsDir, '001-editor-initiated.jsonl'), [
+      JSON.stringify(runEvent({ event: 'run_started', source: 'editor', run_id: 'editor-run', test_id: 'keel::lane::test-fast' })),
+      JSON.stringify(runEvent({ event: 'test_started', source: 'editor', run_id: 'editor-run', test_id: 'keel::lane::test-fast' })),
+      JSON.stringify(runEvent({ event: 'passed', source: 'editor', run_id: 'editor-run', test_id: 'keel::lane::test-fast' })),
+      JSON.stringify(runEvent({ event: 'run_finished', source: 'editor', run_id: 'editor-run', exit_code: 0 }))
+    ].join('\n') + '\n');
+    fs.writeFileSync(path.join(runsDir, '002-unattributed.jsonl'), [
+      JSON.stringify(runEvent({ event: 'run_started', run_id: 'unattributed-run', test_id: 'keel::lane::lint' })),
+      JSON.stringify(runEvent({ event: 'test_started', run_id: 'unattributed-run', test_id: 'keel::lane::lint' })),
+      JSON.stringify(runEvent({ event: 'passed', run_id: 'unattributed-run', test_id: 'keel::lane::lint' })),
+      JSON.stringify(runEvent({ event: 'run_finished', run_id: 'unattributed-run', exit_code: 0 }))
+    ].join('\n') + '\n');
+
+    try {
+      await mirror.syncWorkspace();
+      assert.ok(!runNames.some((name) => name.includes('editor-run')), `editor-initiated stream must not open a test run; opened ${JSON.stringify(runNames)}`);
+      assert.ok(!passed.includes('keel::lane::test-fast'), 'editor-initiated stream must stamp no result onto the tree');
+      assert.ok(runNames.some((name) => name.includes('unattributed-run')), `unattributed stream must still be imported; opened ${JSON.stringify(runNames)}`);
+      assert.ok(passed.includes('keel::lane::lint'), 'unattributed stream must still stamp its result onto the tree');
+      assert.ok(!mirror.snapshots().some((snapshot) => snapshot.runId === 'editor-run'), 'editor-initiated stream must not be tracked as a mirrored stream');
+    } finally {
+      spyTarget.createTestRun = originalCreateTestRun;
+      fs.rmSync(root, { recursive: true, force: true });
+      mirror.dispose();
+      setCurrentTreeForTest(undefined);
+      controller.dispose();
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
     }
   });
 
