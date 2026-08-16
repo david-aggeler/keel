@@ -164,12 +164,24 @@ func vsixProtocolDriftFindings(schemas map[vscode.SchemaName][]byte, protocolSou
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", vsixProtocolRel, err)
 	}
-	var findings []string
+	stale, err := vsixProtocolStaleKeywordExemptions(schemas)
+	if err != nil {
+		return nil, err
+	}
+	findings := stale
 	for _, covered := range vsixProtocolDriftCoverage {
 		body, ok := schemas[covered.schema]
 		if !ok {
 			return nil, fmt.Errorf("no embedded schema supplied for the %s family", covered.schema)
 		}
+		// The keyword scan runs before the type walk and independently of it:
+		// the walk only reaches what it can type, so a keyword the reader does
+		// not model must be found by reading the document, not by walking it.
+		keywords, err := vsixProtocolKeywordFindings(covered.schema, body)
+		if err != nil {
+			return nil, err
+		}
+		findings = append(findings, keywords...)
 		var root protocolSchema
 		if err := json.Unmarshal(body, &root); err != nil {
 			return nil, fmt.Errorf("parse the %s schema: %w", covered.schema, err)
@@ -259,6 +271,19 @@ func (p *protocolPin) compare(path string, schema protocolSchema, declared tsTyp
 
 	p.compareEnum(path, resolvedSchema, resolvedTS, tsPath)
 	p.compareConst(path, resolvedSchema, resolvedTS, tsPath)
+
+	// A node the pin cannot type is the second arm of keel/issue-166, the one
+	// its correction left standing: the switch below matches neither "object"
+	// nor "array" on an empty want, so the walk stops without descending and
+	// the subtree goes unchecked behind a green gate. Refusing holds the same
+	// line the keyword scan holds — say what could not be read rather than pass
+	// over it. The value comparisons above still run, because an enum or const
+	// mismatch is worth reporting alongside the refusal rather than instead of
+	// it.
+	if want == "" {
+		p.add("cannot type the schema node at %s, so %s is not checked against it (keel/requirement-128)", path, tsPath)
+		return
+	}
 
 	switch want {
 	case "object":
