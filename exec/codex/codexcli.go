@@ -6,8 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -15,6 +13,7 @@ import (
 	"time"
 
 	procexec "github.com/david-aggeler/keel/exec"
+	logging "github.com/david-aggeler/keel/log"
 )
 
 type processLogger interface {
@@ -78,7 +77,10 @@ type Request struct {
 	// before Run returns.
 	OnEvent func(Event)
 	// Logger receives the shared process lifecycle and raw output records. Nil
-	// uses slog.Default through the process facility.
+	// produces no output at all: a library handed no sink stays silent rather
+	// than emitting outside the caller's formatter, file sinks, and redaction.
+	//
+	// DHF-REQ: keel/requirement-122
 	Logger processLogger
 }
 
@@ -243,7 +245,10 @@ func (w *eventStreamWriter) logProgress(ev Event, line []byte) {
 	if detail := codexProgressDetail(line); detail != "" {
 		log := w.logger
 		if log == nil {
-			log = slog.Default()
+			// A library handed no sink stays silent: reaching for slog.Default()
+			// would emit outside the caller's formatter, file sinks, and redaction.
+			// DHF-REQ: keel/requirement-122
+			log = logging.Discard()
 		}
 		log.Info("codex progress",
 			"event_type", ev.Type,
@@ -379,7 +384,7 @@ func Version(ctx context.Context, bin string) (string, error) {
 		Program: bin,
 		Args:    []string{"--version"},
 		Stdout:  &out,
-		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:  logging.Discard(),
 	})
 	if err != nil {
 		return "", fmt.Errorf("keel/exec/codex: %s --version: %w", bin, err)

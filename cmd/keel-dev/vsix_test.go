@@ -3,11 +3,12 @@ package main
 import (
 	"context"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	logging "github.com/david-aggeler/keel/log"
 )
 
 // DHF-TEST: keel/requirement-11, keel/requirement-40
@@ -17,7 +18,7 @@ func TestHandleVSIXGateRejectsArgsAndReportsMissingToolchain(t *testing.T) {
 	}
 
 	t.Setenv("PATH", t.TempDir())
-	ctx := withRunStateProtocol(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, t.TempDir(), io.Discard)
+	ctx := withRunStateProtocol(context.Background(), logging.Discard(), nil, t.TempDir(), io.Discard)
 	err := handleVSIXGate(ctx, []string{"ci"})
 	if err == nil || !strings.Contains(err.Error(), `required tool "node" not found`) {
 		t.Fatalf("handleVSIXGate missing toolchain err = %v, want node missing", err)
@@ -28,7 +29,7 @@ func TestHandleVSIXGateRejectsArgsAndReportsMissingToolchain(t *testing.T) {
 func TestEvaluateVSIXCoverageSummaryValidatesFixtureAndTotals(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "coverage-summary.json")
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := logging.Discard()
 
 	for _, tc := range []struct {
 		name string

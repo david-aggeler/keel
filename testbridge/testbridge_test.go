@@ -31,7 +31,7 @@ func TestCommandSpecOwnsCanonicalBridgeWire(t *testing.T) {
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{
 		Root:     root,
 		Protocol: &bytes.Buffer{},
-		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Log:      logging.Discard(),
 		RunID:    func() string { return "run-fixed" },
 	})
 
@@ -144,7 +144,7 @@ func TestBridgeDispatchAndTerminalEventsReachLogSinksWithoutChangingProtocol(t *
 	plainCtx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{
 		Root:     root,
 		Protocol: &protocol,
-		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Log:      logging.Discard(),
 		Now:      func() time.Time { return time.Unix(10, 0).UTC() },
 		RunID:    func() string { return "run-log" },
 	})

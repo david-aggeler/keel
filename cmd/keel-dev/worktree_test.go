@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -14,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/david-aggeler/keel/cli"
+	logging "github.com/david-aggeler/keel/log"
 	"github.com/david-aggeler/keel/worktree"
 )
 
@@ -774,7 +774,7 @@ func TestWorktreeExitMapsTheTaxonomy(t *testing.T) {
 		{"branch missing", &worktree.Error{Op: "resume", Code: worktree.CodeBranchMissing, Message: "gone"}, 67},
 		{"unclassified", errors.New("boom"), 1},
 	}
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := logging.Discard()
 	for _, tc := range cases {
 		if got := exitFor(logger, worktreeExit("verb", tc.err)); got != tc.want {
 			t.Errorf("%s: exit %d, want %d", tc.name, got, tc.want)
