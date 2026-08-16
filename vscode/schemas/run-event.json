@@ -26,7 +26,8 @@
     },
     "source": {
       "type": "string",
-      "enum": ["vscode", "external"]
+      "$comment": "Two axes on one field, per keel/design_decision-14: vscode and external name which producer normalized the events, editor names the surface that initiated the run. A producer that does not know its initiating surface stamps vscode, and a consumer that cannot attribute a stream imports it.",
+      "enum": ["vscode", "external", "editor"]
     },
     "workspace": {
       "type": "string",

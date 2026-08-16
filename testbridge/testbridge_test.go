@@ -3400,6 +3400,79 @@ func rawItemIDs(items map[string]map[string]any) []string {
 	return ids
 }
 
+// The run verb carries the initiating surface onto every run event it stamps,
+// so a consumer reading the stream can tell an editor-started run from a
+// terminal-started one. Absent the flag the run keeps the historical value.
+//
+// DHF-TEST: keel/requirement-36
+func TestRunSourceFlagStampsInitiatingSurfaceOnEveryRunEvent(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		extraArgs  []string
+		wantSource string
+	}{
+		{name: "editor surface declared", extraArgs: []string{"--source", "editor"}, wantSource: "editor"},
+		{name: "surface undeclared", wantSource: "vscode"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			fake := newFakeBridge(root)
+			protocol := &bytes.Buffer{}
+			ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{
+				Root:     root,
+				Protocol: protocol,
+				Log:      logging.Discard(),
+				RunID:    func() string { return "run-source" },
+			})
+
+			args := append([]string{"test-bridge", "run"}, tc.extraArgs...)
+			args = append(args, "--id", "demo::lane::fast")
+			if err := testbridge.CommandSpec(fake).Dispatch(ctx, args); err != nil {
+				t.Fatalf("run dispatch: %v", err)
+			}
+
+			events := decodeEvents(t, protocol.String())
+			if len(events) == 0 {
+				t.Fatal("run produced no events")
+			}
+			for _, event := range events {
+				if event.Source != tc.wantSource {
+					t.Fatalf("event %q source = %q, want %q", event.Event, event.Source, tc.wantSource)
+				}
+			}
+
+			stored, err := os.ReadFile(filepath.Join(root, ".devtools", "vscode-runs", "run-source.jsonl"))
+			if err != nil {
+				t.Fatalf("read spool stream: %v", err)
+			}
+			for _, event := range decodeEvents(t, string(stored)) {
+				if event.Source != tc.wantSource {
+					t.Fatalf("spooled event %q source = %q, want %q", event.Event, event.Source, tc.wantSource)
+				}
+			}
+		})
+	}
+}
+
+// An unrecognized initiating surface is refused at the CLI boundary rather than
+// reaching the stamper, where it would demote every event to output.
+//
+// DHF-TEST: keel/requirement-36
+func TestRunSourceFlagRefusesUnknownSurface(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{
+		Root:     root,
+		Protocol: &bytes.Buffer{},
+		Log:      logging.Discard(),
+	})
+
+	err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--source", "bogus", "--id", "demo::lane::fast"})
+	if err == nil || !strings.Contains(err.Error(), `invalid --source "bogus"`) {
+		t.Fatalf("unknown source err = %v, want usage refusal naming the rejected --source value", err)
+	}
+}
+
 func dispatchRaw(t *testing.T, bridge testbridge.Bridge, root, verb string) *bytes.Buffer {
 	t.Helper()
 	protocol := &bytes.Buffer{}

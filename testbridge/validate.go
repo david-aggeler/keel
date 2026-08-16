@@ -181,7 +181,7 @@ func validateRunEvent(event vscode.RunEvent) error {
 	if !vscode.IsKnownRunEvent(event.Event) {
 		return fmt.Errorf("keel/testbridge: run-event has invalid event %q", event.Event)
 	}
-	if event.Source != "" && !in(event.Source, "vscode", "external") {
+	if event.Source != "" && !vscode.IsKnownRunEventSource(event.Source) {
 		return fmt.Errorf("keel/testbridge: run-event has invalid source %q", event.Source)
 	}
 	if event.DurationMS < 0 {

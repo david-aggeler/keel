@@ -125,7 +125,10 @@ export interface RunEvent {
   event: 'run_started' | 'test_started' | 'output' | 'passed' | 'failed' | 'errored' | 'cancelled' | 'skipped' | 'cleared' | 'artifact' | 'run_finished';
   time: string;
   run_id?: string;
-  source?: 'vscode' | 'external';
+  // Two axes on one field, per keel/design_decision-14: 'vscode' and 'external'
+  // name which producer normalized the events, 'editor' names the surface that
+  // initiated the run. A stream carrying no recognized value is unattributed.
+  source?: 'vscode' | 'external' | 'editor';
   workspace?: string;
   live?: boolean;
   requested?: Array<{ id: string; label: string }>;
