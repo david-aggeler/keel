@@ -595,8 +595,8 @@ func putSchemaKeyword(t *testing.T, body []byte, objectPath []string, keyword st
 	return mutated
 }
 
-// TestVSIXProtocolPinRedsOnAnUnmodelledSchemaKeyword proves keel/ac-499: a
-// covered schema node carrying a keyword outside the modelled subset produces a
+// TestVSIXProtocolPinRedsOnAnUnmodeledSchemaKeyword proves keel/ac-499: a
+// covered schema node carrying a keyword outside the modeled subset produces a
 // finding naming the keyword and the schema path, instead of being dropped into
 // a false green.
 //
@@ -605,7 +605,7 @@ func putSchemaKeyword(t *testing.T, body []byte, objectPath []string, keyword st
 // turned on. A guard keyed on an untypeable node would miss every case here.
 //
 // DHF-TEST: keel/requirement-128
-func TestVSIXProtocolPinRedsOnAnUnmodelledSchemaKeyword(t *testing.T) {
+func TestVSIXProtocolPinRedsOnAnUnmodeledSchemaKeyword(t *testing.T) {
 	source := committedProtocolSource(t)
 
 	for _, tc := range []struct {
@@ -653,7 +653,7 @@ func TestVSIXProtocolPinRedsOnAnUnmodelledSchemaKeyword(t *testing.T) {
 				t.Fatalf("pin stayed green after %q was added to the %s schema at %s", tc.keyword, tc.schema, tc.wantPath)
 			}
 			if !strings.Contains(joined, tc.keyword) {
-				t.Fatalf("finding does not name the unmodelled keyword %q:\n%s", tc.keyword, joined)
+				t.Fatalf("finding does not name the unmodeled keyword %q:\n%s", tc.keyword, joined)
 			}
 			if !strings.Contains(joined, tc.wantPath) {
 				t.Fatalf("finding does not name the schema path %q:\n%s", tc.wantPath, joined)
@@ -749,14 +749,14 @@ func TestVSIXProtocolKeywordScanNamesTheLiveConditionalConstraint(t *testing.T) 
 	}
 }
 
-// TestProtocolModelledKeywordsMatchTheModelledStruct keeps the guard's
+// TestProtocolModeledKeywordsMatchTheModeledStruct keeps the guard's
 // enumeration and the reader's struct from drifting apart. A field added to
-// protocolSchema without an entry in protocolModelledKeywords would make the
+// protocolSchema without an entry in protocolModeledKeywords would make the
 // guard red a keyword the pin does in fact compare; the reverse would reopen
 // the fail-open this unit closed.
 //
 // DHF-TEST: keel/requirement-128
-func TestProtocolModelledKeywordsMatchTheModelledStruct(t *testing.T) {
+func TestProtocolModeledKeywordsMatchTheModeledStruct(t *testing.T) {
 	declared := map[string]bool{}
 	structType := reflect.TypeOf(protocolSchema{})
 	for i := range structType.NumField() {
@@ -767,13 +767,13 @@ func TestProtocolModelledKeywordsMatchTheModelledStruct(t *testing.T) {
 		declared[strings.Split(tag, ",")[0]] = true
 	}
 	for keyword := range declared {
-		if !protocolModelledKeywords[keyword] {
-			t.Fatalf("protocolSchema reads %q but protocolModelledKeywords does not list it, so the guard would red a modelled keyword", keyword)
+		if !protocolModeledKeywords[keyword] {
+			t.Fatalf("protocolSchema reads %q but protocolModeledKeywords does not list it, so the guard would red a modeled keyword", keyword)
 		}
 	}
-	for keyword := range protocolModelledKeywords {
+	for keyword := range protocolModeledKeywords {
 		if !declared[keyword] {
-			t.Fatalf("protocolModelledKeywords lists %q but protocolSchema has no field for it, so the guard excuses a keyword the pin drops", keyword)
+			t.Fatalf("protocolModeledKeywords lists %q but protocolSchema has no field for it, so the guard excuses a keyword the pin drops", keyword)
 		}
 	}
 }
