@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	procexec "github.com/david-aggeler/keel/exec"
 	logging "github.com/david-aggeler/keel/log"
 )
 
@@ -324,6 +326,35 @@ func TestRun_UsesProcessStartWithClaudeStreamAdapterAndPreservesResult(t *testin
 	}
 	if got, ok := progress["detail"].(string); !ok || !strings.Contains(got, "Inspecting repository status.") {
 		t.Fatalf("claude progress detail = %#v, want curated assistant text", progress["detail"])
+	}
+}
+
+// TestRun_OutputCapExceededAfterResultEventFailsTheRun proves the output
+// ceiling outranks the adapter's own outcome policy: a stub that emits a
+// well-formed result event and only then writes past the configured ceiling
+// must still fail the run with the cap sentinel, even though the terminal
+// event's is_error flag would otherwise absorb the wait error
+// (keel/issue-160).
+//
+// DHF-TEST: keel/requirement-81
+func TestRun_OutputCapExceededAfterResultEventFailsTheRun(t *testing.T) {
+	// A complete result event first, then 16 KiB of trailing output — well past
+	// the 4 KiB ceiling below, and far short of the 64 MiB default the test must
+	// never have to write.
+	var stdout strings.Builder
+	stdout.WriteString(`{"type":"result","is_error":true,"result":"boom","num_turns":1,"usage":{}}`)
+	for i := 0; i < 16; i++ {
+		stdout.WriteString("\n" + strings.Repeat("x", 1024))
+	}
+	stub := writeStub(t, stdout.String(), 1)
+
+	_, err := Run(context.Background(), Request{
+		Prompt:         "x",
+		Bin:            stub,
+		MaxOutputBytes: 4096,
+	})
+	if !errors.Is(err, procexec.ErrOutputLimitExceeded) {
+		t.Fatalf("Run err = %v, want one satisfying errors.Is(err, procexec.ErrOutputLimitExceeded)", err)
 	}
 }
 
