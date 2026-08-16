@@ -49,7 +49,7 @@ func TestTestBridgeCommandTreeIsFlatAndUsesCLIBoundFlags(t *testing.T) {
 		"test-bridge config-upgrade",
 		"test-bridge discover [--format json]",
 		"test-bridge desired-state [--format json] [--id test-id]",
-		"test-bridge run [--dry-run] --id test-id",
+		"test-bridge run [--dry-run] [--source surface] --id test-id",
 	}
 	if !stringSlicesEqual(got, want) {
 		t.Fatalf("test-bridge leaves = %#v, want %#v", got, want)

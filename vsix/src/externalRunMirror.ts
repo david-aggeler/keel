@@ -53,6 +53,16 @@ interface ExternalRunStreamState {
 let externalRunStaleMs = 60_000;
 const externalRunImportRecencyMs = 60_000;
 
+// The run-event source value a bridge run carries when the editor initiated it.
+// The mirror mirrors runs it did not start, so a stream declaring this surface
+// is the one stream it must leave alone: the controller already holds those
+// results live. Any other value — including none at all, which is what a
+// pre-upgrade spool file and a third-party producer both look like — leaves the
+// stream unattributed and it is imported as before.
+//
+// DHF-REQ: keel/requirement-36
+const editorRunSource = 'editor';
+
 // DHF-REQ: keel/requirement-36
 export function setExternalRunStaleMsForTest(ms: number): void {
   externalRunStaleMs = ms;
@@ -194,6 +204,16 @@ export class ExternalRunMirror implements vscode.Disposable {
       return;
     }
     if (!state) {
+      // The watcher fires on create, before the producer has written its first
+      // line. An empty stream carries no origin to read, so defer rather than
+      // open a run the next event might turn out to be the editor's own.
+      if (lines.length === 0) {
+        return;
+      }
+      if (isEditorInitiatedStream(lines)) {
+        appendMirrorLog(`External run stream ${file} declares the editor as its initiating surface; skipping import.`);
+        return;
+      }
       const first = firstRunEvent(lines);
       if (first?.test_id && testItemsForRunEvent(first.test_id).length === 0) {
         extensionOutput().appendLine(`External run stream ${file} references ${first.test_id} before discovery has published it; deferring import.`);
@@ -321,6 +341,36 @@ function refreshProtocolIds(state: ExternalRunStreamState): string[] {
     ...state.selectedProtocolIds,
     ...state.protocolResultIds
   ]));
+}
+
+// appendMirrorLog writes one line to the extension's output channel. The
+// channel exists only after activation, and the mirror is exercised directly by
+// the headless suite without it, so an absent channel drops the line instead of
+// throwing inside the import path.
+function appendMirrorLog(message: string): void {
+  const channel = extensionOutput() as vscode.OutputChannel | undefined;
+  channel?.appendLine(message);
+}
+
+// isEditorInitiatedStream reports whether the stream attributes itself to the
+// editor. The producer stamps the same source onto every event of a run, so the
+// first line that carries one settles the question; a line the mirror cannot
+// parse is skipped rather than treated as an attribution.
+//
+// DHF-REQ: keel/requirement-36
+function isEditorInitiatedStream(lines: string[]): boolean {
+  for (const line of lines) {
+    let event: RunEvent;
+    try {
+      event = JSON.parse(line) as RunEvent;
+    } catch {
+      continue;
+    }
+    if (event.source) {
+      return event.source === editorRunSource;
+    }
+  }
+  return false;
 }
 
 function firstRunEvent(lines: string[]): RunEvent | undefined {

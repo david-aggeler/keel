@@ -8,9 +8,28 @@ import (
 	"time"
 )
 
+// runEventSources is the closed run-event source value set. It carries two
+// axes, which is the cost design_decision-14 accepted rather than designed
+// around: "vscode" and "external" name which producer normalized the events,
+// and "editor" names the surface that initiated the run. A bridge run that
+// declares no initiating surface keeps stamping "vscode", so a stream written
+// by an older producer stays importable.
+//
+// DHF-REQ: keel/requirement-36
 var runEventSources = map[string]struct{}{
 	"vscode":   {},
 	"external": {},
+	"editor":   {},
+}
+
+// IsKnownRunEventSource reports whether source is one of the closed run-event
+// source values. It is the single producer-side answer to that question, so a
+// validator elsewhere in the module cannot drift from the stamper's value set.
+//
+// DHF-REQ: keel/requirement-36
+func IsKnownRunEventSource(source string) bool {
+	_, ok := runEventSources[source]
+	return ok
 }
 
 var artifactKinds = map[string]struct{}{

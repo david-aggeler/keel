@@ -331,6 +331,7 @@ func CommandSpec(bridge Bridge) *cli.CommandSpec {
 	var desiredStateIDs []string
 	var runIDs []string
 	var runDryRun bool
+	var runSource string
 	return &cli.CommandSpec{
 		Subcommands: []*cli.CommandSpec{
 			{
@@ -341,7 +342,7 @@ func CommandSpec(bridge Bridge) *cli.CommandSpec {
 					{Name: "config-upgrade", Use: "test-bridge config-upgrade", Short: "Upgrade .vscode/test-bridge.json to the current schema.", Group: "Config", Positionals: []cli.PositionalSpec{{Name: "args", Min: 0, Max: 0}}, Handler: guardWorkspace(bridge, handleConfigUpgrade(bridge))},
 					{Name: "discover", Use: "test-bridge discover [--format json]", Short: "Emit the test discovery document.", Group: "Tests", Positionals: []cli.PositionalSpec{{Name: "args", Min: 0, Max: 0}}, Flags: []cli.FlagSpec{{Name: "format", Value: "json", Default: "json", Enum: []string{"json"}, Short: "Output format.", StringTarget: &discoverFormat}}, Handler: guardWorkspace(bridge, handleDiscover(bridge, &discoverFormat))},
 					{Name: "desired-state", Use: "test-bridge desired-state [--format json] [--id test-id]", Short: "Emit the read-only desired-state document.", Group: "Tests", Positionals: []cli.PositionalSpec{{Name: "args", Min: 0, Max: 0}}, Flags: []cli.FlagSpec{{Name: "format", Value: "json", Default: "json", Enum: []string{"json"}, Short: "Output format.", StringTarget: &desiredStateFormat}, {Name: "id", Value: "test-id", Repeatable: true, Short: "Selected test id.", StringSliceTarget: &desiredStateIDs}}, Handler: guardWorkspace(bridge, handleDesiredState(bridge, &desiredStateFormat, &desiredStateIDs))},
-					{Name: "run", Use: "test-bridge run [--dry-run] --id test-id", Short: "Run selected tests.", Group: "Tests", Positionals: []cli.PositionalSpec{{Name: "args", Min: 0, Max: 0}}, Flags: []cli.FlagSpec{{Name: "id", Value: "test-id", Repeatable: true, Required: true, Short: "Selected test id.", StringSliceTarget: &runIDs}, {Name: "dry-run", Short: "Resolve selected test ids without executing them.", BoolTarget: &runDryRun}}, Handler: guardWorkspace(bridge, handleRun(bridge, &runIDs, &runDryRun))},
+					{Name: "run", Use: "test-bridge run [--dry-run] [--source surface] --id test-id", Short: "Run selected tests.", Group: "Tests", Positionals: []cli.PositionalSpec{{Name: "args", Min: 0, Max: 0}}, Flags: []cli.FlagSpec{{Name: "id", Value: "test-id", Repeatable: true, Required: true, Short: "Selected test id.", StringSliceTarget: &runIDs}, {Name: "dry-run", Short: "Resolve selected test ids without executing them.", BoolTarget: &runDryRun}, {Name: "source", Value: "surface", Default: defaultRunSource, Enum: runSourceSurfaces, Short: "Initiating surface stamped onto every run event.", StringTarget: &runSource}}, Handler: guardWorkspace(bridge, handleRun(bridge, &runIDs, &runDryRun, &runSource))},
 				},
 			},
 		},
@@ -916,9 +917,26 @@ func deriveDesiredStateRow(ctx context.Context, root string, row DesiredStateRow
 	}, nil
 }
 
+// defaultRunSource is the run-event source a bridge run stamps when the caller
+// declares no initiating surface. It is the historical value, so a caller that
+// predates the --source flag keeps producing the stream it always produced.
+//
+// runSourceSurfaces are the surfaces a caller may declare. "external" is not
+// among them: it names an imported stream, which no bridge run produces.
+//
+// DHF-REQ: keel/requirement-36
+const defaultRunSource = "vscode"
+
+var runSourceSurfaces = []string{defaultRunSource, editorRunSource}
+
+// editorRunSource marks a run the VS Code editor itself initiated, so the
+// extension's external-run mirror can skip the spool file that run writes.
+const editorRunSource = "editor"
+
 // DHF-REQ: keel/requirement-58, keel/requirement-107
 // DHF-REQ: keel/requirement-86
-func handleRun(bridge Bridge, ids *[]string, dryRun *bool) cli.Handler {
+// DHF-REQ: keel/requirement-36
+func handleRun(bridge Bridge, ids *[]string, dryRun *bool, source *string) cli.Handler {
 	return func(ctx context.Context, args []string) error {
 		rt := runtimeOrDefault(ctx, bridge)
 		selected := append([]string(nil), (*ids)...)
@@ -935,7 +953,7 @@ func handleRun(bridge Bridge, ids *[]string, dryRun *bool) cli.Handler {
 		}
 		selected = runResolutionIDs(requests)
 		runID := newRunID(rt)
-		writer, closeWriter, err := newRunWriter(rt, bridge.Workspace(), runID)
+		writer, closeWriter, err := newRunWriter(rt, bridge.Workspace(), runID, *source)
 		if err != nil {
 			return err
 		}
@@ -1644,7 +1662,16 @@ func runtimeRoot(rt Runtime, bridge Bridge) string {
 	return bridge.Workspace().Root
 }
 
-func newRunWriter(rt Runtime, workspace Workspace, runID string) (vscode.RunEventWriter, func(), error) {
+// newRunWriter opens the run's spool file and returns the stamping writer. The
+// source argument is the initiating surface the caller declared; an empty
+// value falls back to defaultRunSource, so an in-process caller that knows
+// nothing about surfaces produces the historical stream.
+//
+// DHF-REQ: keel/requirement-36
+func newRunWriter(rt Runtime, workspace Workspace, runID, source string) (vscode.RunEventWriter, func(), error) {
+	if source == "" {
+		source = defaultRunSource
+	}
 	root := rt.Root
 	if root == "" {
 		root = workspace.Root
@@ -1661,7 +1688,7 @@ func newRunWriter(rt Runtime, workspace Workspace, runID string) (vscode.RunEven
 	stamper := vscode.EventStamper{
 		Now:       rt.Now,
 		RunID:     runID,
-		Source:    "vscode",
+		Source:    source,
 		Workspace: workspaceNode(workspace, root),
 		Logf: func(message string) {
 			if rt.Log != nil {
