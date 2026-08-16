@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -50,6 +51,13 @@ type step struct {
 	// quietStderr reclassifies only known-benign child stderr progress records
 	// for noisy tools whose progress stream is not itself a failure signal.
 	quietStderr bool
+	// remedy, when set, is appended to this step's failure: the committed file
+	// that declares the repo-local convention plus the action that satisfies it.
+	// A stage enforcing a rule an author cannot infer from the language or the
+	// toolchain must report the means of compliance next to the offense, so the
+	// rule is learned from the failure instead of by search.
+	// DHF-REQ: keel/requirement-130 (keel/ac-502)
+	remedy string
 }
 
 type runLogLocator interface {
@@ -101,7 +109,14 @@ func ciStepsWithConfig(ctx context.Context, logger *slog.Logger, dir string, cfg
 	} else if len(gofmtFiles) == 0 {
 		gofmtStep = step{name: "gofmt", fn: func(context.Context, *slog.Logger, string) error { return nil }}
 	}
-	cspellStep := step{name: "cspell", tool: "cspell", program: "cspell", args: append([]string{"--no-progress"}, cspellFiles...), quietStderr: true}
+	cspellStep := step{
+		name: "cspell", tool: "cspell", program: "cspell",
+		args:        append([]string{"--no-progress"}, cspellFiles...),
+		quietStderr: true,
+		// Only the spelling verdict carries a remedy: the two fallbacks below fail
+		// on file selection, which the dictionary cannot fix.
+		remedy: cspellRemedy(dir),
+	}
 	if cspellListErr != nil {
 		cspellStep = step{name: "cspell", fn: func(context.Context, *slog.Logger, string) error { return cspellListErr }}
 	} else if len(cspellFiles) == 0 {
@@ -197,6 +212,56 @@ func ciStepsWithConfig(ctx context.Context, logger *slog.Logger, dir string, cfg
 			return resolver.verifyPins(ctx, logger, tools)
 		},
 	})
+}
+
+// cspellConfigFile is the committed rulebook the cspell stage evaluates.
+const cspellConfigFile = "cspell.json"
+
+// cspellRemedy composes the cspell stage's means-of-compliance text out of the
+// committed cspell.json, so the failure names the dictionary the stage really
+// loads instead of a hard-coded path that can drift away from it. An unreadable
+// config, or one declaring no writable dictionary, yields no text: the stage's
+// verdict is identical either way, and a guessed remedy is worse than none.
+//
+// DHF-REQ: keel/requirement-130 (keel/ac-502)
+func cspellRemedy(dir string) string {
+	raw, err := os.ReadFile(filepath.Join(dir, cspellConfigFile))
+	if err != nil {
+		return ""
+	}
+	var cfg struct {
+		Language              string `json:"language"`
+		DictionaryDefinitions []struct {
+			Path     string `json:"path"`
+			AddWords bool   `json:"addWords"`
+		} `json:"dictionaryDefinitions"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return ""
+	}
+	for _, def := range cfg.DictionaryDefinitions {
+		if !def.AddWords || def.Path == "" {
+			continue
+		}
+		dict := filepath.ToSlash(filepath.Clean(def.Path))
+		if cfg.Language == "" {
+			return fmt.Sprintf("remedy: a deliberate coinage is registered, not reworded — add the exact word "+
+				"on its own line in %s (the dictionary %s declares).", dict, cspellConfigFile)
+		}
+		return fmt.Sprintf("remedy: %s pins language %s for this repo, and a deliberate coinage is registered "+
+			"rather than reworded — add the exact word on its own line in %s, or correct it to the %s spelling.",
+			cspellConfigFile, cfg.Language, dict, cfg.Language)
+	}
+	return ""
+}
+
+// withRemedy appends a stage's means-of-compliance text to its failure, keeping
+// the original error wrapped so exit-code extraction still reaches through it.
+func withRemedy(err error, remedy string) error {
+	if err == nil || remedy == "" {
+		return err
+	}
+	return fmt.Errorf("%w\n%s", err, remedy)
 }
 
 // stepToolNames lists the pinned tools this step list will actually run, so the
@@ -474,14 +539,14 @@ func runStep(ctx context.Context, logger *slog.Logger, dir string, s step) error
 	}
 
 	if waitErr != nil {
-		return fmt.Errorf("%s %s: %w", s.program, strings.Join(s.args, " "), waitErr)
+		return withRemedy(fmt.Errorf("%s %s: %w", s.program, strings.Join(s.args, " "), waitErr), s.remedy)
 	}
 	if res.ExitCode != 0 {
-		return fmt.Errorf("%s %s exited %d", s.program, strings.Join(s.args, " "), res.ExitCode)
+		return withRemedy(fmt.Errorf("%s %s exited %d", s.program, strings.Join(s.args, " "), res.ExitCode), s.remedy)
 	}
 	if s.stdoutFails != nil {
 		if msg := s.stdoutFails(capture.String()); msg != "" {
-			return fmt.Errorf("%s", msg)
+			return withRemedy(fmt.Errorf("%s", msg), s.remedy)
 		}
 	}
 	logger.Debug("step complete", "step", s.name, "elapsed_ms", time.Since(started).Milliseconds())
