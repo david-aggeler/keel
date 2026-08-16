@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rm .devtools/vscode-runs/*.jsonl)",
+      "Bash(rm -f .devtools/vscode-runs/*.jsonl)",
+      "Bash(rm /projects/keel/.devtools/vscode-runs/*.jsonl)",
+      "Bash(rm -f /projects/keel/.devtools/vscode-runs/*.jsonl)"
+    ]
+  }
+}
