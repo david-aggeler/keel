@@ -27,6 +27,7 @@ import (
 
 	"github.com/david-aggeler/keel/cli"
 	procexec "github.com/david-aggeler/keel/exec"
+	logging "github.com/david-aggeler/keel/log"
 	"github.com/david-aggeler/keel/testbridge"
 	"github.com/david-aggeler/keel/vscode"
 )
@@ -2144,7 +2145,7 @@ func emitGoTestJSONEvents(raw string, selection vscode.GoSelection, selectedID, 
 }
 
 func vscodeDiscardLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
+	return logging.Discard()
 }
 
 func parseVSCodeIDs(args []string, allowEmpty bool) ([]string, error) {

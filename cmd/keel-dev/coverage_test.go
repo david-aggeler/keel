@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -10,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	logging "github.com/david-aggeler/keel/log"
 	"github.com/david-aggeler/keel/vscode"
 )
 
@@ -85,7 +85,7 @@ func TestPruneOldVSCodeCoverageDirsRemovesOnlyExpiredDirectories(t *testing.T) {
 // DHF-TEST: keel/requirement-11
 func TestRunTestWithCoverageReportsCommandAndParseFailures(t *testing.T) {
 	root := t.TempDir()
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := logging.Discard()
 
 	bin := t.TempDir()
 	callsFile := filepath.Join(bin, "calls.log")
@@ -150,7 +150,7 @@ exit 0`)
 // DHF-TEST: keel/requirement-11, keel/requirement-39
 func TestRunVSCodeTestCoverageReportsFailureBranches(t *testing.T) {
 	root := t.TempDir()
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := logging.Discard()
 
 	bin := t.TempDir()
 	callsFile := filepath.Join(bin, "calls.log")
