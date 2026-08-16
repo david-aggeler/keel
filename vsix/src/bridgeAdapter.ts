@@ -100,11 +100,16 @@ export async function readDesiredState(workspaceRoot: string, ids: string[]): Pr
   return parsed;
 }
 
-// DHF-REQ: keel/requirement-42
+// DHF-REQ: keel/requirement-42, keel/requirement-36
 export function runTests(workspaceRoot: string, ids: string[]): cp.ChildProcessWithoutNullStreams {
   const adapter = adapterConfig(workspaceRoot);
   assertCompatibleBridgeVersionSync(adapter, workspaceRoot);
-  const args = canonicalTestsArgs(adapter, 'run');
+  // Declare the initiating surface so the run's spool file carries it. The
+  // external-run mirror reads that value and skips this run's own stream
+  // instead of replaying it into a controller that already holds the results.
+  // The version parity check above keeps the devtool in step with this VSIX,
+  // so the flag cannot reach a producer that does not know it.
+  const args = canonicalTestsArgs(adapter, 'run', ['--source', 'editor']);
   for (const id of ids) {
     args.push('--id', id);
   }

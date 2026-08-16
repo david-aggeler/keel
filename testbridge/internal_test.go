@@ -297,7 +297,7 @@ func TestRunWriterStampsPersistsAndRejectsInvalidEvents(t *testing.T) {
 		Protocol: &protocol,
 		Log:      slog.New(slog.NewTextHandler(&logs, nil)),
 		Now:      func() time.Time { return time.Unix(3, 0).UTC() },
-	}, Workspace{Root: root, Node: "node"}, "run-1")
+	}, Workspace{Root: root, Node: "node"}, "run-1", "")
 	if err != nil {
 		t.Fatalf("new run writer: %v", err)
 	}
@@ -344,7 +344,7 @@ func TestPrivateHelpersCoverDefaultsAndErrors(t *testing.T) {
 	if err := os.WriteFile(fileRoot, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := newRunWriter(Runtime{Root: fileRoot}, Workspace{Root: fileRoot}, "run-1"); err == nil {
+	if _, _, err := newRunWriter(Runtime{Root: fileRoot}, Workspace{Root: fileRoot}, "run-1", ""); err == nil {
 		t.Fatal("newRunWriter with file root returned nil, want mkdir error")
 	}
 	if _, err := acquireRunLock(fileRoot, []string{"x"}, "t", nil); err == nil {
