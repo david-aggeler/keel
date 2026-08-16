@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -146,7 +145,7 @@ type stickyErr struct{}
 func (*stickyErr) Error() string { return "sticky" }
 
 func TestClaudeStreamWriterLineTooLong(t *testing.T) {
-	w := &claudeStreamWriter{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	w := &claudeStreamWriter{logger: logging.Discard()}
 	huge := make([]byte, 5*1024*1024) // > maxLine, no newline
 	for i := range huge {
 		huge[i] = 'a'

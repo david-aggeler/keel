@@ -3,12 +3,11 @@ package worktree_test
 import (
 	"context"
 	"fmt"
-	"io"
-	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 
+	logging "github.com/david-aggeler/keel/log"
 	"github.com/david-aggeler/keel/worktree"
 )
 
@@ -28,7 +27,7 @@ func Example_abandonedBranch() {
 		RepoRoot: repo,
 		Base:     "main",
 		Env:      exampleEnv,
-		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:   logging.Discard(),
 	})
 	if err != nil {
 		panic(err)

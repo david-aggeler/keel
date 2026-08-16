@@ -5,14 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"log/slog"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	procexec "github.com/david-aggeler/keel/exec"
+	logging "github.com/david-aggeler/keel/log"
 )
 
 type processLogger interface {
@@ -45,7 +44,11 @@ type Request struct {
 	// Tests point this at a stub.
 	Bin string
 	// Logger receives the shared process lifecycle and curated claude progress
-	// records. Nil uses slog.Default through the process facility.
+	// records. Nil produces no output at all: a library handed no sink stays
+	// silent rather than emitting outside the caller's formatter, file sinks,
+	// and redaction.
+	//
+	// DHF-REQ: keel/requirement-122
 	Logger processLogger
 }
 
@@ -135,7 +138,10 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 	stdout := &claudeStreamWriter{logger: req.Logger}
 	logger := req.Logger
 	if logger == nil {
-		logger = slog.Default()
+		// A library handed no sink stays silent: reaching for slog.Default()
+		// would emit outside the caller's formatter, file sinks, and redaction.
+		// DHF-REQ: keel/requirement-122
+		logger = logging.Discard()
 	}
 	proc, startErr := procexec.ProcessStart(ctx, procexec.Request{
 		Program: bin,
@@ -201,7 +207,7 @@ func Version(ctx context.Context, bin string) (string, error) {
 		Program: bin,
 		Args:    []string{"--version"},
 		Stdout:  &out,
-		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:  logging.Discard(),
 	})
 	if err != nil {
 		return "", fmt.Errorf("keel/exec/claude: %s --version: %w", bin, err)
@@ -278,7 +284,11 @@ func (w *claudeStreamWriter) consumeLine(line []byte) {
 	if detail := claudeProgressDetail(ev); detail != "" {
 		log := w.logger
 		if log == nil {
-			log = slog.Default()
+			// Same silence rule as the Run entry point: this per-line path
+			// carries every "claude progress" record and would otherwise leak
+			// them to the process-wide default sink.
+			// DHF-REQ: keel/requirement-122
+			log = logging.Discard()
 		}
 		log.Info("claude progress",
 			"event_type", stringValue(ev["type"]),

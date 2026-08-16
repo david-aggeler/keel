@@ -3,12 +3,11 @@ package codex_test
 import (
 	"context"
 	"fmt"
-	"io"
-	"log/slog"
 	"os"
 	"strings"
 
 	"github.com/david-aggeler/keel/exec/codex"
+	logging "github.com/david-aggeler/keel/log"
 )
 
 // ExampleRun drives the adapter against a hermetic stub standing in for the real
@@ -30,7 +29,7 @@ func ExampleRun() {
 	res, err := codex.Run(context.Background(), codex.Request{
 		Prompt:  "inspect the repo",
 		Bin:     stub,
-		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:  logging.Discard(),
 		OnEvent: func(e codex.Event) { types = append(types, e.Type) },
 	})
 	if err != nil {

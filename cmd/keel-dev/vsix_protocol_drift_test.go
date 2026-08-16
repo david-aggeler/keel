@@ -3,13 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	logging "github.com/david-aggeler/keel/log"
 	"github.com/david-aggeler/keel/vscode"
 )
 
@@ -342,7 +341,7 @@ func TestRunVSIXGateRunsTheProtocolPin(t *testing.T) {
 	}
 	t.Setenv("PATH", stubBin)
 
-	err := runVSIXGate(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), root)
+	err := runVSIXGate(context.Background(), logging.Discard(), root)
 	if err == nil {
 		t.Fatal("runVSIXGate stayed green with a drifted protocol.ts")
 	}

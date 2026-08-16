@@ -10,7 +10,6 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/david-aggeler/keel/cli"
 	procexec "github.com/david-aggeler/keel/exec"
+	logging "github.com/david-aggeler/keel/log"
 	"github.com/david-aggeler/keel/testbridge"
 	"github.com/david-aggeler/keel/vscode"
 )
@@ -517,7 +517,7 @@ func TestVSIXChangelogSignalsDemoWireRemoval(t *testing.T) {
 }
 
 func contextWithVSCodeTestState(root string, protocol io.Writer) context.Context {
-	return withRunStateProtocol(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, root, protocol)
+	return withRunStateProtocol(context.Background(), logging.Discard(), nil, root, protocol)
 }
 
 func dispatchTestBridgeConfigInit(ctx context.Context) error {
