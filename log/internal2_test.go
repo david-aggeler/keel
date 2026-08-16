@@ -30,12 +30,12 @@ func TestBuildIdentity(t *testing.T) {
 
 	logBuildIdentity(nil, "v1", "c") // nil logger falls back, must not panic
 
-	if got := resolveGitCommit("explicit"); got != "explicit" {
+	if got := ResolveGitCommit("explicit"); got != "explicit" {
 		t.Errorf("explicit commit should pass through, got %q", got)
 	}
 	// "dev" and "" resolve from build info; tests run without vcs stamping, so
 	// any non-empty result is acceptable.
-	if got := resolveGitCommit("dev"); got == "" {
+	if got := ResolveGitCommit("dev"); got == "" {
 		t.Error("dev commit resolution returned empty")
 	}
 	if versionOrDev("") != "dev" || versionOrDev("v2") != "v2" {
