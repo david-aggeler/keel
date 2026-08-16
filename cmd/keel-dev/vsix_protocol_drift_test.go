@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -528,7 +529,11 @@ func TestSchemaJSONTypeInfersUndeclaredTypes(t *testing.T) {
 		{"closed enum", `{"enum":["a","b"]}`, "string"},
 		{"properties only", `{"properties":{"a":{"type":"string"}}}`, "object"},
 		{"items only", `{"items":{"type":"string"}}`, "array"},
-		{"nothing to infer from", `{"minLength":1}`, ""},
+		// An empty return is still the honest answer from an inference
+		// helper, but it is not an ordinary outcome for the walk: compare
+		// now refuses a node it cannot type rather than skipping past it
+		// (TestVSIXProtocolPinRedsOnASchemaNodeItCannotType).
+		{"nothing to infer from, which the walk now refuses", `{"minLength":1}`, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var schema protocolSchema
@@ -562,5 +567,274 @@ func TestVSIXProtocolCoverageGapsRedOnAnUndecidedFamily(t *testing.T) {
 	gaps := vsixProtocolCoverageGaps(append(families, "unaccounted-family"))
 	if len(gaps) != 1 || !strings.Contains(gaps[0], "unaccounted-family") {
 		t.Fatalf("a new schema family did not red the coverage decision: %v", gaps)
+	}
+}
+
+// putSchemaKeyword sets one keyword on the schema node reached by objectPath,
+// so a test can place a construct the pin does not model onto a covered family
+// without hand-editing the embedded document.
+func putSchemaKeyword(t *testing.T, body []byte, objectPath []string, keyword string, value any) []byte {
+	t.Helper()
+	var document map[string]any
+	if err := json.Unmarshal(body, &document); err != nil {
+		t.Fatal(err)
+	}
+	node := document
+	for _, step := range objectPath {
+		next, ok := node[step].(map[string]any)
+		if !ok {
+			t.Fatalf("schema path %v has no object at %q", objectPath, step)
+		}
+		node = next
+	}
+	node[keyword] = value
+	mutated, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return mutated
+}
+
+// TestVSIXProtocolPinRedsOnAnUnmodeledSchemaKeyword proves keel/ac-499: a
+// covered schema node carrying a keyword outside the modeled subset produces a
+// finding naming the keyword and the schema path, instead of being dropped into
+// a false green.
+//
+// The mutation deliberately leaves the node typing fine — the keyword is a
+// sibling of "type" — because that is the shape keel/issue-166's correction
+// turned on. A guard keyed on an untypeable node would miss every case here.
+//
+// DHF-TEST: keel/requirement-128
+func TestVSIXProtocolPinRedsOnAnUnmodeledSchemaKeyword(t *testing.T) {
+	source := committedProtocolSource(t)
+
+	for _, tc := range []struct {
+		name     string
+		schema   vscode.SchemaName
+		path     []string
+		keyword  string
+		value    any
+		wantPath string
+	}{
+		{
+			name:     "combinator on a covered root",
+			schema:   vscode.SchemaDiscovery,
+			keyword:  "oneOf",
+			value:    []any{map[string]any{"type": "object"}},
+			wantPath: "#",
+		},
+		{
+			name:     "negation below a covered root",
+			schema:   vscode.SchemaRunEvent,
+			path:     []string{"properties", "run_id"},
+			keyword:  "not",
+			value:    map[string]any{"const": ""},
+			wantPath: "#/properties/run_id",
+		},
+		{
+			name:     "pattern properties on a nested definition",
+			schema:   vscode.SchemaDesiredState,
+			path:     []string{"$defs", "group"},
+			keyword:  "patternProperties",
+			value:    map[string]any{"^x-": map[string]any{"type": "string"}},
+			wantPath: "#/$defs/group",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			schemas := coveredSchemaBytes(t)
+			schemas[tc.schema] = putSchemaKeyword(t, schemas[tc.schema], tc.path, tc.keyword, tc.value)
+
+			findings, err := vsixProtocolDriftFindings(schemas, source)
+			if err != nil {
+				t.Fatalf("pin failed to run: %v", err)
+			}
+			joined := strings.Join(findings, "\n")
+			if len(findings) == 0 {
+				t.Fatalf("pin stayed green after %q was added to the %s schema at %s", tc.keyword, tc.schema, tc.wantPath)
+			}
+			if !strings.Contains(joined, tc.keyword) {
+				t.Fatalf("finding does not name the unmodeled keyword %q:\n%s", tc.keyword, joined)
+			}
+			if !strings.Contains(joined, tc.wantPath) {
+				t.Fatalf("finding does not name the schema path %q:\n%s", tc.wantPath, joined)
+			}
+			if !strings.Contains(joined, string(tc.schema)) {
+				t.Fatalf("finding does not name the document family %q:\n%s", tc.schema, joined)
+			}
+		})
+	}
+}
+
+// TestVSIXProtocolPinRedsOnAnExemptedKeywordAtANewSite is the non-wildcard
+// half of keel/ac-499. The six keywords desired-state.json already carries are
+// disposed of by an exemption pinned to the site that carries them; the same
+// keyword appearing anywhere else must still red the gate. A keyword-wildcard
+// exemption would pass the gate and fail this test.
+//
+// DHF-TEST: keel/requirement-128
+func TestVSIXProtocolPinRedsOnAnExemptedKeywordAtANewSite(t *testing.T) {
+	source := committedProtocolSource(t)
+
+	for _, tc := range []struct {
+		keyword string
+		value   any
+	}{
+		{"allOf", []any{map[string]any{"type": "object"}}},
+		{"if", map[string]any{"required": []any{"label"}}},
+		{"then", map[string]any{"required": []any{"label"}}},
+		{"contains", map[string]any{"type": "object"}},
+		{"minContains", 1},
+		{"maxContains", 1},
+	} {
+		t.Run(tc.keyword, func(t *testing.T) {
+			schemas := coveredSchemaBytes(t)
+			schemas[vscode.SchemaDesiredState] = putSchemaKeyword(t,
+				schemas[vscode.SchemaDesiredState], []string{"$defs", "desired_state"}, tc.keyword, tc.value)
+
+			findings, err := vsixProtocolDriftFindings(schemas, source)
+			if err != nil {
+				t.Fatalf("pin failed to run: %v", err)
+			}
+			joined := strings.Join(findings, "\n")
+			if !strings.Contains(joined, tc.keyword) || !strings.Contains(joined, "#/$defs/desired_state") {
+				t.Fatalf("%q at an unexempted site did not red the pin:\n%s", tc.keyword, joined)
+			}
+		})
+	}
+}
+
+// TestVSIXProtocolKeywordScanNamesTheLiveConditionalConstraint is the positive
+// control for the guard, and the reason keel/issue-166 had to be corrected: a
+// green pin is only evidence if the scan demonstrably reaches the construct it
+// is excusing. With the site-scoped disposals removed, the scan must name
+// exactly the six keywords desired-state.json carries below $defs/group. If it
+// names none, the guard is not reaching them and every green above it is false.
+//
+// DHF-TEST: keel/requirement-128
+func TestVSIXProtocolKeywordScanNamesTheLiveConditionalConstraint(t *testing.T) {
+	var global []vsixProtocolKeywordExemption
+	for _, exemption := range vsixProtocolKeywordExemptions {
+		if exemption.family == "" && exemption.path == "" {
+			global = append(global, exemption)
+		}
+	}
+	restore := vsixProtocolKeywordExemptions
+	vsixProtocolKeywordExemptions = global
+	t.Cleanup(func() { vsixProtocolKeywordExemptions = restore })
+
+	body, err := vscode.SchemaBytes(vscode.SchemaDesiredState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings, err := vsixProtocolKeywordFindings(vscode.SchemaDesiredState, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(findings, "\n")
+	for _, want := range []struct{ keyword, path string }{
+		{"allOf", "#/$defs/group"},
+		{"if", "#/$defs/group/allOf/0"},
+		{"then", "#/$defs/group/allOf/0"},
+		{"contains", "#/$defs/group/allOf/0/then/properties/rows"},
+		{"minContains", "#/$defs/group/allOf/0/then/properties/rows"},
+		{"maxContains", "#/$defs/group/allOf/0/then/properties/rows"},
+	} {
+		line := "the schema node at " + want.path + " carries the keyword \"" + want.keyword + "\""
+		if !strings.Contains(joined, line) {
+			t.Fatalf("the scan does not reach %q at %s:\n%s", want.keyword, want.path, joined)
+		}
+	}
+	if len(findings) != 6 {
+		t.Fatalf("the site-scoped disposal covers %d keywords, not the six on the wire:\n%s", len(findings), joined)
+	}
+}
+
+// TestProtocolModeledKeywordsMatchTheModeledStruct keeps the guard's
+// enumeration and the reader's struct from drifting apart. A field added to
+// protocolSchema without an entry in protocolModeledKeywords would make the
+// guard red a keyword the pin does in fact compare; the reverse would reopen
+// the fail-open this unit closed.
+//
+// DHF-TEST: keel/requirement-128
+func TestProtocolModeledKeywordsMatchTheModeledStruct(t *testing.T) {
+	declared := map[string]bool{}
+	structType := reflect.TypeOf(protocolSchema{})
+	for i := range structType.NumField() {
+		tag, ok := structType.Field(i).Tag.Lookup("json")
+		if !ok {
+			t.Fatalf("protocolSchema field %q carries no json tag, so its keyword cannot be enumerated", structType.Field(i).Name)
+		}
+		declared[strings.Split(tag, ",")[0]] = true
+	}
+	for keyword := range declared {
+		if !protocolModeledKeywords[keyword] {
+			t.Fatalf("protocolSchema reads %q but protocolModeledKeywords does not list it, so the guard would red a modeled keyword", keyword)
+		}
+	}
+	for keyword := range protocolModeledKeywords {
+		if !declared[keyword] {
+			t.Fatalf("protocolModeledKeywords lists %q but protocolSchema has no field for it, so the guard excuses a keyword the pin drops", keyword)
+		}
+	}
+}
+
+// TestVSIXProtocolStaleKeywordExemptionsRedOnAnExcuseThatOutlivedItsSite proves
+// the disposal table cannot rot into a standing hole: an exemption whose site no
+// longer carries the keyword reds the gate instead of quietly excusing nothing.
+//
+// DHF-TEST: keel/requirement-128
+func TestVSIXProtocolStaleKeywordExemptionsRedOnAnExcuseThatOutlivedItsSite(t *testing.T) {
+	schemas := coveredSchemaBytes(t)
+	if stale, err := vsixProtocolStaleKeywordExemptions(schemas); err != nil || len(stale) != 0 {
+		t.Fatalf("committed disposal table is already stale (%v):\n  %s", err, strings.Join(stale, "\n  "))
+	}
+
+	restore := vsixProtocolKeywordExemptions
+	vsixProtocolKeywordExemptions = append(append([]vsixProtocolKeywordExemption{}, restore...),
+		vsixProtocolKeywordExemption{keyword: "oneOf", family: vscode.SchemaDesiredState, path: "#/$defs/gone", reason: "test"})
+	t.Cleanup(func() { vsixProtocolKeywordExemptions = restore })
+
+	stale, err := vsixProtocolStaleKeywordExemptions(schemas)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stale) != 1 || !strings.Contains(stale[0], "oneOf") || !strings.Contains(stale[0], "#/$defs/gone") {
+		t.Fatalf("an exemption pointing at no schema node did not red the pin: %v", stale)
+	}
+}
+
+// TestVSIXProtocolPinRedsOnASchemaNodeItCannotType covers keel/issue-166's
+// second arm, the one its correction left standing: a node that states no type
+// and gives the walk nothing to infer one from used to skip the type check and
+// fall through without descending, so the subtree below it went unchecked and
+// the gate stayed green. The mutation carries only an exempted value
+// constraint, so the keyword scan is silent and this refusal is the only thing
+// that can red the pin.
+//
+// DHF-TEST: keel/requirement-128
+func TestVSIXProtocolPinRedsOnASchemaNodeItCannotType(t *testing.T) {
+	schemas := coveredSchemaBytes(t)
+	var document map[string]any
+	if err := json.Unmarshal(schemas[vscode.SchemaDesiredState], &document); err != nil {
+		t.Fatal(err)
+	}
+	properties, ok := document["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("the desired-state schema declares no root properties")
+	}
+	properties["workspace"] = map[string]any{"minLength": 1}
+	mutated, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schemas[vscode.SchemaDesiredState] = mutated
+
+	findings, err := vsixProtocolDriftFindings(schemas, committedProtocolSource(t))
+	if err != nil {
+		t.Fatalf("pin failed to run: %v", err)
+	}
+	joined := strings.Join(findings, "\n")
+	if !strings.Contains(joined, "cannot type the schema node at #/workspace") {
+		t.Fatalf("an untypeable schema node did not red the pin:\n%s", joined)
 	}
 }
