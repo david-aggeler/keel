@@ -48,7 +48,12 @@ import (
 //     exported marker — and each consumer surface states it at most once
 //     (keel/requirement-126, keel/ac-479).
 //
-// DHF-REQ: keel/requirement-10, keel/requirement-11, keel/requirement-85 (keel/ac-453, keel/ac-454, keel/ac-455), keel/requirement-118 (keel/ac-450), keel/requirement-126 (keel/ac-479)
+//   - no-bare-forwarder: an unexported package-level function whose whole body
+//     forwards to a same-package exported function, with no non-test caller, is
+//     the residue of an unexport-then-re-export round trip and fails the gate
+//     (keel/requirement-33, keel/ac-497).
+//
+// DHF-REQ: keel/requirement-10, keel/requirement-11, keel/requirement-85 (keel/ac-453, keel/ac-454, keel/ac-455), keel/requirement-118 (keel/ac-450), keel/requirement-126 (keel/ac-479), keel/requirement-33 (keel/ac-497)
 func runLint(dir string, files []string) error {
 	var violations []string
 
@@ -89,6 +94,12 @@ func runLint(dir string, files []string) error {
 	violations = append(violations, v...)
 
 	v, err = scanDesiredStateGroupLabelCoupling(dir, files)
+	if err != nil {
+		return err
+	}
+	violations = append(violations, v...)
+
+	v, err = scanNoBareForwarders(dir, files)
 	if err != nil {
 		return err
 	}
