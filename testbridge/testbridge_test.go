@@ -489,7 +489,7 @@ func TestDesiredStateGroupMarkerExcludesDerivedDescendants(t *testing.T) {
 }
 
 // TestDesiredStateGroupIDRoundTripsEveryAcceptedNode pins the marker pair's
-// own well-formedness: every id the constructor hands back is an id the
+// own shape rule: every id the constructor hands back is an id the
 // recognizer accepts. The namespaced and empty nodes are the point — both
 // shipped consumers use a single-segment node, so a table built from them
 // would pass without exercising the rule.
@@ -516,14 +516,14 @@ func TestDesiredStateGroupIDRoundTripsEveryAcceptedNode(t *testing.T) {
 	}
 }
 
-// TestBridgeEntryRefusesUnroundtrippableWorkspaceNode closes the second route a
+// TestBridgeEntryRefusesWorkspaceNodeThatCannotRoundTrip closes the second route a
 // node reaches the marker by: a consumer that never calls the constructor and
 // simply names its workspace. An empty node is not covered here — the bridge
 // substitutes a neutral node for it, which
 // TestBridgeOwnedVocabularyIsConsumerAgnostic pins.
 //
 // DHF-TEST: keel/requirement-126
-func TestBridgeEntryRefusesUnroundtrippableWorkspaceNode(t *testing.T) {
+func TestBridgeEntryRefusesWorkspaceNodeThatCannotRoundTrip(t *testing.T) {
 	root := t.TempDir()
 	bridge := namespacedNodeBridge{newFakeBridge(root)}
 	var protocol bytes.Buffer
