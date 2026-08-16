@@ -53,7 +53,16 @@ import (
 //     the residue of an unexport-then-re-export round trip and fails the gate
 //     (keel/requirement-33, keel/ac-497).
 //
-// DHF-REQ: keel/requirement-10, keel/requirement-11, keel/requirement-85 (keel/ac-453, keel/ac-454, keel/ac-455), keel/requirement-118 (keel/ac-450), keel/requirement-126 (keel/ac-479), keel/requirement-33 (keel/ac-497)
+//   - no-inline-discard-construction: log.Discard is the only site permitted to
+//     build a discard logger by hand (keel/ac-493). Held here rather than in a
+//     log/ test so its evaluated set is the gate's tracked-files selector.
+//
+//   - no-test-owned-tree-walk: a tracked _test.go file must not select files by
+//     walking the filesystem from outside its own package — that walk reaches
+//     gitignored scratch and reds the gate on content no change owns
+//     (keel/requirement-85, keel/ac-501).
+//
+// DHF-REQ: keel/requirement-10, keel/requirement-11, keel/requirement-85 (keel/ac-453, keel/ac-454, keel/ac-455, keel/ac-501), keel/requirement-118 (keel/ac-450), keel/requirement-126 (keel/ac-479), keel/requirement-33 (keel/ac-497), keel/requirement-122 (keel/ac-493)
 func runLint(dir string, files []string) error {
 	var violations []string
 
@@ -100,6 +109,18 @@ func runLint(dir string, files []string) error {
 	violations = append(violations, v...)
 
 	v, err = scanNoBareForwarders(dir, files)
+	if err != nil {
+		return err
+	}
+	violations = append(violations, v...)
+
+	v, err = scanInlineDiscardConstruction(dir, files)
+	if err != nil {
+		return err
+	}
+	violations = append(violations, v...)
+
+	v, err = scanNoTestOwnedTreeWalk(dir, files)
 	if err != nil {
 		return err
 	}
