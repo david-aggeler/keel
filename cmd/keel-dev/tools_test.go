@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -311,6 +312,147 @@ func TestCspellStep_FailsOnMisspelling(t *testing.T) {
 		args:    []string{"--no-progress", "--root", fixtureDir, "--config", config, clean},
 	}); err != nil {
 		t.Fatalf("cspell must pass on a clean file, got %v", err)
+	}
+}
+
+// TestCspellStepFailure_NamesDictionaryAndRegistrationAction proves keel/ac-502:
+// when the gate's cspell stage reds on an unknown word, its failure does not
+// stop at the offending token. It also names the committed dictionary that
+// declares the repo's spelling convention and states the action that registers
+// a deliberate coinage, so the author learns the rule from the failure instead
+// of by search.
+//
+// The assertions are anchored on facts rather than on a golden copy of the
+// message: the named dictionary must be the one cspell.json actually loads and
+// must be git-tracked, and the named action — appending the exact word to that
+// dictionary — must be the one that turns the red run green. A test pinned to
+// the exact wording would only prove that a constant equals itself, and would
+// red on every future rewording.
+//
+// DHF-TEST: keel/requirement-130
+func TestCspellStepFailure_NamesDictionaryAndRegistrationAction(t *testing.T) {
+	root, err := findModuleRoot(".")
+	if err != nil {
+		t.Fatalf("findModuleRoot: %v", err)
+	}
+	config := filepath.Join(root, "cspell.json")
+
+	// The expected dictionary is read from the committed config here, not from
+	// the production helper under test, so the two derivations stay independent.
+	dict := addWordsDictionary(t, config)
+	if _, err := os.Stat(filepath.Join(root, dict)); err != nil {
+		t.Fatalf("dictionary named by cspell.json is not in the tree: %v", err)
+	}
+	mustRun(t, root, "git", "ls-files", "--error-unmatch", dict)
+
+	// A nonsense consonant run, built from runes so no unknown word literal
+	// appears in this source file for the real gate's own cspell run to flag.
+	bad := string([]rune{'z', 'q', 'x', 'v', 'w', 'k', 'j', 'b', 'f'})
+	fixtureDir, err := os.MkdirTemp(root, "cspell-remedy-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(fixtureDir)
+	fixture := filepath.Join(fixtureDir, "bad.md")
+	if err := os.WriteFile(fixture, []byte("# heading\n\nThe word "+bad+" is not real.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The step under test is the gate's own cspell step, re-aimed at the fixture:
+	// --root anchors cspell there while --config supplies the committed rulebook.
+	// Pin resolution is dropped (the pinned-version probe is tool-pins' subject,
+	// not this test's) but every other field, remedy included, is the gate's.
+	s := stepByName(t, ciSteps(context.Background(), discardLogger(), root), "cspell")
+	s.tool = ""
+	s.resolver = nil
+	s.args = []string{"--no-progress", "--root", fixtureDir, "--config", config, fixture}
+
+	logger, capture := testLogger("keel-dev")
+	err = runStep(context.Background(), logger, root, s)
+	if err == nil {
+		t.Fatal("cspell step must fail on an unknown word")
+	}
+	failure := err.Error()
+
+	if !strings.Contains(failure, dict) {
+		t.Errorf("failure must name the dictionary %q, got: %s", dict, failure)
+	}
+	if !strings.Contains(strings.ToLower(failure), "add") {
+		t.Errorf("failure must state the registration action, got: %s", failure)
+	}
+
+	// "In addition to the offending word and its location": the stage's own
+	// report still reaches the operator through keel/log.
+	logged := capture.buf.String()
+	if !strings.Contains(logged, bad) || !strings.Contains(logged, "bad.md") {
+		t.Errorf("stage output must still carry the offending word and its location, got: %s", logged)
+	}
+
+	// The named action is the one that works: register the exact word in a copy
+	// of the dictionary and the same fixture passes. This is the leg that keeps
+	// the remedy honest — a message naming a file that registration does not fix
+	// would still be wrong.
+	registered := t.TempDir()
+	copyFileForTest(t, config, filepath.Join(registered, "cspell.json"))
+	copiedDict := filepath.Join(registered, filepath.FromSlash(dict))
+	if err := os.MkdirAll(filepath.Dir(copiedDict), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	copyFileForTest(t, filepath.Join(root, dict), copiedDict)
+	words, err := os.ReadFile(copiedDict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(copiedDict, append(words, []byte("\n"+bad+"\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	copyFileForTest(t, fixture, filepath.Join(registered, "bad.md"))
+
+	s.args = []string{
+		"--no-progress", "--root", registered,
+		"--config", filepath.Join(registered, "cspell.json"),
+		filepath.Join(registered, "bad.md"),
+	}
+	if err := runStep(context.Background(), discardLogger(), root, s); err != nil {
+		t.Fatalf("registering the word in %s must make the stage green, got %v", dict, err)
+	}
+}
+
+// addWordsDictionary returns the repo-relative path of the writable dictionary
+// declared by the given cspell config — the test's own reading of the config,
+// independent of the production helper it checks.
+func addWordsDictionary(t *testing.T, config string) string {
+	t.Helper()
+	raw, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatalf("read cspell config: %v", err)
+	}
+	var parsed struct {
+		DictionaryDefinitions []struct {
+			Path     string `json:"path"`
+			AddWords bool   `json:"addWords"`
+		} `json:"dictionaryDefinitions"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("parse cspell config: %v", err)
+	}
+	for _, def := range parsed.DictionaryDefinitions {
+		if def.AddWords && def.Path != "" {
+			return filepath.ToSlash(filepath.Clean(def.Path))
+		}
+	}
+	t.Fatalf("cspell config %s declares no writable dictionary", config)
+	return ""
+}
+
+func copyFileForTest(t *testing.T, src, dst string) {
+	t.Helper()
+	content, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("read %s: %v", src, err)
+	}
+	if err := os.WriteFile(dst, content, 0o644); err != nil {
+		t.Fatalf("write %s: %v", dst, err)
 	}
 }
 
