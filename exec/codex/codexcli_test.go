@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	procexec "github.com/david-aggeler/keel/exec"
 	logging "github.com/david-aggeler/keel/log"
 )
 
@@ -954,6 +955,41 @@ func TestRun_EnvExportsAssignmentsToChild(t *testing.T) {
 	}
 	if string(gotGoTmp) != want {
 		t.Errorf("child GOTMPDIR = %q, want %q", string(gotGoTmp), want)
+	}
+}
+
+// TestRun_OutputCapExceededAfterCompleteStreamFailsTheRun proves the output
+// ceiling outranks the adapter's own outcome policy: a stub that emits a
+// well-formed event stream terminated by a result event and only then writes
+// past the configured ceiling must still fail the run with the cap sentinel.
+//
+// The event stream is what makes this the case the ceiling exists for — an
+// overrunning child has by definition produced output — and it is exactly the
+// case the len(res.Events) == 0 wait-error guard cannot see (keel/issue-160).
+//
+// DHF-TEST: keel/requirement-81
+func TestRun_OutputCapExceededAfterCompleteStreamFailsTheRun(t *testing.T) {
+	dir := t.TempDir()
+	argvFile := filepath.Join(dir, "argv.txt")
+	stdinLenFile := filepath.Join(dir, "stdinlen.txt")
+
+	// A complete stream first, then 16 KiB of trailing output — well past the
+	// 4 KiB ceiling below, and far short of the 64 MiB default the test must
+	// never have to write.
+	lines := append([]string(nil), streamLines...)
+	for i := 0; i < 16; i++ {
+		lines = append(lines, strings.Repeat("x", 1024))
+	}
+	stub := writeStreamStub(t, argvFile, stdinLenFile, lines, 0)
+
+	_, err := Run(context.Background(), Request{
+		Prompt:         "x",
+		Dir:            dir,
+		Bin:            stub,
+		MaxOutputBytes: 4096,
+	})
+	if !errors.Is(err, procexec.ErrOutputLimitExceeded) {
+		t.Fatalf("Run err = %v, want one satisfying errors.Is(err, procexec.ErrOutputLimitExceeded)", err)
 	}
 }
 
