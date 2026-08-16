@@ -409,7 +409,7 @@ func TestDesiredStateDerivationIgnoresGroupDisplayLabel(t *testing.T) {
 		root := t.TempDir()
 		fake := newFakeBridge(root)
 		fake.extraItems = []vscode.TestItem{{
-			ID:       testbridge.DesiredStateGroupID(fixtureConsumerNode),
+			ID:       fixtureAnchorID(),
 			Label:    label,
 			Kind:     "group",
 			Runnable: false,
@@ -437,7 +437,7 @@ func TestDesiredStateDerivationIgnoresGroupDisplayLabel(t *testing.T) {
 	if !ok {
 		t.Fatalf("renamed desired-state group was not derived — derivation still keys on the display label: %+v", renamed.Items)
 	}
-	if derived.ParentID != testbridge.DesiredStateGroupID(fixtureConsumerNode) {
+	if derived.ParentID != fixtureAnchorID() {
 		t.Fatalf("derived group parent = %q, want the marker-identified anchor", derived.ParentID)
 	}
 	if row, ok := testItemByID(renamed.Items, "demo::action::seed-small"); !ok || row.ParentID != derived.ID {
@@ -450,7 +450,7 @@ func TestDesiredStateDerivationIgnoresGroupDisplayLabel(t *testing.T) {
 	}
 	for i, want := range renamed.Items {
 		got := relabeled.Items[i]
-		if got.ID == testbridge.DesiredStateGroupID(fixtureConsumerNode) {
+		if got.ID == fixtureAnchorID() {
 			continue // the anchor's own label is the thing being varied
 		}
 		if !reflect.DeepEqual(got, want) {
@@ -466,7 +466,7 @@ func TestDesiredStateDerivationIgnoresGroupDisplayLabel(t *testing.T) {
 //
 // DHF-TEST: keel/requirement-126
 func TestDesiredStateGroupMarkerExcludesDerivedDescendants(t *testing.T) {
-	anchor := testbridge.DesiredStateGroupID(fixtureConsumerNode)
+	anchor := fixtureAnchorID()
 	if anchor != fixtureConsumerNode+testbridge.DesiredStateGroupIDSuffix {
 		t.Fatalf("DesiredStateGroupID(%q) = %q, want node + suffix", fixtureConsumerNode, anchor)
 	}
@@ -484,6 +484,60 @@ func TestDesiredStateGroupMarkerExcludesDerivedDescendants(t *testing.T) {
 	} {
 		if got := testbridge.IsDesiredStateGroupID(tc.id); got != tc.want {
 			t.Fatalf("IsDesiredStateGroupID(%q) = %v, want %v", tc.id, got, tc.want)
+		}
+	}
+}
+
+// TestDesiredStateGroupIDRoundTripsEveryAcceptedNode pins the marker pair's
+// own well-formedness: every id the constructor hands back is an id the
+// recognizer accepts. The namespaced and empty nodes are the point — both
+// shipped consumers use a single-segment node, so a table built from them
+// would pass without exercising the rule.
+//
+// DHF-TEST: keel/requirement-126
+func TestDesiredStateGroupIDRoundTripsEveryAcceptedNode(t *testing.T) {
+	for _, node := range []string{"keel", "keel-demo-dev"} {
+		id, err := testbridge.DesiredStateGroupID(node)
+		if err != nil {
+			t.Fatalf("DesiredStateGroupID(%q) = error %v, want an anchor id", node, err)
+		}
+		if !testbridge.IsDesiredStateGroupID(id) {
+			t.Fatalf("DesiredStateGroupID(%q) = %q, which IsDesiredStateGroupID rejects: the constructor accepted a node the bridge will not recognize", node, id)
+		}
+	}
+	for _, node := range []string{"team::svc", ""} {
+		id, err := testbridge.DesiredStateGroupID(node)
+		if err == nil {
+			t.Fatalf("DesiredStateGroupID(%q) = %q with no error; the id is recognized = %v — a node that cannot round-trip must be refused where it is supplied", node, id, testbridge.IsDesiredStateGroupID(id))
+		}
+		if !errors.Is(err, testbridge.ErrInvalidDesiredStateNode) {
+			t.Fatalf("DesiredStateGroupID(%q) error = %v, want ErrInvalidDesiredStateNode", node, err)
+		}
+	}
+}
+
+// TestBridgeEntryRefusesUnroundtrippableWorkspaceNode closes the second route a
+// node reaches the marker by: a consumer that never calls the constructor and
+// simply names its workspace. An empty node is not covered here — the bridge
+// substitutes a neutral node for it, which
+// TestBridgeOwnedVocabularyIsConsumerAgnostic pins.
+//
+// DHF-TEST: keel/requirement-126
+func TestBridgeEntryRefusesUnroundtrippableWorkspaceNode(t *testing.T) {
+	root := t.TempDir()
+	bridge := namespacedNodeBridge{newFakeBridge(root)}
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol})
+	for _, argv := range [][]string{
+		{"test-bridge", "discover", "--format", "json"},
+		{"test-bridge", "desired-state", "--format", "json"},
+	} {
+		err := testbridge.CommandSpec(bridge).Dispatch(ctx, argv)
+		if err == nil {
+			t.Fatalf("%v dispatch with workspace node %q returned nil, want refusal", argv, bridge.Workspace().Node)
+		}
+		if !errors.Is(err, testbridge.ErrInvalidDesiredStateNode) {
+			t.Fatalf("%v dispatch error = %v, want ErrInvalidDesiredStateNode", argv, err)
 		}
 	}
 }
@@ -2653,6 +2707,18 @@ func (b emptyNodeBridge) Workspace() testbridge.Workspace {
 	return workspace
 }
 
+// namespacedNodeBridge is a consumer that supplies a node the desired-state
+// marker pair cannot round-trip.
+type namespacedNodeBridge struct {
+	*fakeBridge
+}
+
+func (b namespacedNodeBridge) Workspace() testbridge.Workspace {
+	workspace := b.fakeBridge.Workspace()
+	workspace.Node = "team::svc"
+	return workspace
+}
+
 func newFakeBridge(root string) *fakeBridge {
 	return &fakeBridge{root: root}
 }
@@ -2662,13 +2728,25 @@ func newFakeBridge(root string) *fakeBridge {
 // out, so no fixture can re-introduce the label coupling these tests guard.
 const fixtureConsumerNode = "demo"
 
+// fixtureAnchorID builds the fixture consumer's anchor id through the exported
+// constructor. fixtureConsumerNode is a valid single-segment node, so the
+// refusal path cannot fire here; a panic would mean the fixture itself broke
+// the rule.
+func fixtureAnchorID() string {
+	id, err := testbridge.DesiredStateGroupID(fixtureConsumerNode)
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
+
 // desiredStateGroupItem is the fixture consumer's desired-state anchor. Its
 // label is deliberately unlike any label a shipped consumer uses: a fixture that
 // constructed the anchor by label would exercise a coupling the bridge no longer
 // has.
 func desiredStateGroupItem() vscode.TestItem {
 	return vscode.TestItem{
-		ID:       testbridge.DesiredStateGroupID(fixtureConsumerNode),
+		ID:       fixtureAnchorID(),
 		Label:    "fixture desired-state anchor",
 		Kind:     "group",
 		Runnable: false,
