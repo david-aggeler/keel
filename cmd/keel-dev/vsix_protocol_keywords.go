@@ -9,8 +9,8 @@ import (
 )
 
 // The schema half of the protocol pin used to hold the opposite line from the
-// TypeScript half: protocolSchema modelled nine keywords and every other
-// keyword unmarshalled into nothing and was dropped without a trace, so a
+// TypeScript half: protocolSchema modeled nine keywords and every other
+// keyword unmarshaled into nothing and was dropped without a trace, so a
 // covered family could carry a wire property the pin never compared while the
 // gate reported green. vsix_protocol_ts.go:9-14 states the posture both halves
 // owe the reader — a construct the reader cannot model must red the gate rather
@@ -21,14 +21,14 @@ import (
 // keyword sitting in a subtree the walk never enters would stay invisible to a
 // check hung off the walk; the scan reads the whole document instead.
 
-// protocolModelledKeywords is the single enumeration of the JSON Schema
+// protocolModeledKeywords is the single enumeration of the JSON Schema
 // keywords the pin compares. It is pinned to protocolSchema's json tags by
-// TestProtocolModelledKeywordsMatchTheModelledStruct, so a field added to the
+// TestProtocolModeledKeywordsMatchTheModeledStruct, so a field added to the
 // struct without an entry here — or the reverse — reds the gate rather than
 // letting the guard and the reader drift apart.
 //
 // DHF-REQ: keel/requirement-128
-var protocolModelledKeywords = map[string]bool{
+var protocolModeledKeywords = map[string]bool{
 	"type":                 true,
 	"$ref":                 true,
 	"const":                true,
@@ -40,7 +40,7 @@ var protocolModelledKeywords = map[string]bool{
 	"$defs":                true,
 }
 
-// protocolDataKeywords names the modelled keywords whose value is document
+// protocolDataKeywords names the modeled keywords whose value is document
 // data rather than a nested schema. The scan must not walk into them, or a
 // const object's own field names would be read as keywords.
 var protocolDataKeywords = map[string]bool{
@@ -82,7 +82,7 @@ type vsixProtocolKeywordExemption struct {
 	reason  string
 }
 
-// vsixProtocolKeywordExemptions is the disposal decision for every unmodelled
+// vsixProtocolKeywordExemptions is the disposal decision for every unmodeled
 // keyword the embedded schemas carry today. Each entry names one keyword and
 // says why it has no counterpart in vsix/src/protocol.ts. There is deliberately
 // no wildcard entry: a keyword absent from this table reds the gate, which is
@@ -178,7 +178,7 @@ func vsixProtocolKeywordFindings(family vscode.SchemaName, document []byte) ([]s
 		}
 		sort.Strings(names)
 		for _, name := range names {
-			if !protocolModelledKeywords[name] && !vsixProtocolKeywordExempt(family, path, name) {
+			if !protocolModeledKeywords[name] && !vsixProtocolKeywordExempt(family, path, name) {
 				findings = append(findings, fmt.Sprintf(
 					"%s: the schema node at %s carries the keyword %q, which the protocol pin does not model, so %s is not checked against it (keel/ac-499)",
 					family, path, name, vsixProtocolRel))
