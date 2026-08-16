@@ -54,7 +54,7 @@ func TestValidateTreeRejectsDepthBeyondTwoCommandTokens(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-106
+// DHF-TEST: keel/requirement-106 (keel/ac-382)
 func TestValidateTreeRejectsSingleChildNamespace(t *testing.T) {
 	root := &CommandSpec{
 		Name: "tool",
@@ -80,6 +80,39 @@ func TestValidateTreeRejectsSingleChildNamespace(t *testing.T) {
 	root.Subcommands[0].Subcommands = append(root.Subcommands[0].Subcommands, &CommandSpec{Name: "repair", Handler: noopHandler})
 	if err := root.ValidateTree(); err != nil {
 		t.Fatalf("ValidateTree rejected namespace with two children: %v", err)
+	}
+}
+
+// TestValidateTreeExemptsTheRootFromTheTwoChildRule pins the root carve-out of
+// the two-child rule: the carrier-tree shape a library package exports — a root
+// holding exactly one namespace subcommand, which a consumer grafts into its own
+// root — passes ValidateTree. The opposite direction, a namespace *below* the
+// root holding exactly one child, is pinned by
+// TestValidateTreeRejectsSingleChildNamespace; the two together are the both-way
+// pin the exemption needs, so deleting or widening the !root guard reddens one
+// of them.
+//
+// The single subcommand is itself a well-formed two-child namespace so that the
+// two-child rule is the only rule in play: a bare childless, handler-less child
+// would trip the neither-namespace-nor-leaf rule instead and prove nothing.
+//
+// DHF-TEST: keel/requirement-106 (keel/ac-382)
+func TestValidateTreeExemptsTheRootFromTheTwoChildRule(t *testing.T) {
+	carrier := &CommandSpec{
+		Name: "tool",
+		Subcommands: []*CommandSpec{
+			{
+				Name: "admin",
+				Subcommands: []*CommandSpec{
+					{Name: "status", Handler: noopHandler},
+					{Name: "repair", Handler: noopHandler},
+				},
+			},
+		},
+	}
+
+	if err := carrier.ValidateTree(); err != nil {
+		t.Fatalf("ValidateTree rejected a root holding exactly one subcommand: %v", err)
 	}
 }
 
