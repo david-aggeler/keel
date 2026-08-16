@@ -9,6 +9,18 @@
 # read — which is how a real inventory change passes unexamined (keel/issue-149).
 #
 # Nothing downstream reads the committed copy. grype re-scans a freshly generated
-# one, and linked-components.md / cve.md are what review consumes. The two CVE
-# artifacts beside it carry no host paths and stay tracked.
+# one, and linked-components.md / cve.md are what review consumes.
 raw/filesystem.cyclonedx.json
+
+# raw/cve-filesystem.json is generated, not committed (keel/ac-496).
+#
+# Same argument, second artifact. grype stamps descriptor.timestamp, so two runs
+# of the same commit differ in that field with an identical vulnerability
+# payload. The file also carries ~90 CVE publication dates, so a repository-side
+# strip of the generation stamp would leave a file no shape-based guard can
+# clear — the wall-clock instant and the payload dates are indistinguishable by
+# form.
+#
+# Nothing reads the committed copy: cve.md and raw/cve-filesystem.txt are the
+# rendered forms review consumes, and both are free of generation stamps.
+raw/cve-filesystem.json
