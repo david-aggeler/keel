@@ -130,6 +130,11 @@ func ciStepsWithConfig(ctx context.Context, logger *slog.Logger, dir string, cfg
 		// from prose/spell checks while still being part of the published module.
 		// DHF-REQ: keel/requirement-8 (keel/ac-464)
 		{name: "module-zip", fn: runModuleZipCheck},
+		// Like module-zip, this reads the git-tracked tree directly: the SBOM
+		// artifacts are excluded from the prose/spell file lists but are exactly
+		// what keel publishes, and convergence is a property of the committed set.
+		// DHF-REQ: keel/requirement-123 (keel/ac-495, keel/ac-496)
+		{name: "sbom-convergence", fn: runSBOMConvergence},
 		// --- static-tool battery (keel/requirement-12) ---
 		// DHF-REQ: keel/requirement-12 (keel/ac-38)
 		{name: "golangci-lint", tool: "golangci-lint", program: "golangci-lint", args: []string{"run", "./..."}, quietStderr: true},
@@ -243,6 +248,29 @@ func trackedLintFiles(ctx context.Context, logger *slog.Logger, dir string, excl
 //
 // DHF-REQ: keel/requirement-85 (keel/ac-435), keel/requirement-118 (keel/ac-451)
 func trackedFilesWithExt(ctx context.Context, logger *slog.Logger, dir string, excludes gateExcludePatterns, exts ...string) ([]string, error) {
+	tracked, err := listTrackedFiles(ctx, logger, dir)
+	if err != nil {
+		return nil, err
+	}
+	want := make(map[string]bool, len(exts))
+	for _, ext := range exts {
+		want[ext] = true
+	}
+	var files []string
+	for _, file := range tracked {
+		if gatePathExcluded(file, excludes) || !want[filepath.Ext(file)] {
+			continue
+		}
+		files = append(files, file)
+	}
+	return files, nil
+}
+
+// listTrackedFiles returns every git-tracked repo-relative path in dir, before
+// any gate exclusion or extension filter. Steps that select by extension layer
+// their filter on top; steps whose subject is an artifact set rather than a
+// language (sbom-convergence) walk the raw list.
+func listTrackedFiles(ctx context.Context, logger *slog.Logger, dir string) ([]string, error) {
 	proc, err := procexec.ProcessStart(ctx, procexec.Request{
 		Program: "git",
 		Args:    []string{"ls-files"},
@@ -259,17 +287,11 @@ func trackedFilesWithExt(ctx context.Context, logger *slog.Logger, dir string, e
 	if res.ExitCode != 0 {
 		return nil, fmt.Errorf("keel-dev: list git-tracked files: git ls-files exited %d", res.ExitCode)
 	}
-	want := make(map[string]bool, len(exts))
-	for _, ext := range exts {
-		want[ext] = true
-	}
 	var files []string
 	for _, file := range strings.Split(res.Stdout, "\n") {
-		file = strings.TrimSpace(file)
-		if file == "" || gatePathExcluded(file, excludes) || !want[filepath.Ext(file)] {
-			continue
+		if file = strings.TrimSpace(file); file != "" {
+			files = append(files, file)
 		}
-		files = append(files, file)
 	}
 	return files, nil
 }

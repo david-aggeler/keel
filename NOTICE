@@ -14,8 +14,6 @@ do not edit by hand. To regenerate after a dependency change:
 
     just sbom
 
-Generated: 2026-08-15
-
 
 =============================================================================
 Section 1: Go module attributions
