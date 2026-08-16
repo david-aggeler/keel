@@ -198,12 +198,45 @@ const (
 // DHF-REQ: keel/requirement-126
 const DesiredStateGroupIDSuffix = "::desired-state"
 
-// DesiredStateGroupID returns the desired-state anchor id for a consumer node:
-// the node, then DesiredStateGroupIDSuffix.
+// ErrInvalidDesiredStateNode names the refusal of a consumer node the
+// desired-state marker pair cannot round-trip. Callers match it with
+// errors.Is.
 //
 // DHF-REQ: keel/requirement-126
-func DesiredStateGroupID(node string) string {
-	return node + DesiredStateGroupIDSuffix
+var ErrInvalidDesiredStateNode = errors.New("keel/testbridge: invalid desired-state node")
+
+// isDesiredStateNode is the one definition of a valid consumer node: non-empty
+// and a single segment. Both halves of the exported marker pair consult it, so
+// the constructor cannot admit a node the recognizer refuses.
+//
+// DHF-REQ: keel/requirement-126
+func isDesiredStateNode(node string) bool {
+	return node != "" && !strings.Contains(node, "::")
+}
+
+// requireDesiredStateNode refuses a node that cannot round-trip, naming the
+// node and the rule it broke.
+func requireDesiredStateNode(node string) error {
+	if isDesiredStateNode(node) {
+		return nil
+	}
+	return fmt.Errorf("%w: %q must be non-empty and must not contain %q", ErrInvalidDesiredStateNode, node, "::")
+}
+
+// DesiredStateGroupID returns the desired-state anchor id for a consumer node:
+// the node, then DesiredStateGroupIDSuffix. The node must be non-empty and a
+// single segment — it must not contain "::" — because that is what
+// IsDesiredStateGroupID accepts and what keeps ids derived beneath an anchor
+// from reading as a second anchor. A node that breaks the rule is refused with
+// ErrInvalidDesiredStateNode rather than turned into an id the bridge would
+// silently ignore.
+//
+// DHF-REQ: keel/requirement-126
+func DesiredStateGroupID(node string) (string, error) {
+	if err := requireDesiredStateNode(node); err != nil {
+		return "", err
+	}
+	return node + DesiredStateGroupIDSuffix, nil
 }
 
 // IsDesiredStateGroupID reports whether id is a consumer's desired-state
@@ -214,7 +247,7 @@ func DesiredStateGroupID(node string) string {
 // DHF-REQ: keel/requirement-126
 func IsDesiredStateGroupID(id string) bool {
 	node, ok := strings.CutSuffix(id, DesiredStateGroupIDSuffix)
-	return ok && node != "" && !strings.Contains(node, "::")
+	return ok && isDesiredStateNode(node)
 }
 
 // ClearStateProvider supplies the only consumer-owned action behind the
@@ -304,14 +337,28 @@ func CommandSpec(bridge Bridge) *cli.CommandSpec {
 				Name:  "test-bridge",
 				Short: "Serve VS Code test-bridge protocol commands.",
 				Subcommands: []*cli.CommandSpec{
-					{Name: "config-init", Use: "test-bridge config-init", Short: "Write .vscode/test-bridge.json if absent.", Group: "Config", Positionals: []cli.PositionalSpec{{Name: "args", Min: 0, Max: 0}}, Handler: handleConfigInit(bridge)},
-					{Name: "config-upgrade", Use: "test-bridge config-upgrade", Short: "Upgrade .vscode/test-bridge.json to the current schema.", Group: "Config", Positionals: []cli.PositionalSpec{{Name: "args", Min: 0, Max: 0}}, Handler: handleConfigUpgrade(bridge)},
-					{Name: "discover", Use: "test-bridge discover [--format json]", Short: "Emit the test discovery document.", Group: "Tests", Positionals: []cli.PositionalSpec{{Name: "args", Min: 0, Max: 0}}, Flags: []cli.FlagSpec{{Name: "format", Value: "json", Default: "json", Enum: []string{"json"}, Short: "Output format.", StringTarget: &discoverFormat}}, Handler: handleDiscover(bridge, &discoverFormat)},
-					{Name: "desired-state", Use: "test-bridge desired-state [--format json] [--id test-id]", Short: "Emit the read-only desired-state document.", Group: "Tests", Positionals: []cli.PositionalSpec{{Name: "args", Min: 0, Max: 0}}, Flags: []cli.FlagSpec{{Name: "format", Value: "json", Default: "json", Enum: []string{"json"}, Short: "Output format.", StringTarget: &desiredStateFormat}, {Name: "id", Value: "test-id", Repeatable: true, Short: "Selected test id.", StringSliceTarget: &desiredStateIDs}}, Handler: handleDesiredState(bridge, &desiredStateFormat, &desiredStateIDs)},
-					{Name: "run", Use: "test-bridge run [--dry-run] --id test-id", Short: "Run selected tests.", Group: "Tests", Positionals: []cli.PositionalSpec{{Name: "args", Min: 0, Max: 0}}, Flags: []cli.FlagSpec{{Name: "id", Value: "test-id", Repeatable: true, Required: true, Short: "Selected test id.", StringSliceTarget: &runIDs}, {Name: "dry-run", Short: "Resolve selected test ids without executing them.", BoolTarget: &runDryRun}}, Handler: handleRun(bridge, &runIDs, &runDryRun)},
+					{Name: "config-init", Use: "test-bridge config-init", Short: "Write .vscode/test-bridge.json if absent.", Group: "Config", Positionals: []cli.PositionalSpec{{Name: "args", Min: 0, Max: 0}}, Handler: guardWorkspace(bridge, handleConfigInit(bridge))},
+					{Name: "config-upgrade", Use: "test-bridge config-upgrade", Short: "Upgrade .vscode/test-bridge.json to the current schema.", Group: "Config", Positionals: []cli.PositionalSpec{{Name: "args", Min: 0, Max: 0}}, Handler: guardWorkspace(bridge, handleConfigUpgrade(bridge))},
+					{Name: "discover", Use: "test-bridge discover [--format json]", Short: "Emit the test discovery document.", Group: "Tests", Positionals: []cli.PositionalSpec{{Name: "args", Min: 0, Max: 0}}, Flags: []cli.FlagSpec{{Name: "format", Value: "json", Default: "json", Enum: []string{"json"}, Short: "Output format.", StringTarget: &discoverFormat}}, Handler: guardWorkspace(bridge, handleDiscover(bridge, &discoverFormat))},
+					{Name: "desired-state", Use: "test-bridge desired-state [--format json] [--id test-id]", Short: "Emit the read-only desired-state document.", Group: "Tests", Positionals: []cli.PositionalSpec{{Name: "args", Min: 0, Max: 0}}, Flags: []cli.FlagSpec{{Name: "format", Value: "json", Default: "json", Enum: []string{"json"}, Short: "Output format.", StringTarget: &desiredStateFormat}, {Name: "id", Value: "test-id", Repeatable: true, Short: "Selected test id.", StringSliceTarget: &desiredStateIDs}}, Handler: guardWorkspace(bridge, handleDesiredState(bridge, &desiredStateFormat, &desiredStateIDs))},
+					{Name: "run", Use: "test-bridge run [--dry-run] --id test-id", Short: "Run selected tests.", Group: "Tests", Positionals: []cli.PositionalSpec{{Name: "args", Min: 0, Max: 0}}, Flags: []cli.FlagSpec{{Name: "id", Value: "test-id", Repeatable: true, Required: true, Short: "Selected test id.", StringSliceTarget: &runIDs}, {Name: "dry-run", Short: "Resolve selected test ids without executing them.", BoolTarget: &runDryRun}}, Handler: guardWorkspace(bridge, handleRun(bridge, &runIDs, &runDryRun))},
 				},
 			},
 		},
+	}
+}
+
+// guardWorkspace validates the consumer's workspace once per dispatch, before
+// any protocol work runs. CommandSpec is the bridge's only entry point, so
+// every command surface inherits the check from here.
+//
+// DHF-REQ: keel/requirement-126
+func guardWorkspace(bridge Bridge, next cli.Handler) cli.Handler {
+	return func(ctx context.Context, args []string) error {
+		if err := validateWorkspace(bridge.Workspace()); err != nil {
+			return err
+		}
+		return next(ctx, args)
 	}
 }
 
@@ -650,9 +697,13 @@ func deriveDesiredStateDeclaration(ctx context.Context, bridge Bridge, ids []str
 	}
 	rt := runtimeOrDefault(ctx, bridge)
 	root := runtimeRoot(rt, bridge)
+	rootID, err := desiredStateRootID(bridge)
+	if err != nil {
+		return vscode.DesiredStateDocument{}, err
+	}
 	groups := make([]vscode.DesiredStateGroup, 0, len(declared.Groups))
 	for _, group := range declared.Groups {
-		derivedRows, err := deriveDesiredStateGroupRows(reportCtx, root, desiredStateRootID(bridge), group)
+		derivedRows, err := deriveDesiredStateGroupRows(reportCtx, root, rootID, group)
 		if err != nil {
 			return vscode.DesiredStateDocument{}, err
 		}
@@ -809,7 +860,7 @@ func exclusiveUnknownRunID(parentID, groupLabel string) string {
 	return parentID + "::group::" + stableIDSegment(groupLabel) + "::unknown"
 }
 
-func desiredStateRootID(bridge Bridge) string {
+func desiredStateRootID(bridge Bridge) (string, error) {
 	node := bridge.Workspace().Node
 	if node == "" {
 		node = "testbridge"

@@ -49,6 +49,25 @@ func ValidateDocument(doc any) error {
 	}
 }
 
+// validateWorkspace checks the consumer-supplied workspace once, at bridge
+// entry, before any protocol work runs. Node is the only field carrying a shape
+// constraint: the bridge builds the desired-state anchor id from it, so a node
+// the marker pair cannot round-trip is a wiring error the consumer must learn
+// about here rather than by noticing that desired-state rows stopped appearing.
+// An empty Node is not a supplied node — the bridge substitutes a neutral one
+// (desiredStateRootID) — so it is left to that documented fallback.
+//
+// DHF-REQ: keel/requirement-126
+func validateWorkspace(workspace Workspace) error {
+	if workspace.Node == "" {
+		return nil
+	}
+	if err := requireDesiredStateNode(workspace.Node); err != nil {
+		return fmt.Errorf("keel/testbridge: workspace node: %w", err)
+	}
+	return nil
+}
+
 func requireSchema(name vscode.SchemaName) error {
 	data, err := vscode.SchemaBytes(name)
 	if err != nil {
