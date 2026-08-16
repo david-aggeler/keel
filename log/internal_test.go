@@ -16,15 +16,15 @@ import (
 
 func TestFromContextAndWithLogger(t *testing.T) {
 	base := slog.Default()
-	if got := fromContext(context.Background()); got != base {
+	if got := FromContext(context.Background()); got != base {
 		t.Error("empty context should fall back to slog.Default")
 	}
 	l, _ := newForTesting("svc")
-	ctx := withLogger(context.Background(), l)
-	if got := fromContext(ctx); got != l {
+	ctx := WithLogger(context.Background(), l)
+	if got := FromContext(ctx); got != l {
 		t.Error("stored logger not returned")
 	}
-	if got := fromContext(withLogger(context.Background(), nil)); got != base {
+	if got := FromContext(WithLogger(context.Background(), nil)); got != base {
 		t.Error("nil stored logger should fall back to slog.Default")
 	}
 }
