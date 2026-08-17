@@ -1959,11 +1959,24 @@ func vsixSelectionFiles(root string, selection vscode.VSIXSelection) ([]string, 
 	}
 }
 
+// emitLaneGoPackageEvents replays a lane's `go test -json` stream as run
+// events. Both granularities settle under their own id: a package-level
+// result keys go::pkg::<rel>, and a test-bearing one keys
+// go::test::<pkg>::<name> through vscode.GoRunEventTestID — the same id shape
+// the direct selection path emits, so the two paths cannot drift.
+//
+// Only terminal actions are replayed. The stream's per-test "run" records are
+// deliberately not turned into test_started events: the lane path emits no
+// test_started for its package rows either, and the consumer already enqueues
+// the run's execution scope (keel/ac-430), so a started leg here would add a
+// second, redundant source for the same rows.
+//
+// DHF-REQ: keel/requirement-71
 func emitLaneGoPackageEvents(raw, modulePath string, writer vscode.RunEventWriter) {
 	scanner := bufio.NewScanner(strings.NewReader(raw))
 	for scanner.Scan() {
 		var event vscode.GoTestJSONEvent
-		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil || event.Package == "" || event.Test != "" {
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil || event.Package == "" {
 			continue
 		}
 		switch event.Action {
@@ -1972,9 +1985,13 @@ func emitLaneGoPackageEvents(raw, modulePath string, writer vscode.RunEventWrite
 			if pkg == "" {
 				continue
 			}
+			testID := "go::pkg::" + filepath.ToSlash(pkg)
+			if event.Test != "" {
+				testID = vscode.GoRunEventTestID(vscode.GoSelection{}, event, testID, modulePath)
+			}
 			writer(vscode.RunEvent{
 				Event:      vscode.StatusEventName(event.Action),
-				TestID:     "go::pkg::" + filepath.ToSlash(pkg),
+				TestID:     testID,
 				DurationMS: vscode.GoElapsedMillis(event.Elapsed, time.Now()),
 			})
 		}
