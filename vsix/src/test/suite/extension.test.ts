@@ -24,6 +24,7 @@ import {
   parseGoCoverageProfile,
   publishedTestItemIds,
   rejectConcurrentRun,
+  resetReconcileSignatureForTest,
   resultItemsForRunEvent,
   runEventApplicationSnapshot,
   runProfileHandlerForTest,
@@ -2726,6 +2727,64 @@ process.exit(2);
         spawn.kind === 'spawn' ? spawn.ids : [],
         ['demo::desired-state::dataset::full'],
         'the invalidation adds no id to the devtool run invocation'
+      );
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  // DHF-TEST: keel/requirement-132 (keel/ac-513)
+  test('an unchanged served reconcile list still replays after a run-start invalidation', async function () {
+    this.timeout(20_000);
+    // 'fail' leaves the active member exactly where it was, so the bridge
+    // serves a list identical to the pre-run one. That is precisely when the
+    // in-session signature guard would suppress the replay — and precisely
+    // when the transitional all-skipped rendering is wrong.
+    const workspace = createExclusiveGroupWorkspace('keel-run-start-replay-guard-', 'fail');
+    try {
+      const extension = vscode.extensions.getExtension('aggeler.keel-test-bridge');
+      assert.ok(extension, 'extension should be discoverable');
+      await extension.activate();
+      resetReconcileSignatureForTest();
+      await vscode.commands.executeCommand('keel.tests.refresh');
+      const controller = testControllerForTest();
+      assert.ok(controller, 'extension should expose its active TestController for tests');
+
+      const timeline: RunTimelineEntry[] = [];
+      const restore = recordRunTimeline(controller, timeline);
+      try {
+        await runProfileHandlerForTest('demo::desired-state::dataset::full');
+      } finally {
+        restore();
+      }
+
+      const spawnIndex = timeline.findIndex((entry) => entry.kind === 'spawn');
+      assert.ok(spawnIndex >= 0, `the devtool run child is spawned; timeline=${JSON.stringify(timeline)}`);
+      const afterSpawn = timeline.slice(spawnIndex + 1);
+
+      // The served list is unchanged, so the replay must still fire and stamp
+      // every row of the group with the served state.
+      assert.ok(
+        stampedIds(afterSpawn, 'passed').includes('demo::desired-state::dataset::small'),
+        `the genuinely active member is restored to passed; timeline=${JSON.stringify(timeline)}`
+      );
+      assert.ok(
+        stampedIds(afterSpawn, 'skipped').includes('demo::desired-state::dataset::full'),
+        `the failed member renders the served state, not the transitional one; timeline=${JSON.stringify(timeline)}`
+      );
+
+      // The regression this guards against is worse than the bug it fixes: a
+      // failed activation must never erase the record of what is active.
+      const finalStateById = new Map<string, string>();
+      for (const entry of timeline) {
+        if (entry.kind !== 'spawn') {
+          finalStateById.set(entry.id, entry.kind);
+        }
+      }
+      assert.equal(
+        finalStateById.get('demo::desired-state::dataset::small'),
+        'passed',
+        `the group is not left with every row skipped; timeline=${JSON.stringify(timeline)}`
       );
     } finally {
       workspace.dispose();
