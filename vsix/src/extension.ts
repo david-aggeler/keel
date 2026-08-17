@@ -754,6 +754,11 @@ async function runSelected(
     child = runTests(workspaceRoot, selectedProtocolIds);
   } catch (error) {
     appendRunOutput(run, `Failed to start Keel test run: ${error instanceof Error ? error.message : String(error)}`, 'ERROR');
+    // The child never came into existence, so no `close` will settle the
+    // group. This path had no post-run refresh at all before keel/ac-516.
+    if (invalidatedExclusiveGroup) {
+      await refreshDesiredStateAfterRun(run, controller, workspaceRoot, selectedProtocolIds);
+    }
     finishRun();
     return;
   }
@@ -785,11 +790,16 @@ async function runSelected(
     appendRunOutput(run, chunk.toString('utf8'), 'WARN');
   });
   await new Promise<void>((resolve) => {
-    child.on('error', (error) => {
+    child.on('error', async (error) => {
       appendRunOutput(run, `Keel test process error: ${error.message}`, 'ERROR');
       cancellation.dispose();
       if (forceKill) {
         clearTimeout(forceKill);
+      }
+      // `close` does not follow an `error`, so this path settles the group
+      // itself (keel/ac-516).
+      if (invalidatedExclusiveGroup) {
+        await refreshDesiredStateAfterRun(run, controller, workspaceRoot, selectedProtocolIds);
       }
       finishRun();
       resolve();
@@ -1052,7 +1062,10 @@ export function externalRunSnapshots(): ExternalRunStateSnapshot[] {
   return Array.from(externalRunMirror?.snapshots() ?? []);
 }
 
-export async function runProfileHandlerForTest(protocolID: string): Promise<void> {
+// runProfileHandlerForTest drives the real run profile for a single published
+// row. `token` lets a spec own the cancellation source so it can cancel a run
+// in flight; omitted, the handler runs to completion on its own source.
+export async function runProfileHandlerForTest(protocolID: string, token?: vscode.CancellationToken): Promise<void> {
   const controller = testControllerForRunProfile;
   const profile = testRunProfileForRunProfile;
   if (!controller || !profile) {
@@ -1067,7 +1080,7 @@ export async function runProfileHandlerForTest(protocolID: string): Promise<void
   }
   const source = new vscode.CancellationTokenSource();
   try {
-    await profile.runHandler(new vscode.TestRunRequest([item], undefined, profile), source.token);
+    await profile.runHandler(new vscode.TestRunRequest([item], undefined, profile), token ?? source.token);
   } finally {
     source.dispose();
   }

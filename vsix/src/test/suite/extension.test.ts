@@ -3,6 +3,8 @@ import * as cp from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import * as vscode from 'vscode';
 import {
   applyRunEvent,
@@ -2790,6 +2792,116 @@ process.exit(2);
       workspace.dispose();
     }
   });
+
+  // The three abort paths of keel/ac-516. Each reaches finishRun without a
+  // normal completion, and one of them returns before the child is ever
+  // spawned. Each has to converge on the bridge-served truth, or a failed
+  // activation silently erases the record of what is actually active.
+  //
+  // DHF-TEST: keel/requirement-132 (keel/ac-516)
+  test('a spawn failure settles the exclusive group on bridge-served truth', async function () {
+    this.timeout(20_000);
+    const workspace = createExclusiveGroupWorkspace('keel-run-start-spawn-failure-', 'activate');
+    const adapterModule = bridgeAdapterModule as unknown as { runTests: typeof runTests };
+    const realRunTests = adapterModule.runTests;
+    try {
+      const controller = await activateExclusiveGroupWorkspace();
+      // The child never comes into existence — the one path that had no
+      // post-run refresh at all before this unit.
+      adapterModule.runTests = (() => {
+        throw new Error('devtool binary is not executable');
+      }) as typeof runTests;
+
+      const timeline: RunTimelineEntry[] = [];
+      const restore = recordRunTimeline(controller, timeline);
+      try {
+        await runProfileHandlerForTest('demo::desired-state::dataset::full');
+      } finally {
+        restore();
+      }
+
+      assert.ok(
+        stampedIds(timeline, 'skipped').includes('demo::desired-state::dataset::small'),
+        `the transitional stamp fired before the failed spawn; timeline=${JSON.stringify(timeline)}`
+      );
+      assertGroupSettledOnActiveMember(timeline, 'demo::desired-state::dataset::small');
+    } finally {
+      adapterModule.runTests = realRunTests;
+      workspace.dispose();
+    }
+  });
+
+  // DHF-TEST: keel/requirement-132 (keel/ac-516)
+  test('a child error event settles the exclusive group on bridge-served truth', async function () {
+    this.timeout(20_000);
+    const workspace = createExclusiveGroupWorkspace('keel-run-start-child-error-', 'activate');
+    const adapterModule = bridgeAdapterModule as unknown as { runTests: typeof runTests };
+    const realRunTests = adapterModule.runTests;
+    try {
+      const controller = await activateExclusiveGroupWorkspace();
+      // The child is handed back but immediately errors, so `close` never
+      // arrives and the run settles through the error handler instead.
+      adapterModule.runTests = (() => {
+        const child = new EventEmitter() as unknown as cp.ChildProcessWithoutNullStreams;
+        const mutable = child as unknown as { stdout: PassThrough; stderr: PassThrough; pid: number; kill: () => boolean };
+        mutable.stdout = new PassThrough();
+        mutable.stderr = new PassThrough();
+        mutable.pid = 0;
+        mutable.kill = () => true;
+        setTimeout(() => child.emit('error', new Error('devtool child failed')), 10);
+        return child;
+      }) as typeof runTests;
+
+      const timeline: RunTimelineEntry[] = [];
+      const restore = recordRunTimeline(controller, timeline);
+      try {
+        await runProfileHandlerForTest('demo::desired-state::dataset::full');
+      } finally {
+        restore();
+      }
+
+      assert.ok(
+        stampedIds(timeline, 'skipped').includes('demo::desired-state::dataset::small'),
+        `the transitional stamp fired before the child errored; timeline=${JSON.stringify(timeline)}`
+      );
+      assertGroupSettledOnActiveMember(timeline, 'demo::desired-state::dataset::small');
+    } finally {
+      adapterModule.runTests = realRunTests;
+      workspace.dispose();
+    }
+  });
+
+  // DHF-TEST: keel/requirement-132 (keel/ac-516)
+  test('a cancelled run settles the exclusive group on bridge-served truth', async function () {
+    this.timeout(30_000);
+    // 'hang' starts the run and then waits to be signalled, so the cancel
+    // arrives with the child genuinely in flight.
+    const workspace = createExclusiveGroupWorkspace('keel-run-start-cancelled-', 'hang');
+    try {
+      const controller = await activateExclusiveGroupWorkspace();
+      const timeline: RunTimelineEntry[] = [];
+      const restore = recordRunTimeline(controller, timeline);
+      const source = new vscode.CancellationTokenSource();
+      const started = path.join(workspace.root, '.devtools-run-started');
+      try {
+        const running = runProfileHandlerForTest('demo::desired-state::dataset::full', source.token);
+        await waitFor(() => fs.existsSync(started), 15_000);
+        source.cancel();
+        await running;
+      } finally {
+        source.dispose();
+        restore();
+      }
+
+      assert.ok(
+        stampedIds(timeline, 'skipped').includes('demo::desired-state::dataset::small'),
+        `the transitional stamp fired before the cancel; timeline=${JSON.stringify(timeline)}`
+      );
+      assertGroupSettledOnActiveMember(timeline, 'demo::desired-state::dataset::small');
+    } finally {
+      workspace.dispose();
+    }
+  });
 });
 
 // createExclusiveGroupWorkspace stands up a workspace whose adapter serves two
@@ -2948,6 +3060,38 @@ if (args.slice(0, 2).join(' ') === 'test-bridge run') {
 type RunTimelineEntry =
   | { kind: 'passed' | 'skipped'; id: string }
   | { kind: 'spawn'; ids: string[] };
+
+// activateExclusiveGroupWorkspace activates the extension against the current
+// workspace, arms a fresh reconcile signature, and hands back the controller.
+async function activateExclusiveGroupWorkspace(): Promise<vscode.TestController> {
+  const extension = vscode.extensions.getExtension('aggeler.keel-test-bridge');
+  assert.ok(extension, 'extension should be discoverable');
+  await extension.activate();
+  resetReconcileSignatureForTest();
+  await vscode.commands.executeCommand('keel.tests.refresh');
+  const controller = testControllerForTest();
+  assert.ok(controller, 'extension should expose its active TestController for tests');
+  return controller;
+}
+
+// assertGroupSettledOnActiveMember reads the LAST state stamped onto each row
+// of the group. keel/ac-516 is a claim about where the group comes to rest
+// after an abort, not about the states it passes through on the way.
+function assertGroupSettledOnActiveMember(timeline: readonly RunTimelineEntry[], activeId: string): void {
+  const finalStateById = new Map<string, string>();
+  for (const entry of timeline) {
+    if (entry.kind !== 'spawn') {
+      finalStateById.set(entry.id, entry.kind);
+    }
+  }
+  assert.equal(
+    finalStateById.get(activeId),
+    'passed',
+    `the genuinely active member is restored to passed; timeline=${JSON.stringify(timeline)}`
+  );
+  const settled = datasetGroupRowIds.filter((id) => finalStateById.get(id) === 'passed');
+  assert.deepEqual(settled, [activeId], `exactly one row of the group renders passed; timeline=${JSON.stringify(timeline)}`);
+}
 
 // stampedIds narrows the timeline to the ids stamped with one state, so an
 // assertion reads as the sequence of rendered states rather than a type guard.
