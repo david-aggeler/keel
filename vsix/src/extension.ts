@@ -629,13 +629,29 @@ function invalidateExclusiveGroupAtRunStart(
     run.skipped(item);
   }
   run.end();
+  // The transitional rendering is only safe because the bridge is guaranteed
+  // to overwrite it. lastReconcileSignature suppresses the replay when the
+  // served list is unchanged — which is exactly the failed-activation case,
+  // where the active row did not move and the peer just stamped skipped is
+  // still the genuinely active member. Left armed, the guard would strand the
+  // group with every row skipped and no icon anywhere: a regression strictly
+  // worse than the stale icon this unit removes. Clearing it is part of the
+  // requirement, not an implementation detail (keel/ac-513).
+  resetReconcileSignature();
   return true;
 }
 
-// resetReconcileSignatureForTest clears the in-session reconcile signature
-// guard. Production never calls this; specs use it to isolate cases.
-export function resetReconcileSignatureForTest(): void {
+// resetReconcileSignature clears the in-session reconcile replay guard so the
+// next served list is stamped even when it is byte-identical to the last one.
+function resetReconcileSignature(): void {
   lastReconcileSignature = undefined;
+}
+
+// resetReconcileSignatureForTest clears the in-session reconcile signature
+// guard. Specs use it to isolate cases; production reaches the same reset
+// through resetReconcileSignature.
+export function resetReconcileSignatureForTest(): void {
+  resetReconcileSignature();
 }
 
 async function runAdapterMaintenance(controller: vscode.TestController, ids: readonly string[]): Promise<void> {
