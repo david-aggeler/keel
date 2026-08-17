@@ -408,6 +408,107 @@ func writeVSIXPolicyFixtureWithCitation(t *testing.T, root, nodeMajor, citation 
 	}
 }
 
+// DHF-TEST: keel/requirement-119 (keel/ac-500)
+func TestValidateVSIXEngineDeclarationsHoldsEveryTrackedManifestToTheDeclaredMinimum(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		manifest string
+		tracked  bool
+		want     string
+	}{
+		{
+			name:     "second declaration below the declared minimum",
+			manifest: `{"engines":{"vscode":"^1.102.0"}}`,
+			tracked:  true,
+			want:     "vsix/packaged-e2e-driver/package.json",
+		},
+		{
+			name:     "second declaration at the declared minimum",
+			manifest: `{"engines":{"vscode":"^1.125.0"}}`,
+			tracked:  true,
+		},
+		{
+			name:     "second declaration above the declared minimum",
+			manifest: `{"engines":{"vscode":"^1.126.0"}}`,
+			tracked:  true,
+		},
+		{
+			name:     "second declaration below the minimum states its reason",
+			manifest: `{"engines":{"vscode":"^1.102.0"},"keelEngineHoldReason":"the driver must load on the oldest host the harness supports"}`,
+			tracked:  true,
+		},
+		{
+			name:     "second declaration below the minimum states an empty reason",
+			manifest: `{"engines":{"vscode":"^1.102.0"},"keelEngineHoldReason":"   "}`,
+			tracked:  true,
+			want:     "vsix/packaged-e2e-driver/package.json",
+		},
+		{
+			name:     "manifest declares no engine at all",
+			manifest: `{"name":"keel-packaged-e2e-driver"}`,
+			tracked:  true,
+		},
+		{
+			name:     "manifest declares an unreadable engine",
+			manifest: `{"engines":{"vscode":"1.102"}}`,
+			tracked:  true,
+			want:     "vsix/packaged-e2e-driver/package.json",
+		},
+		{
+			name:     "an untracked manifest below the minimum is not the gate's subject",
+			manifest: `{"engines":{"vscode":"^1.102.0"}}`,
+			tracked:  false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeVSIXPolicyFixture(t, root, "^1.125.0", "24", "^1.125.0", "1.102.0", "^22.20.1")
+			driverRel := "vsix/packaged-e2e-driver/package.json"
+			if err := os.MkdirAll(filepath.Join(root, "vsix", "packaged-e2e-driver"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(driverRel)), []byte(tc.manifest), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			tracked := []string{"vsix/package.json", "vsix/SUPPORTED_VSCODE.md"}
+			if tc.tracked {
+				tracked = append(tracked, driverRel)
+			}
+			stubGitLsFiles(t, tracked)
+
+			err := validateVSIXEngineDeclarations(context.Background(), logging.Discard(), root)
+			switch {
+			case tc.want == "" && err != nil:
+				t.Fatalf("validateVSIXEngineDeclarations err = %v, want nil", err)
+			case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+				t.Fatalf("validateVSIXEngineDeclarations err = %v, want containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// stubGitLsFiles puts a git stub on PATH whose ls-files output is exactly tracked,
+// so the engine-declaration gate can be exercised against a fixture tree that is
+// not itself a repository.
+func stubGitLsFiles(t *testing.T, tracked []string) {
+	t.Helper()
+	bin := t.TempDir()
+	stub(t, bin, filepath.Join(bin, "calls.log"), "git", `
+case "$1" in
+  "ls-files") printf '%s\n' `+shellQuoteAll(tracked)+` ;;
+esac
+exit 0`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func shellQuoteAll(values []string) string {
+	quoted := make([]string, 0, len(values))
+	for _, value := range values {
+		quoted = append(quoted, "'"+strings.ReplaceAll(value, "'", `'\''`)+"'")
+	}
+	return strings.Join(quoted, " ")
+}
+
 func validVSIXPolicyPackage(manifestFloor, typesVSCode, typesNode string) string {
 	return `{
   "engines": { "vscode": "` + manifestFloor + `" },
