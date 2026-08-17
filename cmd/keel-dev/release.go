@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -349,6 +350,41 @@ func capture(ctx context.Context, logger *slog.Logger, dir, program string, args
 
 func captureWithMaxOutput(ctx context.Context, logger *slog.Logger, dir string, maxOutputBytes int, program string, args ...string) (string, string, error) {
 	return captureEnvWithMaxOutput(ctx, logger, dir, nil, maxOutputBytes, program, args...)
+}
+
+// streamWithMaxOutput runs a subprocess through keel/exec with the caller's
+// stdout writer attached to the procexec.Request seam, so the caller observes
+// the child's output as it is produced instead of after the child exits. It
+// returns the captured stderr and the run error.
+//
+// The error is returned unconditionally: keel/exec enforces the output ceiling
+// as the bytes arrive and promotes the ceiling error over the exit code, and a
+// caller that had already delivered events off the stream must still fail the
+// run (keel/requirement-81, keel/ac-509 — the keel/issue-160 shape). stderr is
+// still captured in full because keel/exec buffers both streams regardless of
+// this seam, so the caller's existing error message is unchanged.
+//
+// DHF-REQ: keel/requirement-131
+func streamWithMaxOutput(ctx context.Context, logger *slog.Logger, dir string, maxOutputBytes int, stdout io.Writer, program string, args ...string) (string, error) {
+	proc, err := procexec.ProcessStart(ctx, procexec.Request{
+		Program:        program,
+		Args:           args,
+		Dir:            dir,
+		Logger:         logger,
+		Stdout:         stdout,
+		MaxOutputBytes: maxOutputBytes,
+	})
+	if err != nil {
+		return "", err
+	}
+	res, waitErr := proc.Wait()
+	if waitErr != nil {
+		return res.Stderr, waitErr
+	}
+	if res.ExitCode != 0 {
+		return res.Stderr, fmt.Errorf("%s exited %d", program, res.ExitCode)
+	}
+	return res.Stderr, nil
 }
 
 // captureEnv is capture with an explicit environment (nil inherits the parent's).
