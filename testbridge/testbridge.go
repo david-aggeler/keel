@@ -45,6 +45,24 @@ type Runtime struct {
 
 const externalRunStreamRetentionLimit = 32
 
+// externalRunStreamRetentionBytes bounds the spool in bytes, beside — not
+// instead of — the count bound above (keel/ac-522).
+//
+// A count bound implies a volume bound only while runs are the same size.
+// keel/change_request-209 broke that coupling: the file-lane path now emits a
+// terminal per executed test rather than per package, so one stream's size
+// tracks the repository's test count. Measured on the whole-module file lane at
+// cr-216: 970 events, 227,070 bytes for one run, against the 469 per-test
+// terminals keel/issue-91 recorded earlier — the per-run figure roughly doubled
+// between those two observations. A full 32-stream window is therefore ~7.3 MB
+// today, and grows with the test suite while the count bound reads as satisfied.
+//
+// 16 MiB leaves ~2.3x headroom over that measured full window, so the count
+// bound keeps binding first at today's sizes and this bound takes over once the
+// per-run figure roughly doubles again. It is deliberately not pinned to the
+// observation itself: one lane run on one machine is a single sample.
+const externalRunStreamRetentionBytes int64 = 16 << 20
+
 // WithRuntime stores Runtime in ctx for a CommandSpec handler.
 func WithRuntime(ctx context.Context, rt Runtime) context.Context {
 	return context.WithValue(ctx, runtimeKey{}, rt)
@@ -1731,6 +1749,9 @@ func newRunWriter(rt Runtime, workspace Workspace, runID, source string) (vscode
 			if err := pruneCompletedRunStreams(runDir, externalRunStreamRetentionLimit); err != nil && rt.Log != nil {
 				rt.Log.Warn("prune testbridge run streams", "error", err.Error())
 			}
+			if err := pruneRunStreamsToByteCeiling(runDir, externalRunStreamRetentionBytes); err != nil && rt.Log != nil {
+				rt.Log.Warn("prune testbridge run streams to byte ceiling", "error", err.Error())
+			}
 		}
 	}, closeFn, nil
 }
@@ -1739,16 +1760,18 @@ type completedRunStream struct {
 	path        string
 	name        string
 	completedAt time.Time
+	size        int64
 }
 
-// DHF-REQ: keel/requirement-92
-func pruneCompletedRunStreams(runDir string, keep int) error {
-	if keep < 1 {
-		return nil
-	}
+// collectCompletedRunStreams returns the prunable streams in runDir, newest
+// first. Only completed streams are candidates: the run.lock path is not a
+// .jsonl file and a stream still lacking run_finished has no completion time,
+// so neither can enter the slice. Both retention bounds share this scan, so the
+// exemptions keel/ac-302 states hold for the byte bound too.
+func collectCompletedRunStreams(runDir string) ([]completedRunStream, error) {
 	entries, err := os.ReadDir(runDir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	completed := make([]completedRunStream, 0, len(entries))
 	for _, entry := range entries {
@@ -1764,10 +1787,7 @@ func pruneCompletedRunStreams(runDir string, keep int) error {
 		if !ok {
 			continue
 		}
-		completed = append(completed, completedRunStream{path: path, name: entry.Name(), completedAt: completedAt})
-	}
-	if len(completed) <= keep {
-		return nil
+		completed = append(completed, completedRunStream{path: path, name: entry.Name(), completedAt: completedAt, size: info.Size()})
 	}
 	sort.Slice(completed, func(i, j int) bool {
 		if completed[i].completedAt.Equal(completed[j].completedAt) {
@@ -1775,13 +1795,71 @@ func pruneCompletedRunStreams(runDir string, keep int) error {
 		}
 		return completed[i].completedAt.After(completed[j].completedAt)
 	})
+	return completed, nil
+}
+
+// removeRunStreams deletes the given streams, accumulating rather than
+// short-circuiting: one undeletable file must not strand the rest above bound.
+func removeRunStreams(streams []completedRunStream) error {
 	var errs []error
-	for _, stream := range completed[keep:] {
+	for _, stream := range streams {
 		if err := os.Remove(stream.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// DHF-REQ: keel/requirement-92
+func pruneCompletedRunStreams(runDir string, keep int) error {
+	if keep < 1 {
+		return nil
+	}
+	completed, err := collectCompletedRunStreams(runDir)
+	if err != nil {
+		return err
+	}
+	if len(completed) <= keep {
+		return nil
+	}
+	return removeRunStreams(completed[keep:])
+}
+
+// pruneRunStreamsToByteCeiling drops oldest-first until the completed streams
+// fit under maxBytes. It is the byte-axis sibling of the count bound above and
+// runs at the same enforcement point (keel/ac-522).
+//
+// The newest completed stream is always retained, even when it alone exceeds
+// the ceiling: a single oversized run must not erase itself and leave the mirror
+// with nothing to import. Pruning is best-effort housekeeping — like the count
+// bound, it never fails the run that triggered it.
+//
+// DHF-REQ: keel/requirement-92
+func pruneRunStreamsToByteCeiling(runDir string, maxBytes int64) error {
+	if maxBytes < 1 {
+		return nil
+	}
+	completed, err := collectCompletedRunStreams(runDir)
+	if err != nil {
+		return err
+	}
+	var total int64
+	for _, stream := range completed {
+		total += stream.size
+	}
+	if total <= maxBytes {
+		return nil
+	}
+	keep := 0
+	var kept int64
+	for _, stream := range completed {
+		if keep > 0 && kept+stream.size > maxBytes {
+			break
+		}
+		kept += stream.size
+		keep++
+	}
+	return removeRunStreams(completed[keep:])
 }
 
 func completedRunStreamTime(path string, fallback time.Time) (time.Time, bool) {

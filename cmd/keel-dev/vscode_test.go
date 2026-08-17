@@ -3142,6 +3142,77 @@ func TestVSCodeRunPrunesExternalRunSpoolToRecentCompletedStreams(t *testing.T) {
 	}
 }
 
+// externalRunSpoolByteCeiling mirrors the retention ceiling the bridge
+// enforces. Stated here as a literal on purpose: the test asserts the observed
+// spool from outside the package, exactly as keel/ac-522 words the criterion.
+const externalRunSpoolByteCeiling = 16 << 20
+
+// DHF-TEST: keel/requirement-92
+func TestVSCodeRunPrunesExternalRunSpoolToByteCeiling(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	t.Setenv("PATH", t.TempDir())
+
+	runDir := filepath.Join(root, ".devtools", "vscode-runs")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(runDir, "run.lock")
+	if err := os.WriteFile(lockPath, []byte(`{"pid":1,"created_at":"2026-07-13T00:00:00Z","ids":["x"],"token":"t"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join(".devtools", "vscode-runs", "in-flight.jsonl"), `{"version":1,"event":"run_started","run_id":"in-flight"}`+"\n")
+
+	// Fewer streams than the count bound of 32, each far larger than a lane run
+	// leaves today, so the byte bound is the only thing that can prune them.
+	const seeded = 20
+	padding := strings.Repeat("x", 1<<20)
+	for i := 0; i < seeded; i++ {
+		name := fmt.Sprintf("2026-08-17T00-00-%02dZ.jsonl", i)
+		stream := `{"version":1,"event":"output","message":"` + padding + `"}` + "\n" +
+			fmt.Sprintf(`{"version":1,"event":"run_finished","time":"2026-08-17T00:00:%02dZ","exit_code":0}`, i) + "\n"
+		writeFile(t, root, filepath.Join(".devtools", "vscode-runs", name), stream)
+	}
+
+	var protocol bytes.Buffer
+	if err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), "keel::lane::test-fast"); err == nil {
+		t.Fatal("blocked lane returned nil error; want non-zero")
+	}
+
+	entries, err := os.ReadDir(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var total int64
+	var newestSeeded bool
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			t.Fatal(err)
+		}
+		total += info.Size()
+		if entry.Name() == fmt.Sprintf("2026-08-17T00-00-%02dZ.jsonl", seeded-1) {
+			newestSeeded = true
+		}
+	}
+	if total > externalRunSpoolByteCeiling {
+		t.Fatalf("spool bytes = %d, want at most %d after retention", total, externalRunSpoolByteCeiling)
+	}
+	if !newestSeeded {
+		t.Fatal("newest completed stream was pruned; the byte bound must drop oldest-first")
+	}
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("run.lock was pruned: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "in-flight.jsonl")); err != nil {
+		t.Fatalf("in-flight stream was pruned: %v", err)
+	}
+}
+
 func discoveryHasLane(doc vscode.DiscoveryDocument, id string) bool {
 	for _, item := range doc.Items {
 		if item.ID == id {

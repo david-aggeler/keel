@@ -503,6 +503,62 @@ func TestPruneCompletedRunStreamsKeepsNewestCompletedAndActive(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-92
+func TestPruneRunStreamsToByteCeilingDropsOldestAndKeepsNewest(t *testing.T) {
+	runDir := t.TempDir()
+	pad := func(name string, at time.Time, fill int) {
+		writeRunStream(t, runDir, name, "run_finished", at)
+		f, err := os.OpenFile(filepath.Join(runDir, name), os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.WriteString(strings.Repeat("p", fill)); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pad("old.jsonl", time.Unix(10, 0).UTC(), 400)
+	pad("middle.jsonl", time.Unix(20, 0).UTC(), 400)
+	pad("new.jsonl", time.Unix(30, 0).UTC(), 400)
+	writeRunStream(t, runDir, "active.jsonl", "passed", time.Unix(40, 0).UTC())
+
+	// A ceiling that fits one padded stream but not two.
+	if err := pruneRunStreamsToByteCeiling(runDir, 700); err != nil {
+		t.Fatalf("pruneRunStreamsToByteCeiling: %v", err)
+	}
+	for _, want := range []string{"new.jsonl", "active.jsonl"} {
+		if _, err := os.Stat(filepath.Join(runDir, want)); err != nil {
+			t.Fatalf("%s missing after byte prune: %v", want, err)
+		}
+	}
+	for _, gone := range []string{"old.jsonl", "middle.jsonl"} {
+		if _, err := os.Stat(filepath.Join(runDir, gone)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s stat = %v, want removed by byte prune", gone, err)
+		}
+	}
+
+	// The newest completed stream survives even when it alone busts the ceiling:
+	// a single oversized run must not erase itself.
+	if err := pruneRunStreamsToByteCeiling(runDir, 1); err != nil {
+		t.Fatalf("pruneRunStreamsToByteCeiling below one stream: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "new.jsonl")); err != nil {
+		t.Fatalf("newest completed stream was erased by an unmeetable ceiling: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "active.jsonl")); err != nil {
+		t.Fatalf("in-flight stream was pruned by the byte bound: %v", err)
+	}
+
+	if err := pruneRunStreamsToByteCeiling(runDir, 0); err != nil {
+		t.Fatalf("byte prune maxBytes=0: %v", err)
+	}
+	if err := pruneRunStreamsToByteCeiling(filepath.Join(runDir, "missing"), 1); err == nil {
+		t.Fatal("byte prune on missing dir returned nil, want read error")
+	}
+}
+
 func TestConfigErrorBranches(t *testing.T) {
 	root := t.TempDir()
 	template := vscode.TestBridgeConfig{Version: vscode.CurrentConfigVersion, Command: "bin/demo", Args: []string{}, DisplayName: "Demo"}
