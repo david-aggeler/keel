@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as vscode from 'vscode';
 import { adapterConfig, configRelativePath, currentConfigVersion, defaultAdapterConfig, defaultConfigTemplate, discoverTests, readDesiredState, readAdapterConfig, runTests, upgradeConfig } from './bridgeAdapter';
-import { ExternalRunMirror, ExternalRunStateSnapshot, setExternalRunStaleMsForTest } from './externalRunMirror';
+import { ExternalRunMirror, ExternalRunStateSnapshot, externalRunStaleMs, setExternalRunStaleMsForTest } from './externalRunMirror';
 import { publishDiscovery, PublishedTree, replacePublishedTestItem } from './tree';
 import { DesiredState, DesiredStateGroup, DiscoveryItem, ReconcileResult, RunEvent, DesiredStateDocument } from './protocol';
 
@@ -25,7 +25,7 @@ let testRunProfileForRunProfile: vscode.TestRunProfile | undefined;
 // Re-export for any caller that still imports ExternalRunMirror /
 // ExternalRunStateSnapshot from './extension' (the pre-Story-27.24 path).
 export { ExternalRunMirror };
-export { setExternalRunStaleMsForTest };
+export { externalRunStaleMs, setExternalRunStaleMsForTest };
 export type { ExternalRunStateSnapshot };
 
 // DHF-REQ: keel/requirement-40

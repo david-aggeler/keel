@@ -42,7 +42,16 @@ extension, and fixture state atomically.
 ## Workspace Config
 
 The extension activates only when `.vscode/test-bridge.json` exists. It does not
-read or fall back to `testBridge.*` VS Code settings.
+read or fall back to `testBridge.*` VS Code settings. Consumer mapping is a
+config-file concern, never a settings one.
+
+One VS Code setting exists, in the `keel.tests.*` namespace the extension already
+owns: `keel.tests.externalRunStaleMs` (default `60000`) is how long the
+external-run mirror waits for a producer to write again before it closes a
+mirrored run as errored. Raise it for producers that legitimately run quiet for
+longer. A producer that writes its terminal event after the deadline reconciles
+the run to its own outcome either way — the deadline changes when the mirror
+gives up, not who has the last word.
 
 ```json
 {
