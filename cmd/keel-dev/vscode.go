@@ -787,7 +787,11 @@ func (s lanesState) coverItems(eff effectiveLane) []vscode.TestItem {
 		Profiles: []string{},
 	}}
 	seen := map[string]string{}
-	addAlias := func(parentID, canonicalID, label, kind string) string {
+	// addAlias publishes one covers alias. uri/rng are the canonical item's
+	// location, forwarded verbatim so the alias resolves to the same source
+	// position (ac-506); an alias must never re-derive a path of its own.
+	// Alias kinds that name no source position pass "" and nil.
+	addAlias := func(parentID, canonicalID, label, kind, uri string, rng *vscode.Range) string {
 		if canonicalID == "" {
 			return ""
 		}
@@ -801,6 +805,8 @@ func (s lanesState) coverItems(eff effectiveLane) []vscode.TestItem {
 			ParentID:    parentID,
 			Label:       label,
 			Kind:        kind,
+			URI:         uri,
+			Range:       rng,
 			Runnable:    false,
 			Profiles:    []string{},
 			CanonicalID: canonicalID,
@@ -814,42 +820,51 @@ func (s lanesState) coverItems(eff effectiveLane) []vscode.TestItem {
 	}
 	for _, pkgRel := range eff.directGoPackages {
 		pkgID := "go::pkg::" + filepath.ToSlash(pkgRel)
-		pkgAliasID := addAlias(coversID, pkgID, pkgRel, "package")
+		// A package alias names a directory, not a source position: no location.
+		pkgAliasID := addAlias(coversID, pkgID, pkgRel, "package", "", nil)
 		for _, file := range byPkg[pkgRel].files {
 			fileID := "go::file::" + filepath.ToSlash(file.rel)
-			fileAliasID := addAlias(pkgAliasID, fileID, filepath.Base(file.rel), "file")
+			fileURI := filepath.ToSlash(file.rel)
+			fileAliasID := addAlias(pkgAliasID, fileID, filepath.Base(file.rel), "file", fileURI, nil)
 			for _, test := range file.tests {
-				addAlias(fileAliasID, "go::test::"+filepath.ToSlash(pkgRel)+"::"+test.name, test.name, "test")
+				rng := test.rng
+				addAlias(fileAliasID, "go::test::"+filepath.ToSlash(pkgRel)+"::"+test.name, test.name, "test", fileURI, &rng)
 			}
 		}
 	}
 	for _, rel := range eff.directVSIXFiles {
 		slashRel := filepath.ToSlash(rel)
-		fileAliasID := addAlias(coversID, "vsix::file::"+slashRel, filepath.Base(rel), "file")
+		// The vsix file and test items carry the same uri and no range; the
+		// aliases forward exactly that.
+		fileURI := filepath.ToSlash(filepath.Join("vsix", rel))
+		fileAliasID := addAlias(coversID, "vsix::file::"+slashRel, filepath.Base(rel), "file", fileURI, nil)
 		// requirement-94 (ac-308): with vsix::test items discovered, a
 		// vsix-member lane's covers expands file→test like the Go tree.
 		for _, entry := range vsixFileTestEntries(filepath.Join(s.root, "vsix", filepath.FromSlash(rel))) {
-			addAlias(fileAliasID, vsixTestID(slashRel, entry.slug), entry.title, "test")
+			addAlias(fileAliasID, vsixTestID(slashRel, entry.slug), entry.title, "test", fileURI, nil)
 		}
 	}
+	// A root alias names a framework and a lane alias names another lane.
+	// Neither is a source position, so both stay location-free on purpose —
+	// this is the answer ac-506 leaves to the projection, not an oversight.
 	for _, rootID := range eff.directRootIDs {
 		switch rootID {
 		case "go::root":
-			addAlias(coversID, rootID, "Go", "root")
+			addAlias(coversID, rootID, "Go", "root", "", nil)
 		case "vsix::root":
-			addAlias(coversID, rootID, "Mocha (vsix)", "root")
+			addAlias(coversID, rootID, "Mocha (vsix)", "root", "", nil)
 		default:
-			addAlias(coversID, rootID, strings.TrimSuffix(strings.TrimPrefix(rootID, "keel::"), "::root"), "root")
+			addAlias(coversID, rootID, strings.TrimSuffix(strings.TrimPrefix(rootID, "keel::"), "::root"), "root", "", nil)
 		}
 	}
 	for _, laneID := range eff.systemLanes {
 		if laneID == eff.id {
 			continue
 		}
-		addAlias(coversID, laneID, strings.TrimPrefix(laneID, "keel::lane::"), "lane")
+		addAlias(coversID, laneID, strings.TrimPrefix(laneID, "keel::lane::"), "lane", "", nil)
 	}
 	for _, laneID := range eff.laneRefs {
-		addAlias(coversID, laneID, strings.TrimPrefix(laneID, "keel::lane::"), "lane")
+		addAlias(coversID, laneID, strings.TrimPrefix(laneID, "keel::lane::"), "lane", "", nil)
 	}
 	return items
 }
