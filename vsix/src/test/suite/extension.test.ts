@@ -3,6 +3,8 @@ import * as cp from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import * as vscode from 'vscode';
 import {
   applyRunEvent,
@@ -16,6 +18,7 @@ import {
   currentAdapterConfig,
   deferredWatcherEventCountForTest,
   desiredStateRowProtocolID,
+  exclusiveGroupPeerItems,
   ExternalRunMirror,
   finishActiveRun,
   isRunActive,
@@ -23,9 +26,11 @@ import {
   parseGoCoverageProfile,
   publishedTestItemIds,
   rejectConcurrentRun,
+  resetReconcileSignatureForTest,
   resultItemsForRunEvent,
   runEventApplicationSnapshot,
   runProfileHandlerForTest,
+  runStartInvalidationRunName,
   setWatcherDebounceMs,
   setExternalRunStaleMsForTest,
   setCurrentTreeForTest,
@@ -42,7 +47,7 @@ import {
 import * as bridgeAdapterModule from '../../bridgeAdapter';
 import { adapterConfig, configRelativePath, currentConfigVersion, defaultConfigTemplate, discoveryOutputMaxBufferBytes, discoverTests, readDesiredState, readAdapterConfig, runTests, upgradeConfig } from '../../bridgeAdapter';
 import { publishDiscovery, replacePublishedTestItem } from '../../tree';
-import { DesiredStateGroup, DiscoveryItem, RunEvent } from '../../protocol';
+import { DesiredStateGroup, DiscoveryDocument, DiscoveryItem, RunEvent } from '../../protocol';
 
 suite('Keel Test Bridge config contract', () => {
   // DHF-TEST: keel/requirement-40
@@ -818,13 +823,25 @@ process.exit(2);
   // decisions verbatim and must not branch on the mutually_exclusive wire
   // flag. Allowed occurrences in production sources: two protocol.ts type
   // declarations — the desired-state group and the typed discovery-item facts
-  // that replaced the k=v limitations encoding (requirement-127) — and the
-  // display passthrough in formatDesiredStateGroup.
+  // that replaced the k=v limitations encoding (requirement-127) — and, in
+  // extension.ts, the display passthrough in formatDesiredStateGroup plus the
+  // single membership read in exclusiveGroupPeerItems.
   //
-  // DHF-TEST: keel/requirement-97, keel/requirement-127
+  // The second extension.ts occurrence is the bounded narrowing
+  // keel/requirement-132 makes to design_decision-5, and it is narrow on the
+  // axis the decision protects. design_decision-5 forbids the VSIX DECIDING a
+  // rendered state from the flag — that is the bridge's job, served as
+  // reconcile_results and replayed verbatim. exclusiveGroupPeerItems decides no
+  // state: it answers only "which rows form this group", for an interval the
+  // bridge cannot serve because the run has not happened yet (keel/ac-517). The
+  // transitional value it feeds is a fixed skipped, not a computed one, and the
+  // bridge still overwrites every row at run end (keel/ac-513). Raising this
+  // count again for a rendering branch would breach the decision.
+  //
+  // DHF-TEST: keel/requirement-97, keel/requirement-127, keel/requirement-132 (keel/ac-517)
   test('production sources do not branch on mutually_exclusive', () => {
     const srcDir = path.resolve(__dirname, '../../../src');
-    const allowed = new Map([['protocol.ts', 2], ['extension.ts', 1]]);
+    const allowed = new Map([['protocol.ts', 2], ['extension.ts', 2]]);
     const offenders: string[] = [];
     for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.endsWith('.ts')) {
@@ -2615,7 +2632,636 @@ process.exit(2);
       controller.dispose();
     }
   });
+
+  // DHF-TEST: keel/requirement-132 (keel/ac-517)
+  test('exclusive-group peers are resolved from the published discovery tree alone', () => {
+    const controller = vscode.tests.createTestController(`keelExclusivePeers-${Date.now()}`, 'Keel Exclusive Peers');
+    const tree = publishDiscovery(controller, process.cwd(), exclusiveGroupsDiscoveryFixture());
+    try {
+      const full = tree.itemsById.get('demo::desired-state::dataset::full');
+      const small = tree.itemsById.get('demo::desired-state::dataset::small');
+      const warm = tree.itemsById.get('demo::desired-state::caches::warm');
+      const lane = tree.itemsById.get('keel::lane::fast');
+      assert.ok(full && small && warm && lane, 'the fixture publishes every row under test');
+
+      // The launched row's own group yields every other row, the synthesized
+      // Unknown State row included, and reaches no other group.
+      assert.deepEqual(
+        exclusiveGroupPeerItems(tree, [full]).map((item) => item.id).sort(),
+        ['demo::desired-state::dataset::small', 'demo::desired-state::dataset::unknown']
+      );
+
+      // Two members of the same group leave only the rows outside the selection.
+      assert.deepEqual(
+        exclusiveGroupPeerItems(tree, [full, small]).map((item) => item.id).sort(),
+        ['demo::desired-state::dataset::unknown']
+      );
+
+      // Selecting the group node covers every row, so nothing is a peer.
+      const group = tree.itemsById.get('demo::desired-state::dataset');
+      assert.ok(group, 'the fixture publishes the group node');
+      assert.deepEqual(exclusiveGroupPeerItems(tree, [group]), []);
+
+      // A non-exclusive group and an ordinary lane leaf own no peers at all.
+      assert.deepEqual(exclusiveGroupPeerItems(tree, [warm]), []);
+      assert.deepEqual(exclusiveGroupPeerItems(tree, [lane]), []);
+
+      // With no published tree there is nothing to derive from.
+      assert.deepEqual(exclusiveGroupPeerItems(undefined, [full]), []);
+    } finally {
+      controller.dispose();
+    }
+  });
+
+  // DHF-TEST: keel/requirement-132 (keel/ac-512, keel/ac-514, keel/ac-515)
+  test('every exclusive-group peer is stamped skipped before the devtool child is spawned', async function () {
+    this.timeout(20_000);
+    const workspace = createExclusiveGroupWorkspace('keel-run-start-invalidation-', 'activate');
+    try {
+      const extension = vscode.extensions.getExtension('aggeler.keel-test-bridge');
+      assert.ok(extension, 'extension should be discoverable');
+      await extension.activate();
+      await vscode.commands.executeCommand('keel.tests.refresh');
+      const controller = testControllerForTest();
+      assert.ok(controller, 'extension should expose its active TestController for tests');
+
+      const timeline: RunTimelineEntry[] = [];
+      const restore = recordRunTimeline(controller, timeline);
+      try {
+        await runProfileHandlerForTest('demo::desired-state::dataset::full');
+      } finally {
+        restore();
+      }
+
+      const spawnIndex = timeline.findIndex((entry) => entry.kind === 'spawn');
+      assert.ok(spawnIndex >= 0, `the devtool run child is spawned; timeline=${JSON.stringify(timeline)}`);
+      const beforeSpawn = timeline.slice(0, spawnIndex);
+
+      // ac-512: member 'small' rendered passed at rest; launching 'full'
+      // stamps it and the synthesized Unknown State row skipped, and that
+      // stamp is recorded before the child that will re-determine the truth.
+      assert.deepEqual(
+        stampedIds(beforeSpawn, 'skipped').sort(),
+        ['demo::desired-state::dataset::small', 'demo::desired-state::dataset::unknown'],
+        `peers are stamped skipped before the spawn; timeline=${JSON.stringify(timeline)}`
+      );
+      // ac-512: and no row of the group asserts it is the satisfied one from
+      // the moment the run starts until the bridge says otherwise.
+      assert.deepEqual(
+        stampedIds(beforeSpawn, 'passed').filter((id) => datasetGroupRowIds.includes(id)),
+        [],
+        `no row of the group renders passed once the run has started; timeline=${JSON.stringify(timeline)}`
+      );
+
+      // ac-514: the invalidation reaches no row of the second exclusive group
+      // and no lane, at any point in the run.
+      const invalidationStamps = stampedIds(beforeSpawn, 'skipped');
+      assert.deepEqual(
+        invalidationStamps.filter((id) => !datasetGroupRowIds.includes(id)),
+        [],
+        'the run-start invalidation restamps only rows of the group that owns the selected member'
+      );
+
+      // ac-515: peers are restamped, never submitted. The argv id list is
+      // exactly the selected runnable row.
+      const spawn = timeline[spawnIndex];
+      assert.equal(spawn.kind, 'spawn');
+      assert.deepEqual(
+        spawn.kind === 'spawn' ? spawn.ids : [],
+        ['demo::desired-state::dataset::full'],
+        'the invalidation adds no id to the devtool run invocation'
+      );
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  // DHF-TEST: keel/requirement-132 (keel/ac-513)
+  test('an unchanged served reconcile list still replays after a run-start invalidation', async function () {
+    this.timeout(20_000);
+    // 'fail' leaves the active member exactly where it was, so the bridge
+    // serves a list identical to the pre-run one. That is precisely when the
+    // in-session signature guard would suppress the replay — and precisely
+    // when the transitional all-skipped rendering is wrong.
+    const workspace = createExclusiveGroupWorkspace('keel-run-start-replay-guard-', 'fail');
+    try {
+      const extension = vscode.extensions.getExtension('aggeler.keel-test-bridge');
+      assert.ok(extension, 'extension should be discoverable');
+      await extension.activate();
+      resetReconcileSignatureForTest();
+      await vscode.commands.executeCommand('keel.tests.refresh');
+      const controller = testControllerForTest();
+      assert.ok(controller, 'extension should expose its active TestController for tests');
+
+      const timeline: RunTimelineEntry[] = [];
+      const restore = recordRunTimeline(controller, timeline);
+      try {
+        await runProfileHandlerForTest('demo::desired-state::dataset::full');
+      } finally {
+        restore();
+      }
+
+      const spawnIndex = timeline.findIndex((entry) => entry.kind === 'spawn');
+      assert.ok(spawnIndex >= 0, `the devtool run child is spawned; timeline=${JSON.stringify(timeline)}`);
+      const afterSpawn = timeline.slice(spawnIndex + 1);
+
+      // The served list is unchanged, so the replay must still fire and stamp
+      // every row of the group with the served state.
+      assert.ok(
+        stampedIds(afterSpawn, 'passed').includes('demo::desired-state::dataset::small'),
+        `the genuinely active member is restored to passed; timeline=${JSON.stringify(timeline)}`
+      );
+      assert.ok(
+        stampedIds(afterSpawn, 'skipped').includes('demo::desired-state::dataset::full'),
+        `the failed member renders the served state, not the transitional one; timeline=${JSON.stringify(timeline)}`
+      );
+
+      // The regression this guards against is worse than the bug it fixes: a
+      // failed activation must never erase the record of what is active.
+      const finalStateById = new Map<string, string>();
+      for (const entry of timeline) {
+        if (entry.kind !== 'spawn') {
+          finalStateById.set(entry.id, entry.kind);
+        }
+      }
+      assert.equal(
+        finalStateById.get('demo::desired-state::dataset::small'),
+        'passed',
+        `the group is not left with every row skipped; timeline=${JSON.stringify(timeline)}`
+      );
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  // The three abort paths of keel/ac-516. Each reaches finishRun without a
+  // normal completion, and one of them returns before the child is ever
+  // spawned. Each has to converge on the bridge-served truth, or a failed
+  // activation silently erases the record of what is actually active.
+  //
+  // DHF-TEST: keel/requirement-132 (keel/ac-516)
+  test('a spawn failure settles the exclusive group on bridge-served truth', async function () {
+    this.timeout(20_000);
+    const workspace = createExclusiveGroupWorkspace('keel-run-start-spawn-failure-', 'activate');
+    const adapterModule = bridgeAdapterModule as unknown as { runTests: typeof runTests };
+    const realRunTests = adapterModule.runTests;
+    try {
+      const controller = await activateExclusiveGroupWorkspace();
+      // The child never comes into existence — the one path that had no
+      // post-run refresh at all before this unit.
+      adapterModule.runTests = (() => {
+        throw new Error('devtool binary is not executable');
+      }) as typeof runTests;
+
+      const timeline: RunTimelineEntry[] = [];
+      const restore = recordRunTimeline(controller, timeline);
+      try {
+        await runProfileHandlerForTest('demo::desired-state::dataset::full');
+      } finally {
+        restore();
+      }
+
+      assert.ok(
+        stampedIds(timeline, 'skipped').includes('demo::desired-state::dataset::small'),
+        `the transitional stamp fired before the failed spawn; timeline=${JSON.stringify(timeline)}`
+      );
+      assertGroupSettledOnActiveMember(timeline, 'demo::desired-state::dataset::small');
+    } finally {
+      adapterModule.runTests = realRunTests;
+      workspace.dispose();
+    }
+  });
+
+  // DHF-TEST: keel/requirement-132 (keel/ac-516)
+  test('a child error event settles the exclusive group on bridge-served truth', async function () {
+    this.timeout(20_000);
+    const workspace = createExclusiveGroupWorkspace('keel-run-start-child-error-', 'activate');
+    const adapterModule = bridgeAdapterModule as unknown as { runTests: typeof runTests };
+    const realRunTests = adapterModule.runTests;
+    try {
+      const controller = await activateExclusiveGroupWorkspace();
+      // The child is handed back but immediately errors, so `close` never
+      // arrives and the run settles through the error handler instead.
+      adapterModule.runTests = (() => {
+        const child = new EventEmitter() as unknown as cp.ChildProcessWithoutNullStreams;
+        const mutable = child as unknown as { stdout: PassThrough; stderr: PassThrough; pid: number; kill: () => boolean };
+        mutable.stdout = new PassThrough();
+        mutable.stderr = new PassThrough();
+        mutable.pid = 0;
+        mutable.kill = () => true;
+        // A real spawn failure emits BOTH, which is what makes the post-run
+        // refresh dedupe observable: without it the devtool is re-queried for
+        // a truth it has already read.
+        setTimeout(() => {
+          child.emit('error', new Error('devtool child failed'));
+          child.emit('close', 1);
+        }, 10);
+        return child;
+      }) as typeof runTests;
+
+      const timeline: RunTimelineEntry[] = [];
+      const restore = recordRunTimeline(controller, timeline);
+      const desiredStateReads = countDesiredStateReads();
+      try {
+        await runProfileHandlerForTest('demo::desired-state::dataset::full');
+      } finally {
+        desiredStateReads.restore();
+        restore();
+      }
+
+      assert.ok(
+        stampedIds(timeline, 'skipped').includes('demo::desired-state::dataset::small'),
+        `the transitional stamp fired before the child errored; timeline=${JSON.stringify(timeline)}`
+      );
+      assertGroupSettledOnActiveMember(timeline, 'demo::desired-state::dataset::small');
+      // One read at run start, one to settle the group. A child that emits
+      // both `error` and `close` must not re-query the devtool.
+      assert.equal(desiredStateReads.count(), 2, 'the post-run refresh runs exactly once');
+    } finally {
+      adapterModule.runTests = realRunTests;
+      workspace.dispose();
+    }
+  });
+
+  // DHF-TEST: keel/requirement-132 (keel/ac-516)
+  test('a cancelled run settles the exclusive group on bridge-served truth', async function () {
+    this.timeout(30_000);
+    // 'hang' starts the run and then waits to be signalled, so the cancel
+    // arrives with the child genuinely in flight.
+    const workspace = createExclusiveGroupWorkspace('keel-run-start-cancelled-', 'hang');
+    try {
+      const controller = await activateExclusiveGroupWorkspace();
+      const timeline: RunTimelineEntry[] = [];
+      const restore = recordRunTimeline(controller, timeline);
+      const source = new vscode.CancellationTokenSource();
+      const started = path.join(workspace.root, '.devtools-run-started');
+      try {
+        const running = runProfileHandlerForTest('demo::desired-state::dataset::full', source.token);
+        await waitFor(() => fs.existsSync(started), 15_000);
+        source.cancel();
+        await running;
+      } finally {
+        source.dispose();
+        restore();
+      }
+
+      assert.ok(
+        stampedIds(timeline, 'skipped').includes('demo::desired-state::dataset::small'),
+        `the transitional stamp fired before the cancel; timeline=${JSON.stringify(timeline)}`
+      );
+      assertGroupSettledOnActiveMember(timeline, 'demo::desired-state::dataset::small');
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  // DHF-TEST: keel/requirement-132 (keel/ac-514, keel/ac-515)
+  test('the run-start invalidation reaches only the selection own group and submits no peer id', async function () {
+    this.timeout(20_000);
+    const workspace = createExclusiveGroupWorkspace('keel-run-start-blast-radius-', 'activate');
+    try {
+      const controller = await activateExclusiveGroupWorkspace();
+      const timeline: RunTimelineEntry[] = [];
+      const restore = recordRunTimeline(controller, timeline);
+      try {
+        await runProfileHandlerForTest('demo::desired-state::dataset::full');
+      } finally {
+        restore();
+      }
+
+      // ac-514: isolate the invalidation from every other run of the session.
+      // It restamps the rows of the selected member's group and nothing else —
+      // not the second exclusive group, not the lane. This is the standing
+      // guard against an implementation reaching for testing.clearTestResults,
+      // which reaches true Unset but takes the whole Test Explorer with it.
+      const invalidation = timeline.filter((entry) => entry.kind !== 'spawn' && entry.run === runStartInvalidationRunName);
+      assert.deepEqual(
+        stampedIds(invalidation, 'skipped').sort(),
+        ['demo::desired-state::dataset::small', 'demo::desired-state::dataset::unknown'],
+        `the invalidation restamps only the selected member's group; timeline=${JSON.stringify(timeline)}`
+      );
+      assert.deepEqual(
+        stampedIds(invalidation, 'passed'),
+        [],
+        'the invalidation renders no row satisfied'
+      );
+
+      // The lane carries no desired-state truth, so the run touches it at no
+      // point — neither the invalidation nor the post-run replay.
+      assert.deepEqual(
+        timeline.filter((entry) => entry.kind !== 'spawn' && entry.id === 'keel::lane::fast'),
+        [],
+        `lane results are never restamped by a desired-state run; timeline=${JSON.stringify(timeline)}`
+      );
+      // The second exclusive group is reached only by the bridge's own replay,
+      // never by the invalidation, and its served truth does not move.
+      const runtimeStamps = timeline.filter((entry) => entry.kind !== 'spawn' && entry.id.startsWith('demo::desired-state::runtime'));
+      assert.ok(
+        runtimeStamps.every((entry) => entry.kind !== 'spawn' && entry.run !== runStartInvalidationRunName),
+        `the second group is never restamped by the invalidation; timeline=${JSON.stringify(timeline)}`
+      );
+      assert.deepEqual(
+        stampedIds(runtimeStamps, 'passed').filter((id, index, ids) => ids.indexOf(id) === index),
+        ['demo::desired-state::runtime::node'],
+        'the second group keeps the member it had before the run'
+      );
+
+      // ac-515: the exception requirement-132 carves out of ac-348 is on the
+      // rendering axis only. Widening it to the execution axis would submit
+      // ids the bridge did not serve as runnable, which the bridge rejects.
+      const spawns = timeline.flatMap((entry) => entry.kind === 'spawn' ? [entry.ids] : []);
+      assert.deepEqual(spawns, [['demo::desired-state::dataset::full']], 'exactly the selected runnable row is submitted');
+      for (const ids of spawns) {
+        assert.deepEqual(
+          ids.filter((id) => id.startsWith('testbridge::desired-state')),
+          [],
+          'no informational row id in the VSIX-private namespace is submitted'
+        );
+      }
+    } finally {
+      workspace.dispose();
+    }
+  });
 });
+
+// createExclusiveGroupWorkspace stands up a workspace whose adapter serves two
+// mutually-exclusive desired-state groups and one ordinary lane, so a run of a
+// member of the first group can be observed against everything it must not
+// touch. `mode` selects what the run child does:
+//
+//   activate — records the selected member as active, passes, exits 0
+//   fail     — leaves the active member where it was, fails, exits non-zero
+//   hang     — starts and then waits to be signalled
+//
+// The served reconcile_results always describe the CURRENT active member, so
+// the `fail` mode serves a list identical to the pre-run one — the case
+// keel/ac-513 exists for.
+interface ExclusiveGroupWorkspace {
+  root: string;
+  dispose(): void;
+}
+
+function createExclusiveGroupWorkspace(prefix: string, mode: 'activate' | 'fail' | 'hang'): ExclusiveGroupWorkspace {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+  process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = root;
+  fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+  const adapter = path.join(root, 'exclusive-groups-adapter.js');
+  fs.writeFileSync(adapter, `
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+const now = () => new Date().toISOString();
+const activePath = path.join(process.cwd(), '.devtools', 'active-member');
+const mode = ${JSON.stringify(mode)};
+if (args.includes('--version')) {
+  process.stdout.write('dev\\n');
+  process.exit(0);
+}
+const datasetRows = [
+  ['demo::desired-state::dataset::small', 'small'],
+  ['demo::desired-state::dataset::full', 'full'],
+  ['demo::desired-state::dataset::unknown', 'Unknown State']
+];
+const runtimeRows = [
+  ['demo::desired-state::runtime::node', 'node'],
+  ['demo::desired-state::runtime::unknown', 'Unknown State']
+];
+function activeMember() {
+  try {
+    return fs.readFileSync(activePath, 'utf8').trim();
+  } catch {
+    return 'demo::desired-state::dataset::small';
+  }
+}
+function discovery() {
+  const active = activeMember();
+  const rowItem = (parentId) => ([id, label]) => ({
+    id, parent_id: parentId, label, kind: 'group', runnable: true, profiles: ['run'],
+    desired_state_row: { current: label, action: 'reuse', active: id === active }
+  });
+  return {
+    version: 1,
+    workspace: process.cwd(),
+    generated_at: now(),
+    capabilities: {
+      reconcile_results: datasetRows.map(([id]) => ({
+        test_id: id,
+        state: id === active ? 'passed' : 'skipped',
+        message: id === active ? 'active' : 'not active'
+      })).concat(runtimeRows.map(([id]) => ({
+        test_id: id,
+        state: id === 'demo::desired-state::runtime::node' ? 'passed' : 'skipped',
+        message: id === 'demo::desired-state::runtime::node' ? 'active' : 'not active'
+      })))
+    },
+    items: [
+      { id: 'demo::desired-state::dataset', label: 'Data Set', kind: 'group', runnable: false, profiles: [], desired_state_group: { mutually_exclusive: true } },
+      ...datasetRows.map(rowItem('demo::desired-state::dataset')),
+      { id: 'demo::desired-state::runtime', label: 'Runtime', kind: 'group', runnable: false, profiles: [], desired_state_group: { mutually_exclusive: true } },
+      ...runtimeRows.map(rowItem('demo::desired-state::runtime')),
+      { id: 'keel::lane::fast', label: 'fast', kind: 'lane', runnable: true, profiles: ['run'] }
+    ]
+  };
+}
+function desiredState() {
+  const active = activeMember();
+  const group = (label, order, rows) => ({
+    label, order, mutually_exclusive: true,
+    rows: rows.map(([run_id, resource]) => ({
+      run_id, resource, kind: 'dataset', desired: resource, current: resource,
+      status: run_id === active ? 'satisfied' : 'available',
+      action: run_id === active ? 'reuse' : 'none',
+      message: resource, reusable: true, owned: false, active: run_id === active
+    }))
+  });
+  return {
+    version: 3,
+    workspace: process.cwd(),
+    generated_at: now(),
+    groups: [group('Data Set', 1, datasetRows), group('Runtime', 2, runtimeRows)]
+  };
+}
+if (args.slice(0, 3).join(' ') === 'test-bridge discover --format') {
+  process.stdout.write(JSON.stringify(discovery()) + '\\n');
+  process.exit(0);
+}
+if (args.slice(0, 3).join(' ') === 'test-bridge desired-state --format') {
+  process.stdout.write(JSON.stringify(desiredState()) + '\\n');
+  process.exit(0);
+}
+if (args.slice(0, 2).join(' ') === 'test-bridge run') {
+  const selected = args[args.indexOf('--id') + 1];
+  const emit = (event) => process.stdout.write(JSON.stringify({ version: 1, time: now(), run_id: 'mutex-run', ...event }) + '\\n');
+  emit({ event: 'run_started', test_id: selected });
+  emit({ event: 'test_started', test_id: selected });
+  if (mode === 'hang') {
+    fs.writeFileSync(path.join(process.cwd(), '.devtools-run-started'), selected + '\\n');
+    setInterval(() => {}, 1000);
+  } else if (mode === 'fail') {
+    emit({ event: 'failed', test_id: selected, message: 'activation failed' });
+    emit({ event: 'run_finished', exit_code: 1 });
+    process.exit(1);
+  } else {
+    fs.mkdirSync(path.dirname(activePath), { recursive: true });
+    fs.writeFileSync(activePath, selected + '\\n');
+    emit({ event: 'passed', test_id: selected, duration_ms: 1 });
+    emit({ event: 'run_finished', exit_code: 0 });
+    process.exit(0);
+  }
+} else {
+  process.stderr.write('unsupported command ' + args.join(' ') + '\\n');
+  process.exit(2);
+}
+`);
+  fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+    version: currentConfigVersion,
+    command: process.execPath,
+    args: [adapter],
+    displayName: 'Keel'
+  }, null, 2) + '\n');
+  return {
+    root,
+    dispose() {
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  };
+}
+
+// A single ordered timeline of every result stamp the extension makes and the
+// moment the devtool run child is spawned. Ordering against the spawn is what
+// makes keel/ac-512 falsifiable: a stamp that lands after the bridge has
+// already reconciled proves nothing about the interval the requirement covers.
+type RunTimelineEntry =
+  | { kind: 'passed' | 'skipped'; id: string; run: string }
+  | { kind: 'spawn'; ids: string[] };
+
+// activateExclusiveGroupWorkspace activates the extension against the current
+// workspace, arms a fresh reconcile signature, and hands back the controller.
+async function activateExclusiveGroupWorkspace(): Promise<vscode.TestController> {
+  const extension = vscode.extensions.getExtension('aggeler.keel-test-bridge');
+  assert.ok(extension, 'extension should be discoverable');
+  await extension.activate();
+  resetReconcileSignatureForTest();
+  await vscode.commands.executeCommand('keel.tests.refresh');
+  const controller = testControllerForTest();
+  assert.ok(controller, 'extension should expose its active TestController for tests');
+  return controller;
+}
+
+// assertGroupSettledOnActiveMember reads the LAST state stamped onto each row
+// of the group. keel/ac-516 is a claim about where the group comes to rest
+// after an abort, not about the states it passes through on the way.
+function assertGroupSettledOnActiveMember(timeline: readonly RunTimelineEntry[], activeId: string): void {
+  const finalStateById = new Map<string, string>();
+  for (const entry of timeline) {
+    if (entry.kind !== 'spawn') {
+      finalStateById.set(entry.id, entry.kind);
+    }
+  }
+  assert.equal(
+    finalStateById.get(activeId),
+    'passed',
+    `the genuinely active member is restored to passed; timeline=${JSON.stringify(timeline)}`
+  );
+  const settled = datasetGroupRowIds.filter((id) => finalStateById.get(id) === 'passed');
+  assert.deepEqual(settled, [activeId], `exactly one row of the group renders passed; timeline=${JSON.stringify(timeline)}`);
+}
+
+// countDesiredStateReads counts devtool desired-state queries, so a settle path
+// that fires twice is visible as a duplicate read rather than staying silent.
+function countDesiredStateReads(): { count(): number; restore(): void } {
+  const adapterModule = bridgeAdapterModule as unknown as { readDesiredState: typeof readDesiredState };
+  const original = adapterModule.readDesiredState;
+  let reads = 0;
+  adapterModule.readDesiredState = ((workspaceRoot: string, ids: string[]) => {
+    reads += 1;
+    return original(workspaceRoot, ids);
+  }) as typeof readDesiredState;
+  return {
+    count: () => reads,
+    restore: () => {
+      adapterModule.readDesiredState = original;
+    }
+  };
+}
+
+// stampedIds narrows the timeline to the ids stamped with one state, so an
+// assertion reads as the sequence of rendered states rather than a type guard.
+function stampedIds(timeline: readonly RunTimelineEntry[], kind: 'passed' | 'skipped'): string[] {
+  return timeline.flatMap((entry) => entry.kind === kind ? [entry.id] : []);
+}
+
+function recordRunTimeline(controller: vscode.TestController, timeline: RunTimelineEntry[]): () => void {
+  const originalCreateTestRun = controller.createTestRun.bind(controller);
+  const adapterModule = bridgeAdapterModule as unknown as { runTests: typeof runTests };
+  const originalRunTests = adapterModule.runTests;
+  controller.createTestRun = ((request: vscode.TestRunRequest, name?: string, persist?: boolean) => {
+    const run = originalCreateTestRun(request, name, persist);
+    const originalPassed = run.passed.bind(run);
+    const originalSkipped = run.skipped.bind(run);
+    run.passed = (item: vscode.TestItem, duration?: number) => {
+      timeline.push({ kind: 'passed', id: item.id, run: name ?? '' });
+      originalPassed(item, duration);
+    };
+    run.skipped = (item: vscode.TestItem) => {
+      timeline.push({ kind: 'skipped', id: item.id, run: name ?? '' });
+      originalSkipped(item);
+    };
+    return run;
+  }) as typeof controller.createTestRun;
+  adapterModule.runTests = ((workspaceRoot: string, ids: string[]) => {
+    timeline.push({ kind: 'spawn', ids: [...ids] });
+    return originalRunTests(workspaceRoot, ids);
+  }) as typeof runTests;
+  return () => {
+    controller.createTestRun = originalCreateTestRun;
+    adapterModule.runTests = originalRunTests;
+  };
+}
+
+const datasetGroupRowIds = [
+  'demo::desired-state::dataset::small',
+  'demo::desired-state::dataset::full',
+  'demo::desired-state::dataset::unknown'
+];
+
+// exclusiveGroupsDiscoveryFixture publishes two mutually-exclusive
+// desired-state groups, one non-exclusive group, and one ordinary lane leaf,
+// so a peer-set assertion can prove both what is reached and what is not.
+function exclusiveGroupsDiscoveryFixture(): DiscoveryDocument {
+  const row = (id: string, parentId: string, label: string, active: boolean): DiscoveryItem => ({
+    id,
+    parent_id: parentId,
+    label,
+    kind: 'group',
+    runnable: true,
+    profiles: ['run'],
+    desired_state_row: { current: label, action: 'reuse', active }
+  });
+  return {
+    version: 1,
+    workspace: process.cwd(),
+    generated_at: new Date().toISOString(),
+    items: [
+      { id: 'demo::desired-state::dataset', label: 'Data Set', kind: 'group', runnable: false, profiles: [], desired_state_group: { mutually_exclusive: true } },
+      row('demo::desired-state::dataset::small', 'demo::desired-state::dataset', 'small', true),
+      row('demo::desired-state::dataset::full', 'demo::desired-state::dataset', 'full', false),
+      row('demo::desired-state::dataset::unknown', 'demo::desired-state::dataset', 'Unknown State', false),
+      { id: 'demo::desired-state::runtime', label: 'Runtime', kind: 'group', runnable: false, profiles: [], desired_state_group: { mutually_exclusive: true } },
+      row('demo::desired-state::runtime::node', 'demo::desired-state::runtime', 'node', true),
+      row('demo::desired-state::runtime::unknown', 'demo::desired-state::runtime', 'Unknown State', false),
+      { id: 'demo::desired-state::caches', label: 'Caches', kind: 'group', runnable: true, profiles: ['run'], desired_state_group: { mutually_exclusive: false } },
+      row('demo::desired-state::caches::warm', 'demo::desired-state::caches', 'warm', false),
+      { id: 'keel::lane::fast', label: 'fast', kind: 'lane', runnable: true, profiles: ['run'] }
+    ]
+  };
+}
 
 function runEvent(partial: Partial<RunEvent>): RunEvent {
   return {

@@ -7,7 +7,7 @@ import * as vscode from 'vscode';
 import { adapterConfig, configRelativePath, currentConfigVersion, defaultAdapterConfig, defaultConfigTemplate, discoverTests, readDesiredState, readAdapterConfig, runTests, upgradeConfig } from './bridgeAdapter';
 import { ExternalRunMirror, ExternalRunStateSnapshot, setExternalRunStaleMsForTest } from './externalRunMirror';
 import { publishDiscovery, PublishedTree, replacePublishedTestItem } from './tree';
-import { DesiredState, DesiredStateGroup, ReconcileResult, RunEvent, DesiredStateDocument } from './protocol';
+import { DesiredState, DesiredStateGroup, DiscoveryItem, ReconcileResult, RunEvent, DesiredStateDocument } from './protocol';
 
 let tree: PublishedTree | undefined;
 let output: vscode.OutputChannel;
@@ -349,6 +349,63 @@ function executionScopeLeafItems(selected: readonly vscode.TestItem[]): vscode.T
   return Array.from(leaves.values());
 }
 
+// exclusiveGroupPeerItems resolves the rows of every mutually-exclusive
+// desired-state group that owns a selected item, minus the selection's own
+// subtree. It reads the published discovery tree ONLY: the group is recognized
+// by the exclusivity fact its group item carries, and the rows are that item's
+// children. No bridge run event is consulted, which is precisely what makes the
+// peer set knowable BEFORE the devtool child is spawned — the end-of-run
+// `cleared` path cannot be moved earlier, because those ids arrive on the
+// child's stdout and by construction do not exist yet (keel/ac-517).
+//
+// DHF-REQ: keel/requirement-132
+export function exclusiveGroupPeerItems(
+  publishedTree: PublishedTree | undefined,
+  selected: readonly vscode.TestItem[]
+): vscode.TestItem[] {
+  if (!publishedTree) {
+    return [];
+  }
+  const selectedProtocolIds = new Set<string>();
+  const collectSubtree = (item: vscode.TestItem): void => {
+    selectedProtocolIds.add(publishedTree.protocolIdByItemId.get(item.id) ?? item.id);
+    item.children.forEach((child) => collectSubtree(child));
+  };
+  for (const item of selected) {
+    collectSubtree(item);
+  }
+
+  const exclusiveGroupIds = new Set<string>();
+  for (const protocolID of selectedProtocolIds) {
+    const visited = new Set<string>();
+    let cursor: string | undefined = protocolID;
+    while (cursor && !visited.has(cursor)) {
+      visited.add(cursor);
+      const discoveryItem: DiscoveryItem | undefined = publishedTree.discoveryItemsById.get(cursor);
+      if (discoveryItem?.desired_state_group?.mutually_exclusive === true) {
+        exclusiveGroupIds.add(cursor);
+        break;
+      }
+      cursor = discoveryItem?.parent_id;
+    }
+  }
+  if (exclusiveGroupIds.size === 0) {
+    return [];
+  }
+
+  const peers = new Map<string, vscode.TestItem>();
+  for (const [protocolID, discoveryItem] of publishedTree.discoveryItemsById) {
+    if (!discoveryItem.parent_id || !exclusiveGroupIds.has(discoveryItem.parent_id) || selectedProtocolIds.has(protocolID)) {
+      continue;
+    }
+    const item = publishedTree.itemsById.get(protocolID);
+    if (item) {
+      peers.set(protocolID, item);
+    }
+  }
+  return Array.from(peers.values());
+}
+
 function isNoResultEnqueueItem(item: vscode.TestItem): boolean {
   const protocolID = protocolIDForTestItem(item);
   return protocolID === desiredStateRootProtocolID || protocolID.includes('::desired-state');
@@ -525,10 +582,75 @@ export function applyReconcileResultsCapability(controller: vscode.TestControlle
   run.end();
 }
 
-// resetReconcileSignatureForTest clears the in-session reconcile signature
-// guard. Production never calls this; specs use it to isolate cases.
-export function resetReconcileSignatureForTest(): void {
+// runStartInvalidationRunName names the short-lived non-persisted run that
+// carries the transitional stamp. It is deliberately NOT the reconcile run's
+// name: the two are different claims — the reconcile replays bridge-served
+// truth, this one records that the truth is currently unknown.
+export const runStartInvalidationRunName = 'desired-state run-start invalidation';
+
+// invalidateExclusiveGroupAtRunStart stamps every peer of the selection's
+// mutually-exclusive group(s) skipped, before the run's devtool child exists.
+//
+// Between a run's start and the post-run reconcile replay, the previously
+// active member's passed icon is no longer true — the group's truth is being
+// re-determined — but nothing overwrote it, so it kept asserting it was the
+// satisfied one for the whole reconcile (keel/requirement-132).
+//
+// The stamp travels on its own non-persisted TestRun, the same mechanism
+// applyReconcileResultsCapability uses, and NOT on the caller's test run. That
+// is what keeps keel/ac-348 intact: the test run stamps nothing outside its own
+// scope, and the peers are never added to the submitted id set (keel/ac-515).
+// Overwriting is the only rendering mechanism proven live; per-item Unset is
+// unreachable on this platform, so `skipped` is the transitional value
+// (keel/requirement-97, F16).
+//
+// Returns true when a stamp was made, so the caller knows the group is now
+// carrying a transitional rendering that MUST be settled on bridge-served
+// truth before the run ends.
+//
+// DHF-REQ: keel/requirement-132
+function invalidateExclusiveGroupAtRunStart(
+  controller: vscode.TestController,
+  selected: readonly vscode.TestItem[]
+): boolean {
+  const peers = exclusiveGroupPeerItems(tree, selected);
+  if (peers.length === 0) {
+    return false;
+  }
+  const request = new vscode.TestRunRequest(peers, undefined, undefined, undefined, true);
+  const run = controller.createTestRun(request, runStartInvalidationRunName, false);
+  for (const item of peers) {
+    // skipped reason (d): a non-active member of a mutually-exclusive
+    // desired-state group. Here the member is not merely known-inactive — the
+    // group's truth is in flight — but the rendering alphabet has no distinct
+    // value for that, and asserting the stale passed would be worse.
+    // See keel/ac-428.
+    run.skipped(item);
+  }
+  run.end();
+  // The transitional rendering is only safe because the bridge is guaranteed
+  // to overwrite it. lastReconcileSignature suppresses the replay when the
+  // served list is unchanged — which is exactly the failed-activation case,
+  // where the active row did not move and the peer just stamped skipped is
+  // still the genuinely active member. Left armed, the guard would strand the
+  // group with every row skipped and no icon anywhere: a regression strictly
+  // worse than the stale icon this unit removes. Clearing it is part of the
+  // requirement, not an implementation detail (keel/ac-513).
+  resetReconcileSignature();
+  return true;
+}
+
+// resetReconcileSignature clears the in-session reconcile replay guard so the
+// next served list is stamped even when it is byte-identical to the last one.
+function resetReconcileSignature(): void {
   lastReconcileSignature = undefined;
+}
+
+// resetReconcileSignatureForTest clears the in-session reconcile signature
+// guard. Specs use it to isolate cases; production reaches the same reset
+// through resetReconcileSignature.
+export function resetReconcileSignatureForTest(): void {
+  resetReconcileSignature();
 }
 
 async function runAdapterMaintenance(controller: vscode.TestController, ids: readonly string[]): Promise<void> {
@@ -607,11 +729,31 @@ async function runSelected(
     finishRun();
     return;
   }
+  // The group's truth stops being known here, not when the run ends, so the
+  // transitional stamp lands before any devtool child of this run is spawned
+  // (keel/ac-512). Every path out of runSelected below must settle the group on
+  // bridge-served truth once this has fired (keel/ac-516).
+  const invalidatedExclusiveGroup = invalidateExclusiveGroupAtRunStart(controller, selected);
+
+  // A child can emit BOTH `error` and `close` (spawn ENOENT is the ordinary
+  // case), and every settle path below would then re-query the devtool for a
+  // truth it has already read. The refresh is memoized rather than skipped, so
+  // the second caller AWAITS the in-flight one instead of racing past it and
+  // letting the run end before the group has settled.
+  let postRunRefresh: Promise<void> | undefined;
+  const settleOnBridgeServedTruth = (): Promise<void> => {
+    postRunRefresh ??= refreshDesiredStateAfterRun(run, controller, workspaceRoot, selectedProtocolIds);
+    return postRunRefresh;
+  };
+
   try {
     const desiredState = await readDesiredState(workspaceRoot, selectedProtocolIds);
     appendDesiredStateDocument(run, desiredState);
   } catch (error) {
     appendRunOutput(run, `Failed to read desired state for ${currentAdapterConfig().displayName} test run: ${error instanceof Error ? error.message : String(error)}`, 'ERROR');
+    if (invalidatedExclusiveGroup) {
+      await settleOnBridgeServedTruth();
+    }
     finishRun();
     return;
   }
@@ -622,6 +764,11 @@ async function runSelected(
     child = runTests(workspaceRoot, selectedProtocolIds);
   } catch (error) {
     appendRunOutput(run, `Failed to start Keel test run: ${error instanceof Error ? error.message : String(error)}`, 'ERROR');
+    // The child never came into existence, so no `close` will settle the
+    // group. This path had no post-run refresh at all before keel/ac-516.
+    if (invalidatedExclusiveGroup) {
+      await settleOnBridgeServedTruth();
+    }
     finishRun();
     return;
   }
@@ -653,11 +800,17 @@ async function runSelected(
     appendRunOutput(run, chunk.toString('utf8'), 'WARN');
   });
   await new Promise<void>((resolve) => {
-    child.on('error', (error) => {
+    child.on('error', async (error) => {
       appendRunOutput(run, `Keel test process error: ${error.message}`, 'ERROR');
       cancellation.dispose();
       if (forceKill) {
         clearTimeout(forceKill);
+      }
+      // An `error` is not always followed by a `close`, so this path settles
+      // the group itself (keel/ac-516); the dedupe above keeps the pair that
+      // does emit both from refreshing twice.
+      if (invalidatedExclusiveGroup) {
+        await settleOnBridgeServedTruth();
       }
       finishRun();
       resolve();
@@ -676,7 +829,7 @@ async function runSelected(
         await resetKeelTestResults(controller);
       }
       invalidateClearedResults(controller, clearedResultIds);
-      await refreshDesiredStateAfterRun(run, controller, workspaceRoot, selectedProtocolIds);
+      await settleOnBridgeServedTruth();
       finishRun();
       resolve();
     });
@@ -920,7 +1073,10 @@ export function externalRunSnapshots(): ExternalRunStateSnapshot[] {
   return Array.from(externalRunMirror?.snapshots() ?? []);
 }
 
-export async function runProfileHandlerForTest(protocolID: string): Promise<void> {
+// runProfileHandlerForTest drives the real run profile for a single published
+// row. `token` lets a spec own the cancellation source so it can cancel a run
+// in flight; omitted, the handler runs to completion on its own source.
+export async function runProfileHandlerForTest(protocolID: string, token?: vscode.CancellationToken): Promise<void> {
   const controller = testControllerForRunProfile;
   const profile = testRunProfileForRunProfile;
   if (!controller || !profile) {
@@ -935,7 +1091,7 @@ export async function runProfileHandlerForTest(protocolID: string): Promise<void
   }
   const source = new vscode.CancellationTokenSource();
   try {
-    await profile.runHandler(new vscode.TestRunRequest([item], undefined, profile), source.token);
+    await profile.runHandler(new vscode.TestRunRequest([item], undefined, profile), token ?? source.token);
   } finally {
     source.dispose();
   }
