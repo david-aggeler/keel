@@ -238,7 +238,6 @@ func TestAbandonedDesiredStateProbeIsNeverRenderedActive(t *testing.T) {
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 	blocked := blockingDesiredStateRow("demo::desired-state::slow", "slow-resource", release)
-	blocked.Active = true
 	fake.desiredGroups = []testbridge.DesiredStateGroup{{
 		Label:             "Provisioning",
 		Order:             10,
