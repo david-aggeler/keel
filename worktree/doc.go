@@ -13,7 +13,8 @@
 //
 // [Manager.Down] removes a worktree. Its precondition is inspectable
 // working-tree state, never merge status: uncommitted tracked changes,
-// untracked non-ignored files, commits present on no remote, locked or
+// untracked non-ignored files, commits no remote ref and no local default
+// branch keeps, locked or
 // prunable registrations, and content the process cannot unlink each block
 // removal and are reported individually with the offending path or commit id.
 // That makes tear-down callable before, after, or entirely without a merge —
