@@ -958,6 +958,76 @@ exit 0`)
 	}
 }
 
+// A lane run settles every test it executed under that test's own id, not the
+// package rows alone, so the covers descendants below the lane stop rendering
+// Unset after a green run (keel/ac-505, keel/issue-173).
+//
+// DHF-TEST: keel/requirement-71
+func TestVSCodeLaneRunEmitsTerminalPerExecutedTest(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	for _, dir := range []string{"log", ".vscode"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, root, filepath.Join("log", "logging_test.go"), `package log
+
+import "testing"
+
+func TestLog(t *testing.T)     {}
+func TestMetrics(t *testing.T) {}
+func TestSkipped(t *testing.T) { t.Skip() }
+`)
+	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{"version":1,"lanes":[{"id":"log-only","label":"log","order":"b.40","members":[{"go":"./log/..."}]}]}`+"\n")
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", `
+case "$1 $2 $3" in
+  "test -json ./log")
+    printf '{"Action":"run","Package":"github.com/david-aggeler/keel/log","Test":"TestLog"}\n'
+    printf '{"Action":"pass","Package":"github.com/david-aggeler/keel/log","Test":"TestLog","Elapsed":0.01}\n'
+    printf '{"Action":"run","Package":"github.com/david-aggeler/keel/log","Test":"TestMetrics"}\n'
+    printf '{"Action":"pass","Package":"github.com/david-aggeler/keel/log","Test":"TestMetrics","Elapsed":0.02}\n'
+    printf '{"Action":"run","Package":"github.com/david-aggeler/keel/log","Test":"TestSkipped"}\n'
+    printf '{"Action":"skip","Package":"github.com/david-aggeler/keel/log","Test":"TestSkipped","Elapsed":0}\n'
+    printf '{"Action":"pass","Package":"github.com/david-aggeler/keel/log","Elapsed":0.05}\n'
+    ;;
+  *)
+    printf 'unexpected go invocation: %s\n' "$*" >&2
+    exit 2
+    ;;
+esac
+exit 0`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var protocol bytes.Buffer
+	if err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), "keel::lane::log-only"); err != nil {
+		t.Fatalf("log-only lane run: %v\nprotocol:\n%s\ncalls:\n%s", err, protocol.String(), calls(t, callsFile))
+	}
+	events := decodeRunEvents(t, protocol.String())
+	for id, want := range map[string]string{
+		"go::test::log::TestLog":     "passed",
+		"go::test::log::TestMetrics": "passed",
+		"go::test::log::TestSkipped": "skipped",
+	} {
+		if !runEventsContain(events, want, id) {
+			t.Fatalf("lane run events missing %s terminal for %s: %+v", want, id, events)
+		}
+	}
+	if !runEventsContain(events, "passed", "go::pkg::log") {
+		t.Fatalf("lane run dropped the package terminal it already emitted: %+v", events)
+	}
+	if !runEventsContain(events, "passed", "keel::lane::log-only") {
+		t.Fatalf("lane run events missing the lane terminal: %+v", events)
+	}
+	if events[len(events)-1].Event != "run_finished" || events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode != 0 {
+		t.Fatalf("terminal event = %+v, want run_finished exit 0", events[len(events)-1])
+	}
+}
+
 // DHF-TEST: keel/requirement-51, keel/requirement-65, keel/requirement-73
 func TestVSCodeLanesListAndDetect(t *testing.T) {
 	root := t.TempDir()
