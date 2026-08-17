@@ -129,6 +129,52 @@ func TestDownRefusesUnpushedCommits(t *testing.T) {
 	}
 }
 
+// TestDownMergedBranchTearsDownOnUnpushedCheckout is the issue-180 case: the
+// repository has a remote, the local default branch has run ahead of every
+// remote ref, and the unit's branch is clean and fully merged into that local
+// default. Every commit the branch carries is kept by `main`, so nothing removal
+// could destroy remains and tear-down must proceed.
+//
+// The measured instance had cr-208 and cr-210 report 38 and 31 unpushed commits
+// while `git branch --merged main` listed both; the counts tracked the
+// checkout's distance from origin and nothing else.
+//
+// DHF-TEST: keel/requirement-113 (keel/ac-523)
+func TestDownMergedBranchTearsDownOnUnpushedCheckout(t *testing.T) {
+	root, _ := newRepoWithRemote(t)
+	m := newManager(t, worktree.Config{RepoRoot: root})
+	ctx := context.Background()
+	wt, err := m.Up(ctx, "unit-1")
+	if err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	writeFile(t, filepath.Join(wt.Path, "work.txt"), "work\n")
+	git(t, wt.Path, "add", "work.txt")
+	git(t, wt.Path, "commit", "-m", "unit-1 work")
+
+	// Land the unit on the local default branch without pushing it, which is
+	// what leaves main ahead of every remote ref.
+	git(t, root, "merge", "--no-ff", "-m", "Merge branch 'unit-1'", "unit-1")
+	if ahead := strings.TrimSpace(git(t, root, "rev-list", "--count", "main", "--not", "--remotes")); ahead == "0" {
+		t.Fatal("fixture did not leave local main ahead of every remote ref")
+	}
+
+	res, err := m.Down(ctx, "unit-1", worktree.DownOptions{})
+	if err != nil {
+		t.Fatalf("down of a merged branch on an unpushed checkout: %v", err)
+	}
+	if res.Outcome != worktree.DownRemoved {
+		t.Errorf("outcome = %q, want %q", res.Outcome, worktree.DownRemoved)
+	}
+	if _, statErr := os.Stat(wt.Path); !os.IsNotExist(statErr) {
+		t.Errorf("checkout still present after tear-down: %v", statErr)
+	}
+	// Tear-down is still not a branch delete.
+	if out, err := gitTry(root, "show-ref", "--verify", "--quiet", "refs/heads/unit-1"); err != nil {
+		t.Errorf("branch unit-1 was destroyed by tear-down: %v\n%s", err, out)
+	}
+}
+
 // TestDownPolicyKeepsBranchCommitsReachable proves callers can name the
 // tear-down policy that treats branch-reachable commits as preserved by the
 // surviving branch instead of reassembling blocker sets or forcing every held

@@ -33,8 +33,9 @@ type DownPolicy string
 
 const (
 	// DownPolicyDefault is the package default: any uncommitted change,
-	// untracked file, or commit absent from every remote blocks tear-down,
-	// preserving the ac-401 safety contract for callers that opt into nothing.
+	// untracked file, or commit absent from both every remote and the local
+	// default branch blocks tear-down, preserving the ac-401 safety contract for
+	// callers that opt into nothing.
 	DownPolicyDefault DownPolicy = ""
 	// DownPolicyKeepBranchCommits waives only [BlockerUnpushedCommit]. Down
 	// never deletes the branch, so callers using this policy treat commits on
@@ -49,7 +50,7 @@ type DownOptions struct {
 	// [DownPolicyDefault].
 	Policy DownPolicy
 	// Force removes the checkout even though it holds work — uncommitted
-	// changes, untracked files, or commits on no remote. It is deliberately
+	// changes, untracked files, or commits no other ref keeps. It is deliberately
 	// per-condition and never cascades: it does not delete the branch, and it
 	// cannot clear content the process is unable to unlink, because that needs
 	// privilege rather than permission.
@@ -71,9 +72,12 @@ type DownResult struct {
 // Down removes the worktree for name. Its only input is inspectable state: the
 // checkout is removed when it holds nothing that removal would destroy, and
 // refused with [CodeBlocked] and a [StaleReport] naming every offending path or
-// commit when it does. No merge-status or base-comparison query takes part in
+// commit when it does. No merge-status or ahead/behind-base query takes part in
 // the decision, so tear-down is callable before a merge, after one, or when no
-// merge will ever happen — the branch survives either way.
+// merge will ever happen — the branch survives either way. The one place the
+// default branch is named is the reachability probe for unreachable commits,
+// which asks only whether some surviving ref keeps a commit; it exempts, and can
+// never make removal conditional on a merge having happened.
 //
 // An already-removed, unregistered path is success with [DownNoop] and no
 // mutating git command, so a reconciliation loop can re-invoke Down after a
@@ -319,15 +323,25 @@ func (m *Manager) appendStatus(ctx context.Context, op string, report *StaleRepo
 	}
 }
 
-// appendUnpushed reports commits that exist in this checkout and on no remote.
+// appendUnpushed reports commits that exist in this checkout and nowhere that
+// would keep them once the checkout is gone.
 //
 // Two cases differ in what removal would actually cost. A detached checkout's
 // commits are reachable from no ref at all, so removing it orphans them
 // immediately — those are always reported. Commits on a branch stay reachable
 // from the branch ref, which tear-down never deletes, so they are reported as
-// the belt-and-suspenders case only when the repository has remote refs to
-// measure "exists elsewhere" against; with no remote configured there is
-// nowhere for them to be, and the branch ref is what keeps them.
+// the belt-and-suspenders case only when the repository has somewhere else to
+// measure "exists elsewhere" against.
+//
+// That elsewhere is two refs, not one: a remote ref, and the repository's own
+// local default branch. Both keep a commit, and the second is what bring-up
+// already branches from (keel/ac-417), so measuring tear-down against remotes
+// alone made the symmetric pair disagree — on a checkout whose default branch
+// runs ahead of every remote, a unit inherits that whole span and can never
+// probe clean, merged or not. With neither available there is nowhere for the
+// commits to be, and the branch ref is what keeps them.
+//
+// DHF-REQ: keel/requirement-113 (keel/ac-523)
 func (m *Manager) appendUnpushed(ctx context.Context, op string, report *StaleReport, path string, reg registration) {
 	var args []string
 	switch {
@@ -335,6 +349,9 @@ func (m *Manager) appendUnpushed(ctx context.Context, op string, report *StaleRe
 		args = []string{"rev-list", "HEAD", "--not", "--branches", "--remotes"}
 	case m.hasRemoteRefs(ctx, op):
 		args = []string{"rev-list", reg.branch, "--not", "--remotes"}
+		if keeper := m.defaultBranchKeeper(ctx, op, reg.branch); keeper != "" {
+			args = append(args, keeper)
+		}
 	default:
 		return
 	}
@@ -352,10 +369,31 @@ func (m *Manager) appendUnpushed(ctx context.Context, op string, report *StaleRe
 		report.add(Blocker{
 			Kind:        BlockerUnpushedCommit,
 			Commit:      commit,
-			Detail:      "reachable from this checkout and from no remote ref",
-			Remediation: "push the branch, or force the tear-down deliberately",
+			Detail:      "reachable from this checkout, from no remote ref, and from no local default branch",
+			Remediation: "merge the branch into the default branch, push it, or force the tear-down deliberately",
 		})
 	}
+}
+
+// defaultBranchKeeper names the local ref that keeps a commit after this
+// checkout is gone, or "" when there is none to name. It reuses bring-up's own
+// base resolution rather than deriving a second answer, which is what keeps the
+// two halves of the pair pointed at the same branch instead of merely both
+// plausible.
+//
+// Two answers are withheld deliberately, because a wrong one silently empties
+// the probe rather than loosening it by a commit: a base that does not resolve
+// leaves the guard measuring remotes alone, and a base that IS the branch under
+// tear-down would exclude the branch from itself and exempt everything.
+func (m *Manager) defaultBranchKeeper(ctx context.Context, op, branch string) string {
+	base, err := m.resolveBase(ctx, op)
+	if err != nil || base == "" {
+		return ""
+	}
+	if base == branch || base == "refs/heads/"+branch {
+		return ""
+	}
+	return base
 }
 
 func (m *Manager) hasRemoteRefs(ctx context.Context, op string) bool {
