@@ -18,6 +18,15 @@ carries that derivation so it can be re-checked without reading
 `vsix/package.json`. `keel/issue-147` records what happens without it — the
 value was moved 22 → 26 to clear the `@types/node` ceiling it exists to impose.
 
+Every tracked `package.json` in the repository is held to the minimum above, not
+only `vsix/package.json`. VS Code requires `engines.vscode` on any extension it
+loads, including the packaged-e2e driver it loads through
+`extensionDevelopmentPath`, so the driver states the declared minimum rather than
+a floor of its own — `keel/issue-170` records the second declaration that sat two
+releases behind it, unreached by the gate. A manifest that must hold a lower
+value states the reason in its own `keelEngineHoldReason` field, which is the
+declaration site the gate reads.
+
 Dependency hold notes:
 
 - `@types/node` is held at `24.13.3` (current: `26.2.0`).

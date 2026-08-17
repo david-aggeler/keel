@@ -5,7 +5,7 @@
   "publisher": "aggeler",
   "private": true,
   "engines": {
-    "vscode": "^1.102.0"
+    "vscode": "^1.125.0"
   },
   "activationEvents": [],
   "main": "./extension.js"
