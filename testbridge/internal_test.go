@@ -545,7 +545,7 @@ func TestPruneRunStreamsToByteCeilingDropsOldestAndKeepsNewest(t *testing.T) {
 		t.Fatalf("pruneRunStreamsToByteCeiling below one stream: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(runDir, "new.jsonl")); err != nil {
-		t.Fatalf("newest completed stream was erased by an unmeetable ceiling: %v", err)
+		t.Fatalf("newest completed stream was erased by a ceiling no single stream can meet: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(runDir, "active.jsonl")); err != nil {
 		t.Fatalf("in-flight stream was pruned by the byte bound: %v", err)
