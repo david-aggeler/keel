@@ -4,7 +4,8 @@
 // TestController used for in-Test-Explorer runs. Net effect:
 // terminal-initiated lane runs land in the Test Results panel with the
 // same result attribution as if the user had clicked Run. See
-// docs/devtool/vscode-integration.md § External Run Mirror.
+// docs/vscode-bridge.md, Protocol Streams, for the run-event stream files
+// this watches, and Workspace Config for keel.tests.externalRunStaleMs.
 //
 // Pulled out of extension.ts per Story 27.24 AC19. The class still
 // depends on a handful of extension.ts helpers; those are imported

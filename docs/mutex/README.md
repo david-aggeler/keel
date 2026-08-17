@@ -29,7 +29,14 @@ stayed wrong (`keel/rca-3`, reopened 2026-07-17).
 | [architecture.md](architecture.md) | Component diagram, the four state representations, per-row state machine, invariants and where each is (not) enforced, design tensions |
 | [sequences.md](sequences.md) | Sequence diagrams: at-rest refresh (with the issue-86 gap), activation run end-to-end, post-run reconcile, probe-execution inventory |
 | [history.md](history.md) | The full defect/fix trail: rca-3, rca-4, the ~14 issue fixes, and why the fixes didn't stick |
-| [vscode-object-model.md](vscode-object-model.md) | What the VS Code testing API actually guarantees (evidence-classed facts), the target rendering model, and the mechanism-mapping that selects the fix design |
+
+<!-- DHF-REQ: keel/requirement-133 -->
+The consumed VS Code testing API — what the platform actually guarantees as
+evidence-tagged facts (F1..F18), the target rendering model, and the
+mechanism-mapping that selects the fix design — is **not** a chapter here. It
+lives in `keel/interface_spec-7`, which is its only holder. This folder's
+`vscode-object-model.md` was a second copy and was retired once the record
+carried the whole contract.
 
 ## Current open records (2026-07-17)
 
