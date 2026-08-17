@@ -1813,15 +1813,112 @@ func runVSIXFileSelection(ctx context.Context, logger *slog.Logger, root string,
 	}
 	args := []string{"--dir", filepath.Join(root, "vsix"), "run", "test:headless:json", "--"}
 	args = append(args, files...)
-	runErr := runStep(ctx, logger, root, step{name: "vscode:vsix-files", program: "pnpm", args: args, maxOutputBytes: maxOutputBytes})
+	// The index comes from a static source scan, so it is built before the
+	// child starts and stays valid for the whole run.
+	var tail *vsixMochaResultsTail
 	if writer != nil {
-		if raw, err := os.ReadFile(resultsPath); err == nil {
-			emitMochaJSONLEvents(raw, buildVSIXTestIndex(root), writer)
-		} else if !errors.Is(err, os.ErrNotExist) {
-			logger.Warn("read mocha results", "path", resultsPath, "error", err.Error())
-		}
+		tail = startVSIXMochaResultsTail(resultsPath, vsixMochaTailInterval, buildVSIXTestIndex(root), writer)
+	}
+	runErr := runStep(ctx, logger, root, step{name: "vscode:vsix-files", program: "pnpm", args: args, maxOutputBytes: maxOutputBytes})
+	if tail != nil {
+		tail.stopAndDrain(logger)
 	}
 	return runErr
+}
+
+// vsixMochaTailInterval is how often the results tail looks for newly appended
+// rows while the suite child runs. It bounds only how long a row waits, never
+// whether it is delivered: the drain after the child exits reads whatever the
+// last tick missed.
+const vsixMochaTailInterval = 25 * time.Millisecond
+
+// vsixMochaResultsTail follows the Mocha reporter's JSONL results file while
+// the suite child is still running, so each per-test row reaches the run-event
+// writer at the time the reporter appends it instead of as a post-exit burst
+// (keel/ac-511). The reporter holds one open stream and appends complete rows
+// from its per-test handlers, so the tail reads forward from a monotonic file
+// offset: no row is read twice, and a row that is only half-written when a
+// read lands is carried in the line writer's remainder until its newline
+// arrives.
+//
+// One goroutine reads while the child runs and it has exited before the drain
+// reads, so exactly one goroutine ever enters the writer — the protocol stream
+// stays single-writer and ordered as the producer wrote the rows.
+//
+// DHF-REQ: keel/requirement-131
+type vsixMochaResultsTail struct {
+	path    string
+	lines   *lineFuncWriter
+	file    *os.File
+	readErr error
+	stopCh  chan struct{}
+	doneCh  chan struct{}
+}
+
+// startVSIXMochaResultsTail begins following path in the background. The file
+// need not exist yet; the reporter creates it when the suite starts.
+func startVSIXMochaResultsTail(path string, interval time.Duration, index vsixTestIndex, writer vscode.RunEventWriter) *vsixMochaResultsTail {
+	tail := &vsixMochaResultsTail{
+		path:   path,
+		lines:  newLineFuncWriter(func(line []byte) { emitMochaJSONLLine(line, index, writer) }),
+		stopCh: make(chan struct{}),
+		doneCh: make(chan struct{}),
+	}
+	go tail.follow(interval)
+	return tail
+}
+
+func (t *vsixMochaResultsTail) follow(interval time.Duration) {
+	defer close(t.doneCh)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-t.stopCh:
+			return
+		case <-ticker.C:
+			t.read()
+		}
+	}
+}
+
+// read hands the line writer every byte appended since the previous read. A
+// missing file is the ordinary pre-suite state and is not an error; any other
+// failure is kept for the drain to report, so a broken tail is visible in the
+// log rather than silently emitting nothing.
+func (t *vsixMochaResultsTail) read() {
+	if t.file == nil {
+		file, err := os.Open(t.path)
+		if err != nil {
+			if !errors.Is(err, os.ErrNotExist) && t.readErr == nil {
+				t.readErr = err
+			}
+			return
+		}
+		t.file = file
+	}
+	if _, err := io.Copy(t.lines, t.file); err != nil && t.readErr == nil {
+		t.readErr = err
+	}
+}
+
+// stopAndDrain halts the follow goroutine, waits for it to exit, and then
+// reads the rows the reporter appended between the last tick and the child's
+// exit. Without this drain the tail's termination condition would silently
+// drop the run's final terminals.
+func (t *vsixMochaResultsTail) stopAndDrain(logger *slog.Logger) {
+	close(t.stopCh)
+	<-t.doneCh
+	t.read()
+	t.lines.Flush()
+	if t.file != nil {
+		if err := t.file.Close(); err != nil && t.readErr == nil {
+			t.readErr = err
+		}
+	}
+	if t.readErr != nil && logger != nil {
+		logger.Warn("tail mocha results", "path", t.path, "error", t.readErr.Error())
+	}
 }
 
 // mochaJSONLEvent is one line of the vsix Mocha JSONL reporter stream
@@ -1916,26 +2013,37 @@ func emitMochaJSONLEvents(raw []byte, index vsixTestIndex, writer vscode.RunEven
 	scanner := bufio.NewScanner(bytes.NewReader(raw))
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
-		var event mochaJSONLEvent
-		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			continue
-		}
-		switch event.Event {
-		case "test_started", "passed", "failed", "skipped":
-		default:
-			continue
-		}
-		id := index.resolve(event)
-		if id == "" {
-			continue
-		}
-		writer(vscode.RunEvent{
-			Event:      event.Event,
-			TestID:     id,
-			DurationMS: event.DurationMS,
-			Message:    event.Message,
-		})
+		emitMochaJSONLLine(scanner.Bytes(), index, writer)
 	}
+}
+
+// emitMochaJSONLLine turns one reporter row into at most one run event. It is
+// the whole of the per-row discipline, so the streaming tail and the batch
+// replay above cannot drift apart: a malformed row, an envelope row, or a row
+// whose title resolves to no discovered id is skipped, exactly as it was when
+// the finished file was the only input.
+//
+// DHF-REQ: keel/requirement-94, keel/requirement-131
+func emitMochaJSONLLine(line []byte, index vsixTestIndex, writer vscode.RunEventWriter) {
+	var event mochaJSONLEvent
+	if err := json.Unmarshal(line, &event); err != nil {
+		return
+	}
+	switch event.Event {
+	case "test_started", "passed", "failed", "skipped":
+	default:
+		return
+	}
+	id := index.resolve(event)
+	if id == "" {
+		return
+	}
+	writer(vscode.RunEvent{
+		Event:      event.Event,
+		TestID:     id,
+		DurationMS: event.DurationMS,
+		Message:    event.Message,
+	})
 }
 
 // DHF-REQ: keel/requirement-91

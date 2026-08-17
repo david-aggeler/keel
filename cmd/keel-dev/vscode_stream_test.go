@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	procexec "github.com/david-aggeler/keel/exec"
 	"github.com/david-aggeler/keel/vscode"
@@ -183,6 +185,157 @@ func TestLineFuncWriterJoinsSplitLinesInOrder(t *testing.T) {
 	w.Flush()
 	if strings.Join(got, "|") != "first|second|third|trailing" {
 		t.Fatalf("lines after Flush = %v, want the trailing unterminated line appended", got)
+	}
+}
+
+// vsixStreamFixtureRoot lays out the smallest vsix tree the Mocha run path
+// resolves: two statically discoverable tests in one file, so a JSONL row can
+// resolve to a discovered id.
+func vsixStreamFixtureRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "vsix", "src", "test"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, filepath.Join("vsix", "src", "test", "sample.test.ts"),
+		"suite('sample', () => {\n  test('alpha', () => {});\n  test('beta', () => {});\n});\n")
+	return root
+}
+
+// A vsix selection whose Mocha suite contains two tests delivers the terminal
+// for the first-completing test to the run-event writer while the `pnpm` child
+// is still running. The stub `pnpm` appends the first row, then blocks on a
+// handshake the writer creates on its first event, so a consumer that reads the
+// results file only after the child exits deadlocks the stub into its bounded
+// expiry instead of passing.
+//
+// DHF-TEST: keel/requirement-131 (keel/ac-511)
+func TestVSIXFileSelectionStreamsFirstTerminalBeforeChildExits(t *testing.T) {
+	root := vsixStreamFixtureRoot(t)
+	resultsPath := filepath.Join(root, "vsix", filepath.FromSlash(vsixMochaResultsRel))
+
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	handshake := filepath.Join(bin, "handshake")
+	expiry := filepath.Join(bin, "expired")
+	stub(t, bin, callsFile, "pnpm", `
+mkdir -p "`+filepath.Dir(resultsPath)+`"
+printf '{"event":"passed","title":"alpha","file":"out/test/sample.test.js","duration_ms":11}\n' >> "`+resultsPath+`"
+i=0
+while [ $i -lt 100 ]; do
+  if [ -f "`+handshake+`" ]; then break; fi
+  sleep 0.05
+  i=$((i+1))
+done
+if [ ! -f "`+handshake+`" ]; then : > "`+expiry+`"; fi
+printf '{"event":"passed","title":"beta","file":"out/test/sample.test.js","duration_ms":22}\n' >> "`+resultsPath+`"
+exit 0`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var got []vscode.RunEvent
+	writer := func(event vscode.RunEvent) {
+		got = append(got, event)
+		if len(got) == 1 {
+			if err := os.WriteFile(handshake, []byte("1"), 0o644); err != nil {
+				t.Errorf("write handshake: %v", err)
+			}
+		}
+	}
+
+	files := []string{"src/test/sample.test.ts"}
+	if err := runVSIXFileSelection(context.Background(), discardLogger(), root, files, procexec.DefaultMaxOutputBytes, writer); err != nil {
+		t.Fatalf("vsix file selection: %v\ncalls:\n%s", err, calls(t, callsFile))
+	}
+	if _, err := os.Stat(expiry); err == nil {
+		t.Fatalf("stub `pnpm` timed out waiting for the first run event: the terminal for the first-completing test did not reach the writer before the child exited\nevents: %+v", got)
+	}
+	// The producer-supplied duration identifies each row without the test
+	// knowing how ids are built; the drain is what makes the second row
+	// observable at all.
+	if len(got) != 2 || got[0].DurationMS != 11 || got[1].DurationMS != 22 {
+		t.Fatalf("vsix run events = %+v, want the alpha terminal then the beta terminal", got)
+	}
+	for i, event := range got {
+		if event.Event != "passed" || event.TestID == "" {
+			t.Fatalf("vsix run event %d = %+v, want a passed terminal carrying a resolved test id", i, event)
+		}
+	}
+	if got[0].TestID == got[1].TestID {
+		t.Fatalf("vsix run events resolved to the same id %q, want one id per test", got[0].TestID)
+	}
+}
+
+// The tail emits a row only once it is complete and never emits one twice, and
+// the drain delivers what the reporter appended after the last tick — the two
+// properties the change request names as the load-bearing risk of tailing a
+// file the producer is still appending to.
+//
+// Written after the implementation, unlike the keel/ac-511 test above: it pins
+// the read discipline the criterion exercises only incidentally.
+//
+// DHF-TEST: keel/requirement-131 (keel/ac-511)
+func TestVSIXMochaResultsTailEmitsCompleteRowsOnceAndDrains(t *testing.T) {
+	root := vsixStreamFixtureRoot(t)
+	resultsPath := filepath.Join(root, "vsix", filepath.FromSlash(vsixMochaResultsRel))
+	if err := os.MkdirAll(filepath.Dir(resultsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	appendRaw := func(text string) {
+		file, err := os.OpenFile(resultsPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.WriteString(text); err != nil {
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var mu sync.Mutex
+	var got []vscode.RunEvent
+	writer := func(event vscode.RunEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		got = append(got, event)
+	}
+	snapshot := func() []vscode.RunEvent {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]vscode.RunEvent(nil), got...)
+	}
+
+	// A complete row, then a row cut mid-way — the shape a read lands on when
+	// the reporter is part-way through appending.
+	appendRaw(`{"event":"passed","title":"alpha","file":"out/test/sample.test.js","duration_ms":11}` + "\n")
+	appendRaw(`{"event":"passed","title":"beta","fi`)
+
+	tail := startVSIXMochaResultsTail(resultsPath, time.Millisecond, buildVSIXTestIndex(root), writer)
+
+	// Give the tail many ticks over the truncated row.
+	deadline := time.Now().Add(2 * time.Second)
+	for len(snapshot()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if events := snapshot(); len(events) != 1 || events[0].DurationMS != 11 {
+		t.Fatalf("events while the second row was half-written = %+v, want only the first complete row", events)
+	}
+
+	// Complete the partial row and append one more, then stop without giving
+	// the follow loop a chance to see either: only the drain can deliver them.
+	appendRaw(`le":"out/test/sample.test.js","duration_ms":22}` + "\n")
+	tail.stopAndDrain(discardLogger())
+
+	events := snapshot()
+	if len(events) != 2 {
+		t.Fatalf("events after the drain = %+v, want exactly the two complete rows, each once", events)
+	}
+	if events[0].DurationMS != 11 || events[1].DurationMS != 22 {
+		t.Fatalf("events after the drain = %+v, want the alpha row then the completed beta row", events)
+	}
+	if events[0].TestID == "" || events[1].TestID == "" || events[0].TestID == events[1].TestID {
+		t.Fatalf("events after the drain = %+v, want one resolved id per test", events)
 	}
 }
 
