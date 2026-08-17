@@ -873,7 +873,7 @@ func isExclusiveUnknownRunID(id string) bool {
 	return strings.Contains(id, "::desired-state::group::") && strings.HasSuffix(id, "::unknown")
 }
 
-// DHF-REQ: keel/requirement-129
+// DHF-REQ: keel/requirement-129, keel/requirement-75
 func deriveDesiredStateRow(ctx context.Context, root string, row DesiredStateRow) (vscode.DesiredState, error) {
 	if row.Probe == nil {
 		return vscode.DesiredState{}, fmt.Errorf("keel/testbridge: desired-state row %q has no probe", row.Resource)
@@ -913,7 +913,11 @@ func deriveDesiredStateRow(ctx context.Context, root string, row DesiredStateRow
 		Detail:   row.Detail,
 		Reusable: row.Reusable,
 		Owned:    row.Owned,
-		Active:   row.Active,
+		// The probe is the single source for all four rendered facts. A row is
+		// active exactly when its probe reports the resource satisfied; the
+		// mutually-exclusive resolution keel/requirement-88 owns composes on top
+		// of this derived base rather than on a consumer-declared value.
+		Active: result.Satisfied,
 	}, nil
 }
 

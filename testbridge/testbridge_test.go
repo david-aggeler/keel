@@ -1164,6 +1164,68 @@ func TestDiscoverAnonymousDesiredStateRowIDIgnoresProbeDerivedAction(t *testing.
 	}
 }
 
+// A group that is not mutually exclusive has no override loop, so the active
+// fact reaches the wire straight out of deriveDesiredStateRow. It must follow
+// the row's probe there, exactly as current, status and action already do.
+//
+// DHF-TEST: keel/requirement-75, keel/ac-503
+func TestNonExclusiveDesiredStateRowActiveFollowsItsProbe(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{desiredStateGroupItem()}
+	fake.desiredGroups = []testbridge.DesiredStateGroup{{
+		Label:             "Test Preconditions",
+		Order:             10,
+		MutuallyExclusive: false,
+		Rows: []testbridge.DesiredStateRow{
+			// The declared row that the probe reports satisfied.
+			probedRow("demo::desired-state::ready", "ready-resource", "service", "up", "up", true, "ready is up", false, false),
+			// The declared row that the probe reports unsatisfied.
+			probedRow("demo::desired-state::missing", "missing-resource", "service", "up", "down", false, "missing is down", false, true),
+		},
+	}}
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol})
+
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "discover", "--format", "json"}); err != nil {
+		t.Fatalf("discover dispatch: %v", err)
+	}
+	var discovery vscode.DiscoveryDocument
+	decodeJSON(t, &protocol, &discovery)
+	for _, want := range []struct {
+		id     string
+		active bool
+	}{
+		{id: "demo::desired-state::ready", active: true},
+		{id: "demo::desired-state::missing", active: false},
+	} {
+		item, ok := testItemByID(discovery.Items, want.id)
+		if !ok {
+			t.Fatalf("discovery missing desired-state row %q: %+v", want.id, discovery.Items)
+		}
+		if item.DesiredStateRow == nil {
+			t.Fatalf("discovery row %q carries no desired-state facts: %+v", want.id, item)
+		}
+		if item.DesiredStateRow.Active != want.active {
+			t.Fatalf("discovery row %q active = %v, want %v (probe-derived)", want.id, item.DesiredStateRow.Active, want.active)
+		}
+	}
+
+	protocol.Reset()
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "desired-state", "--format", "json"}); err != nil {
+		t.Fatalf("desired-state dispatch: %v", err)
+	}
+	var desired vscode.DesiredStateDocument
+	decodeJSON(t, &protocol, &desired)
+	group := desiredStateGroupByLabel(t, desired.Groups, "Test Preconditions")
+	if row := desiredStateRowByResource(t, group.Rows, "ready-resource"); !row.Active {
+		t.Fatalf("satisfied non-exclusive row inactive: %+v", row)
+	}
+	if row := desiredStateRowByResource(t, group.Rows, "missing-resource"); row.Active {
+		t.Fatalf("unsatisfied non-exclusive row active: %+v", row)
+	}
+}
+
 // DHF-TEST: keel/requirement-83
 func TestDiscoverServesRunnableNonExclusiveDesiredStateGroups(t *testing.T) {
 	root := t.TempDir()
