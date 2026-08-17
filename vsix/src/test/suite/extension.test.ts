@@ -30,6 +30,7 @@ import {
   resultItemsForRunEvent,
   runEventApplicationSnapshot,
   runProfileHandlerForTest,
+  runStartInvalidationRunName,
   setWatcherDebounceMs,
   setExternalRunStaleMsForTest,
   setCurrentTreeForTest,
@@ -2902,6 +2903,74 @@ process.exit(2);
       workspace.dispose();
     }
   });
+
+  // DHF-TEST: keel/requirement-132 (keel/ac-514, keel/ac-515)
+  test('the run-start invalidation reaches only the selection own group and submits no peer id', async function () {
+    this.timeout(20_000);
+    const workspace = createExclusiveGroupWorkspace('keel-run-start-blast-radius-', 'activate');
+    try {
+      const controller = await activateExclusiveGroupWorkspace();
+      const timeline: RunTimelineEntry[] = [];
+      const restore = recordRunTimeline(controller, timeline);
+      try {
+        await runProfileHandlerForTest('demo::desired-state::dataset::full');
+      } finally {
+        restore();
+      }
+
+      // ac-514: isolate the invalidation from every other run of the session.
+      // It restamps the rows of the selected member's group and nothing else —
+      // not the second exclusive group, not the lane. This is the standing
+      // guard against an implementation reaching for testing.clearTestResults,
+      // which reaches true Unset but takes the whole Test Explorer with it.
+      const invalidation = timeline.filter((entry) => entry.kind !== 'spawn' && entry.run === runStartInvalidationRunName);
+      assert.deepEqual(
+        stampedIds(invalidation, 'skipped').sort(),
+        ['demo::desired-state::dataset::small', 'demo::desired-state::dataset::unknown'],
+        `the invalidation restamps only the selected member's group; timeline=${JSON.stringify(timeline)}`
+      );
+      assert.deepEqual(
+        stampedIds(invalidation, 'passed'),
+        [],
+        'the invalidation renders no row satisfied'
+      );
+
+      // The lane carries no desired-state truth, so the run touches it at no
+      // point — neither the invalidation nor the post-run replay.
+      assert.deepEqual(
+        timeline.filter((entry) => entry.kind !== 'spawn' && entry.id === 'keel::lane::fast'),
+        [],
+        `lane results are never restamped by a desired-state run; timeline=${JSON.stringify(timeline)}`
+      );
+      // The second exclusive group is reached only by the bridge's own replay,
+      // never by the invalidation, and its served truth does not move.
+      const runtimeStamps = timeline.filter((entry) => entry.kind !== 'spawn' && entry.id.startsWith('demo::desired-state::runtime'));
+      assert.ok(
+        runtimeStamps.every((entry) => entry.kind !== 'spawn' && entry.run !== runStartInvalidationRunName),
+        `the second group is never restamped by the invalidation; timeline=${JSON.stringify(timeline)}`
+      );
+      assert.deepEqual(
+        stampedIds(runtimeStamps, 'passed').filter((id, index, ids) => ids.indexOf(id) === index),
+        ['demo::desired-state::runtime::node'],
+        'the second group keeps the member it had before the run'
+      );
+
+      // ac-515: the exception requirement-132 carves out of ac-348 is on the
+      // rendering axis only. Widening it to the execution axis would submit
+      // ids the bridge did not serve as runnable, which the bridge rejects.
+      const spawns = timeline.flatMap((entry) => entry.kind === 'spawn' ? [entry.ids] : []);
+      assert.deepEqual(spawns, [['demo::desired-state::dataset::full']], 'exactly the selected runnable row is submitted');
+      for (const ids of spawns) {
+        assert.deepEqual(
+          ids.filter((id) => id.startsWith('testbridge::desired-state')),
+          [],
+          'no informational row id in the VSIX-private namespace is submitted'
+        );
+      }
+    } finally {
+      workspace.dispose();
+    }
+  });
 });
 
 // createExclusiveGroupWorkspace stands up a workspace whose adapter serves two
@@ -3058,7 +3127,7 @@ if (args.slice(0, 2).join(' ') === 'test-bridge run') {
 // makes keel/ac-512 falsifiable: a stamp that lands after the bridge has
 // already reconciled proves nothing about the interval the requirement covers.
 type RunTimelineEntry =
-  | { kind: 'passed' | 'skipped'; id: string }
+  | { kind: 'passed' | 'skipped'; id: string; run: string }
   | { kind: 'spawn'; ids: string[] };
 
 // activateExclusiveGroupWorkspace activates the extension against the current
@@ -3108,11 +3177,11 @@ function recordRunTimeline(controller: vscode.TestController, timeline: RunTimel
     const originalPassed = run.passed.bind(run);
     const originalSkipped = run.skipped.bind(run);
     run.passed = (item: vscode.TestItem, duration?: number) => {
-      timeline.push({ kind: 'passed', id: item.id });
+      timeline.push({ kind: 'passed', id: item.id, run: name ?? '' });
       originalPassed(item, duration);
     };
     run.skipped = (item: vscode.TestItem) => {
-      timeline.push({ kind: 'skipped', id: item.id });
+      timeline.push({ kind: 'skipped', id: item.id, run: name ?? '' });
       originalSkipped(item);
     };
     return run;
