@@ -46,12 +46,39 @@ interface ExternalRunStreamState {
   clearedResultIds: Set<string>;
   lineCount: number;
   finished: boolean;
+  // staleClosed marks a stream the mirror closed on its own timeout rather than
+  // on a terminal the producer wrote. That close is a guess about a stream still
+  // being written, so it is the one closed state a later line may reopen.
+  staleClosed: boolean;
   importedCompleted: boolean;
   staleTimer?: NodeJS.Timeout;
 }
 
-let externalRunStaleMs = 60_000;
+// The stale deadline the extension ships with. The declared setting
+// `keel.tests.externalRunStaleMs` carries the same default in package.json; the
+// two are asserted against each other by the manifest test rather than derived
+// from one another, so a drift between them is a test failure and not a silent
+// disagreement.
+const externalRunStaleDefaultMs = 60_000;
+let externalRunStaleMsOverride: number | undefined;
 const externalRunImportRecencyMs = 60_000;
+
+// externalRunStaleMs resolves the deadline at the moment a timer is armed, so a
+// workspace that changes the setting mid-session takes effect on the next armed
+// stream without a reload. A non-positive or unreadable value falls back to the
+// default rather than arming a timer that fires immediately.
+//
+// DHF-REQ: keel/requirement-36
+export function externalRunStaleMs(): number {
+  if (externalRunStaleMsOverride !== undefined) {
+    return externalRunStaleMsOverride;
+  }
+  const configured = vscode.workspace.getConfiguration('keel.tests').get<number>('externalRunStaleMs');
+  if (typeof configured === 'number' && Number.isFinite(configured) && configured > 0) {
+    return configured;
+  }
+  return externalRunStaleDefaultMs;
+}
 
 // The run-event source value a bridge run carries when the editor initiated it.
 // The mirror mirrors runs it did not start, so a stream declaring this surface
@@ -63,9 +90,13 @@ const externalRunImportRecencyMs = 60_000;
 // DHF-REQ: keel/requirement-36
 const editorRunSource = 'editor';
 
+// setExternalRunStaleMsForTest pins the deadline for a test that must not depend
+// on workspace configuration. Passing undefined clears the pin and hands the
+// resolution back to the setting.
+//
 // DHF-REQ: keel/requirement-36
-export function setExternalRunStaleMsForTest(ms: number): void {
-  externalRunStaleMs = ms;
+export function setExternalRunStaleMsForTest(ms: number | undefined): void {
+  externalRunStaleMsOverride = ms;
 }
 
 export class ExternalRunMirror implements vscode.Disposable {
@@ -197,8 +228,15 @@ export class ExternalRunMirror implements vscode.Disposable {
     const lines = body.split(/\r?\n/).filter((line) => line.trim().length > 0);
     let state = this.streams.get(file);
     if (state?.finished) {
-      state.lineCount = Math.max(state.lineCount, lines.length);
-      return;
+      // A stream the producer itself terminated stays closed: its outcome is
+      // already the producer's. A stream the mirror closed on its own timeout is
+      // reopened as soon as the producer writes again, because the timeout was a
+      // guess and the new line is evidence against it (keel/ac-518).
+      if (!state.staleClosed || lines.length <= state.lineCount) {
+        state.lineCount = Math.max(state.lineCount, lines.length);
+        return;
+      }
+      this.reopenStaleClosedStream(state);
     }
     if (state && lines.length <= state.lineCount) {
       return;
@@ -284,8 +322,35 @@ export class ExternalRunMirror implements vscode.Disposable {
       clearedResultIds: new Set<string>(),
       lineCount: 0,
       finished: false,
+      staleClosed: false,
       importedCompleted
     };
+  }
+
+  // reopenStaleClosedStream puts a stale-closed stream back into the mirroring
+  // state so the producer's own events can be applied. The stale close ended the
+  // previous vscode.TestRun, and an ended run accepts no further results, so the
+  // reconciliation needs a fresh run: the later run is the one the Test Explorer
+  // shows, which is exactly the intent — the producer's outcome supersedes the
+  // synthesized one.
+  //
+  // DHF-REQ: keel/requirement-36
+  private reopenStaleClosedStream(state: ExternalRunStreamState): void {
+    const [selectedProtocolId] = Array.from(state.selectedProtocolIds);
+    const selectedItems = selectedProtocolId
+      ? resultItemsForRunEvent(testItemsForRunEvent(selectedProtocolId), selectedProtocolId)
+      : [];
+    const request = selectedItems.length > 0 ? new vscode.TestRunRequest(selectedItems) : new vscode.TestRunRequest();
+    state.run = this.controller.createTestRun(request, `External ${state.runId}`);
+    enqueueExecutionScope(state.run, selectedItems);
+    state.selectedItemIds = new Set(selectedItems.map((item) => item.id));
+    state.resultItemIds = new Set<string>();
+    state.finished = false;
+    state.staleClosed = false;
+    appendRunOutput(
+      state.run,
+      `External run ${state.runId} resumed: the run producer wrote again after the stale close, so its own events decide the outcome.`
+    );
   }
 
   // DHF-REQ: keel/requirement-36
@@ -297,16 +362,25 @@ export class ExternalRunMirror implements vscode.Disposable {
       clearTimeout(state.staleTimer);
     }
     const expectedLineCount = state.lineCount;
+    const staleMs = externalRunStaleMs();
     state.staleTimer = setTimeout(() => {
       state.staleTimer = undefined;
       if (state.finished || state.lineCount !== expectedLineCount) {
         return;
       }
-      this.closeStaleStream(state);
-    }, externalRunStaleMs);
+      this.closeStaleStream(state, staleMs);
+    }, staleMs);
   }
 
-  private closeStaleStream(state: ExternalRunStreamState): void {
+  // closeStaleStream reports what the mirror actually observed: the producer
+  // stopped writing. It does not claim the stream was truncated — every line the
+  // producer wrote is present and parses, and the producer may still be running,
+  // which is why a later terminal event reopens this stream (keel/ac-519).
+  //
+  // The synthesized terminal is deliberately NOT recorded in
+  // latestTerminalByProtocolId: it is the consumer's guess, and it must never
+  // out-rank the producer's own terminal in the recency guard.
+  private closeStaleStream(state: ExternalRunStreamState, staleMs: number): void {
     if (state.finished) {
       return;
     }
@@ -320,7 +394,7 @@ export class ExternalRunMirror implements vscode.Disposable {
         time,
         run_id: state.runId,
         test_id: testId,
-        message: `External run stream truncated at line ${state.lineCount}; no terminal event arrived before the ${externalRunStaleMs}ms stale timeout.`
+        message: `The run producer emitted nothing for ${staleMs}ms and no terminal event arrived; the run may still be executing. ${state.lineCount} stream line(s) received so far.`
       } satisfies RunEvent), state.selectedItemIds, state.resultItemIds);
       state.protocolResultIds.add(testId);
     }
@@ -332,6 +406,7 @@ export class ExternalRunMirror implements vscode.Disposable {
       exit_code: 1
     } satisfies RunEvent), state.selectedItemIds, state.resultItemIds);
     state.finished = true;
+    state.staleClosed = true;
     state.run.end();
   }
 }
