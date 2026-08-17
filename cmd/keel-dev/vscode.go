@@ -1960,8 +1960,8 @@ func vsixSelectionFiles(root string, selection vscode.VSIXSelection) ([]string, 
 }
 
 // emitLaneGoPackageEvents replays a lane's `go test -json` stream as run
-// events. Both granularities settle under their own id: a package-level
-// result keys go::pkg::<rel>, and a test-bearing one keys
+// events. A package-level result and a per-test result each settle under
+// their own id: the former keys go::pkg::<rel>, the latter keys
 // go::test::<pkg>::<name> through vscode.GoRunEventTestID — the same id shape
 // the direct selection path emits, so the two paths cannot drift.
 //
