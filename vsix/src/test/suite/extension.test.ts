@@ -2849,15 +2849,23 @@ process.exit(2);
         mutable.stderr = new PassThrough();
         mutable.pid = 0;
         mutable.kill = () => true;
-        setTimeout(() => child.emit('error', new Error('devtool child failed')), 10);
+        // A real spawn failure emits BOTH, which is what makes the post-run
+        // refresh dedupe observable: without it the devtool is re-queried for
+        // a truth it has already read.
+        setTimeout(() => {
+          child.emit('error', new Error('devtool child failed'));
+          child.emit('close', 1);
+        }, 10);
         return child;
       }) as typeof runTests;
 
       const timeline: RunTimelineEntry[] = [];
       const restore = recordRunTimeline(controller, timeline);
+      const desiredStateReads = countDesiredStateReads();
       try {
         await runProfileHandlerForTest('demo::desired-state::dataset::full');
       } finally {
+        desiredStateReads.restore();
         restore();
       }
 
@@ -2866,6 +2874,9 @@ process.exit(2);
         `the transitional stamp fired before the child errored; timeline=${JSON.stringify(timeline)}`
       );
       assertGroupSettledOnActiveMember(timeline, 'demo::desired-state::dataset::small');
+      // One read at run start, one to settle the group. A child that emits
+      // both `error` and `close` must not re-query the devtool.
+      assert.equal(desiredStateReads.count(), 2, 'the post-run refresh runs exactly once');
     } finally {
       adapterModule.runTests = realRunTests;
       workspace.dispose();
@@ -3160,6 +3171,24 @@ function assertGroupSettledOnActiveMember(timeline: readonly RunTimelineEntry[],
   );
   const settled = datasetGroupRowIds.filter((id) => finalStateById.get(id) === 'passed');
   assert.deepEqual(settled, [activeId], `exactly one row of the group renders passed; timeline=${JSON.stringify(timeline)}`);
+}
+
+// countDesiredStateReads counts devtool desired-state queries, so a settle path
+// that fires twice is visible as a duplicate read rather than staying silent.
+function countDesiredStateReads(): { count(): number; restore(): void } {
+  const adapterModule = bridgeAdapterModule as unknown as { readDesiredState: typeof readDesiredState };
+  const original = adapterModule.readDesiredState;
+  let reads = 0;
+  adapterModule.readDesiredState = ((workspaceRoot: string, ids: string[]) => {
+    reads += 1;
+    return original(workspaceRoot, ids);
+  }) as typeof readDesiredState;
+  return {
+    count: () => reads,
+    restore: () => {
+      adapterModule.readDesiredState = original;
+    }
+  };
 }
 
 // stampedIds narrows the timeline to the ids stamped with one state, so an
