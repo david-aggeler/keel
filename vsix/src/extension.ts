@@ -7,7 +7,7 @@ import * as vscode from 'vscode';
 import { adapterConfig, configRelativePath, currentConfigVersion, defaultAdapterConfig, defaultConfigTemplate, discoverTests, readDesiredState, readAdapterConfig, runTests, upgradeConfig } from './bridgeAdapter';
 import { ExternalRunMirror, ExternalRunStateSnapshot, setExternalRunStaleMsForTest } from './externalRunMirror';
 import { publishDiscovery, PublishedTree, replacePublishedTestItem } from './tree';
-import { DesiredState, DesiredStateGroup, ReconcileResult, RunEvent, DesiredStateDocument } from './protocol';
+import { DesiredState, DesiredStateGroup, DiscoveryItem, ReconcileResult, RunEvent, DesiredStateDocument } from './protocol';
 
 let tree: PublishedTree | undefined;
 let output: vscode.OutputChannel;
@@ -347,6 +347,64 @@ function executionScopeLeafItems(selected: readonly vscode.TestItem[]): vscode.T
     visit(item);
   }
   return Array.from(leaves.values());
+}
+
+// exclusiveGroupPeerItems resolves the rows of every mutually-exclusive
+// desired-state group that owns a selected item, minus the selection's own
+// subtree. It reads the published discovery tree ONLY: the group is recognized
+// by the exclusivity fact its group item carries, and the rows are that item's
+// children. No bridge run event is consulted,
+// which is precisely what makes the peer set knowable BEFORE the devtool child
+// is spawned — the end-of-run `cleared` path cannot be moved earlier, because
+// those ids arrive on the child's stdout and by construction do not exist yet
+// (keel/ac-517).
+//
+// DHF-REQ: keel/requirement-132
+export function exclusiveGroupPeerItems(
+  publishedTree: PublishedTree | undefined,
+  selected: readonly vscode.TestItem[]
+): vscode.TestItem[] {
+  if (!publishedTree) {
+    return [];
+  }
+  const selectedProtocolIds = new Set<string>();
+  const collectSubtree = (item: vscode.TestItem): void => {
+    selectedProtocolIds.add(publishedTree.protocolIdByItemId.get(item.id) ?? item.id);
+    item.children.forEach((child) => collectSubtree(child));
+  };
+  for (const item of selected) {
+    collectSubtree(item);
+  }
+
+  const exclusiveGroupIds = new Set<string>();
+  for (const protocolID of selectedProtocolIds) {
+    const visited = new Set<string>();
+    let cursor: string | undefined = protocolID;
+    while (cursor && !visited.has(cursor)) {
+      visited.add(cursor);
+      const discoveryItem: DiscoveryItem | undefined = publishedTree.discoveryItemsById.get(cursor);
+      if (discoveryItem?.desired_state_group?.mutually_exclusive === true) {
+        exclusiveGroupIds.add(cursor);
+        break;
+      }
+      cursor = discoveryItem?.parent_id;
+    }
+  }
+  if (exclusiveGroupIds.size === 0) {
+    return [];
+  }
+
+  const peers = new Map<string, vscode.TestItem>();
+  for (const [protocolID, discoveryItem] of publishedTree.discoveryItemsById) {
+    if (!discoveryItem.parent_id || !exclusiveGroupIds.has(discoveryItem.parent_id) || selectedProtocolIds.has(protocolID)) {
+      continue;
+    }
+    const item = publishedTree.itemsById.get(protocolID);
+    if (item) {
+      peers.set(protocolID, item);
+    }
+  }
+  return Array.from(peers.values());
 }
 
 function isNoResultEnqueueItem(item: vscode.TestItem): boolean {

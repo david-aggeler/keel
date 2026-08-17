@@ -16,6 +16,7 @@ import {
   currentAdapterConfig,
   deferredWatcherEventCountForTest,
   desiredStateRowProtocolID,
+  exclusiveGroupPeerItems,
   ExternalRunMirror,
   finishActiveRun,
   isRunActive,
@@ -42,7 +43,7 @@ import {
 import * as bridgeAdapterModule from '../../bridgeAdapter';
 import { adapterConfig, configRelativePath, currentConfigVersion, defaultConfigTemplate, discoveryOutputMaxBufferBytes, discoverTests, readDesiredState, readAdapterConfig, runTests, upgradeConfig } from '../../bridgeAdapter';
 import { publishDiscovery, replacePublishedTestItem } from '../../tree';
-import { DesiredStateGroup, DiscoveryItem, RunEvent } from '../../protocol';
+import { DesiredStateGroup, DiscoveryDocument, DiscoveryItem, RunEvent } from '../../protocol';
 
 suite('Keel Test Bridge config contract', () => {
   // DHF-TEST: keel/requirement-40
@@ -818,13 +819,25 @@ process.exit(2);
   // decisions verbatim and must not branch on the mutually_exclusive wire
   // flag. Allowed occurrences in production sources: two protocol.ts type
   // declarations — the desired-state group and the typed discovery-item facts
-  // that replaced the k=v limitations encoding (requirement-127) — and the
-  // display passthrough in formatDesiredStateGroup.
+  // that replaced the k=v limitations encoding (requirement-127) — and, in
+  // extension.ts, the display passthrough in formatDesiredStateGroup plus the
+  // single membership read in exclusiveGroupPeerItems.
   //
-  // DHF-TEST: keel/requirement-97, keel/requirement-127
+  // The second extension.ts occurrence is the bounded narrowing
+  // keel/requirement-132 makes to design_decision-5, and it is narrow on the
+  // axis the decision protects. design_decision-5 forbids the VSIX DECIDING a
+  // rendered state from the flag — that is the bridge's job, served as
+  // reconcile_results and replayed verbatim. exclusiveGroupPeerItems decides no
+  // state: it answers only "which rows form this group", for an interval the
+  // bridge cannot serve because the run has not happened yet (keel/ac-517). The
+  // transitional value it feeds is a fixed skipped, not a computed one, and the
+  // bridge still overwrites every row at run end (keel/ac-513). Raising this
+  // count again for a rendering branch would breach the decision.
+  //
+  // DHF-TEST: keel/requirement-97, keel/requirement-127, keel/requirement-132 (keel/ac-517)
   test('production sources do not branch on mutually_exclusive', () => {
     const srcDir = path.resolve(__dirname, '../../../src');
-    const allowed = new Map([['protocol.ts', 2], ['extension.ts', 1]]);
+    const allowed = new Map([['protocol.ts', 2], ['extension.ts', 2]]);
     const offenders: string[] = [];
     for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.endsWith('.ts')) {
@@ -2615,7 +2628,79 @@ process.exit(2);
       controller.dispose();
     }
   });
+
+  // DHF-TEST: keel/requirement-132 (keel/ac-517)
+  test('exclusive-group peers are resolved from the published discovery tree alone', () => {
+    const controller = vscode.tests.createTestController(`keelExclusivePeers-${Date.now()}`, 'Keel Exclusive Peers');
+    const tree = publishDiscovery(controller, process.cwd(), exclusiveGroupsDiscoveryFixture());
+    try {
+      const full = tree.itemsById.get('demo::desired-state::dataset::full');
+      const small = tree.itemsById.get('demo::desired-state::dataset::small');
+      const warm = tree.itemsById.get('demo::desired-state::caches::warm');
+      const lane = tree.itemsById.get('keel::lane::fast');
+      assert.ok(full && small && warm && lane, 'the fixture publishes every row under test');
+
+      // The launched row's own group yields every other row, the synthesized
+      // Unknown State row included, and reaches no other group.
+      assert.deepEqual(
+        exclusiveGroupPeerItems(tree, [full]).map((item) => item.id).sort(),
+        ['demo::desired-state::dataset::small', 'demo::desired-state::dataset::unknown']
+      );
+
+      // Two members of the same group leave only the rows outside the selection.
+      assert.deepEqual(
+        exclusiveGroupPeerItems(tree, [full, small]).map((item) => item.id).sort(),
+        ['demo::desired-state::dataset::unknown']
+      );
+
+      // Selecting the group node covers every row, so nothing is a peer.
+      const group = tree.itemsById.get('demo::desired-state::dataset');
+      assert.ok(group, 'the fixture publishes the group node');
+      assert.deepEqual(exclusiveGroupPeerItems(tree, [group]), []);
+
+      // A non-exclusive group and an ordinary lane leaf own no peers at all.
+      assert.deepEqual(exclusiveGroupPeerItems(tree, [warm]), []);
+      assert.deepEqual(exclusiveGroupPeerItems(tree, [lane]), []);
+
+      // With no published tree there is nothing to derive from.
+      assert.deepEqual(exclusiveGroupPeerItems(undefined, [full]), []);
+    } finally {
+      controller.dispose();
+    }
+  });
 });
+
+// exclusiveGroupsDiscoveryFixture publishes two mutually-exclusive
+// desired-state groups, one non-exclusive group, and one ordinary lane leaf,
+// so a peer-set assertion can prove both what is reached and what is not.
+function exclusiveGroupsDiscoveryFixture(): DiscoveryDocument {
+  const row = (id: string, parentId: string, label: string, active: boolean): DiscoveryItem => ({
+    id,
+    parent_id: parentId,
+    label,
+    kind: 'group',
+    runnable: true,
+    profiles: ['run'],
+    desired_state_row: { current: label, action: 'reuse', active }
+  });
+  return {
+    version: 1,
+    workspace: process.cwd(),
+    generated_at: new Date().toISOString(),
+    items: [
+      { id: 'demo::desired-state::dataset', label: 'Data Set', kind: 'group', runnable: false, profiles: [], desired_state_group: { mutually_exclusive: true } },
+      row('demo::desired-state::dataset::small', 'demo::desired-state::dataset', 'small', true),
+      row('demo::desired-state::dataset::full', 'demo::desired-state::dataset', 'full', false),
+      row('demo::desired-state::dataset::unknown', 'demo::desired-state::dataset', 'Unknown State', false),
+      { id: 'demo::desired-state::runtime', label: 'Runtime', kind: 'group', runnable: false, profiles: [], desired_state_group: { mutually_exclusive: true } },
+      row('demo::desired-state::runtime::node', 'demo::desired-state::runtime', 'node', true),
+      row('demo::desired-state::runtime::unknown', 'demo::desired-state::runtime', 'Unknown State', false),
+      { id: 'demo::desired-state::caches', label: 'Caches', kind: 'group', runnable: true, profiles: ['run'], desired_state_group: { mutually_exclusive: false } },
+      row('demo::desired-state::caches::warm', 'demo::desired-state::caches', 'warm', false),
+      { id: 'keel::lane::fast', label: 'fast', kind: 'lane', runnable: true, profiles: ['run'] }
+    ]
+  };
+}
 
 function runEvent(partial: Partial<RunEvent>): RunEvent {
   return {
