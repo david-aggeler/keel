@@ -1311,6 +1311,107 @@ func TestVSCodeDiscoveryEmitsLaneCoversAndVSIXFileItems(t *testing.T) {
 }
 
 // DHF-TEST: keel/requirement-54
+func TestVSCodeCoversAliasesCarryCanonicalLocation(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+	writeFile(t, root, "go.sum", "")
+	for _, dir := range []string{"log", ".vscode", filepath.Join("vsix", "src", "test", "suite")} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(t, root, filepath.Join("log", "logging_test.go"), "package log\n\nimport \"testing\"\n\nfunc TestLog(t *testing.T) {}\n")
+	writeFile(t, root, filepath.Join("vsix", "src", "test", "suite", "extension.test.ts"), "suite('x', () => {\n  test('alpha case', () => {});\n});\n")
+	writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{
+  "version": 1,
+  "lanes": [
+    {"id":"go-log","label":"log","order":"b.40","members":[{"go":"./log/..."}]},
+    {"id":"ui","label":"ui","order":"b.41","members":[{"vsix":"src/test/suite/extension.test.ts"}]},
+    {"id":"roots","label":"roots","order":"b.42","members":[{"root":"vsix"}]},
+    {"id":"combo","label":"combo","order":"b.43","members":[{"lane":"go-log"}]}
+  ]
+}`+"\n")
+
+	built, buildErr := buildVSCodeDiscovery(root)
+	if buildErr != nil {
+		t.Fatalf("buildVSCodeDiscovery: %v", buildErr)
+	}
+	var discover bytes.Buffer
+	if err := testbridge.EncodeDocument(&discover, built); err != nil {
+		t.Fatalf("encode protocol document: %v", err)
+	}
+	var doc vscode.DiscoveryDocument
+	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
+		t.Fatalf("discovery JSON: %v\n%s", err, discover.String())
+	}
+
+	canonicalItem := func(canonicalID string) vscode.TestItem {
+		t.Helper()
+		item, ok := discoveryItemByID(doc, canonicalID)
+		if !ok {
+			t.Fatalf("canonical item %q missing from discovery: %+v", canonicalID, doc.Items)
+		}
+		return item
+	}
+	aliasItem := func(coversID, canonicalID string) vscode.TestItem {
+		t.Helper()
+		item, ok := discoveryItemByID(doc, coversID+"::"+StableIDSegment(canonicalID))
+		if !ok || item.CanonicalID != canonicalID {
+			t.Fatalf("covers alias of %q missing under %q: %+v", canonicalID, coversID, doc.Items)
+		}
+		return item
+	}
+
+	// ac-506: a file or test alias resolves to the same source position as the
+	// item it aliases. Assert against the canonical item, never a literal path —
+	// and refuse a canonical that carries no location, because two empty values
+	// compare equal and would keep this test green forever.
+	for _, tc := range []struct {
+		coversID    string
+		canonicalID string
+		wantRange   bool
+	}{
+		{coversID: "keel::lane::go-log::covers", canonicalID: "go::file::log/logging_test.go"},
+		{coversID: "keel::lane::go-log::covers", canonicalID: "go::test::log::TestLog", wantRange: true},
+		{coversID: "keel::lane::ui::covers", canonicalID: "vsix::file::src/test/suite/extension.test.ts"},
+		{coversID: "keel::lane::ui::covers", canonicalID: "vsix::test::src/test/suite/extension.test.ts::alpha-case"},
+	} {
+		want := canonicalItem(tc.canonicalID)
+		if want.URI == "" {
+			t.Fatalf("canonical item %q carries no uri; the alias assertion would be vacuous: %+v", tc.canonicalID, want)
+		}
+		got := aliasItem(tc.coversID, tc.canonicalID)
+		if got.URI != want.URI {
+			t.Errorf("alias of %q uri = %q, want canonical %q", tc.canonicalID, got.URI, want.URI)
+		}
+		switch {
+		case tc.wantRange:
+			if want.Range == nil || *want.Range == (vscode.Range{}) {
+				t.Fatalf("canonical item %q carries no range; the alias assertion would be vacuous: %+v", tc.canonicalID, want)
+			}
+			if got.Range == nil || *got.Range != *want.Range {
+				t.Errorf("alias of %q range = %+v, want canonical %+v", tc.canonicalID, got.Range, want.Range)
+			}
+		case want.Range == nil && got.Range != nil:
+			t.Errorf("alias of %q range = %+v, want none (canonical carries none)", tc.canonicalID, got.Range)
+		}
+	}
+
+	// The other alias kinds name something that is not a source position, so
+	// they stay location-free by design (ac-506 scope).
+	for _, tc := range []struct{ coversID, canonicalID string }{
+		{coversID: "keel::lane::go-log::covers", canonicalID: "go::pkg::log"},
+		{coversID: "keel::lane::roots::covers", canonicalID: "vsix::root"},
+		{coversID: "keel::lane::combo::covers", canonicalID: "keel::lane::go-log"},
+	} {
+		got := aliasItem(tc.coversID, tc.canonicalID)
+		if got.URI != "" || got.Range != nil {
+			t.Errorf("alias of %q must carry no location, got uri=%q range=%+v", tc.canonicalID, got.URI, got.Range)
+		}
+	}
+}
+
+// DHF-TEST: keel/requirement-54
 func TestVSCodeFileLaneRunPassesVSIXFileFilter(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
