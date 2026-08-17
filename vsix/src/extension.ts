@@ -543,8 +543,8 @@ let lastReconcileSignature: string | undefined;
 // ends. Overwriting is the only rendering mechanism proven live — it beats
 // persistence-restored results by construction, where result REMOVAL
 // (invalidate, TestItem replacement) provably cannot: VS Code re-associates
-// persisted results to new TestItems by id (docs/mutex/vscode-object-model.md
-// F14). No branching on the exclusivity wire flag (design_decision-5).
+// persisted results to new TestItems by id (keel/interface_spec-7 F14). No
+// branching on the exclusivity wire flag (design_decision-5).
 //
 // DHF-REQ: keel/requirement-97
 export function applyReconcileResultsCapability(controller: vscode.TestController, publishedTree: PublishedTree): void {
