@@ -353,11 +353,10 @@ function executionScopeLeafItems(selected: readonly vscode.TestItem[]): vscode.T
 // desired-state group that owns a selected item, minus the selection's own
 // subtree. It reads the published discovery tree ONLY: the group is recognized
 // by the exclusivity fact its group item carries, and the rows are that item's
-// children. No bridge run event is consulted,
-// which is precisely what makes the peer set knowable BEFORE the devtool child
-// is spawned — the end-of-run `cleared` path cannot be moved earlier, because
-// those ids arrive on the child's stdout and by construction do not exist yet
-// (keel/ac-517).
+// children. No bridge run event is consulted, which is precisely what makes the
+// peer set knowable BEFORE the devtool child is spawned — the end-of-run
+// `cleared` path cannot be moved earlier, because those ids arrive on the
+// child's stdout and by construction do not exist yet (keel/ac-517).
 //
 // DHF-REQ: keel/requirement-132
 export function exclusiveGroupPeerItems(
@@ -736,13 +735,24 @@ async function runSelected(
   // bridge-served truth once this has fired (keel/ac-516).
   const invalidatedExclusiveGroup = invalidateExclusiveGroupAtRunStart(controller, selected);
 
+  // A child can emit BOTH `error` and `close` (spawn ENOENT is the ordinary
+  // case), and every settle path below would then re-query the devtool for a
+  // truth it has already read. The refresh is memoized rather than skipped, so
+  // the second caller AWAITS the in-flight one instead of racing past it and
+  // letting the run end before the group has settled.
+  let postRunRefresh: Promise<void> | undefined;
+  const settleOnBridgeServedTruth = (): Promise<void> => {
+    postRunRefresh ??= refreshDesiredStateAfterRun(run, controller, workspaceRoot, selectedProtocolIds);
+    return postRunRefresh;
+  };
+
   try {
     const desiredState = await readDesiredState(workspaceRoot, selectedProtocolIds);
     appendDesiredStateDocument(run, desiredState);
   } catch (error) {
     appendRunOutput(run, `Failed to read desired state for ${currentAdapterConfig().displayName} test run: ${error instanceof Error ? error.message : String(error)}`, 'ERROR');
     if (invalidatedExclusiveGroup) {
-      await refreshDesiredStateAfterRun(run, controller, workspaceRoot, selectedProtocolIds);
+      await settleOnBridgeServedTruth();
     }
     finishRun();
     return;
@@ -757,7 +767,7 @@ async function runSelected(
     // The child never came into existence, so no `close` will settle the
     // group. This path had no post-run refresh at all before keel/ac-516.
     if (invalidatedExclusiveGroup) {
-      await refreshDesiredStateAfterRun(run, controller, workspaceRoot, selectedProtocolIds);
+      await settleOnBridgeServedTruth();
     }
     finishRun();
     return;
@@ -796,10 +806,11 @@ async function runSelected(
       if (forceKill) {
         clearTimeout(forceKill);
       }
-      // `close` does not follow an `error`, so this path settles the group
-      // itself (keel/ac-516).
+      // An `error` is not always followed by a `close`, so this path settles
+      // the group itself (keel/ac-516); the dedupe above keeps the pair that
+      // does emit both from refreshing twice.
       if (invalidatedExclusiveGroup) {
-        await refreshDesiredStateAfterRun(run, controller, workspaceRoot, selectedProtocolIds);
+        await settleOnBridgeServedTruth();
       }
       finishRun();
       resolve();
@@ -818,7 +829,7 @@ async function runSelected(
         await resetKeelTestResults(controller);
       }
       invalidateClearedResults(controller, clearedResultIds);
-      await refreshDesiredStateAfterRun(run, controller, workspaceRoot, selectedProtocolIds);
+      await settleOnBridgeServedTruth();
       finishRun();
       resolve();
     });
