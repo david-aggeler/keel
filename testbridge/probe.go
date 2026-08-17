@@ -173,8 +173,11 @@ func logDesiredStateProbeAbandoned(ctx context.Context, bound probeBoundError) {
 
 // abandonedDesiredState renders a probe that breached its bound as a row rather
 // than an error, so the remaining rows of the group still reach the consumer.
+// The row is fail-closed: a probe that returned no verdict never renders active,
+// because a green active row would read as evidence that a resource is ready
+// when the bridge never learned whether it is.
 //
-// DHF-REQ: keel/requirement-129
+// DHF-REQ: keel/requirement-129, keel/requirement-75
 func abandonedDesiredState(row DesiredStateRow, bound probeBoundError) vscode.DesiredState {
 	return vscode.DesiredState{
 		RunID:    row.RunID,
@@ -188,6 +191,6 @@ func abandonedDesiredState(row DesiredStateRow, bound probeBoundError) vscode.De
 		Detail:   row.Detail,
 		Reusable: row.Reusable,
 		Owned:    row.Owned,
-		Active:   row.Active,
+		Active:   false,
 	}
 }

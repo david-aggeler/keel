@@ -429,7 +429,9 @@ func dataSet(runID, resource, want, activeDataSet, actionName string) testbridge
 		Kind:     "fixture-data",
 		Desired:  want,
 		Owned:    true,
-		Active:   activeDataSet == want,
+		// The active fact is derived from this probe (keel/requirement-75); the
+		// demo declares only the resource, its desired value, and how to observe
+		// it.
 		Probe: func(context.Context, testbridge.DesiredStateProbeRequest) testbridge.DesiredStateProbeResult {
 			return testbridge.DesiredStateProbeResult{
 				Current:   activeDataSet,
