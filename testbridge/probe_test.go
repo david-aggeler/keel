@@ -226,6 +226,59 @@ func TestDesiredStateProbeDeadlineNamesTimeoutAndResource(t *testing.T) {
 	}
 }
 
+// Deriving active from the probe introduces a case a declared flag never had:
+// the probe may return no verdict at all. The rule is fail-closed — an
+// underivable fact never reads as satisfied, and the rendered row names why.
+//
+// DHF-TEST: keel/requirement-75, keel/ac-504
+func TestAbandonedDesiredStateProbeIsNeverRenderedActive(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{desiredStateGroupItem()}
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	blocked := blockingDesiredStateRow("demo::desired-state::slow", "slow-resource", release)
+	blocked.Active = true
+	fake.desiredGroups = []testbridge.DesiredStateGroup{{
+		Label:             "Provisioning",
+		Order:             10,
+		MutuallyExclusive: false,
+		Rows:              []testbridge.DesiredStateRow{blocked},
+	}}
+	var protocol bytes.Buffer
+	ctx := probeBridgeRuntime(root, &protocol, 25*time.Millisecond)
+
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "discover", "--format", "json"}); err != nil {
+		t.Fatalf("discover dispatch: %v", err)
+	}
+	var doc vscode.DiscoveryDocument
+	decodeJSON(t, &protocol, &doc)
+	item, ok := testItemByID(doc.Items, "demo::desired-state::slow")
+	if !ok || item.DesiredStateRow == nil {
+		t.Fatalf("discovery items = %+v, want a rendered row for the timed-out probe", doc.Items)
+	}
+	if item.DesiredStateRow.Active {
+		t.Fatalf("timed-out discovery row active = true, want fail-closed false: %+v", item.DesiredStateRow)
+	}
+
+	protocol.Reset()
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "desired-state", "--format", "json"}); err != nil {
+		t.Fatalf("desired-state dispatch: %v", err)
+	}
+	var desired vscode.DesiredStateDocument
+	decodeJSON(t, &protocol, &desired)
+	row := desiredStateDocumentRow(t, desired, "slow-resource")
+	if row.Active {
+		t.Fatalf("timed-out desired-state row active = true, want fail-closed false: %+v", row)
+	}
+	if row.Status != "blocked" {
+		t.Fatalf("timed-out row status = %q, want blocked", row.Status)
+	}
+	if !strings.Contains(row.Message, "slow-resource") || !strings.Contains(row.Message, "timed out") {
+		t.Fatalf("timed-out row message = %q, want it to name the probe failure and the resource", row.Message)
+	}
+}
+
 // DHF-TEST: keel/requirement-129
 func TestDesiredStateProbeTimeoutLeavesRemainingRowsDerived(t *testing.T) {
 	root := t.TempDir()
