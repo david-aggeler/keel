@@ -583,6 +583,55 @@ export function applyReconcileResultsCapability(controller: vscode.TestControlle
   run.end();
 }
 
+// runStartInvalidationRunName names the short-lived non-persisted run that
+// carries the transitional stamp. It is deliberately NOT the reconcile run's
+// name: the two are different claims — the reconcile replays bridge-served
+// truth, this one records that the truth is currently unknown.
+export const runStartInvalidationRunName = 'desired-state run-start invalidation';
+
+// invalidateExclusiveGroupAtRunStart stamps every peer of the selection's
+// mutually-exclusive group(s) skipped, before the run's devtool child exists.
+//
+// Between a run's start and the post-run reconcile replay, the previously
+// active member's passed icon is no longer true — the group's truth is being
+// re-determined — but nothing overwrote it, so it kept asserting it was the
+// satisfied one for the whole reconcile (keel/requirement-132).
+//
+// The stamp travels on its own non-persisted TestRun, the same mechanism
+// applyReconcileResultsCapability uses, and NOT on the caller's test run. That
+// is what keeps keel/ac-348 intact: the test run stamps nothing outside its own
+// scope, and the peers are never added to the submitted id set (keel/ac-515).
+// Overwriting is the only rendering mechanism proven live; per-item Unset is
+// unreachable on this platform, so `skipped` is the transitional value
+// (keel/requirement-97, F16).
+//
+// Returns true when a stamp was made, so the caller knows the group is now
+// carrying a transitional rendering that MUST be settled on bridge-served
+// truth before the run ends.
+//
+// DHF-REQ: keel/requirement-132
+function invalidateExclusiveGroupAtRunStart(
+  controller: vscode.TestController,
+  selected: readonly vscode.TestItem[]
+): boolean {
+  const peers = exclusiveGroupPeerItems(tree, selected);
+  if (peers.length === 0) {
+    return false;
+  }
+  const request = new vscode.TestRunRequest(peers, undefined, undefined, undefined, true);
+  const run = controller.createTestRun(request, runStartInvalidationRunName, false);
+  for (const item of peers) {
+    // skipped reason (d): a non-active member of a mutually-exclusive
+    // desired-state group. Here the member is not merely known-inactive — the
+    // group's truth is in flight — but the rendering alphabet has no distinct
+    // value for that, and asserting the stale passed would be worse.
+    // See keel/ac-428.
+    run.skipped(item);
+  }
+  run.end();
+  return true;
+}
+
 // resetReconcileSignatureForTest clears the in-session reconcile signature
 // guard. Production never calls this; specs use it to isolate cases.
 export function resetReconcileSignatureForTest(): void {
@@ -665,11 +714,20 @@ async function runSelected(
     finishRun();
     return;
   }
+  // The group's truth stops being known here, not when the run ends, so the
+  // transitional stamp lands before any devtool child of this run is spawned
+  // (keel/ac-512). Every path out of runSelected below must settle the group on
+  // bridge-served truth once this has fired (keel/ac-516).
+  const invalidatedExclusiveGroup = invalidateExclusiveGroupAtRunStart(controller, selected);
+
   try {
     const desiredState = await readDesiredState(workspaceRoot, selectedProtocolIds);
     appendDesiredStateDocument(run, desiredState);
   } catch (error) {
     appendRunOutput(run, `Failed to read desired state for ${currentAdapterConfig().displayName} test run: ${error instanceof Error ? error.message : String(error)}`, 'ERROR');
+    if (invalidatedExclusiveGroup) {
+      await refreshDesiredStateAfterRun(run, controller, workspaceRoot, selectedProtocolIds);
+    }
     finishRun();
     return;
   }

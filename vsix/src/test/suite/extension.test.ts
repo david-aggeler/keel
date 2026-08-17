@@ -2668,7 +2668,267 @@ process.exit(2);
       controller.dispose();
     }
   });
+
+  // DHF-TEST: keel/requirement-132 (keel/ac-512, keel/ac-514, keel/ac-515)
+  test('every exclusive-group peer is stamped skipped before the devtool child is spawned', async function () {
+    this.timeout(20_000);
+    const workspace = createExclusiveGroupWorkspace('keel-run-start-invalidation-', 'activate');
+    try {
+      const extension = vscode.extensions.getExtension('aggeler.keel-test-bridge');
+      assert.ok(extension, 'extension should be discoverable');
+      await extension.activate();
+      await vscode.commands.executeCommand('keel.tests.refresh');
+      const controller = testControllerForTest();
+      assert.ok(controller, 'extension should expose its active TestController for tests');
+
+      const timeline: RunTimelineEntry[] = [];
+      const restore = recordRunTimeline(controller, timeline);
+      try {
+        await runProfileHandlerForTest('demo::desired-state::dataset::full');
+      } finally {
+        restore();
+      }
+
+      const spawnIndex = timeline.findIndex((entry) => entry.kind === 'spawn');
+      assert.ok(spawnIndex >= 0, `the devtool run child is spawned; timeline=${JSON.stringify(timeline)}`);
+      const beforeSpawn = timeline.slice(0, spawnIndex);
+
+      // ac-512: member 'small' rendered passed at rest; launching 'full'
+      // stamps it and the synthesized Unknown State row skipped, and that
+      // stamp is recorded before the child that will re-determine the truth.
+      assert.deepEqual(
+        stampedIds(beforeSpawn, 'skipped').sort(),
+        ['demo::desired-state::dataset::small', 'demo::desired-state::dataset::unknown'],
+        `peers are stamped skipped before the spawn; timeline=${JSON.stringify(timeline)}`
+      );
+      // ac-512: and no row of the group asserts it is the satisfied one from
+      // the moment the run starts until the bridge says otherwise.
+      assert.deepEqual(
+        stampedIds(beforeSpawn, 'passed').filter((id) => datasetGroupRowIds.includes(id)),
+        [],
+        `no row of the group renders passed once the run has started; timeline=${JSON.stringify(timeline)}`
+      );
+
+      // ac-514: the invalidation reaches no row of the second exclusive group
+      // and no lane, at any point in the run.
+      const invalidationStamps = stampedIds(beforeSpawn, 'skipped');
+      assert.deepEqual(
+        invalidationStamps.filter((id) => !datasetGroupRowIds.includes(id)),
+        [],
+        'the run-start invalidation restamps only rows of the group that owns the selected member'
+      );
+
+      // ac-515: peers are restamped, never submitted. The argv id list is
+      // exactly the selected runnable row.
+      const spawn = timeline[spawnIndex];
+      assert.equal(spawn.kind, 'spawn');
+      assert.deepEqual(
+        spawn.kind === 'spawn' ? spawn.ids : [],
+        ['demo::desired-state::dataset::full'],
+        'the invalidation adds no id to the devtool run invocation'
+      );
+    } finally {
+      workspace.dispose();
+    }
+  });
 });
+
+// createExclusiveGroupWorkspace stands up a workspace whose adapter serves two
+// mutually-exclusive desired-state groups and one ordinary lane, so a run of a
+// member of the first group can be observed against everything it must not
+// touch. `mode` selects what the run child does:
+//
+//   activate — records the selected member as active, passes, exits 0
+//   fail     — leaves the active member where it was, fails, exits non-zero
+//   hang     — starts and then waits to be signalled
+//
+// The served reconcile_results always describe the CURRENT active member, so
+// the `fail` mode serves a list identical to the pre-run one — the case
+// keel/ac-513 exists for.
+interface ExclusiveGroupWorkspace {
+  root: string;
+  dispose(): void;
+}
+
+function createExclusiveGroupWorkspace(prefix: string, mode: 'activate' | 'fail' | 'hang'): ExclusiveGroupWorkspace {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+  process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = root;
+  fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+  const adapter = path.join(root, 'exclusive-groups-adapter.js');
+  fs.writeFileSync(adapter, `
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+const now = () => new Date().toISOString();
+const activePath = path.join(process.cwd(), '.devtools', 'active-member');
+const mode = ${JSON.stringify(mode)};
+if (args.includes('--version')) {
+  process.stdout.write('dev\\n');
+  process.exit(0);
+}
+const datasetRows = [
+  ['demo::desired-state::dataset::small', 'small'],
+  ['demo::desired-state::dataset::full', 'full'],
+  ['demo::desired-state::dataset::unknown', 'Unknown State']
+];
+const runtimeRows = [
+  ['demo::desired-state::runtime::node', 'node'],
+  ['demo::desired-state::runtime::unknown', 'Unknown State']
+];
+function activeMember() {
+  try {
+    return fs.readFileSync(activePath, 'utf8').trim();
+  } catch {
+    return 'demo::desired-state::dataset::small';
+  }
+}
+function discovery() {
+  const active = activeMember();
+  const rowItem = (parentId) => ([id, label]) => ({
+    id, parent_id: parentId, label, kind: 'group', runnable: true, profiles: ['run'],
+    desired_state_row: { current: label, action: 'reuse', active: id === active }
+  });
+  return {
+    version: 1,
+    workspace: process.cwd(),
+    generated_at: now(),
+    capabilities: {
+      reconcile_results: datasetRows.map(([id]) => ({
+        test_id: id,
+        state: id === active ? 'passed' : 'skipped',
+        message: id === active ? 'active' : 'not active'
+      })).concat(runtimeRows.map(([id]) => ({
+        test_id: id,
+        state: id === 'demo::desired-state::runtime::node' ? 'passed' : 'skipped',
+        message: id === 'demo::desired-state::runtime::node' ? 'active' : 'not active'
+      })))
+    },
+    items: [
+      { id: 'demo::desired-state::dataset', label: 'Data Set', kind: 'group', runnable: false, profiles: [], desired_state_group: { mutually_exclusive: true } },
+      ...datasetRows.map(rowItem('demo::desired-state::dataset')),
+      { id: 'demo::desired-state::runtime', label: 'Runtime', kind: 'group', runnable: false, profiles: [], desired_state_group: { mutually_exclusive: true } },
+      ...runtimeRows.map(rowItem('demo::desired-state::runtime')),
+      { id: 'keel::lane::fast', label: 'fast', kind: 'lane', runnable: true, profiles: ['run'] }
+    ]
+  };
+}
+function desiredState() {
+  const active = activeMember();
+  const group = (label, order, rows) => ({
+    label, order, mutually_exclusive: true,
+    rows: rows.map(([run_id, resource]) => ({
+      run_id, resource, kind: 'dataset', desired: resource, current: resource,
+      status: run_id === active ? 'satisfied' : 'available',
+      action: run_id === active ? 'reuse' : 'none',
+      message: resource, reusable: true, owned: false, active: run_id === active
+    }))
+  });
+  return {
+    version: 3,
+    workspace: process.cwd(),
+    generated_at: now(),
+    groups: [group('Data Set', 1, datasetRows), group('Runtime', 2, runtimeRows)]
+  };
+}
+if (args.slice(0, 3).join(' ') === 'test-bridge discover --format') {
+  process.stdout.write(JSON.stringify(discovery()) + '\\n');
+  process.exit(0);
+}
+if (args.slice(0, 3).join(' ') === 'test-bridge desired-state --format') {
+  process.stdout.write(JSON.stringify(desiredState()) + '\\n');
+  process.exit(0);
+}
+if (args.slice(0, 2).join(' ') === 'test-bridge run') {
+  const selected = args[args.indexOf('--id') + 1];
+  const emit = (event) => process.stdout.write(JSON.stringify({ version: 1, time: now(), run_id: 'mutex-run', ...event }) + '\\n');
+  emit({ event: 'run_started', test_id: selected });
+  emit({ event: 'test_started', test_id: selected });
+  if (mode === 'hang') {
+    fs.writeFileSync(path.join(process.cwd(), '.devtools-run-started'), selected + '\\n');
+    setInterval(() => {}, 1000);
+  } else if (mode === 'fail') {
+    emit({ event: 'failed', test_id: selected, message: 'activation failed' });
+    emit({ event: 'run_finished', exit_code: 1 });
+    process.exit(1);
+  } else {
+    fs.mkdirSync(path.dirname(activePath), { recursive: true });
+    fs.writeFileSync(activePath, selected + '\\n');
+    emit({ event: 'passed', test_id: selected, duration_ms: 1 });
+    emit({ event: 'run_finished', exit_code: 0 });
+    process.exit(0);
+  }
+} else {
+  process.stderr.write('unsupported command ' + args.join(' ') + '\\n');
+  process.exit(2);
+}
+`);
+  fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+    version: currentConfigVersion,
+    command: process.execPath,
+    args: [adapter],
+    displayName: 'Keel'
+  }, null, 2) + '\n');
+  return {
+    root,
+    dispose() {
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  };
+}
+
+// A single ordered timeline of every result stamp the extension makes and the
+// moment the devtool run child is spawned. Ordering against the spawn is what
+// makes keel/ac-512 falsifiable: a stamp that lands after the bridge has
+// already reconciled proves nothing about the interval the requirement covers.
+type RunTimelineEntry =
+  | { kind: 'passed' | 'skipped'; id: string }
+  | { kind: 'spawn'; ids: string[] };
+
+// stampedIds narrows the timeline to the ids stamped with one state, so an
+// assertion reads as the sequence of rendered states rather than a type guard.
+function stampedIds(timeline: readonly RunTimelineEntry[], kind: 'passed' | 'skipped'): string[] {
+  return timeline.flatMap((entry) => entry.kind === kind ? [entry.id] : []);
+}
+
+function recordRunTimeline(controller: vscode.TestController, timeline: RunTimelineEntry[]): () => void {
+  const originalCreateTestRun = controller.createTestRun.bind(controller);
+  const adapterModule = bridgeAdapterModule as unknown as { runTests: typeof runTests };
+  const originalRunTests = adapterModule.runTests;
+  controller.createTestRun = ((request: vscode.TestRunRequest, name?: string, persist?: boolean) => {
+    const run = originalCreateTestRun(request, name, persist);
+    const originalPassed = run.passed.bind(run);
+    const originalSkipped = run.skipped.bind(run);
+    run.passed = (item: vscode.TestItem, duration?: number) => {
+      timeline.push({ kind: 'passed', id: item.id });
+      originalPassed(item, duration);
+    };
+    run.skipped = (item: vscode.TestItem) => {
+      timeline.push({ kind: 'skipped', id: item.id });
+      originalSkipped(item);
+    };
+    return run;
+  }) as typeof controller.createTestRun;
+  adapterModule.runTests = ((workspaceRoot: string, ids: string[]) => {
+    timeline.push({ kind: 'spawn', ids: [...ids] });
+    return originalRunTests(workspaceRoot, ids);
+  }) as typeof runTests;
+  return () => {
+    controller.createTestRun = originalCreateTestRun;
+    adapterModule.runTests = originalRunTests;
+  };
+}
+
+const datasetGroupRowIds = [
+  'demo::desired-state::dataset::small',
+  'demo::desired-state::dataset::full',
+  'demo::desired-state::dataset::unknown'
+];
 
 // exclusiveGroupsDiscoveryFixture publishes two mutually-exclusive
 // desired-state groups, one non-exclusive group, and one ordinary lane leaf,
