@@ -20,6 +20,17 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "configuration": {
+      "title": "Keel Test Bridge",
+      "properties": {
+        "keel.tests.externalRunStaleMs": {
+          "type": "number",
+          "minimum": 1000,
+          "default": 60000,
+          "markdownDescription": "How long the external-run mirror waits for a producer to write again before it closes a mirrored run as errored. Raise this for producers that legitimately run quiet for longer than the default. A producer that writes its terminal event after the deadline still reconciles the run to its own outcome."
+        }
+      }
+    },
     "commands": [
       {
         "command": "keel.tests.initConfig",

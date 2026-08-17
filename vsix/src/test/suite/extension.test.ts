@@ -20,6 +20,7 @@ import {
   desiredStateRowProtocolID,
   exclusiveGroupPeerItems,
   ExternalRunMirror,
+  externalRunStaleMs,
   finishActiveRun,
   isRunActive,
   isWatcherRefreshPending,
@@ -59,7 +60,10 @@ suite('Keel Test Bridge config contract', () => {
       displayName: string;
       license: string;
       activationEvents: string[];
-      contributes?: { configuration?: unknown; commands?: Array<{ command: string }> };
+      contributes?: {
+        configuration?: { properties?: Record<string, { type?: string; default?: unknown }> };
+        commands?: Array<{ command: string }>;
+      };
     };
 
     assert.equal(manifest.publisher, 'aggeler');
@@ -67,7 +71,14 @@ suite('Keel Test Bridge config contract', () => {
     assert.equal(manifest.displayName, 'Keel Test Bridge');
     assert.equal(manifest.license, 'Apache-2.0');
     assert.deepEqual(manifest.activationEvents, ['workspaceContains:.vscode/test-bridge.json']);
-    assert.equal(manifest.contributes?.configuration, undefined);
+    // Consumers are mapped by .vscode/test-bridge.json, never by settings. The one
+    // declared setting is the external-run mirror's stale deadline, and it lives in
+    // the keel.tests.* namespace the extension already owns — never in the
+    // unsupported testBridge.* one (keel/ac-520).
+    const configuredKeys = Object.keys(manifest.contributes?.configuration?.properties ?? {});
+    assert.deepEqual(configuredKeys, ['keel.tests.externalRunStaleMs']);
+    assert.equal(manifest.contributes?.configuration?.properties?.['keel.tests.externalRunStaleMs']?.default, 60000);
+    assert.ok(!configuredKeys.some((key) => key.startsWith('testBridge.')), 'testBridge.* settings stay unsupported');
     const commands = new Set(manifest.contributes?.commands?.map((command) => command.command));
     assert.ok(commands.has('keel.tests.refresh'));
     assert.ok(commands.has('keel.tests.initConfig'));
@@ -1874,7 +1885,203 @@ process.exit(2);
       mirror.dispose();
       setCurrentTreeForTest(undefined);
       controller.dispose();
-      setExternalRunStaleMsForTest(60_000);
+      setExternalRunStaleMsForTest(undefined);
+    }
+  });
+
+  // Silence is not truncation. The stream keel/issue-177 records parsed line for
+  // line and completed successfully; what happened is that the producer stopped
+  // writing. The synthesized close must name that condition, so an operator reads
+  // it as "the producer went quiet" and not as "the file is corrupt".
+  //
+  // keel/ac-519
+  // DHF-TEST: keel/requirement-36
+  test('external run mirror names producer silence and its duration when it closes a stale stream', async function () {
+    this.timeout(10_000);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-external-silence-'));
+    const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+    process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = root;
+    const controller = vscode.tests.createTestController(`keelSilentProducer-${Date.now()}`, 'Keel Silent Producer');
+    const tree = publishDiscovery(controller, root, {
+      version: 1,
+      workspace: root,
+      generated_at: new Date().toISOString(),
+      items: [{ id: 'keel::lane::test-fast', label: 'test-fast', kind: 'lane', runnable: true, profiles: ['run'] }]
+    });
+    setCurrentTreeForTest(tree);
+    const erroredMessages: string[] = [];
+    const spyTarget = controller as vscode.TestController & {
+      createTestRun: (request: vscode.TestRunRequest, name?: string, persist?: boolean) => vscode.TestRun;
+    };
+    const originalCreateTestRun = spyTarget.createTestRun.bind(controller);
+    spyTarget.createTestRun = (request: vscode.TestRunRequest, name?: string, persist?: boolean): vscode.TestRun => {
+      const run = originalCreateTestRun(request, name, persist);
+      const originalErrored = run.errored.bind(run);
+      run.errored = (item: vscode.TestItem, message: vscode.TestMessage | readonly vscode.TestMessage[], duration?: number) => {
+        for (const entry of Array.isArray(message) ? message : [message as vscode.TestMessage]) {
+          erroredMessages.push(typeof entry.message === 'string' ? entry.message : entry.message.value);
+        }
+        originalErrored(item, message, duration);
+      };
+      return run;
+    };
+    const mirror = new ExternalRunMirror(controller);
+    setExternalRunStaleMsForTest(25);
+    const runsDir = path.join(root, '.devtools', 'vscode-runs');
+    fs.mkdirSync(runsDir, { recursive: true });
+    const runFile = path.join(runsDir, 'silent-producer.jsonl');
+    fs.writeFileSync(runFile, [
+      JSON.stringify(runEvent({ event: 'run_started', run_id: 'silent-run', test_id: 'keel::lane::test-fast' })),
+      JSON.stringify(runEvent({ event: 'test_started', run_id: 'silent-run', test_id: 'keel::lane::test-fast' }))
+    ].join('\n') + '\n');
+
+    try {
+      await mirror.syncWorkspace();
+      await waitFor(() => erroredMessages.length > 0);
+      const message = erroredMessages[0];
+      assert.match(message, /producer/i, `the close names the producer as the subject; got: ${message}`);
+      assert.ok(message.includes('25ms'), `the close states how long the producer was silent; got: ${message}`);
+      assert.ok(!/truncat/i.test(message), `a silent producer is not a truncated stream; got: ${message}`);
+    } finally {
+      spyTarget.createTestRun = originalCreateTestRun;
+      fs.rmSync(root, { recursive: true, force: true });
+      mirror.dispose();
+      setCurrentTreeForTest(undefined);
+      controller.dispose();
+      setExternalRunStaleMsForTest(undefined);
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
+    }
+  });
+
+  // The producer's own terminal outranks the consumer's timeout: the stale close
+  // is a guess about a stream still being written, and the stream file settles it.
+  // keel/issue-177 observed a `passed` arriving three minutes after the close and
+  // being dropped, leaving the Test Explorer red against a green run forever.
+  //
+  // keel/ac-518
+  // DHF-TEST: keel/requirement-36
+  test('external run mirror applies a terminal event that arrives after a stale close', async function () {
+    this.timeout(10_000);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-external-late-terminal-'));
+    const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+    process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = root;
+    const controller = vscode.tests.createTestController(`keelLateTerminal-${Date.now()}`, 'Keel Late Terminal');
+    const tree = publishDiscovery(controller, root, {
+      version: 1,
+      workspace: root,
+      generated_at: new Date().toISOString(),
+      items: [{ id: 'keel::lane::test-fast', label: 'test-fast', kind: 'lane', runnable: true, profiles: ['run'] }]
+    });
+    setCurrentTreeForTest(tree);
+    const stamps: StateStamp[] = [];
+    const spyTarget = controller as vscode.TestController & {
+      createTestRun: (request: vscode.TestRunRequest, name?: string, persist?: boolean) => vscode.TestRun;
+    };
+    const originalCreateTestRun = spyTarget.createTestRun.bind(controller);
+    spyTarget.createTestRun = (request: vscode.TestRunRequest, name?: string, persist?: boolean): vscode.TestRun => {
+      const run = originalCreateTestRun(request, name, persist);
+      recordStateStamps(run, stamps);
+      return run;
+    };
+    const mirror = new ExternalRunMirror(controller);
+    setExternalRunStaleMsForTest(25);
+    const runsDir = path.join(root, '.devtools', 'vscode-runs');
+    fs.mkdirSync(runsDir, { recursive: true });
+    const runFile = path.join(runsDir, 'late-terminal.jsonl');
+    const openingLines = [
+      JSON.stringify(runEvent({ event: 'run_started', run_id: 'late-terminal', test_id: 'keel::lane::test-fast' })),
+      JSON.stringify(runEvent({ event: 'test_started', run_id: 'late-terminal', test_id: 'keel::lane::test-fast' }))
+    ];
+    fs.writeFileSync(runFile, openingLines.join('\n') + '\n');
+
+    try {
+      await mirror.syncWorkspace();
+      await waitFor(() => stamps.some((stamp) => stamp.id === 'keel::lane::test-fast' && stamp.state === 'errored'));
+
+      // The producer was alive all along and now writes its real outcome.
+      fs.writeFileSync(runFile, openingLines.concat([
+        JSON.stringify(runEvent({ event: 'passed', run_id: 'late-terminal', test_id: 'keel::lane::test-fast' })),
+        JSON.stringify(runEvent({ event: 'run_finished', run_id: 'late-terminal', exit_code: 0 }))
+      ]).join('\n') + '\n');
+      await mirror.syncWorkspace();
+      await waitFor(() => stamps.some((stamp) => stamp.id === 'keel::lane::test-fast' && stamp.state === 'passed'));
+
+      const finalState = stamps.filter((stamp) => stamp.id === 'keel::lane::test-fast').pop()?.state;
+      assert.equal(finalState, 'passed', `the producer's terminal settles the item, not the synthesized close; stamps: ${JSON.stringify(stamps)}`);
+      assert.ok(
+        mirror.snapshots().some((snapshot) => snapshot.runId === 'late-terminal' && snapshot.finished),
+        'the reconciled stream is closed again once the producer finishes'
+      );
+    } finally {
+      spyTarget.createTestRun = originalCreateTestRun;
+      fs.rmSync(root, { recursive: true, force: true });
+      mirror.dispose();
+      setCurrentTreeForTest(undefined);
+      controller.dispose();
+      setExternalRunStaleMsForTest(undefined);
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
+    }
+  });
+
+  // A workspace whose producers legitimately run quiet for longer than a minute
+  // needs a way to say so. The deadline is read from workspace configuration at
+  // the moment the timer is armed, and falls back to 60000ms when unset.
+  //
+  // keel/ac-520
+  // DHF-TEST: keel/requirement-36
+  test('external run stale deadline is read from workspace configuration, defaulting to 60000ms', async function () {
+    this.timeout(20_000);
+    const settings = vscode.workspace.getConfiguration();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-external-stale-setting-'));
+    const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+    process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = root;
+    const controller = vscode.tests.createTestController(`keelStaleSetting-${Date.now()}`, 'Keel Stale Setting');
+    const tree = publishDiscovery(controller, root, {
+      version: 1,
+      workspace: root,
+      generated_at: new Date().toISOString(),
+      items: [{ id: 'keel::lane::test-fast', label: 'test-fast', kind: 'lane', runnable: true, profiles: ['run'] }]
+    });
+    setCurrentTreeForTest(tree);
+    const mirror = new ExternalRunMirror(controller);
+    setExternalRunStaleMsForTest(undefined);
+    const runsDir = path.join(root, '.devtools', 'vscode-runs');
+    fs.mkdirSync(runsDir, { recursive: true });
+    const runFile = path.join(runsDir, 'configured-stale.jsonl');
+    fs.writeFileSync(runFile, [
+      JSON.stringify(runEvent({ event: 'run_started', run_id: 'configured-stale', test_id: 'keel::lane::test-fast' })),
+      JSON.stringify(runEvent({ event: 'test_started', run_id: 'configured-stale', test_id: 'keel::lane::test-fast' }))
+    ].join('\n') + '\n');
+
+    try {
+      assert.equal(externalRunStaleMs(), 60_000, 'with no setting present the deadline is 60000ms');
+
+      await settings.update('keel.tests.externalRunStaleMs', 25, vscode.ConfigurationTarget.Workspace);
+      assert.equal(externalRunStaleMs(), 25, 'the configured value replaces the default');
+
+      // The armed timer reads the configured value, not the module default: at 25ms
+      // the stale close lands well inside a window 60000ms could never meet.
+      await mirror.syncWorkspace();
+      await waitFor(() => mirror.snapshots().some((snapshot) => snapshot.runId === 'configured-stale' && snapshot.finished), 5_000);
+    } finally {
+      await settings.update('keel.tests.externalRunStaleMs', undefined, vscode.ConfigurationTarget.Workspace);
+      fs.rmSync(root, { recursive: true, force: true });
+      mirror.dispose();
+      setCurrentTreeForTest(undefined);
+      controller.dispose();
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
     }
   });
 
