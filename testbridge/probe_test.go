@@ -227,8 +227,8 @@ func TestDesiredStateProbeDeadlineNamesTimeoutAndResource(t *testing.T) {
 }
 
 // Deriving active from the probe introduces a case a declared flag never had:
-// the probe may return no verdict at all. The rule is fail-closed — an
-// underivable fact never reads as satisfied, and the rendered row names why.
+// the probe may return no verdict at all. The rule is fail-closed — a fact the
+// bridge could not derive never reads as satisfied, and the row names why.
 //
 // DHF-TEST: keel/requirement-75, keel/ac-504
 func TestAbandonedDesiredStateProbeIsNeverRenderedActive(t *testing.T) {
