@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -17,6 +18,16 @@ import (
 
 const vsixCoverageFloorPercent = 76.3
 const vsixSupportPolicyRel = "vsix/SUPPORTED_VSCODE.md"
+
+// vsixSupportManifestRel is the one extension manifest the declared minimum is
+// stated in. Every other tracked manifest is held to that value by
+// validateVSIXEngineDeclarations rather than stating one of its own.
+const vsixSupportManifestRel = "vsix/package.json"
+
+// vsixEngineHoldReasonField lets a tracked manifest state, at its own declaration
+// site, why it holds an engines.vscode below the declared minimum — the allowance
+// keel/requirement-119 makes for a held declaration.
+const vsixEngineHoldReasonField = "keelEngineHoldReason"
 
 var vsixHeldDependencyBaselines = []struct {
 	name    string
@@ -57,6 +68,9 @@ func runVSIXGate(ctx context.Context, logger *slog.Logger, dir string) error {
 		return err
 	}
 	if err := validateVSIXSupportPolicy(dir); err != nil {
+		return err
+	}
+	if err := validateVSIXEngineDeclarations(ctx, logger, dir); err != nil {
 		return err
 	}
 	if err := runStep(ctx, logger, dir, step{
@@ -117,17 +131,32 @@ func evaluateVSIXCoverageSummary(logger *slog.Logger, path string) error {
 	return nil
 }
 
-// DHF-REQ: keel/requirement-119
-func validateVSIXSupportPolicy(dir string) error {
-	policyPath := filepath.Join(dir, filepath.FromSlash(vsixSupportPolicyRel))
+// readVSIXDeclaredMinimum reads the one declared VS Code minimum from the policy
+// record. Every check that compares a manifest against the declared minimum reads
+// it here, so the repository keeps one parse of the one declaration site.
+func readVSIXDeclaredMinimum(dir string) (policyPath, policyText, declaredMinimum string, engineFloor simpleSemver, err error) {
+	policyPath = filepath.Join(dir, filepath.FromSlash(vsixSupportPolicyRel))
 	policy, err := os.ReadFile(policyPath)
 	if err != nil {
-		return fmt.Errorf("keel-dev vsix policy: read %s: %w", policyPath, err)
+		return "", "", "", simpleSemver{}, fmt.Errorf("keel-dev vsix policy: read %s: %w", policyPath, err)
 	}
-	policyText := string(policy)
+	policyText = string(policy)
 	declaredMinimum, ok := policyLineValue(policyText, "Minimum supported VS Code:")
 	if !ok {
-		return fmt.Errorf("keel-dev vsix policy: %s missing Minimum supported VS Code", policyPath)
+		return "", "", "", simpleSemver{}, fmt.Errorf("keel-dev vsix policy: %s missing Minimum supported VS Code", policyPath)
+	}
+	engineFloor, err = parseCaretSemver("Minimum supported VS Code", declaredMinimum)
+	if err != nil {
+		return "", "", "", simpleSemver{}, err
+	}
+	return policyPath, policyText, declaredMinimum, engineFloor, nil
+}
+
+// DHF-REQ: keel/requirement-119
+func validateVSIXSupportPolicy(dir string) error {
+	policyPath, policyText, declaredMinimum, engineFloor, err := readVSIXDeclaredMinimum(dir)
+	if err != nil {
+		return err
 	}
 	if _, ok := policyLineValue(policyText, "Reason:"); !ok {
 		return fmt.Errorf("keel-dev vsix policy: %s missing Reason", policyPath)
@@ -140,12 +169,8 @@ func validateVSIXSupportPolicy(dir string) error {
 	if err != nil || nodeMajor < 1 {
 		return fmt.Errorf("keel-dev vsix policy: VS Code runtime Node major %q is not a positive integer", nodeMajorRaw)
 	}
-	engineFloor, err := parseCaretSemver("Minimum supported VS Code", declaredMinimum)
-	if err != nil {
-		return err
-	}
 
-	manifestPath := filepath.Join(dir, "vsix", "package.json")
+	manifestPath := filepath.Join(dir, filepath.FromSlash(vsixSupportManifestRel))
 	body, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return fmt.Errorf("keel-dev vsix policy: read %s: %w", manifestPath, err)
@@ -180,6 +205,61 @@ func validateVSIXSupportPolicy(dir string) error {
 		return err
 	}
 	return validateVSIXRuntimeNodeCitation(policyPath, policyText, declaredMinimum, nodeMajor)
+}
+
+// validateVSIXEngineDeclarations holds every tracked manifest other than
+// vsix/package.json to the declared minimum. The policy check above reads one
+// manifest by name, so a second declaration elsewhere in the repository sat two
+// releases behind the product minimum unreached by any gate — keel/issue-170. A
+// manifest that must hold a lower value states its reason in the manifest itself,
+// which is the allowance keel/requirement-119 makes for a held declaration.
+//
+// DHF-REQ: keel/requirement-119 (keel/ac-500)
+func validateVSIXEngineDeclarations(ctx context.Context, logger *slog.Logger, dir string) error {
+	_, _, declaredMinimum, engineFloor, err := readVSIXDeclaredMinimum(dir)
+	if err != nil {
+		return err
+	}
+	tracked, err := listTrackedFiles(ctx, logger, dir)
+	if err != nil {
+		return err
+	}
+	for _, rel := range tracked {
+		if path.Base(rel) != "package.json" || rel == vsixSupportManifestRel {
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+		if err != nil {
+			return fmt.Errorf("keel-dev vsix policy: read tracked manifest %s: %w", rel, err)
+		}
+		var manifest struct {
+			Engines struct {
+				VSCode string `json:"vscode"`
+			} `json:"engines"`
+			EngineHoldReason string `json:"keelEngineHoldReason"`
+		}
+		if err := json.Unmarshal(body, &manifest); err != nil {
+			return fmt.Errorf("keel-dev vsix policy: parse tracked manifest %s: %w", rel, err)
+		}
+		declared := strings.TrimSpace(manifest.Engines.VSCode)
+		if declared == "" {
+			continue
+		}
+		version, err := parseCaretSemver(rel+" engines.vscode", declared)
+		if err != nil {
+			return err
+		}
+		if compareSemver(version, engineFloor) >= 0 {
+			continue
+		}
+		if reason := strings.TrimSpace(manifest.EngineHoldReason); reason != "" {
+			logger.Info("tracked manifest holds an engines.vscode below the declared minimum",
+				"manifest", rel, "declared", declared, "minimum", declaredMinimum, "reason", reason)
+			continue
+		}
+		return fmt.Errorf("keel-dev vsix policy: %s declares engines.vscode %q below the declared minimum %q and states no %s", rel, declared, declaredMinimum, vsixEngineHoldReasonField)
+	}
+	return nil
 }
 
 var (
