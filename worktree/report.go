@@ -14,8 +14,9 @@ const (
 	// BlockerUntrackedFile is a file git does not track and does not ignore.
 	// Remedy: add and commit it, or delete it.
 	BlockerUntrackedFile BlockerKind = "untracked_file"
-	// BlockerUnpushedCommit is a commit reachable from this checkout but from no
-	// remote ref. Remedy: push it.
+	// BlockerUnpushedCommit is a commit reachable from this checkout but from
+	// neither a remote ref nor the local default branch. Remedy: merge it into
+	// the default branch, or push it.
 	BlockerUnpushedCommit BlockerKind = "unpushed_commit"
 	// BlockerLockedRegistration is a worktree git has marked locked. Remedy:
 	// unlock it.
