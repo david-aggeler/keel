@@ -104,7 +104,13 @@ type DesiredStateGroup struct {
 }
 
 // DesiredStateRow is the consumer registration contract for one desired-state
-// row. It deliberately carries no Current, Status, or Action field.
+// row. It deliberately carries no Current, Status, Action, or Active field:
+// all four are rendered facts that keel/testbridge derives by executing Probe,
+// so a consumer has nowhere to author one. Active is resolved further for a
+// mutually-exclusive group, which is the single sanctioned override
+// (keel/requirement-88) and still composes on top of the probe verdict.
+//
+// DHF-REQ: keel/requirement-75
 type DesiredStateRow struct {
 	RunID    string
 	Resource string
@@ -113,7 +119,6 @@ type DesiredStateRow struct {
 	Detail   string
 	Reusable bool
 	Owned    bool
-	Active   bool
 	Probe    DesiredStateProbe
 }
 
@@ -830,7 +835,6 @@ func deriveDesiredStateGroupRows(ctx context.Context, root, parentID string, gro
 			Desired:  unknown.Desired,
 			Reusable: unknown.Reusable,
 			Owned:    unknown.Owned,
-			Active:   unknown.Active,
 		},
 		State: unknown,
 	})
