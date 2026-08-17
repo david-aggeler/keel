@@ -1775,8 +1775,11 @@ func runVSCodeFileLane(ctx context.Context, logger *slog.Logger, root, laneID, r
 		for _, pkg := range eff.goPackages {
 			args = append(args, vscode.GoPackageArg(pkg))
 		}
-		stdout, stderr, err := captureWithMaxOutput(ctx, logger, root, maxOutputBytes, "go", args...)
-		emitLaneGoPackageEvents(stdout, modulePath, writer)
+		lines := newLineFuncWriter(func(line []byte) {
+			emitLaneGoPackageLine(line, modulePath, writer)
+		})
+		stderr, err := streamWithMaxOutput(ctx, logger, root, maxOutputBytes, lines, "go", args...)
+		lines.Flush()
 		if err != nil {
 			return fmt.Errorf("go test %s: %w: %s", strings.Join(args[1:], " "), err, strings.TrimSpace(stderr))
 		}
@@ -1974,8 +1977,8 @@ func vsixSelectionFiles(root string, selection vscode.VSIXSelection) ([]string, 
 	}
 }
 
-// emitLaneGoPackageEvents replays a lane's `go test -json` stream as run
-// events. A package-level result and a per-test result each settle under
+// emitLaneGoPackageLine replays one line of a lane's `go test -json` stream as
+// a run event. A package-level result and a per-test result each settle under
 // their own id: the former keys go::pkg::<rel>, the latter keys
 // go::test::<pkg>::<name> through vscode.GoRunEventTestID — the same id shape
 // the direct selection path emits, so the two paths cannot drift.
@@ -1986,30 +1989,33 @@ func vsixSelectionFiles(root string, selection vscode.VSIXSelection) ([]string, 
 // the run's execution scope (keel/ac-430), so a started leg here would add a
 // second, redundant source for the same rows.
 //
-// DHF-REQ: keel/requirement-71
-func emitLaneGoPackageEvents(raw, modulePath string, writer vscode.RunEventWriter) {
-	scanner := bufio.NewScanner(strings.NewReader(raw))
-	for scanner.Scan() {
-		var event vscode.GoTestJSONEvent
-		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil || event.Package == "" {
-			continue
+// It takes one line at a time rather than a finished buffer, so the caller can
+// hand it each line as `go test -json` reports it and the event reaches the
+// writer while the child is still running (keel/ac-507). A line that does not
+// parse is skipped, which is also what a line truncated by the output ceiling
+// does.
+//
+// DHF-REQ: keel/requirement-71, keel/requirement-131
+func emitLaneGoPackageLine(line []byte, modulePath string, writer vscode.RunEventWriter) {
+	var event vscode.GoTestJSONEvent
+	if err := json.Unmarshal(line, &event); err != nil || event.Package == "" {
+		return
+	}
+	switch event.Action {
+	case "pass", "fail", "skip":
+		pkg := vscode.GoEventPackageRel(event.Package, modulePath)
+		if pkg == "" {
+			return
 		}
-		switch event.Action {
-		case "pass", "fail", "skip":
-			pkg := vscode.GoEventPackageRel(event.Package, modulePath)
-			if pkg == "" {
-				continue
-			}
-			testID := "go::pkg::" + filepath.ToSlash(pkg)
-			if event.Test != "" {
-				testID = vscode.GoRunEventTestID(vscode.GoSelection{}, event, testID, modulePath)
-			}
-			writer(vscode.RunEvent{
-				Event:      vscode.StatusEventName(event.Action),
-				TestID:     testID,
-				DurationMS: vscode.GoElapsedMillis(event.Elapsed, time.Now()),
-			})
+		testID := "go::pkg::" + filepath.ToSlash(pkg)
+		if event.Test != "" {
+			testID = vscode.GoRunEventTestID(vscode.GoSelection{}, event, testID, modulePath)
 		}
+		writer(vscode.RunEvent{
+			Event:      vscode.StatusEventName(event.Action),
+			TestID:     testID,
+			DurationMS: vscode.GoElapsedMillis(event.Elapsed, time.Now()),
+		})
 	}
 }
 
@@ -2048,8 +2054,10 @@ func runVSCodeGoSelection(ctx context.Context, logger *slog.Logger, root, select
 	} else if len(selection.TestNames) > 0 {
 		args = append(args, "-run="+vscode.GoTestNamePattern(selection.TestNames))
 	}
-	stdout, stderr, err := captureWithMaxOutput(ctx, logger, root, maxOutputBytes, "go", args...)
-	emitGoTestJSONEvents(stdout, selection, selectedID, modulePath, writer)
+	emitter := newGoTestJSONEmitter(selection, selectedID, modulePath, writer)
+	lines := newLineFuncWriter(emitter.line)
+	stderr, err := streamWithMaxOutput(ctx, logger, root, maxOutputBytes, lines, "go", args...)
+	lines.Flush()
 	if err != nil {
 		return fmt.Errorf("go test %s: %w: %s", strings.Join(args[1:], " "), err, strings.TrimSpace(stderr))
 	}
@@ -2117,61 +2125,88 @@ func goFileRelInNestedModule(root, rel string) bool {
 	return false
 }
 
-// DHF-REQ: keel/requirement-116
-func emitGoTestJSONEvents(raw string, selection vscode.GoSelection, selectedID, modulePath string, writer vscode.RunEventWriter) {
-	scanner := bufio.NewScanner(strings.NewReader(raw))
-	buildOutputByID := map[string]*strings.Builder{}
-	erroredIDs := map[string]struct{}{}
-	for scanner.Scan() {
-		var event vscode.GoTestJSONEvent
-		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			continue
+// goTestJSONEmitter replays a direct Go selection's `go test -json` stream as
+// run events, one line at a time, so an event reaches the writer while the
+// child is still running (keel/ac-510). It is stateful across the stream: a
+// package's build output accumulates until its build-fail settles the id, and a
+// settled id must not settle twice.
+//
+// One emitter serves one child stream and is driven from the single-writer
+// lineFuncWriter, so its maps need no lock and the events it produces keep the
+// producer's line order (keel/ac-508).
+//
+// DHF-REQ: keel/requirement-116, keel/requirement-131
+type goTestJSONEmitter struct {
+	selection       vscode.GoSelection
+	selectedID      string
+	modulePath      string
+	writer          vscode.RunEventWriter
+	buildOutputByID map[string]*strings.Builder
+	erroredIDs      map[string]struct{}
+}
+
+func newGoTestJSONEmitter(selection vscode.GoSelection, selectedID, modulePath string, writer vscode.RunEventWriter) *goTestJSONEmitter {
+	return &goTestJSONEmitter{
+		selection:       selection,
+		selectedID:      selectedID,
+		modulePath:      modulePath,
+		writer:          writer,
+		buildOutputByID: map[string]*strings.Builder{},
+		erroredIDs:      map[string]struct{}{},
+	}
+}
+
+// line replays one `go test -json` line. A line that does not parse is skipped,
+// which is also what a line truncated by the output ceiling does.
+func (e *goTestJSONEmitter) line(line []byte) {
+	var event vscode.GoTestJSONEvent
+	if err := json.Unmarshal(line, &event); err != nil {
+		return
+	}
+	if event.Action == "build-output" || event.Action == "build-fail" {
+		event.Package = vscode.GoBuildEventPackage(event)
+	}
+	testID := vscode.GoRunEventTestID(e.selection, event, e.selectedID, e.modulePath)
+	switch event.Action {
+	case "run":
+		if event.Test != "" && vscode.OutputBelongsToGoSelection(e.selection, event) {
+			e.writer(vscode.RunEvent{Event: "test_started", TestID: testID})
 		}
-		if event.Action == "build-output" || event.Action == "build-fail" {
-			event.Package = vscode.GoBuildEventPackage(event)
+	case "pass", "fail", "skip":
+		if _, errored := e.erroredIDs[testID]; errored {
+			// The package already settled as errored from its build
+			// failure. go test reports the package `fail` right after
+			// build-fail, and emitting it too would both contradict
+			// ac-425 and give one id two terminal events
+			// (requirement-71 AC 6).
+			return
 		}
-		testID := vscode.GoRunEventTestID(selection, event, selectedID, modulePath)
-		switch event.Action {
-		case "run":
-			if event.Test != "" && vscode.OutputBelongsToGoSelection(selection, event) {
-				writer(vscode.RunEvent{Event: "test_started", TestID: testID})
+		if vscode.GoJSONResultBelongsToSelection(e.selection, event) {
+			e.writer(vscode.RunEvent{
+				Event:      vscode.StatusEventName(event.Action),
+				TestID:     testID,
+				DurationMS: vscode.GoElapsedMillis(event.Elapsed, time.Now()),
+			})
+		}
+	case "output":
+		if vscode.OutputBelongsToGoSelection(e.selection, event) {
+			e.writer(vscode.RunEvent{Event: "output", TestID: testID, Message: event.Output})
+		}
+	case "build-output":
+		if vscode.GoJSONResultBelongsToSelection(e.selection, event) {
+			if e.buildOutputByID[testID] == nil {
+				e.buildOutputByID[testID] = &strings.Builder{}
 			}
-		case "pass", "fail", "skip":
-			if _, errored := erroredIDs[testID]; errored {
-				// The package already settled as errored from its build
-				// failure. go test reports the package `fail` right after
-				// build-fail, and emitting it too would both contradict
-				// ac-425 and give one id two terminal events
-				// (requirement-71 AC 6).
-				continue
+			e.buildOutputByID[testID].WriteString(event.Output)
+		}
+	case "build-fail":
+		if vscode.GoJSONResultBelongsToSelection(e.selection, event) {
+			message := ""
+			if b := e.buildOutputByID[testID]; b != nil {
+				message = b.String()
 			}
-			if vscode.GoJSONResultBelongsToSelection(selection, event) {
-				writer(vscode.RunEvent{
-					Event:      vscode.StatusEventName(event.Action),
-					TestID:     testID,
-					DurationMS: vscode.GoElapsedMillis(event.Elapsed, time.Now()),
-				})
-			}
-		case "output":
-			if vscode.OutputBelongsToGoSelection(selection, event) {
-				writer(vscode.RunEvent{Event: "output", TestID: testID, Message: event.Output})
-			}
-		case "build-output":
-			if vscode.GoJSONResultBelongsToSelection(selection, event) {
-				if buildOutputByID[testID] == nil {
-					buildOutputByID[testID] = &strings.Builder{}
-				}
-				buildOutputByID[testID].WriteString(event.Output)
-			}
-		case "build-fail":
-			if vscode.GoJSONResultBelongsToSelection(selection, event) {
-				message := ""
-				if b := buildOutputByID[testID]; b != nil {
-					message = b.String()
-				}
-				erroredIDs[testID] = struct{}{}
-				writer(vscode.RunEvent{Event: "errored", TestID: testID, Message: message})
-			}
+			e.erroredIDs[testID] = struct{}{}
+			e.writer(vscode.RunEvent{Event: "errored", TestID: testID, Message: message})
 		}
 	}
 }
