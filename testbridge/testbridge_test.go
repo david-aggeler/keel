@@ -361,8 +361,8 @@ func TestDiscoverDerivesDesiredStateGroupsFromProvider(t *testing.T) {
 		Order:             20,
 		MutuallyExclusive: true,
 		Rows: []testbridge.DesiredStateRow{
-			probedRow("demo::action::seed-small", "db-small", "fixture-data", "small", "empty", false, "seed small", false, true),
-			probedRow("", "python", "tool", "available", "available", true, "ok", true, false),
+			probedRow("demo::action::seed-small", "db-small", "fixture-data", "small", "empty", false, "seed small", false),
+			probedRow("", "python", "tool", "available", "available", true, "ok", true),
 		},
 	}}
 	var protocol bytes.Buffer
@@ -419,7 +419,7 @@ func TestDesiredStateDerivationIgnoresGroupDisplayLabel(t *testing.T) {
 			Label: "Provisioning",
 			Order: 20,
 			Rows: []testbridge.DesiredStateRow{
-				probedRow("demo::action::seed-small", "db-small", "fixture-data", "small", "empty", false, "seed small", false, true),
+				probedRow("demo::action::seed-small", "db-small", "fixture-data", "small", "empty", false, "seed small", false),
 			},
 		}}
 		var protocol bytes.Buffer
@@ -694,8 +694,8 @@ func TestExclusiveUnknownRunIsBridgeOwnedAndDoesNotInvokeConsumer(t *testing.T) 
 		Order:             20,
 		MutuallyExclusive: true,
 		Rows: []testbridge.DesiredStateRow{
-			probedRow("demo::desired-state::dataset::small", "app-db-small", "fixture-data", "small", "small", true, "small active", false, true),
-			probedRow("demo::desired-state::dataset::full", "app-db-full", "fixture-data", "full", "small", false, "full inactive", false, false),
+			probedRow("demo::desired-state::dataset::small", "app-db-small", "fixture-data", "small", "small", true, "small active", false),
+			probedRow("demo::desired-state::dataset::full", "app-db-full", "fixture-data", "full", "small", false, "full inactive", false),
 		},
 	}}
 	var protocol bytes.Buffer
@@ -728,8 +728,8 @@ func TestExclusiveDesiredStateSingleSelectionClearsSiblingResults(t *testing.T) 
 		Order:             20,
 		MutuallyExclusive: true,
 		Rows: []testbridge.DesiredStateRow{
-			probedRow("demo::desired-state::dataset::small", "app-db-small", "fixture-data", "small", "small", true, "small active", false, true),
-			probedRow("demo::desired-state::dataset::full", "app-db-full", "fixture-data", "full", "full", true, "full active", false, true),
+			probedRow("demo::desired-state::dataset::small", "app-db-small", "fixture-data", "small", "small", true, "small active", false),
+			probedRow("demo::desired-state::dataset::full", "app-db-full", "fixture-data", "full", "full", true, "full active", false),
 		},
 	}}
 	var protocol bytes.Buffer
@@ -895,7 +895,7 @@ func TestBridgeOwnedVocabularyIsConsumerAgnostic(t *testing.T) {
 		Label:             "Data Set",
 		MutuallyExclusive: true,
 		Rows: []testbridge.DesiredStateRow{
-			probedRow("", "db", "fixture-data", "seeded", "empty", false, "seed", false, false),
+			probedRow("", "db", "fixture-data", "seeded", "empty", false, "seed", false),
 		},
 	}}
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{
@@ -1073,7 +1073,7 @@ func TestDiscoverDesiredStateRowUsesProbeDerivedCurrentAndAction(t *testing.T) {
 		Order:             10,
 		MutuallyExclusive: true,
 		Rows: []testbridge.DesiredStateRow{
-			probedRow("demo::desired-state::app-db-full", "app-db-full", "fixture-data", "full", "full", true, "already full", false, true),
+			probedRow("demo::desired-state::app-db-full", "app-db-full", "fixture-data", "full", "full", true, "already full", false),
 		},
 	}}
 
@@ -1125,7 +1125,6 @@ func TestDiscoverAnonymousDesiredStateRowIDIgnoresProbeDerivedAction(t *testing.
 			Resource: "app-db-full",
 			Kind:     "fixture-data",
 			Desired:  "full",
-			Active:   true,
 			Probe: func(context.Context, testbridge.DesiredStateProbeRequest) testbridge.DesiredStateProbeResult {
 				return testbridge.DesiredStateProbeResult{Current: current, Satisfied: satisfied}
 			},
@@ -1164,6 +1163,83 @@ func TestDiscoverAnonymousDesiredStateRowIDIgnoresProbeDerivedAction(t *testing.
 	}
 }
 
+// A group that is not mutually exclusive has no override loop, so the active
+// fact reaches the wire straight out of deriveDesiredStateRow. It must follow
+// the row's probe there, exactly as current, status and action already do.
+//
+// DHF-TEST: keel/requirement-75, keel/ac-503
+func TestNonExclusiveDesiredStateRowActiveFollowsItsProbe(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{desiredStateGroupItem()}
+	fake.desiredGroups = []testbridge.DesiredStateGroup{{
+		Label:             "Test Preconditions",
+		Order:             10,
+		MutuallyExclusive: false,
+		Rows: []testbridge.DesiredStateRow{
+			// The declared row that the probe reports satisfied.
+			probedRow("demo::desired-state::ready", "ready-resource", "service", "up", "up", true, "ready is up", false),
+			// The declared row that the probe reports unsatisfied.
+			probedRow("demo::desired-state::missing", "missing-resource", "service", "up", "down", false, "missing is down", false),
+		},
+	}}
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol})
+
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "discover", "--format", "json"}); err != nil {
+		t.Fatalf("discover dispatch: %v", err)
+	}
+	var discovery vscode.DiscoveryDocument
+	decodeJSON(t, &protocol, &discovery)
+	for _, want := range []struct {
+		id     string
+		active bool
+	}{
+		{id: "demo::desired-state::ready", active: true},
+		{id: "demo::desired-state::missing", active: false},
+	} {
+		item, ok := testItemByID(discovery.Items, want.id)
+		if !ok {
+			t.Fatalf("discovery missing desired-state row %q: %+v", want.id, discovery.Items)
+		}
+		if item.DesiredStateRow == nil {
+			t.Fatalf("discovery row %q carries no desired-state facts: %+v", want.id, item)
+		}
+		if item.DesiredStateRow.Active != want.active {
+			t.Fatalf("discovery row %q active = %v, want %v (probe-derived)", want.id, item.DesiredStateRow.Active, want.active)
+		}
+	}
+
+	protocol.Reset()
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "desired-state", "--format", "json"}); err != nil {
+		t.Fatalf("desired-state dispatch: %v", err)
+	}
+	var desired vscode.DesiredStateDocument
+	decodeJSON(t, &protocol, &desired)
+	group := desiredStateGroupByLabel(t, desired.Groups, "Test Preconditions")
+	if row := desiredStateRowByResource(t, group.Rows, "ready-resource"); !row.Active {
+		t.Fatalf("satisfied non-exclusive row inactive: %+v", row)
+	}
+	if row := desiredStateRowByResource(t, group.Rows, "missing-resource"); row.Active {
+		t.Fatalf("unsatisfied non-exclusive row active: %+v", row)
+	}
+}
+
+// The value half of keel/ac-503 is enforced structurally, not by comparison:
+// the registration contract offers no field a consumer could use to disagree
+// with the probe. The struct's omission rule now covers all four rendered
+// facts, so this guards the omission the doc comment claims.
+//
+// DHF-TEST: keel/requirement-75, keel/ac-503
+func TestDesiredStateRowRegistrationContractCarriesNoRenderedFact(t *testing.T) {
+	rowType := reflect.TypeOf(testbridge.DesiredStateRow{})
+	for _, name := range []string{"Current", "Status", "Action", "Active"} {
+		if _, ok := rowType.FieldByName(name); ok {
+			t.Fatalf("DesiredStateRow carries a %s field: a consumer can author a rendered desired-state fact", name)
+		}
+	}
+}
+
 // DHF-TEST: keel/requirement-83
 func TestDiscoverServesRunnableNonExclusiveDesiredStateGroups(t *testing.T) {
 	root := t.TempDir()
@@ -1174,22 +1250,22 @@ func TestDiscoverServesRunnableNonExclusiveDesiredStateGroups(t *testing.T) {
 		Order:             10,
 		MutuallyExclusive: false,
 		Rows: []testbridge.DesiredStateRow{
-			probedRow("demo::desired-state::db", "db", "service", "seeded", "empty", false, "seed db", false, false),
-			probedRow("", "python", "tool", "available", "available", true, "ok", true, false),
+			probedRow("demo::desired-state::db", "db", "service", "seeded", "empty", false, "seed db", false),
+			probedRow("", "python", "tool", "available", "available", true, "ok", true),
 		},
 	}, {
 		Label:             "Exclusive Choices",
 		Order:             20,
 		MutuallyExclusive: true,
 		Rows: []testbridge.DesiredStateRow{
-			probedRow("demo::desired-state::small", "db", "fixture-data", "small", "empty", false, "seed small", false, true),
+			probedRow("demo::desired-state::small", "db", "fixture-data", "small", "empty", false, "seed small", false),
 		},
 	}, {
 		Label:             "Informational Checks",
 		Order:             30,
 		MutuallyExclusive: false,
 		Rows: []testbridge.DesiredStateRow{
-			probedRow("", "go", "tool", "installed", "installed", true, "ok", true, false),
+			probedRow("", "go", "tool", "installed", "installed", true, "ok", true),
 		},
 	}}
 	var protocol bytes.Buffer
@@ -1231,7 +1307,7 @@ func TestRunDryRunResolvesDerivedDesiredStateRunIDsReadOnly(t *testing.T) {
 	fake.desiredGroups = []testbridge.DesiredStateGroup{{
 		Label: "Provisioning",
 		Order: 10,
-		Rows:  []testbridge.DesiredStateRow{probedRow("demo::action::seed-small", "db-small", "fixture-data", "small", "empty", false, "seed small", false, false)},
+		Rows:  []testbridge.DesiredStateRow{probedRow("demo::action::seed-small", "db-small", "fixture-data", "small", "empty", false, "seed small", false)},
 	}}
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: io.Discard})
 
@@ -1254,11 +1330,11 @@ func TestDiscoverRejectsDuplicateDerivedDesiredStateIDs(t *testing.T) {
 	fake.desiredGroups = []testbridge.DesiredStateGroup{{
 		Label: "Provisioning",
 		Order: 10,
-		Rows:  []testbridge.DesiredStateRow{probedRow("", "db-small", "fixture-data", "small", "empty", false, "seed small", false, false)},
+		Rows:  []testbridge.DesiredStateRow{probedRow("", "db-small", "fixture-data", "small", "empty", false, "seed small", false)},
 	}, {
 		Label: "Provisioning",
 		Order: 20,
-		Rows:  []testbridge.DesiredStateRow{probedRow("", "db-large", "fixture-data", "large", "empty", false, "seed large", false, false)},
+		Rows:  []testbridge.DesiredStateRow{probedRow("", "db-large", "fixture-data", "large", "empty", false, "seed large", false)},
 	}}
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: io.Discard})
 
@@ -1523,7 +1599,7 @@ func TestRunExpandsRunnableDesiredStateGroupToRows(t *testing.T) {
 		Rows: []testbridge.DesiredStateRow{
 			probedCountingRow(calls, "demo::desired-state::db", "db", "seeded", true, "db ready"),
 			probedCountingRow(calls, "demo::desired-state::cache", "cache", "warm", true, "cache ready"),
-			probedRow("", "python", "tool", "available", "available", true, "ok", true, false),
+			probedRow("", "python", "tool", "available", "available", true, "ok", true),
 		},
 	}}
 	var protocol bytes.Buffer
@@ -1566,9 +1642,9 @@ func TestDesiredStateExpandsRunnableGroupSelectionBeforeProviderFilter(t *testin
 		Order:             10,
 		MutuallyExclusive: false,
 		Rows: []testbridge.DesiredStateRow{
-			probedRow("demo::desired-state::db", "db", "service", "seeded", "empty", false, "seed db", false, false),
-			probedRow("demo::desired-state::cache", "cache", "service", "warm", "cold", false, "warm cache", false, false),
-			probedRow("", "python", "tool", "available", "available", true, "ok", true, false),
+			probedRow("demo::desired-state::db", "db", "service", "seeded", "empty", false, "seed db", false),
+			probedRow("demo::desired-state::cache", "cache", "service", "warm", "cold", false, "warm cache", false),
+			probedRow("", "python", "tool", "available", "available", true, "ok", true),
 		},
 	}}
 	var protocol bytes.Buffer
@@ -1645,7 +1721,7 @@ func TestRunDesiredStateGroupWithNoRunnableRowsFailsLoudly(t *testing.T) {
 		Order:             10,
 		MutuallyExclusive: false,
 		Rows: []testbridge.DesiredStateRow{
-			probedRow("", "python", "tool", "available", "available", true, "ok", true, false),
+			probedRow("", "python", "tool", "available", "available", true, "ok", true),
 		},
 	}}
 	var protocol bytes.Buffer
@@ -2816,7 +2892,7 @@ func (f *fakeBridge) DesiredState(_ context.Context, ids []string) (testbridge.D
 	if groups == nil {
 		groups = []testbridge.DesiredStateGroup{{
 			Label: "Test Preconditions",
-			Rows:  []testbridge.DesiredStateRow{probedRow("", "db", "service", "seeded", "empty", false, "seed test database during run", false, false)},
+			Rows:  []testbridge.DesiredStateRow{probedRow("", "db", "service", "seeded", "empty", false, "seed test database during run", false)},
 		}}
 	}
 	if f.filterDesiredStateByIDs && len(ids) > 0 {
@@ -2849,7 +2925,7 @@ func filterDesiredStateGroupsByRunID(groups []testbridge.DesiredStateGroup, ids 
 	return filtered
 }
 
-func probedRow(runID, resource, kind, desired, current string, satisfied bool, message string, reusable, active bool) testbridge.DesiredStateRow {
+func probedRow(runID, resource, kind, desired, current string, satisfied bool, message string, reusable bool) testbridge.DesiredStateRow {
 	return testbridge.DesiredStateRow{
 		RunID:    runID,
 		Resource: resource,
@@ -2857,7 +2933,6 @@ func probedRow(runID, resource, kind, desired, current string, satisfied bool, m
 		Desired:  desired,
 		Reusable: reusable,
 		Owned:    !reusable,
-		Active:   active,
 		Probe: func(context.Context, testbridge.DesiredStateProbeRequest) testbridge.DesiredStateProbeResult {
 			return testbridge.DesiredStateProbeResult{Current: current, Satisfied: satisfied, Message: message}
 		},
@@ -3075,8 +3150,8 @@ func TestUnknownRunDispatchesConsumerResetHook(t *testing.T) {
 			Order:             20,
 			MutuallyExclusive: true,
 			Rows: []testbridge.DesiredStateRow{
-				probedRow("demo::desired-state::dataset::small", "app-db-small", "fixture-data", "small", "small", true, "small active", false, true),
-				probedRow("demo::desired-state::dataset::full", "app-db-full", "fixture-data", "full", "small", false, "full inactive", false, false),
+				probedRow("demo::desired-state::dataset::small", "app-db-small", "fixture-data", "small", "small", true, "small active", false),
+				probedRow("demo::desired-state::dataset::full", "app-db-full", "fixture-data", "full", "small", false, "full inactive", false),
 			},
 		}}
 		return &resetterBridge{fakeBridge: fake}
@@ -3142,7 +3217,6 @@ func (l *lifecycleBridge) group() testbridge.DesiredStateGroup {
 			Kind:     "fixture-data",
 			Desired:  want,
 			Owned:    true,
-			Active:   l.state == want,
 			Probe: func(context.Context, testbridge.DesiredStateProbeRequest) testbridge.DesiredStateProbeResult {
 				current := l.state
 				if current == "" {
@@ -3288,7 +3362,7 @@ func TestDiscoveryCarriesDesiredStateFactsAsTypedFields(t *testing.T) {
 		Order:             20,
 		MutuallyExclusive: true,
 		Rows: []testbridge.DesiredStateRow{
-			probedRow("demo::desired-state::dataset::full", "app-db-full", "fixture-data", "full", "full", true, "full active", false, true),
+			probedRow("demo::desired-state::dataset::full", "app-db-full", "fixture-data", "full", "full", true, "full active", false),
 		},
 	}}
 
@@ -3337,8 +3411,8 @@ func TestLimitationsCarryNoDesiredStateFactEncoding(t *testing.T) {
 		Order:             20,
 		MutuallyExclusive: true,
 		Rows: []testbridge.DesiredStateRow{
-			probedRow("demo::desired-state::dataset::small", "app-db-small", "fixture-data", "small", "small", true, "small active", false, true),
-			probedRow("demo::desired-state::dataset::full", "app-db-full", "fixture-data", "full", "full", true, "full active", false, true),
+			probedRow("demo::desired-state::dataset::small", "app-db-small", "fixture-data", "small", "small", true, "small active", false),
+			probedRow("demo::desired-state::dataset::full", "app-db-full", "fixture-data", "full", "full", true, "full active", false),
 		},
 	}}
 

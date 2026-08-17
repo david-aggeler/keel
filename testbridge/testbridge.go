@@ -104,7 +104,13 @@ type DesiredStateGroup struct {
 }
 
 // DesiredStateRow is the consumer registration contract for one desired-state
-// row. It deliberately carries no Current, Status, or Action field.
+// row. It deliberately carries no Current, Status, Action, or Active field:
+// all four are rendered facts that keel/testbridge derives by executing Probe,
+// so a consumer has nowhere to author one. Active is resolved further for a
+// mutually-exclusive group, which is the single sanctioned override
+// (keel/requirement-88) and still composes on top of the probe verdict.
+//
+// DHF-REQ: keel/requirement-75
 type DesiredStateRow struct {
 	RunID    string
 	Resource string
@@ -113,7 +119,6 @@ type DesiredStateRow struct {
 	Detail   string
 	Reusable bool
 	Owned    bool
-	Active   bool
 	Probe    DesiredStateProbe
 }
 
@@ -830,7 +835,6 @@ func deriveDesiredStateGroupRows(ctx context.Context, root, parentID string, gro
 			Desired:  unknown.Desired,
 			Reusable: unknown.Reusable,
 			Owned:    unknown.Owned,
-			Active:   unknown.Active,
 		},
 		State: unknown,
 	})
@@ -873,7 +877,7 @@ func isExclusiveUnknownRunID(id string) bool {
 	return strings.Contains(id, "::desired-state::group::") && strings.HasSuffix(id, "::unknown")
 }
 
-// DHF-REQ: keel/requirement-129
+// DHF-REQ: keel/requirement-129, keel/requirement-75
 func deriveDesiredStateRow(ctx context.Context, root string, row DesiredStateRow) (vscode.DesiredState, error) {
 	if row.Probe == nil {
 		return vscode.DesiredState{}, fmt.Errorf("keel/testbridge: desired-state row %q has no probe", row.Resource)
@@ -913,7 +917,11 @@ func deriveDesiredStateRow(ctx context.Context, root string, row DesiredStateRow
 		Detail:   row.Detail,
 		Reusable: row.Reusable,
 		Owned:    row.Owned,
-		Active:   row.Active,
+		// The probe is the single source for all four rendered facts. A row is
+		// active exactly when its probe reports the resource satisfied; the
+		// mutually-exclusive resolution keel/requirement-88 owns composes on top
+		// of this derived base rather than on a consumer-declared value.
+		Active: result.Satisfied,
 	}, nil
 }
 
