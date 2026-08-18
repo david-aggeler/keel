@@ -21,8 +21,8 @@ The interface specification is **no longer staged here**. It completed the
 ingestion path this file describes: its body became the gold `interface_spec`
 tree — root `keel/interface_spec-1` with chapters `-2` … `-7` — and the staged
 file was deleted at `4a5ce05` under `keel/change_request-131`. Read the records,
-not this folder, for the interface contract. Its index row is removed rather
-than repointed because the tree is now the only holder.
+not this folder, for the interface contract. Its index row is removed, not
+redirected to another file, because the tree is now the only holder.
 
 Cross-references between the remaining files use PLACEHOLDER refs
 (`keel/architecture_description-1`, `-2`) — fix them to the real sequence ids
