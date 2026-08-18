@@ -4,6 +4,49 @@ Newest first. The Keel Test Bridge extension and the `github.com/david-aggeler/k
 Go module ship on one tag at one version — an entry here describes the extension
 side of that tag.
 
+## v0.8.0
+
+### Breaking
+
+- The declared minimum VS Code version rises from `^1.102.0` to `^1.125.0`. Every
+  tracked manifest in the repository now states that one value, and the policy gate
+  reads them all. Upgrade VS Code to 1.125 or later before installing this VSIX.
+- The desired-state wire document changes shape. `mutually_exclusive`, `active`,
+  `current` and `action` leave the `Limitations` display array and become typed
+  fields covered by the JSON schemas. `Limitations` returns to prose. The extension
+  no longer recovers state by substring match.
+- A row's `active` fact is derived from the row's own probe, in every group. A
+  producer can no longer declare a row active while its probe reports the resource
+  unsatisfied.
+
+### Added
+
+- `src/protocol.ts` is pinned to the embedded schemas inside the VSIX gate, so the
+  TypeScript half of the wire contract cannot go stale silently.
+- The external-run mirror's stale-close deadline is a workspace setting. It was a
+  module literal with no way to change it.
+
+### Changed
+
+- Run events render as the producer writes them. The bridge streams each event
+  while the child is still running, in place of a post-exit burst.
+- An exclusive desired-state group is invalidated at run **start**: every peer is
+  stamped skipped before the devtool child spawns, and the group settles on
+  bridge-served truth on every abort path. Peers previously kept a stale passed
+  icon for the whole reconcile.
+- A test inside a lane navigates to its source. The `covers` aliases now carry the
+  canonical item's URI and range.
+- The mirror skips the spool of the run the editor itself executed. One Test
+  Explorer run previously produced two run-history entries.
+- The mirror's stale close names producer silence rather than stream truncation,
+  and a terminal event that arrives after the close reconciles the item.
+
+### Development
+
+- Toolchain moves to `@types/vscode` 1.125, `@types/node` 24, and TypeScript 7.
+  The Node major is anchored to the runtime VS Code 1.125 ships, against a citable
+  source.
+
 ## v0.7.3
 
 ### Changed
