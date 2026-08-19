@@ -92,3 +92,70 @@ func TestRunLockWireByteStability(t *testing.T) {
 		t.Errorf("run-lock wire drift:\n got: %s\nwant: %s", got, want)
 	}
 }
+
+// TestDiscoveryItemTypedFactsWireByteStability pins the encoding of the typed
+// facts keel/requirement-138 adds to the discovery item. The two pointer
+// members are the point: an item with no attributable run carries no `last_run`
+// key at all, and a measured zero still reaches the wire as 0 rather than
+// vanishing behind omitempty (keel/ac-564).
+//
+// DHF-TEST: keel/requirement-138
+func TestDiscoveryItemTypedFactsWireByteStability(t *testing.T) {
+	fixed := time.Date(2026, 7, 12, 10, 20, 0, 0, time.UTC)
+	zeroDuration := int64(0)
+	measured := int64(9800)
+	exitOne := 1
+
+	cases := []struct {
+		name string
+		item TestItem
+		want string
+	}{
+		{
+			name: "no typed facts",
+			item: TestItem{ID: "keel::lane::go-log", Label: "log", Kind: "lane", Runnable: true, Profiles: []string{"run"}},
+			want: `{"id":"keel::lane::go-log","label":"log","kind":"lane","runnable":true,"profiles":["run"]}`,
+		},
+		{
+			name: "description, findings and last run",
+			item: TestItem{
+				ID:          "keel::lane::go-log",
+				Label:       "log",
+				Kind:        "lane",
+				Runnable:    true,
+				Profiles:    []string{"run"},
+				Description: "the keel/log package",
+				Findings:    []Finding{{Rule: "V6", Severity: "warning", Message: "go member matches no test-bearing packages: ./log/..."}},
+				LastRun:     &LastRunFacts{At: fixed, DurationMS: &measured, ExitCode: &exitOne},
+			},
+			want: `{"id":"keel::lane::go-log","label":"log","kind":"lane","runnable":true,"profiles":["run"],"description":"the keel/log package","findings":[{"rule":"V6","severity":"warning","message":"go member matches no test-bearing packages: ./log/..."}],"last_run":{"at":"2026-07-12T10:20:00Z","duration_ms":9800,"exit_code":1}}`,
+		},
+		{
+			name: "measured zero is not absence",
+			item: TestItem{
+				ID:       "keel::lane::go-log",
+				Label:    "log",
+				Kind:     "lane",
+				Runnable: true,
+				Profiles: []string{"run"},
+				LastRun:  &LastRunFacts{At: fixed, DurationMS: &zeroDuration, ExitCode: &exitZeroItem},
+			},
+			want: `{"id":"keel::lane::go-log","label":"log","kind":"lane","runnable":true,"profiles":["run"],"last_run":{"at":"2026-07-12T10:20:00Z","duration_ms":0,"exit_code":0}}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := json.Marshal(tc.item)
+			if err != nil {
+				t.Fatalf("marshal %s: %v", tc.name, err)
+			}
+			if string(got) != tc.want {
+				t.Errorf("discovery item wire drift for %s:\n got: %s\nwant: %s", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+// exitZeroItem is addressable so the measured-zero case can point at it.
+var exitZeroItem = 0

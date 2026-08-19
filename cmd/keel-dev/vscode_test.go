@@ -1237,6 +1237,91 @@ func TestVSCodeDiscoveryAppendsExactLaneDurationHint(t *testing.T) {
 	if got := strings.Join(lane.Limitations, " "); !strings.Contains(got, "last 9.8s") {
 		t.Fatalf("lane limitations = %q, want newest exact single-lane duration hint", got)
 	}
+	// The typed measurement is asserted against the same three fixture
+	// streams as the formatted hint, in the same test: the attribution
+	// regressing silently while the prose hint still renders is the failure
+	// this carriage exists to make visible (keel/ac-550).
+	// DHF-TEST: keel/requirement-138
+	if lane.LastRun == nil {
+		t.Fatalf("lane carries no typed last_run: %+v", lane)
+	}
+	if lane.LastRun.DurationMS == nil || *lane.LastRun.DurationMS != 9800 {
+		t.Fatalf("lane last_run.duration_ms = %v, want the measured 9800", lane.LastRun.DurationMS)
+	}
+	if lane.LastRun.ExitCode == nil || *lane.LastRun.ExitCode != 1 {
+		t.Fatalf("lane last_run.exit_code = %v, want the failed run's 1", lane.LastRun.ExitCode)
+	}
+	if want := time.Date(2026, 7, 12, 10, 20, 0, 0, time.UTC); !lane.LastRun.At.Equal(want) {
+		t.Fatalf("lane last_run.at = %v, want the newest attributable stream's start %v", lane.LastRun.At, want)
+	}
+	if strings.Contains(lane.Description, "9.8") || strings.Contains(lane.Description, "last ") {
+		t.Fatalf("lane description = %q, want no duration text (keel/ac-550)", lane.Description)
+	}
+}
+
+// TestVSCodeDiscoveryOmitsLastRunWithoutAnAttributableStream holds keel/ac-564:
+// absence of a measurement is absence of the field, never a zero. Both arms of
+// the attribution rule are covered — no stream at all, and a stream whose
+// requested set names more than the one lane.
+//
+// DHF-TEST: keel/requirement-138
+func TestVSCodeDiscoveryOmitsLastRunWithoutAnAttributableStream(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		streams map[string]string
+	}{
+		{name: "no persisted stream", streams: nil},
+		{
+			name: "every candidate is a multi-selection run",
+			streams: map[string]string{
+				"multi.jsonl": strings.Join([]string{
+					`{"version":1,"event":"run_started","time":"2026-07-12T10:10:00Z","run_id":"multi","requested":[{"id":"keel::lane::go-log","label":"log"},{"id":"keel::lane::lint","label":"lint"}]}`,
+					`{"version":1,"event":"run_finished","time":"2026-07-12T10:10:01Z","run_id":"multi","exit_code":0}`,
+				}, "\n") + "\n",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeFile(t, root, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
+			writeFile(t, root, "go.sum", "")
+			if err := os.MkdirAll(filepath.Join(root, ".vscode"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, root, filepath.Join(".vscode", "test-lanes.json"), `{"version":1,"lanes":[{"id":"go-log","label":"log","order":"b.40","members":[{"go":"./log/..."}]}]}`+"\n")
+			if len(tc.streams) > 0 {
+				if err := os.MkdirAll(filepath.Join(root, ".devtools", "vscode-runs"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for name, body := range tc.streams {
+				writeFile(t, root, filepath.Join(".devtools", "vscode-runs", name), body)
+			}
+
+			built, err := buildVSCodeDiscovery(root)
+			if err != nil {
+				t.Fatalf("buildVSCodeDiscovery: %v", err)
+			}
+			var encoded bytes.Buffer
+			if err := testbridge.EncodeDocument(&encoded, built); err != nil {
+				t.Fatalf("encode protocol document: %v", err)
+			}
+			if strings.Contains(encoded.String(), `"last_run"`) {
+				t.Fatalf("discovery carries a last_run member with no attributable stream:\n%s", encoded.String())
+			}
+			var doc vscode.DiscoveryDocument
+			if err := json.Unmarshal(encoded.Bytes(), &doc); err != nil {
+				t.Fatalf("discovery JSON: %v", err)
+			}
+			lane, ok := discoveryItemByID(doc, "keel::lane::go-log")
+			if !ok {
+				t.Fatalf("discovery missing go-log lane: %+v", doc.Items)
+			}
+			if lane.LastRun != nil {
+				t.Fatalf("lane last_run = %+v, want absent (keel/ac-564)", lane.LastRun)
+			}
+		})
+	}
 }
 
 // DHF-TEST: keel/requirement-54
@@ -1659,7 +1744,7 @@ func TestVSCodeLaneEdgeCases(t *testing.T) {
 		t.Fatalf("invalid lane run err = %v\n%s", err, protocol.String())
 	}
 
-	if hint := laneDurationHint(&laneLastRun{DurationMS: 192000}); hint != "· last 3m 12s" {
+	if hint := laneDurationHint(&vscode.LaneRun{DurationMS: 192000}); hint != "· last 3m 12s" {
 		t.Fatalf("long duration hint = %q", hint)
 	}
 	if hint := laneDurationHint(nil); hint != "" {

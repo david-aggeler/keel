@@ -544,12 +544,14 @@ func desiredStateParent(items []vscode.TestItem) (vscode.TestItem, bool) {
 
 func desiredStateDiagnosticItem(parentID string, err error) vscode.TestItem {
 	return vscode.TestItem{
-		ID:          parentID + "::diagnostic::desired-state",
-		ParentID:    parentID,
-		Label:       "desired-state unavailable",
-		Kind:        "group",
-		Runnable:    false,
-		Profiles:    []string{},
+		ID:       parentID + "::diagnostic::desired-state",
+		ParentID: parentID,
+		Label:    "desired-state unavailable",
+		Kind:     "group",
+		Runnable: false,
+		Profiles: []string{},
+		// DHF-REQ: keel/requirement-138
+		Description: err.Error(),
 		Limitations: []string{err.Error()},
 	}
 }

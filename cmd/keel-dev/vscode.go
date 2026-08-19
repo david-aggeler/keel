@@ -757,13 +757,28 @@ func (s lanesState) discoveryItems() []vscode.TestItem {
 		eff := s.effective[id]
 		item := laneItem(eff.id, eff.lane.Order+" "+eff.lane.Label, ordinalSortText(eff.lane.Order))
 		item.RequiredResources = eff.prerequisites
+		// The producer's own prose travels scalar; limitations keeps its copy
+		// until the consumer no longer needs the fallback (keel/ac-549).
+		// DHF-REQ: keel/requirement-138
+		item.Description = eff.lane.Description
 		if eff.lane.Description != "" {
 			item.Limitations = append(item.Limitations, eff.lane.Description)
 		}
-		if hint := laneDurationHint(latestLaneRun(s.root, eff.id)); hint != "" {
+		// The typed measurement and the prose hint are written from one
+		// attribution, so the tree cannot move while the fact starts
+		// traveling typed (keel/ac-550, keel/ac-564).
+		// DHF-REQ: keel/requirement-138
+		lastRun := vscode.LatestLaneRun(s.root, eff.id)
+		item.LastRun = lastRun.Facts()
+		if hint := laneDurationHint(lastRun); hint != "" {
 			item.Limitations = append(item.Limitations, hint)
 		}
+		// Each finding travels as its own rule/severity/message triple; the
+		// concatenated line stays in limitations only until the consumer
+		// stops reading it (keel/ac-551).
+		// DHF-REQ: keel/requirement-138
 		for _, finding := range eff.findings {
+			item.Findings = append(item.Findings, vscode.Finding{Rule: finding.Rule, Severity: finding.Severity, Message: finding.Message})
 			item.Limitations = append(item.Limitations, finding.Rule+" "+finding.Severity+": "+finding.Message)
 		}
 		items = append(items, item)
@@ -869,7 +884,7 @@ func (s lanesState) coverItems(eff effectiveLane) []vscode.TestItem {
 	return items
 }
 
-func laneDurationHint(last *laneLastRun) string {
+func laneDurationHint(last *vscode.LaneRun) string {
 	if last == nil || last.DurationMS < 0 {
 		return ""
 	}
@@ -883,12 +898,14 @@ func laneDurationHint(last *laneLastRun) string {
 
 func lanesDiagnosticItem(id, message string) vscode.TestItem {
 	return vscode.TestItem{
-		ID:          "keel::lane-diagnostic::" + StableIDSegment(id),
-		ParentID:    vscodeGroupLanes,
-		Label:       "lanes diagnostic: " + message,
-		Kind:        "group",
-		Runnable:    false,
-		Profiles:    []string{},
+		ID:       "keel::lane-diagnostic::" + StableIDSegment(id),
+		ParentID: vscodeGroupLanes,
+		Label:    "lanes diagnostic: " + message,
+		Kind:     "group",
+		Runnable: false,
+		Profiles: []string{},
+		// DHF-REQ: keel/requirement-138
+		Description: message,
 		Limitations: []string{message},
 	}
 }
@@ -982,57 +999,17 @@ func laneMembersForBridge(members []laneMember) []map[string]string {
 	return out
 }
 
+// latestLaneRun adapts the neutral attribution to the lanes-list document's
+// own record shape. The rule itself lives in keel/vscode so keel-demo-dev
+// resolves the same lane run from the same streams.
+//
+// DHF-REQ: keel/requirement-53, keel/requirement-138
 func latestLaneRun(root, laneID string) *laneLastRun {
-	runDir := filepath.Join(root, ".devtools", "vscode-runs")
-	entries, err := os.ReadDir(runDir)
-	if err != nil {
+	run := vscode.LatestLaneRun(root, laneID)
+	if run == nil {
 		return nil
 	}
-	var best *laneLastRun
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
-			continue
-		}
-		got := laneRunFromStream(filepath.Join(runDir, entry.Name()), laneID)
-		if got == nil {
-			continue
-		}
-		if best == nil || got.At.After(best.At) {
-			best = got
-		}
-	}
-	return best
-}
-
-func laneRunFromStream(path, laneID string) *laneLastRun {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil
-	}
-	defer file.Close()
-	var started *vscode.RunEvent
-	var finished *vscode.RunEvent
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		var event vscode.RunEvent
-		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			continue
-		}
-		switch event.Event {
-		case "run_started":
-			if len(event.Requested) == 1 && event.Requested[0].ID == laneID {
-				copyEvent := event
-				started = &copyEvent
-			}
-		case "run_finished":
-			copyEvent := event
-			finished = &copyEvent
-		}
-	}
-	if started == nil || finished == nil || finished.ExitCode == nil {
-		return nil
-	}
-	return &laneLastRun{RunID: started.RunID, At: started.Time, DurationMS: finished.Time.Sub(started.Time).Milliseconds(), ExitCode: *finished.ExitCode}
+	return &laneLastRun{RunID: run.RunID, At: run.At, DurationMS: run.DurationMS, ExitCode: run.ExitCode}
 }
 
 func detectGoFamilies(root string) (map[string]bool, error) {
@@ -1207,6 +1184,8 @@ func discoverGoTestItems(_ context.Context, root string) ([]vscode.TestItem, err
 			}
 			if file.parseErr != nil {
 				item.Profiles = []string{}
+				// DHF-REQ: keel/requirement-138
+				item.Description = file.parseErr.Error()
 				item.Limitations = []string{file.parseErr.Error()}
 			}
 			items = append(items, item)
