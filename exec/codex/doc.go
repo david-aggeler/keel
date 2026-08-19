@@ -11,6 +11,12 @@
 // full stream, the captured thread id, and the exit code are collected in
 // [Result].
 //
+// Whether a run succeeded is not decided here. This adapter supplies two
+// per-CLI facts — the child's exit code and its terminal event's own verdict —
+// to the shared contract in [keel/exec.DecideCLIOutcome], which every keel/exec
+// CLI adapter shares. Either fact alone fails the run and neither masks the
+// other; the output ceiling outranks both.
+//
 // [Run] is the primary entry point; [Version] reports the codex binary's
 // version. The zero value of [Request] is not usable — Prompt is required; Dir
 // selects the working directory, Bin points at the codex binary (empty resolves

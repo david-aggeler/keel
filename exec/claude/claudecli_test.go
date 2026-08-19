@@ -116,13 +116,20 @@ func TestRun_NonZeroExitEmptyStdout(t *testing.T) {
 }
 
 // TestRun_ErrorResultParses proves an is_error result event still parses into
-// a Result (no error from Run — the CLI reported a structured failure).
+// a Result the caller can read — now returned alongside the error the shared
+// outcome contract requires for a structured CLI failure (keel/ac-534). Before
+// the ruling on keel/issue-162 this run reported no error at all.
+//
+// DHF-TEST: keel/requirement-134
 func TestRun_ErrorResultParses(t *testing.T) {
 	stub := writeStub(t, `{"type":"result","is_error":true,"result":"Error: Reached max turns (3)","num_turns":3,"usage":{}}`, 1)
 
 	res, err := Run(context.Background(), Request{Prompt: "x", Bin: stub})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
+	if err == nil {
+		t.Fatal("Run returned nil err; a failing terminal event fails the run")
+	}
+	if res == nil {
+		t.Fatal("Run returned nil Result; want the decoded Result alongside the error")
 	}
 	if !res.IsError {
 		t.Error("IsError must be true")

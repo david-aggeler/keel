@@ -32,7 +32,10 @@ type Event struct {
 	Raw json.RawMessage
 }
 
-// Result collects the full event stream of a codex exec run.
+// Result collects the full event stream of a codex exec run: the child's exit
+// code, every decoded event, and a pointer to the terminal event among them.
+//
+// DHF-REQ: keel/requirement-134, keel/requirement-7
 type Result struct {
 	// Events is every decoded event, in arrival order.
 	Events []Event
@@ -50,6 +53,8 @@ type Result struct {
 }
 
 // Request describes one headless `codex exec --json` invocation.
+//
+// DHF-REQ: keel/requirement-7
 type Request struct {
 	// Prompt is the user prompt, passed as the final positional arg.
 	Prompt string
@@ -93,14 +98,20 @@ type Request struct {
 
 // Run executes one `codex exec --json` call, streaming events as they arrive.
 //
-// A non-zero exit with at least one parsed event still returns the Result so
-// callers can inspect ExitCode and partial events. A non-zero exit with zero
-// parsed events returns only an error carrying stderr. A spawn failure returns
-// the error. A run killed at the output ceiling returns no Result and an error
-// satisfying errors.Is(err, [procexec.ErrOutputLimitExceeded]), whatever the
-// event stream held.
+// The outcome is not decided here: Run supplies the shared contract in
+// [procexec.DecideCLIOutcome] with codex's two per-CLI facts — the child's exit
+// code and the terminal event's own verdict — and reports what it returns. A
+// non-zero exit OR a terminal event reporting failure therefore fails the run,
+// and neither fact can mask the other.
 //
-// DHF-REQ: keel/requirement-7, openbrain/requirement-181, keel/requirement-2, keel/requirement-81
+// A failed run whose stream was decodable returns the Result alongside the
+// error, so callers can still inspect ExitCode and the events. A failure with
+// zero parsed events returns only an error carrying stderr. A spawn failure
+// returns the error. A run killed at the output ceiling returns no Result and
+// an error satisfying errors.Is(err, [procexec.ErrOutputLimitExceeded]),
+// whatever the event stream held.
+//
+// DHF-REQ: keel/requirement-134, keel/requirement-7, openbrain/requirement-181, keel/requirement-2, keel/requirement-81
 func Run(ctx context.Context, req Request) (*Result, error) {
 	if req.Prompt == "" {
 		return nil, fmt.Errorf("keel/exec/codex: empty prompt")
@@ -193,16 +204,63 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 		return res, fmt.Errorf("keel/exec/codex: read stdout: %w — stderr: %s",
 			scanErr, strings.TrimSpace(processResult.Stderr))
 	}
-	if res.ExitCode != 0 && len(res.Events) == 0 {
-		return nil, fmt.Errorf("keel/exec/codex: %s exited %d with no events — stderr: %s",
-			bin, res.ExitCode, strings.TrimSpace(processResult.Stderr))
+	// The success-or-failure decision belongs to keel/exec, not here: this
+	// adapter only supplies codex's two per-CLI facts and reports the verdict.
+	// A decodable stream is handed back with the error so a failed run stays
+	// inspectable; with no events there is nothing to hand back.
+	//
+	// DHF-REQ: keel/requirement-134
+	if outcome := procexec.DecideCLIOutcome(res.ExitCode, terminalEventFailed(res.Final)); outcome.Failed {
+		err := fmt.Errorf("keel/exec/codex: %s %s — stderr: %s",
+			bin, outcome.Reason, strings.TrimSpace(processResult.Stderr))
+		if len(res.Events) == 0 {
+			return nil, err
+		}
+		return res, err
 	}
-	if waitErr != nil && len(res.Events) == 0 {
-		return nil, fmt.Errorf("keel/exec/codex: %s wait: %w — stderr: %s",
+
+	// A wait error the exit code did not express (an I/O failure while reaping,
+	// say) is an infrastructure fault like the ceiling above, not the outcome
+	// contract. Reporting it keeps it from passing silently.
+	if waitErr != nil {
+		err := fmt.Errorf("keel/exec/codex: %s wait: %w — stderr: %s",
 			bin, waitErr, strings.TrimSpace(processResult.Stderr))
+		if len(res.Events) == 0 {
+			return nil, err
+		}
+		return res, err
 	}
 
 	return res, nil
+}
+
+// terminalEventFailed reads codex's own failure verdict off the run's terminal
+// event — the per-CLI input the shared outcome contract consumes. codex signals
+// a failed turn either by emitting an `error` event as the last event, or by
+// setting an is_error flag on it; a nil terminal event (an empty stream) is no
+// verdict at all, and the exit code alone then decides.
+//
+// DHF-REQ: keel/requirement-7
+func terminalEventFailed(final *Event) bool {
+	if final == nil {
+		return false
+	}
+	if final.Type == "error" {
+		return true
+	}
+	var hdr struct {
+		Failed *bool `json:"is_error"`
+		Item   struct {
+			Failed *bool `json:"is_error"`
+		} `json:"item"`
+	}
+	if err := json.Unmarshal(final.Raw, &hdr); err != nil {
+		return false
+	}
+	if hdr.Failed != nil {
+		return *hdr.Failed
+	}
+	return hdr.Item.Failed != nil && *hdr.Item.Failed
 }
 
 type eventStreamWriter struct {
