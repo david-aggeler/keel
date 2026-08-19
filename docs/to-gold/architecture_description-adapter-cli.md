@@ -175,8 +175,9 @@ issue/CR filed yet — **file records before implementing**):
 per resource showing which is currently active/ready (the plan's `current`
 column at discovery time). Placement: **above Lanes** (owner) — the group
 takes letter `b.`, Lanes shifts into the previously-unassigned `c.`; the
-renumber is free by design, since ordinals live only in labels + `sort_text`
-and never in item ids, so no results are invalidated:
+renumber is free by design, since an ordinal never enters an item id — it is a
+rendering option over the producer's emission order — so no results are
+invalidated:
 
 ```
 a. Maintenance
@@ -245,8 +246,9 @@ ordinals decided in keel/exploration-2).*
 ### 1. Discovery — populate the tree
 
 **Goal.** Give VS Code's Test Explorer its entire content. The devtool asserts
-*everything* the user sees — groups, ordering (`sort_text`), lanes,
-maintenance actions, click-to-source locations — and the VSIX only renders.
+*everything* the user sees — groups, ordering (the order it emits its items in),
+lanes, maintenance actions, click-to-source locations — and the VSIX only
+renders.
 Discovery is how "per-consumer variation is data, not code" actually happens:
 a different devtool answering this one verb produces a completely different
 tree with zero extension changes. Discovery delivers content families (a),
@@ -274,13 +276,16 @@ Around that content, the document carries its **envelope and mechanics**:
   let a future VSIX condition these behaviors per devtool without a protocol
   version bump. Until then the VSIX behaves unconditionally — a devtool
   should still declare them truthfully (keel-dev declares all three `true`).
-- **Per-item render/run metadata** — stable `id` (ordinals live in labels +
-  `sort_text` only, never in ids, so renumbering never invalidates results),
-  `parent_id`, `label`, `sort_text` (VS Code has no sort concept — order is
-  data), `kind`, `runnable` + `profiles` (run/debug/coverage), `lane_id`,
+- **Per-item render/run metadata** — stable `id` (an ordinal never enters an
+  id, so renumbering never invalidates results), `parent_id`, `label` (no
+  ordinal prefix; the VSIX renders one only where `display.ordinal` is
+  enabled), `kind`, `runnable` + `profiles` (run/debug/coverage), `lane_id`,
   `canonical_id` (alias → canonical result mirroring), `required_resources`
-  (rendered as tags), `limitations` (prose, rendered as description), and the
-  typed `desired_state_group` / `desired_state_row` facts.
+  (rendered as tags), the scalar `description` (the producer's own prose), and
+  the typed `last_run`, `findings`, `desired_state_group` and
+  `desired_state_row` facts. Order carries no field of its own: VS Code has no
+  sort concept, so the extension derives its sort key from the index at which
+  the producer emitted each item (keel/requirement-137).
 
 The devtool discovers all of this **fresh on every invocation** — the VSIX
 caches nothing across refreshes (a generation counter discards stale
