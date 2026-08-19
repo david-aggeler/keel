@@ -66,7 +66,6 @@ classDiagram
         +bool runnable
         +List~string~ profiles
         -string parent_id
-        -string sort_text
         -string framework
         -string runner
         -string uri
