@@ -74,6 +74,7 @@ classDiagram
         -List~string~ required_resources
         -string description
         -List~finding~ findings
+        -List~condition~ conditions
         -last_run_facts last_run
         -range range
         -desired_state_group_facts desired_state_group
@@ -82,6 +83,10 @@ classDiagram
     class finding {
         +string rule
         +string severity
+        +string message
+    }
+    class condition {
+        +string kind
         +string message
     }
     class last_run_facts {
@@ -107,6 +112,7 @@ classDiagram
     capabilities "1" --> "0..*" reconcile_result : reconcile_results
     discovery "1" --> "0..*" test_item : items
     test_item "1" --> "0..*" finding : findings
+    test_item "1" --> "0..*" condition : conditions
     test_item "1" --> "0..1" last_run_facts : last_run
     test_item "1" --> "0..1" range : range
     test_item "1" --> "0..1" desired_state_group_facts : desired_state_group
@@ -117,6 +123,7 @@ classDiagram
 - `test_item.profiles` — run, debug, coverage
 - `test_item.description` — the producer's own prose for this item, one string, never a composed line. Sequencing it against anything else is the consumer's job. It is the item's only prose channel: the `limitations` array it replaced is retired, and a document still carrying that field is refused (requirement-138)
 - `test_item.findings` — the typed validation findings raised against this item: `rule`, `severity`, `message`, with `severity` a closed enum (error, warning). Severity is the fact a consumer selects a surface by, so it never travels as a token inside a message (requirement-138)
+- `test_item.conditions` — the persistent non-result conditions standing against this item at discovery time: `kind`, `message`, with `kind` a closed enum (parse_error, prerequisite_unsatisfied). A condition has no run behind it and holds until the producer stops reporting it, so the consumer routes it to `vscode.TestItem.error` — the platform's own slot for a discovery error — rather than to a run result. Several conditions on one item accumulate into that one value; an error-severity `finding` reaches the same surface, a warning-severity one stays in the composed description (requirement-140)
 - `test_item.last_run` — the typed measurement of the newest run attributable to this item alone: newest persisted stream whose `requested` set is exactly that one item, failed runs included, multi-selection runs excluded (requirement-53). `duration_ms` and `exit_code` are optional so a measured zero stays distinguishable from an absent measurement; a lane with no attributable stream carries no `last_run` member at all, never a zero (requirement-138)
 - `test_item.desired_state_group` / `test_item.desired_state_row` — the typed desired-state facts, present only on the item kind they describe. Their presence is what identifies an item as a desired-state group or row; `action` is a closed enum (reuse, manual_setup_required, reconcile, reconcile_during_run) shared with `desired_state.action`. Until v0.7.3 these four facts were formatted into the retired `limitations` array as `k=v` text and recovered by substring match — a breaking wire change under design_decision-11, landed with producer and consumer on one tag (requirement-127)
 - `capabilities.reconcile_results` — bridge-computed rendered truth for exclusive desired-state rows: one stamp per row with a run id — the derived-active row `state: passed`, every other row (incl. the Unknown State peer) `state: skipped` (closed enum). The consumer replays the entries verbatim through one non-persisted TestRun per discovery refresh, **overwriting** stale results (incl. persistence-restored ones after a window reload) — no consumer branching on `mutually_exclusive` (requirement-97; replaced the never-released `reconcile_no_result_test_ids` after its removal mechanism was falsified on a live editor)

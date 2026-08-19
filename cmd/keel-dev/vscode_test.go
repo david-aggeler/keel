@@ -2295,8 +2295,10 @@ func TestVSCodeDiscoveryReportsGoParseErrorsAsDiagnosticFileItems(t *testing.T) 
 	if item.ParentID != "go::pkg::broken" || item.Kind != "file" || item.Runnable || item.URI != "broken/broken_test.go" {
 		t.Fatalf("parse diagnostic item = %+v, want non-runnable file item under package", item)
 	}
-	if !strings.Contains(item.Description, "expected") {
-		t.Fatalf("parse diagnostic description = %q, want parse error text", item.Description)
+	// The parse text travels on the persistent-condition channel, which is the
+	// platform's own slot for a discovery error (keel/ac-557).
+	if len(item.Conditions) != 1 || !strings.Contains(item.Conditions[0].Message, "expected") {
+		t.Fatalf("parse diagnostic conditions = %+v, want the parse error text", item.Conditions)
 	}
 }
 
@@ -2330,8 +2332,9 @@ func TestVSCodeDiscoveryReportsPackageParseErrorsAsDiagnosticFileItems(t *testin
 	if item.Kind != "file" || item.Runnable || item.URI != "broken/ok_test.go" {
 		t.Fatalf("package diagnostic item = %+v, want non-runnable file item", item)
 	}
-	if !strings.Contains(item.Description, "broken.go") {
-		t.Fatalf("package diagnostic description = %q, want package parse error text", item.Description)
+	// keel/ac-557: the package parse failure is a condition, not prose.
+	if len(item.Conditions) != 1 || !strings.Contains(item.Conditions[0].Message, "broken.go") {
+		t.Fatalf("package diagnostic conditions = %+v, want the package parse error text", item.Conditions)
 	}
 	if _, ok := discoveryItemByID(doc, "go::test::broken::TestOK"); ok {
 		t.Fatalf("discovery included runnable test from invalid package: %+v", doc.Items)
