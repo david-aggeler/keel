@@ -179,9 +179,9 @@ func (b demoBridge) Discover(ctx context.Context) (vscode.DiscoveryDocument, err
 	}
 	if hasDemoLanesFile(ws.Root) {
 		items = append(items,
-			lane(idLaneGoPass, idLanes, "C.10 real Go pass", []string{"go-toolchain"}),
-			lane(idLaneGoFail, idLanes, "C.20 real Go fail", []string{"go-toolchain"}),
-			lane(idLaneFakeSmoke, idLanes, "C.30 fake provisioning smoke", []string{"demo-environment", "demo-database", "demo-services"}),
+			lane(ws.Root, idLaneGoPass, idLanes, "C.10 real Go pass", "runs a real Go test module that passes", []string{"go-toolchain"}),
+			lane(ws.Root, idLaneGoFail, idLanes, "C.20 real Go fail", "runs a real Go test module that fails on purpose", []string{"go-toolchain"}),
+			lane(ws.Root, idLaneFakeSmoke, idLanes, "C.30 fake provisioning smoke", "walks the fake provisioning story without touching real infrastructure", []string{"demo-environment", "demo-database", "demo-services"}),
 			test(idTestGoPass, idGoFramework, "TestReferencePass", idLaneGoPass),
 			test(idTestGoFail, idGoFramework, "TestReferenceFailure", idLaneGoFail),
 			test("fake::test::provisioning::Preview", idFakeFamily, "Preview provisioning story", idLaneFakeSmoke),
@@ -278,13 +278,14 @@ func (b demoBridge) ClearState(_ context.Context, req testbridge.RunRequest, _ v
 
 // DHF-REQ: keel/requirement-87
 func (b demoBridge) Lanes(ctx context.Context) ([]vscode.TestItem, error) {
-	if err := writeDemoReadyState(b.workspace(ctx).Root); err != nil {
+	ws := b.workspace(ctx)
+	if err := writeDemoReadyState(ws.Root); err != nil {
 		return nil, err
 	}
 	return []vscode.TestItem{
-		lane(idLaneGoPass, idLanes, "C.10 real Go pass", []string{"go-toolchain"}),
-		lane(idLaneGoFail, idLanes, "C.20 real Go fail", []string{"go-toolchain"}),
-		lane(idLaneFakeSmoke, idLanes, "C.30 fake provisioning smoke", []string{"demo-environment", "demo-database", "demo-services"}),
+		lane(ws.Root, idLaneGoPass, idLanes, "C.10 real Go pass", "runs a real Go test module that passes", []string{"go-toolchain"}),
+		lane(ws.Root, idLaneGoFail, idLanes, "C.20 real Go fail", "runs a real Go test module that fails on purpose", []string{"go-toolchain"}),
+		lane(ws.Root, idLaneFakeSmoke, idLanes, "C.30 fake provisioning smoke", "walks the fake provisioning story without touching real infrastructure", []string{"demo-environment", "demo-database", "demo-services"}),
 	}, nil
 }
 
@@ -389,8 +390,30 @@ func maintenance(id, parent, label string) vscode.TestItem {
 	return vscode.TestItem{ID: id, ParentID: parent, Label: label, SortText: label, Kind: "maintenance", Framework: "keel-demo-dev", Runner: "keel-demo-dev", RunnerLabel: "Keel Demo Dev", Runnable: true, Profiles: []string{"run"}}
 }
 
-func lane(id, parent, label string, resources []string) vscode.TestItem {
-	return vscode.TestItem{ID: id, ParentID: parent, Label: label, SortText: label, Kind: "lane", Framework: "keel-demo-dev", Runner: "keel-demo-dev", RunnerLabel: "Keel Demo Dev", Runnable: true, Profiles: []string{"run"}, LaneID: id, RequiredResources: resources}
+// lane builds one demo lane item. root is the workspace the lane's run history
+// is attributed from: keel-demo-dev has never carried a duration, and it gains
+// one here from the same shared attribution keel-dev reads (keel/ac-550), which
+// yields no last_run member at all when no stream is attributable to this lane
+// alone (keel/ac-564).
+//
+// DHF-REQ: keel/requirement-138
+func lane(root, id, parent, label, description string, resources []string) vscode.TestItem {
+	return vscode.TestItem{
+		ID:                id,
+		ParentID:          parent,
+		Label:             label,
+		SortText:          label,
+		Kind:              "lane",
+		Framework:         "keel-demo-dev",
+		Runner:            "keel-demo-dev",
+		RunnerLabel:       "Keel Demo Dev",
+		Runnable:          true,
+		Profiles:          []string{"run"},
+		LaneID:            id,
+		RequiredResources: resources,
+		Description:       description,
+		LastRun:           vscode.LatestLaneRun(root, id).Facts(),
+	}
 }
 
 func test(id, parent, label, laneID string) vscode.TestItem {
