@@ -128,6 +128,7 @@ func TestRunHelpJSONReportsWriteFailure(t *testing.T) {
 func TestRunDirectCIDispatchesThroughLoggerAndGate(t *testing.T) {
 	callsFile := stubTools(t, false, false)
 	root := moduleFixture(t)
+	alignFixtureVersions(t, root)
 	t.Chdir(root)
 
 	stdout, stderr := captureProcessStreams(t, func() {
@@ -169,6 +170,7 @@ func TestLintNoStdlibLog(t *testing.T) {
 func TestCILintUsesTrackedNonExcludedFiles(t *testing.T) {
 	stubTools(t, false, false)
 	root := moduleFixture(t)
+	alignFixtureVersions(t, root)
 	t.Chdir(root)
 
 	if err := os.MkdirAll(filepath.Join(root, "scratchpad", "openbrain"), 0o755); err != nil {

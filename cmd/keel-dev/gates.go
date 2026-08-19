@@ -177,6 +177,12 @@ func ciStepsFrom(in gateInputs) []step {
 		{name: "command-tree", fn: func(context.Context, *slog.Logger, string) error {
 			return commandTree().ValidateTree()
 		}},
+		// Placed ahead of every stage that compiles, spawns a pinned tool or runs
+		// the suite: the skew it catches reds every rung on every branch at once,
+		// so its verdict must land in the first second of a run rather than after
+		// minutes of work (keel/issue-187).
+		// DHF-REQ: keel/requirement-141 (keel/ac-569, keel/ac-571)
+		{name: "version-parity", fn: runVersionParity},
 		gofmtStep,
 		{name: "build", program: "go", args: []string{"build", "./..."}},
 		{name: "vet", program: "go", args: []string{"vet", "./..."}},
