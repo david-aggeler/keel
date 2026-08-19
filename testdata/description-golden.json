@@ -1,0 +1,219 @@
+{
+  "version": 1,
+  "separator": "; ",
+  "class_order": ["description", "lastRun", "desiredState", "findings"],
+  "defaults": {
+    "display": {
+      "description": true,
+      "lastRun": true,
+      "desiredState": true,
+      "findings": true
+    }
+  },
+  "cases": [
+    {
+      "name": "every class enabled on an item carrying every class",
+      "item": {
+        "id": "keel::lane::a",
+        "label": "A - Test Bridge Maintenance",
+        "kind": "lane",
+        "runnable": true,
+        "profiles": ["run"],
+        "description": "the lane prose",
+        "last_run": { "at": "2026-08-18T10:00:00Z", "duration_ms": 9800, "exit_code": 0 },
+        "desired_state_row": { "current": "empty", "action": "reconcile", "active": true },
+        "findings": [{ "rule": "lane-order", "severity": "warning", "message": "order drifted" }]
+      },
+      "display": { "description": true, "lastRun": true, "desiredState": true, "findings": true },
+      "expected": "the lane prose; · last 9.8s; current=empty; action=reconcile; active=true; lane-order warning: order drifted",
+      "has_facts": true
+    },
+    {
+      "name": "every class disabled on an item carrying every class",
+      "item": {
+        "id": "keel::lane::a",
+        "label": "A - Test Bridge Maintenance",
+        "kind": "lane",
+        "runnable": true,
+        "profiles": ["run"],
+        "description": "the lane prose",
+        "last_run": { "at": "2026-08-18T10:00:00Z", "duration_ms": 9800, "exit_code": 0 },
+        "desired_state_row": { "current": "empty", "action": "reconcile", "active": true },
+        "findings": [{ "rule": "lane-order", "severity": "warning", "message": "order drifted" }]
+      },
+      "display": { "description": false, "lastRun": false, "desiredState": false, "findings": false },
+      "expected": "",
+      "has_facts": true
+    },
+    {
+      "name": "description alone",
+      "item": {
+        "id": "keel::lane::a",
+        "label": "A - Test Bridge Maintenance",
+        "kind": "lane",
+        "runnable": true,
+        "profiles": ["run"],
+        "description": "the lane prose",
+        "last_run": { "at": "2026-08-18T10:00:00Z", "duration_ms": 9800, "exit_code": 0 },
+        "desired_state_row": { "current": "empty", "action": "reconcile", "active": true },
+        "findings": [{ "rule": "lane-order", "severity": "warning", "message": "order drifted" }]
+      },
+      "display": { "description": true, "lastRun": false, "desiredState": false, "findings": false },
+      "expected": "the lane prose",
+      "has_facts": true
+    },
+    {
+      "name": "last run alone",
+      "item": {
+        "id": "keel::lane::a",
+        "label": "A - Test Bridge Maintenance",
+        "kind": "lane",
+        "runnable": true,
+        "profiles": ["run"],
+        "description": "the lane prose",
+        "last_run": { "at": "2026-08-18T10:00:00Z", "duration_ms": 9800, "exit_code": 0 },
+        "desired_state_row": { "current": "empty", "action": "reconcile", "active": true },
+        "findings": [{ "rule": "lane-order", "severity": "warning", "message": "order drifted" }]
+      },
+      "display": { "description": false, "lastRun": true, "desiredState": false, "findings": false },
+      "expected": "· last 9.8s",
+      "has_facts": true
+    },
+    {
+      "name": "desired state alone",
+      "item": {
+        "id": "keel::lane::a",
+        "label": "A - Test Bridge Maintenance",
+        "kind": "lane",
+        "runnable": true,
+        "profiles": ["run"],
+        "description": "the lane prose",
+        "last_run": { "at": "2026-08-18T10:00:00Z", "duration_ms": 9800, "exit_code": 0 },
+        "desired_state_row": { "current": "empty", "action": "reconcile", "active": true },
+        "findings": [{ "rule": "lane-order", "severity": "warning", "message": "order drifted" }]
+      },
+      "display": { "description": false, "lastRun": false, "desiredState": true, "findings": false },
+      "expected": "current=empty; action=reconcile; active=true",
+      "has_facts": true
+    },
+    {
+      "name": "findings alone",
+      "item": {
+        "id": "keel::lane::a",
+        "label": "A - Test Bridge Maintenance",
+        "kind": "lane",
+        "runnable": true,
+        "profiles": ["run"],
+        "description": "the lane prose",
+        "last_run": { "at": "2026-08-18T10:00:00Z", "duration_ms": 9800, "exit_code": 0 },
+        "desired_state_row": { "current": "empty", "action": "reconcile", "active": true },
+        "findings": [{ "rule": "lane-order", "severity": "warning", "message": "order drifted" }]
+      },
+      "display": { "description": false, "lastRun": false, "desiredState": false, "findings": true },
+      "expected": "lane-order warning: order drifted",
+      "has_facts": true
+    },
+    {
+      "name": "several findings keep their emission order",
+      "item": {
+        "id": "keel::lane::b",
+        "label": "B - Go",
+        "kind": "lane",
+        "runnable": true,
+        "profiles": ["run"],
+        "findings": [
+          { "rule": "lane-order", "severity": "warning", "message": "order drifted" },
+          { "rule": "lane-members", "severity": "error", "message": "member missing" }
+        ]
+      },
+      "display": { "description": true, "lastRun": true, "desiredState": true, "findings": true },
+      "expected": "lane-order warning: order drifted; lane-members error: member missing",
+      "has_facts": true
+    },
+    {
+      "name": "a run over ninety seconds renders minutes and seconds",
+      "item": {
+        "id": "keel::lane::c",
+        "label": "C - Playwright",
+        "kind": "lane",
+        "runnable": true,
+        "profiles": ["run"],
+        "last_run": { "at": "2026-08-18T10:00:00Z", "duration_ms": 192000, "exit_code": 0 }
+      },
+      "display": { "description": true, "lastRun": true, "desiredState": true, "findings": true },
+      "expected": "· last 3m 12s",
+      "has_facts": true
+    },
+    {
+      "name": "a run whose duration was never measured contributes nothing",
+      "item": {
+        "id": "keel::lane::c",
+        "label": "C - Playwright",
+        "kind": "lane",
+        "runnable": true,
+        "profiles": ["run"],
+        "description": "the lane prose",
+        "last_run": { "at": "2026-08-18T10:00:00Z" }
+      },
+      "display": { "description": true, "lastRun": true, "desiredState": true, "findings": true },
+      "expected": "the lane prose",
+      "has_facts": true
+    },
+    {
+      "name": "a measured zero is a measurement and renders",
+      "item": {
+        "id": "keel::lane::c",
+        "label": "C - Playwright",
+        "kind": "lane",
+        "runnable": true,
+        "profiles": ["run"],
+        "last_run": { "at": "2026-08-18T10:00:00Z", "duration_ms": 0, "exit_code": 0 }
+      },
+      "display": { "description": true, "lastRun": true, "desiredState": true, "findings": true },
+      "expected": "· last 0.0s",
+      "has_facts": true
+    },
+    {
+      "name": "a mutually exclusive desired-state group",
+      "item": {
+        "id": "keel::group::data-set",
+        "label": "Data set",
+        "kind": "group",
+        "runnable": false,
+        "profiles": [],
+        "desired_state_group": { "mutually_exclusive": true }
+      },
+      "display": { "description": true, "lastRun": true, "desiredState": true, "findings": true },
+      "expected": "mutually_exclusive=true",
+      "has_facts": true
+    },
+    {
+      "name": "an inactive desired-state row states its inactivity",
+      "item": {
+        "id": "keel::row::app-db",
+        "label": "app-db",
+        "kind": "test",
+        "runnable": true,
+        "profiles": ["run"],
+        "desired_state_row": { "current": "running", "action": "reuse", "active": false }
+      },
+      "display": { "description": true, "lastRun": true, "desiredState": true, "findings": true },
+      "expected": "current=running; action=reuse; active=false",
+      "has_facts": true
+    },
+    {
+      "name": "an item carrying no typed fact renders nothing",
+      "item": {
+        "id": "openbrain::lane::a",
+        "label": "A - Lint",
+        "kind": "lane",
+        "runnable": true,
+        "profiles": ["run"],
+        "limitations": ["current=empty", "action=reconcile", "active=true"]
+      },
+      "display": { "description": true, "lastRun": true, "desiredState": true, "findings": true },
+      "expected": "",
+      "has_facts": false
+    }
+  ]
+}
