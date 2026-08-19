@@ -54,14 +54,31 @@ const (
 	idDesiredSDK       = "keel-demo-dev::desired-state::sdk"
 	idDesiredDNS       = "keel-demo-dev::desired-state::dns"
 	idDesiredPing      = "keel-demo-dev::desired-state::ping"
+	idDesiredSeedCache = "keel-demo-dev::desired-state::seed-cache"
 	idDataSetEmpty     = "keel-demo-dev::desired-state::dataset::empty"
 	idDataSetSmall     = "keel-demo-dev::desired-state::dataset::small"
 	idDataSetFull      = "keel-demo-dev::desired-state::dataset::full"
+
+	idPreconditionsGroup = idDesired + "::group::test-preconditions"
 
 	demoDataSetEmpty = "empty/stopped"
 	demoDataSetSmall = "small"
 	demoDataSetFull  = "full"
 )
+
+// demoSlowRunDelayDefault is the fake work time the demo's slow precondition row
+// and slow lane take. It exists so a run is on screen long enough to watch:
+// every other demo item settles in microseconds, which renders the transitional
+// state of a run unobservable (keel/ac-580, keel/ac-581). It is fake demo time —
+// it reaches no real infrastructure.
+const demoSlowRunDelayDefault = 10 * time.Second
+
+// demoSlowRunDelay is the fake work time in force. It is a variable for one
+// reason: the demo's own tests shorten it, so the keel gate never waits ten
+// seconds for demo content. There is no flag, environment variable, or config
+// row behind it — for anyone running keel-demo-dev the slow row and the slow
+// lane are always slow.
+var demoSlowRunDelay = demoSlowRunDelayDefault
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -232,6 +249,7 @@ func (b demoBridge) DesiredState(ctx context.Context, ids []string) (testbridge.
 					prereq(root, idDesiredSDK, "sdk", "tool", "installed", "missing", "install_demo_sdk", true),
 					prereq(root, idDesiredDNS, "dns", "host-port-set", "resolves", "missing", "seed_demo_dns", true),
 					prereq(root, idDesiredPing, "ping", "dependency", "reachable", "timeout", "probe_demo_endpoint", true),
+					prereq(root, idDesiredSeedCache, "seed-cache", "fixture-data", "warmed", "cold", "warm_demo_seed_cache", false),
 				},
 			},
 			{
@@ -247,6 +265,40 @@ func (b demoBridge) DesiredState(ctx context.Context, ids []string) (testbridge.
 		},
 		TeardownPolicy: "demo-only fake resources; no teardown command mutates real infrastructure",
 	}, nil
+}
+
+// ReconcileDesiredStateRow performs the seed-cache row's named action during a
+// run. It is the one demo row whose action takes real time, so the Explorer
+// shows a precondition row in flight rather than only its settled result
+// (keel/ac-580). The work is fake: it waits, and it touches nothing.
+//
+// Every other row is left to the bridge's read-only path by reporting the row
+// unhandled.
+//
+// DHF-REQ: keel/requirement-62, keel/requirement-75
+func (demoBridge) ReconcileDesiredStateRow(ctx context.Context, req testbridge.DesiredStateRowRunRequest, emit vscode.RunEventWriter) (bool, int, error) {
+	if req.RunID != idDesiredSeedCache {
+		return false, 0, nil
+	}
+	emit(vscode.RunEvent{Event: "output", TestID: req.RunID, Message: "warm_demo_seed_cache is warming the fake seed cache"})
+	if err := demoSleep(ctx, demoSlowRunDelay); err != nil {
+		return true, 1, err
+	}
+	emit(vscode.RunEvent{Event: "output", TestID: req.RunID, Message: "warm_demo_seed_cache warmed the fake seed cache"})
+	return true, 0, nil
+}
+
+// demoSleep waits for the demo's fake work time and reports a canceled run as
+// an error rather than returning early as though the work had been done.
+func demoSleep(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (b demoBridge) workspace(ctx context.Context) testbridge.Workspace {
@@ -538,7 +590,7 @@ func hasDemoLanesFile(root string) bool {
 }
 
 func writeDemoReadyState(root string) error {
-	for _, resource := range []string{"docker-env", "postgres", "service-a", "service-b", "service-c", "sdk", "dns", "ping"} {
+	for _, resource := range []string{"docker-env", "postgres", "service-a", "service-b", "service-c", "sdk", "dns", "ping", "seed-cache"} {
 		if err := writeDemoPrereqReady(root, resource); err != nil {
 			return err
 		}

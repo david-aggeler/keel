@@ -74,6 +74,18 @@ func (p *probePass) load(key probeMemoKey) (probeOutcome, bool) {
 	return outcome, ok
 }
 
+// forget drops one row's memoized outcome so the next derivation observes the
+// resource again. It is used after a consumer reconciled the row: the pass is
+// the scope over which a probe result may be shared, and a reconcile is exactly
+// the event that ends that sharing for the row it touched.
+//
+// DHF-REQ: keel/requirement-129
+func (p *probePass) forget(key probeMemoKey) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.outcomes, key)
+}
+
 func (p *probePass) store(key probeMemoKey, outcome probeOutcome) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -193,4 +205,17 @@ func abandonedDesiredState(row DesiredStateRow, bound probeBoundError) vscode.De
 		Owned:    row.Owned,
 		Active:   false,
 	}
+}
+
+// forgetDesiredStateProbe drops the memoized outcome for one row in ctx's pass.
+// A derivation reached without a pass memoizes nothing, so there is nothing to
+// forget.
+//
+// DHF-REQ: keel/requirement-129
+func forgetDesiredStateProbe(ctx context.Context, root string, row DesiredStateRow) {
+	pass := probePassFrom(ctx)
+	if pass == nil {
+		return
+	}
+	pass.forget(probeMemoKey{RunID: row.RunID, Resource: row.Resource, Root: root})
 }

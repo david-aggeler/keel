@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/david-aggeler/keel/testbridge"
 	"github.com/david-aggeler/keel/vscode"
@@ -111,6 +112,9 @@ func demoRunnableDesiredStateRows(items []vscode.TestItem, rootID string) []vsco
 //
 // DHF-TEST: keel/requirement-62, keel/requirement-138
 func TestDemoDesiredStateRowsCarryMeasuredLastRunDuration(t *testing.T) {
+	// The criterion is that a run is measured, not how long it took: the demo's
+	// slow row is shortened so the gate does not wait for it (keel/ac-580).
+	stubDemoSlowRunDelay(t, time.Millisecond)
 	root := t.TempDir()
 
 	rows := demoRunnableDesiredStateRows(demoDiscoveryAfterDetect(t, root).Items, idDesired)
@@ -141,5 +145,100 @@ func TestDemoDesiredStateRowsCarryMeasuredLastRunDuration(t *testing.T) {
 		if *item.LastRun.DurationMS < 0 {
 			t.Fatalf("desired-state row %q last_run.duration_ms = %d, want a non-negative measurement", row.ID, *item.LastRun.DurationMS)
 		}
+	}
+}
+
+// demoSettleGaps measures, per test id, the elapsed time between the item's
+// test_started event and the event that settles it.
+func demoSettleGaps(t *testing.T, events []vscode.RunEvent) map[string]time.Duration {
+	t.Helper()
+	started := map[string]time.Time{}
+	gaps := map[string]time.Duration{}
+	for _, event := range events {
+		if event.TestID == "" {
+			continue
+		}
+		switch event.Event {
+		case "test_started":
+			started[event.TestID] = event.Time
+		case "passed", "failed", "errored", "skipped":
+			at, ok := started[event.TestID]
+			if !ok {
+				t.Fatalf("item %q settled %q with no test_started before it", event.TestID, event.Event)
+			}
+			gaps[event.TestID] = event.Time.Sub(at)
+		}
+	}
+	return gaps
+}
+
+// The shipped slow demo row and slow demo lane take at least the ten seconds
+// keel/ac-580 and keel/ac-581 ask for. The delay itself is authored content, so
+// the number is asserted here; that the run path applies it is asserted by the
+// run tests below, which shorten it so the gate never waits for it.
+//
+// DHF-TEST: keel/requirement-62
+func TestDemoSlowRunDelayIsAtLeastTenSeconds(t *testing.T) {
+	if demoSlowRunDelayDefault < 10*time.Second {
+		t.Fatalf("demo slow run delay = %s, want at least 10s", demoSlowRunDelayDefault)
+	}
+	if demoSlowRunDelay != demoSlowRunDelayDefault {
+		t.Fatalf("demo slow run delay in force = %s, want the shipped default %s", demoSlowRunDelay, demoSlowRunDelayDefault)
+	}
+}
+
+// stubDemoSlowRunDelay shortens the demo's fake work time for one test. The
+// gate never runs the demo's slow row or slow lane at their shipped length
+// (keel/ac-580).
+func stubDemoSlowRunDelay(t *testing.T, delay time.Duration) {
+	t.Helper()
+	restore := demoSlowRunDelay
+	demoSlowRunDelay = delay
+	t.Cleanup(func() { demoSlowRunDelay = restore })
+}
+
+// Running the Test Preconditions group keeps exactly one row in flight for the
+// demo's fake work time while every other row settles at once, so an operator
+// can watch a transitional row instead of only its settled result
+// (keel/ac-580).
+//
+// DHF-TEST: keel/requirement-62
+func TestDemoPreconditionsGroupRunHoldsExactlyOneRowInFlight(t *testing.T) {
+	const delay = 150 * time.Millisecond
+	stubDemoSlowRunDelay(t, delay)
+	root := t.TempDir()
+	if _, err := dispatchDemoBridge(t, root, "test-bridge", "run", "--id", idDetectLanes); err != nil {
+		t.Fatalf("detect-lanes dispatch: %v", err)
+	}
+
+	out, err := dispatchDemoBridgeWithRunID(t, root, "run-preconditions", "test-bridge", "run", "--id", idPreconditionsGroup)
+	if err != nil {
+		t.Fatalf("preconditions group run dispatch: %v\n%s", err, out)
+	}
+	events := decodeRunEvents(t, out)
+	gaps := demoSettleGaps(t, events)
+	// Selecting the group runs every row in it: the group expands to its rows
+	// and each settles under its own id.
+	for _, row := range demoItemsWithParent(demoDiscoveryAfterDetect(t, root).Items, idPreconditionsGroup) {
+		if !row.Runnable {
+			continue
+		}
+		if _, ok := gaps[row.ID]; !ok {
+			t.Fatalf("precondition row %q did not run when its group was selected: %v", row.ID, gaps)
+		}
+		assertRunEvent(t, events, "passed", row.ID, "")
+	}
+	var slow []string
+	for id, gap := range gaps {
+		if gap >= delay {
+			slow = append(slow, id)
+			continue
+		}
+		if gap >= time.Second {
+			t.Fatalf("precondition row %q settled after %s, want under one second", id, gap)
+		}
+	}
+	if len(slow) != 1 {
+		t.Fatalf("preconditions group held %d rows in flight for %s, want exactly 1: %v", len(slow), delay, slow)
 	}
 }

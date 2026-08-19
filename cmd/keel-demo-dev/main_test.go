@@ -317,12 +317,11 @@ func TestKeelDemoDevDesiredStateRowsAreRunnable(t *testing.T) {
 		t.Fatalf("re-activate small after Unknown reset exit = %d, want 0\n%s", code, out)
 	}
 
-	out, code = runDemoDev(t, root, exe, "test-bridge", "run", "--id", "keel-demo-dev::desired-state::group::test-preconditions")
-	if code != 0 {
-		t.Fatalf("desired-state group exit = %d, want 0\n%s", code, out)
-	}
-	events = decodeRunEvents(t, out)
-	assertRunEvent(t, events, "passed", "keel-demo-dev::desired-state::docker-env", "provision_demo_environment")
+	// Running the whole Test Preconditions group is asserted by
+	// TestDemoPreconditionsGroupRunHoldsExactlyOneRowInFlight instead. The group
+	// holds the demo's slow row, and the gate never runs that row at its shipped
+	// ten seconds (keel/ac-580), so the group run is exercised in process where
+	// the fake work time can be shortened.
 
 	if err := os.Remove(demoReadyPath(root, "docker-env")); err != nil {
 		t.Fatal(err)
@@ -650,11 +649,52 @@ func demoConstAliases(t *testing.T, file *ast.File) map[string]string {
 				if i < len(valueSpec.Values) {
 					value = valueSpec.Values[i]
 				}
-				aliases[name.Name] = demoCaseExprName(t, value)
+				// The const table holds more than id strings. A const whose
+				// value is not a foldable id (a duration arithmetic expression,
+				// say) can never name a run id, so it is skipped rather than
+				// failing the parse: the strict fold belongs to the runOne case
+				// expressions this helper feeds.
+				folded, ok := demoFoldConstExpr(value)
+				if !ok {
+					continue
+				}
+				aliases[name.Name] = folded
 			}
 		}
 	}
 	return aliases
+}
+
+// demoFoldConstExpr folds an id-shaped constant expression, reporting whether
+// the expression has an id shape at all.
+func demoFoldConstExpr(expr ast.Expr) (string, bool) {
+	switch typed := expr.(type) {
+	case *ast.Ident:
+		return typed.Name, true
+	case *ast.SelectorExpr:
+		if ident, ok := typed.X.(*ast.Ident); ok {
+			return ident.Name + "." + typed.Sel.Name, true
+		}
+	case *ast.BasicLit:
+		if typed.Kind == token.STRING {
+			value, err := strconv.Unquote(typed.Value)
+			if err != nil {
+				return "", false
+			}
+			return value, true
+		}
+	case *ast.BinaryExpr:
+		if typed.Op != token.ADD {
+			return "", false
+		}
+		left, leftOK := demoFoldConstExpr(typed.X)
+		right, rightOK := demoFoldConstExpr(typed.Y)
+		if !leftOK || !rightOK {
+			return "", false
+		}
+		return left + right, true
+	}
+	return "", false
 }
 
 func demoCaseExprName(t *testing.T, expr ast.Expr) string {
