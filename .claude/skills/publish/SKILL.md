@@ -46,6 +46,9 @@ Show a short summary and ask for an explicit go-ahead:
 - Gold sync: after a successful release, `/publish` advances gold `product_version` for
   product `keel` to `X.Y.Z` through `openbrain-client` from PATH. This sync stays outside
   `keel-dev`; do not add SoR client code to the binary.
+- Release notes: after a successful release, `/publish` brings the line's `release_notes`
+  record current — coverage range, breaking changes, migration rows — and sets it
+  `released`. A shipped version never leaves its note at `draft`.
 
 Ask: "Proceed with release `<version>`? This tags the repo and cuts a public GitHub Release.
 (yes/no)". Do not proceed without an explicit "yes".
@@ -114,13 +117,66 @@ If the installed `openbrain-client` cannot export/import product catalog data or
 the confirmation query does not return the released row, stop and hand back to the
 owner with that exact blocker; do not implement a gold client in `keel-dev`.
 
-## Step 5: Report results
+## Step 5: Bring the release notes current
+
+<!-- DHF-REQ: keel/requirement-112 -->
+
+The `release_notes` record is what a consumer actually reads. A shipped version whose
+note still says `draft`, or whose coverage stops at an earlier unit, is a stale document
+with a release behind it. Bring it current **before** reporting success.
+
+keel keeps one line-level note per minor line, titled `keel vX.Y.x`, which accumulates as
+units merge. Find it, then extend rather than replace:
+
+- `list_release_notes(product="keel")` — locate the note whose title covers this line.
+- Extend it with `update_release_notes(field="details", edits=[...])` using **anchored
+  edits**. Never rewrite the whole `details` body: the note carries curated prose from
+  earlier units, and a full replace silently drops it.
+- If no note covers the line, create one with `create_release_notes` against the
+  `release_notes` template.
+
+What the note must carry for the version just cut:
+
+| section | content |
+|---|---|
+| header | the unit range now covered, and a table of which version shipped which units |
+| Highlights / New / Improved / Fixed | one line per unit, each naming its `change_request` |
+| Breaking changes | one subsection per break: **what changed**, **why**, **what to do** |
+| Upgrade & migration | a row per affected consumer, naming the file or setting to edit |
+| Known issues | anything open at the cut, and any unit parked rather than landed |
+
+Then set `status: released` on the note and refresh its `summary`.
+
+**Advance the note's `product_version` pointer.** keel keeps ONE note per minor line, and
+that note's `product_version` tracks the line's currently **in-development** version — not
+the version just shipped. The note is created against an in-development version and
+accumulates as units merge into it, so after Step 4 opens the next development line the
+pointer must follow:
+
+    product_version: keel/<the version Step 4 left in_development>
+
+Leaving it on the version just released points the line's living document at a closed
+version, and the next unit to merge accumulates against the wrong row. This field lives on
+the gold record, not in the repository.
+
+Two rules learned from live releases:
+
+- **Name external consumers concretely.** A migration row that says "update your
+  producer" is not actionable. Name the repository, the file, and the symbol where it is
+  known — and state the commit you measured it at, so a reader can tell a stale reading
+  from a current one.
+- **A break at a patch level needs its reason in the note.** Semver alone will not carry
+  it, so the note must say why the level was chosen and who chose it.
+
+## Step 6: Report results
 
 On success:
 - Report the GitHub Release URL and confirm the VSIX asset is attached.
 - Confirm the tag `<version>` was created and the anonymous `go get` check passed.
 - Confirm gold `product_version` for product `keel` now reflects `X.Y.Z` and that the sync was
   performed through `openbrain-client`.
+- Confirm the line's `release_notes` record covers this version, names every breaking change
+  with its migration action, and is `released` rather than `draft`.
 
 On failure, identify which preflight/step failed and suggest remediation:
 
@@ -133,6 +189,7 @@ On failure, identify which preflight/step failed and suggest remediation:
 | GitHub Release | `gh` not installed / not authed / network | `gh auth status`; `gh auth login`; re-run |
 | Anonymous fetch | Module proxy lag or a private-path leak | Confirm no GOPRIVATE/token was introduced (never allowed); retry the fetch check |
 | Gold sync | `openbrain-client` missing, unauthenticated, or lacks product-version update | Fix `openbrain-client` access or hand back; never add SoR client code to keel-dev |
+| Release notes | no note covers the line, or an edit anchor no longer matches | Create the note from its template, or re-read `details` and re-anchor; never full-replace the body |
 
 ## What this skill never does
 
@@ -141,4 +198,8 @@ On failure, identify which preflight/step failed and suggest remediation:
 - Embeds raw `go` / `gh` / `git` commands — version/preflight/release steps are `just` recipes
 - Runs the release without explicit user confirmation
 - Adds GOPRIVATE, tokens, or any private build path (anonymous `go get` must always work)
+- Reports a release as done while the line's `release_notes` record is still `draft` or
+  stops short of the units just shipped
+- Rewrites a `release_notes` body wholesale — curated prose from earlier units is extended
+  by anchored edit, never replaced
 - Force-pushes or force-tags
