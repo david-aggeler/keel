@@ -172,9 +172,13 @@ func TestVSIXProtocolPinRedsOnProtocolTSDrift(t *testing.T) {
 			wantAll: []string{"teardown_policy", "desired-state"},
 		},
 		{
-			name:    "property retyped",
-			old:     "  exit_code?: number;",
-			new:     "  exit_code?: string;",
+			name: "property retyped",
+			// Anchored on RunEvent's own artifact block: exit_code?: number is
+			// declared by more than one interface since keel/requirement-138
+			// added LastRunFacts, and a bare anchor would mutate whichever
+			// comes first in the file rather than the one this case names.
+			old:     "    kind: string;\n  };\n  exit_code?: number;",
+			new:     "    kind: string;\n  };\n  exit_code?: string;",
 			wantAll: []string{"exit_code", "run-event"},
 		},
 		{

@@ -44,6 +44,8 @@ func TestSchemasDriftAgainstGoTypes(t *testing.T) {
 		{"discovery range", reflect.TypeOf(Range{}), "#/$defs/test_item/properties/range"},
 		{"discovery desired-state group facts", reflect.TypeOf(DesiredStateGroupFacts{}), desiredStateGroupFactsRef},
 		{"discovery desired-state row facts", reflect.TypeOf(DesiredStateRowFacts{}), desiredStateRowFactsRef},
+		{"discovery last-run facts", reflect.TypeOf(LastRunFacts{}), lastRunFactsRef},
+		{"discovery finding", reflect.TypeOf(Finding{}), findingRef},
 		{"desired-state", reflect.TypeOf(DesiredStateDocument{}), ""},
 		{"desired-state devtool", reflect.TypeOf(DevtoolMetadata{}), "#/properties/devtool"},
 		{"desired-state group", reflect.TypeOf(DesiredStateGroup{}), "#/$defs/group"},
@@ -72,6 +74,7 @@ func TestSchemasDriftAgainstGoTypes(t *testing.T) {
 	assertEnumMatches(t, loaded["run-event"].Properties["source"].Enum, sortedKeys(runEventSources))
 	assertEnumMatches(t, loaded["run-event"].Properties["artifact"].Properties["kind"].Enum, sortedKeys(artifactKinds))
 	assertEnumMatches(t, schemaAtRef(loaded["discovery"], desiredStateRowFactsRef).Properties["action"].Enum, sortedKeys(desiredStateActions))
+	assertEnumMatches(t, schemaAtRef(loaded["discovery"], findingRef).Properties["severity"].Enum, sortedKeys(findingSeverities))
 	assertEnumMatches(t, schemaAtRef(loaded["desired-state"], "#/$defs/desired_state").Properties["action"].Enum, sortedKeys(desiredStateActions))
 }
 
@@ -276,5 +279,52 @@ func assertEnumMatches(t *testing.T, got, want []string) {
 	sort.Strings(got)
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("enum drift:\n got: %v\nwant: %v", got, want)
+	}
+}
+
+// lastRunFactsRef is where the discovery schema describes the typed last-run
+// facts a lane item carries.
+const lastRunFactsRef = "#/$defs/test_item/properties/last_run"
+
+// findingRef is where the discovery schema describes one typed lane validation
+// finding.
+const findingRef = "#/$defs/test_item/properties/findings/items"
+
+// TestDiscoveryItemCarriesTypedFactsAndScalarDescription pins the carriage
+// keel/requirement-138 introduces: the prose channel is a scalar `description`
+// string, and the two machine facts that rode the `limitations` array — the
+// measured last-run duration and the lane validation findings — are typed,
+// schema-covered properties with a closed severity enum.
+//
+// DHF-TEST: keel/requirement-138
+func TestDiscoveryItemCarriesTypedFactsAndScalarDescription(t *testing.T) {
+	item := schemaAtRef(loadSchemas(t)["discovery"], "#/$defs/test_item")
+
+	if got := item.Properties["description"].Type; got != "string" {
+		t.Errorf("discovery test_item.description type = %q, want %q (keel/ac-549)", got, "string")
+	}
+	if got := item.Properties["findings"].Type; got != "array" {
+		t.Errorf("discovery test_item.findings type = %q, want %q (keel/ac-551)", got, "array")
+	}
+	if got := item.Properties["last_run"].Type; got != "object" {
+		t.Errorf("discovery test_item.last_run type = %q, want %q (keel/ac-550)", got, "object")
+	}
+	for _, name := range []string{"rule", "severity", "message"} {
+		if _, ok := schemaAtRef(loadSchemas(t)["discovery"], findingRef).Properties[name]; !ok {
+			t.Errorf("discovery finding declares no %q member (keel/ac-551)", name)
+		}
+	}
+	for _, name := range []string{"at", "duration_ms", "exit_code"} {
+		if _, ok := schemaAtRef(loadSchemas(t)["discovery"], lastRunFactsRef).Properties[name]; !ok {
+			t.Errorf("discovery last_run declares no %q member (keel/ac-550)", name)
+		}
+	}
+	// duration_ms and exit_code stay optional so that a lane with no
+	// attributable run stream carries no measurement at all rather than a
+	// zero standing in for "never measured" (keel/ac-564).
+	for _, name := range schemaAtRef(loadSchemas(t)["discovery"], lastRunFactsRef).Required {
+		if name != "at" {
+			t.Errorf("discovery last_run requires %q; only %q may be required (keel/ac-564)", name, "at")
+		}
 	}
 }
