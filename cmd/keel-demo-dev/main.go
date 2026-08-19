@@ -30,13 +30,19 @@ const (
 	idFrameworks  = "keel-demo-dev::frameworks"
 	idGoFramework = "keel-demo-dev::frameworks::go"
 	idFakeFamily  = "keel-demo-dev::frameworks::fake"
+	idSlowFamily  = "keel-demo-dev::frameworks::slow"
 
 	idLaneGoPass    = "keel-demo-dev::lane::go-pass"
 	idLaneGoFail    = "keel-demo-dev::lane::go-fail"
 	idLaneFakeSmoke = "keel-demo-dev::lane::fake-smoke"
+	idLaneSlow      = "keel-demo-dev::lane::slow-provisioning"
 
 	idTestGoPass = "go::test::passing::TestReferencePass"
 	idTestGoFail = "go::test::failing::TestReferenceFailure"
+
+	idTestFakeEnvironment = "fake::test::provisioning::Environment"
+	idTestFakeDatabase    = "fake::test::provisioning::Database"
+	idTestFakeServices    = "fake::test::provisioning::Services"
 
 	idDetectLanes    = testbridge.MaintenanceDetectLanesID
 	idBlockBadLane   = "keel-demo-dev::maintenance::block-bad-lane"
@@ -50,14 +56,91 @@ const (
 	idDesiredSDK       = "keel-demo-dev::desired-state::sdk"
 	idDesiredDNS       = "keel-demo-dev::desired-state::dns"
 	idDesiredPing      = "keel-demo-dev::desired-state::ping"
+	idDesiredSeedCache = "keel-demo-dev::desired-state::seed-cache"
 	idDataSetEmpty     = "keel-demo-dev::desired-state::dataset::empty"
 	idDataSetSmall     = "keel-demo-dev::desired-state::dataset::small"
 	idDataSetFull      = "keel-demo-dev::desired-state::dataset::full"
+
+	idPreconditionsGroup = idDesired + "::group::test-preconditions"
 
 	demoDataSetEmpty = "empty/stopped"
 	demoDataSetSmall = "small"
 	demoDataSetFull  = "full"
 )
+
+// demoDescriptionLimit bounds the authored description of every runnable lane
+// and test item the demo serves. A description longer than this crowds the
+// label it follows in the tree; an absent one leaves the item unexplained
+// (keel/ac-583). It bounds the demo's own authored prose only — never the
+// secondary text a consumer composes from several fact classes
+// (keel/requirement-139).
+const demoDescriptionLimit = 40
+
+// demoLaneMembersRule is the Test Lanes validation rule a lane breaks when it
+// declares no members (spec Section 11, rule V2).
+const demoLaneMembersRule = "V2"
+
+// demoBrokenLaneName is the lane the demo declares invalid on purpose.
+const demoBrokenLaneName = "broken-fixture"
+
+// demoLaneDeclaration is one authored lane in the demo's lane inventory: the
+// lane's identity and the member test items it runs.
+type demoLaneDeclaration struct {
+	id          string
+	name        string
+	label       string
+	description string
+	resources   []string
+	members     []string
+}
+
+// demoLaneDeclarations is the demo's authored lane inventory. The last entry
+// declares no members on purpose, so the tree always carries one lane-validation
+// diagnostic beside four lanes that validate (keel/ac-584).
+var demoLaneDeclarations = []demoLaneDeclaration{
+	{id: idLaneGoPass, name: "go-pass", label: "real Go pass", description: "runs a real Go module that passes", resources: []string{"go-toolchain"}, members: []string{idTestGoPass}},
+	{id: idLaneGoFail, name: "go-fail", label: "real Go fail", description: "runs a real Go module that fails", resources: []string{"go-toolchain"}, members: []string{idTestGoFail}},
+	{id: idLaneFakeSmoke, name: "fake-smoke", label: "fake provisioning smoke", description: "walks the fake provisioning story", resources: []string{"demo-environment", "demo-database", "demo-services"}, members: []string{idTestFakeEnvironment, idTestFakeDatabase, idTestFakeServices}},
+	{id: idLaneSlow, name: "slow-provisioning", label: "slow fake provisioning", description: "three fake steps, each one slow", resources: []string{"demo-environment"}, members: demoSlowLaneMemberIDs()},
+	{id: "keel-demo-dev::lane::" + demoBrokenLaneName, name: demoBrokenLaneName, label: "broken fixture lane", description: "declares no members on purpose"},
+}
+
+// demoSlowLaneMemberIDs lists the slow lane's members from the one table that
+// declares them, so the lane and the tree cannot disagree about what it runs.
+func demoSlowLaneMemberIDs() []string {
+	ids := make([]string, 0, len(demoSlowLaneMembers))
+	for _, member := range demoSlowLaneMembers {
+		ids = append(ids, member.id)
+	}
+	return ids
+}
+
+// demoSlowLaneMembers are the slow lane's three members. Three rather than one,
+// because the behavior the slow lane demonstrates is partial progress: members
+// settle one after another while the rest are still in flight (keel/ac-581).
+var demoSlowLaneMembers = []struct {
+	id          string
+	label       string
+	description string
+}{
+	{id: "slow::test::provisioning::Warmup", label: "Slow warmup", description: "waits out the fake warmup step"},
+	{id: "slow::test::provisioning::Migrate", label: "Slow migration", description: "waits out the fake migration step"},
+	{id: "slow::test::provisioning::Verify", label: "Slow verification", description: "waits out the fake verify step"},
+}
+
+// demoSlowRunDelayDefault is the fake work time the demo's slow precondition row
+// and slow lane take. It exists so a run is on screen long enough to watch:
+// every other demo item settles in microseconds, which renders the transitional
+// state of a run unobservable (keel/ac-580, keel/ac-581). It is fake demo time —
+// it reaches no real infrastructure.
+const demoSlowRunDelayDefault = 10 * time.Second
+
+// demoSlowRunDelay is the fake work time in force. It is a variable for one
+// reason: the demo's own tests shorten it, so the keel gate never waits ten
+// seconds for demo content. There is no flag, environment variable, or config
+// row behind it — for anyone running keel-demo-dev the slow row and the slow
+// lane are always slow.
+var demoSlowRunDelay = demoSlowRunDelayDefault
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -174,6 +257,7 @@ func (b demoBridge) Discover(ctx context.Context) (vscode.DiscoveryDocument, err
 		group(idFrameworks, idRoot, "D - Frameworks"),
 		group(idGoFramework, idFrameworks, "Go"),
 		group(idFakeFamily, idFrameworks, "Fake infrastructure"),
+		group(idSlowFamily, idFrameworks, "Slow fake infrastructure"),
 		maintenance(idBlockBadLane, idMaintenance, "block failing Go lane"),
 		maintenance(idUnblockBadLane, idMaintenance, "unblock failing Go lane"),
 	}
@@ -184,10 +268,15 @@ func (b demoBridge) Discover(ctx context.Context) (vscode.DiscoveryDocument, err
 		}
 		items = append(items, lanes...)
 		items = append(items,
-			test(idTestGoPass, idGoFramework, "TestReferencePass", idLaneGoPass),
-			test(idTestGoFail, idGoFramework, "TestReferenceFailure", idLaneGoFail),
-			test("fake::test::provisioning::Preview", idFakeFamily, "Preview provisioning story", idLaneFakeSmoke),
+			test(idTestGoPass, idGoFramework, "TestReferencePass", "a real Go test that passes", idLaneGoPass),
+			test(idTestGoFail, idGoFramework, "TestReferenceFailure", "a real Go test that fails", idLaneGoFail),
+			test(idTestFakeEnvironment, idFakeFamily, "Fake environment", "brings the fake environment up", idLaneFakeSmoke),
+			test(idTestFakeDatabase, idFakeFamily, "Fake database", "seeds the fake app database", idLaneFakeSmoke),
+			test(idTestFakeServices, idFakeFamily, "Fake services", "starts fake services a, b and c", idLaneFakeSmoke),
 		)
+		for _, member := range demoSlowLaneMembers {
+			items = append(items, test(member.id, idSlowFamily, member.label, member.description, idLaneSlow))
+		}
 	}
 	return vscode.DiscoveryDocument{
 		Version:     1,
@@ -226,6 +315,7 @@ func (b demoBridge) DesiredState(ctx context.Context, ids []string) (testbridge.
 					prereq(root, idDesiredSDK, "sdk", "tool", "installed", "missing", "install_demo_sdk", true),
 					prereq(root, idDesiredDNS, "dns", "host-port-set", "resolves", "missing", "seed_demo_dns", true),
 					prereq(root, idDesiredPing, "ping", "dependency", "reachable", "timeout", "probe_demo_endpoint", true),
+					prereq(root, idDesiredSeedCache, "seed-cache", "fixture-data", "warmed", "cold", "warm_demo_seed_cache", false),
 				},
 			},
 			{
@@ -241,6 +331,40 @@ func (b demoBridge) DesiredState(ctx context.Context, ids []string) (testbridge.
 		},
 		TeardownPolicy: "demo-only fake resources; no teardown command mutates real infrastructure",
 	}, nil
+}
+
+// ReconcileDesiredStateRow performs the seed-cache row's named action during a
+// run. It is the one demo row whose action takes real time, so the Explorer
+// shows a precondition row in flight rather than only its settled result
+// (keel/ac-580). The work is fake: it waits, and it touches nothing.
+//
+// Every other row is left to the bridge's read-only path by reporting the row
+// unhandled.
+//
+// DHF-REQ: keel/requirement-62, keel/requirement-75
+func (demoBridge) ReconcileDesiredStateRow(ctx context.Context, req testbridge.DesiredStateRowRunRequest, emit vscode.RunEventWriter) (bool, int, error) {
+	if req.RunID != idDesiredSeedCache {
+		return false, 0, nil
+	}
+	emit(vscode.RunEvent{Event: "output", TestID: req.RunID, Message: "warm_demo_seed_cache is warming the fake seed cache"})
+	if err := demoSleep(ctx, demoSlowRunDelay); err != nil {
+		return true, 1, err
+	}
+	emit(vscode.RunEvent{Event: "output", TestID: req.RunID, Message: "warm_demo_seed_cache warmed the fake seed cache"})
+	return true, 0, nil
+}
+
+// demoSleep waits for the demo's fake work time and reports a canceled run as
+// an error rather than returning early as though the work had been done.
+func demoSleep(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (b demoBridge) workspace(ctx context.Context) testbridge.Workspace {
@@ -295,10 +419,18 @@ func (b demoBridge) Lanes(ctx context.Context) ([]vscode.TestItem, error) {
 //
 // DHF-REQ: keel/requirement-140
 func demoLanes(root string) ([]vscode.TestItem, error) {
-	items := []vscode.TestItem{
-		lane(root, idLaneGoPass, idLanes, "real Go pass", "runs a real Go test module that passes", []string{"go-toolchain"}),
-		lane(root, idLaneGoFail, idLanes, "real Go fail", "runs a real Go test module that fails on purpose", []string{"go-toolchain"}),
-		lane(root, idLaneFakeSmoke, idLanes, "fake provisioning smoke", "walks the fake provisioning story without touching real infrastructure", []string{"demo-environment", "demo-database", "demo-services"}),
+	items := make([]vscode.TestItem, 0, len(demoLaneDeclarations))
+	for _, declared := range demoLaneDeclarations {
+		if len(declared.members) == 0 {
+			// A lane that declares no members cannot run anything, so it is
+			// reported rather than served — and reporting it is the point: the
+			// diagnostic rendering is demo content here, not the trace of a
+			// broken workspace (keel/ac-584). Discovery continues with every
+			// lane that validates (keel/requirement-51).
+			items = append(items, laneDiagnostic(declared.name, demoLaneMembersRule, "lane "+quoted(declared.name)+" declares no members"))
+			continue
+		}
+		items = append(items, lane(root, declared.id, idLanes, declared.label, declared.description, declared.resources))
 	}
 	blocked, err := blockedLane(root)
 	if err != nil {
@@ -347,10 +479,18 @@ func (b demoBridge) runOne(ctx context.Context, root, id string, emit vscode.Run
 		return selectDemoDataSet(root, id, demoDataSetSmall, "reuse_small_data_set selected small data set", emit)
 	case idDataSetFull:
 		return selectDemoDataSet(root, id, demoDataSetFull, "select_full_data_set selected full data set", emit)
-	case idLaneFakeSmoke, "fake::test::provisioning::Preview":
+	case idLaneFakeSmoke, idTestFakeEnvironment, idTestFakeDatabase, idTestFakeServices:
 		emit(vscode.RunEvent{Event: "test_started", TestID: id})
 		emit(vscode.RunEvent{Event: "output", TestID: id, Message: "fake provisioning preview: environment/database/services need reconcile_during_run"})
 		emit(vscode.RunEvent{Event: "passed", TestID: id, Message: "fake provisioning preview rendered"})
+		return 0, nil
+	case idLaneSlow:
+		for _, member := range demoSlowLaneMembers {
+			code, err := runSlowDemoStep(ctx, member.id, emit)
+			if code != 0 || err != nil {
+				return code, err
+			}
+		}
 		return 0, nil
 	case idLaneGoPass, idTestGoPass:
 		return runGoLane(ctx, root, id, true, emit)
@@ -367,8 +507,28 @@ func (b demoBridge) runOne(ctx context.Context, root, id string, emit vscode.Run
 		}
 		return runGoLane(ctx, root, id, false, emit)
 	default:
+		for _, member := range demoSlowLaneMembers {
+			if id == member.id {
+				return runSlowDemoStep(ctx, id, emit)
+			}
+		}
 		return 1, fmt.Errorf("unknown demo test id %q", id)
 	}
+}
+
+// runSlowDemoStep runs one member of the slow lane: it announces the member,
+// spends the demo's fake work time, and settles it. Every member is slow, so
+// running the lane shows some members settled while others are still in flight
+// (keel/ac-581).
+//
+// DHF-REQ: keel/requirement-62
+func runSlowDemoStep(ctx context.Context, id string, emit vscode.RunEventWriter) (int, error) {
+	emit(vscode.RunEvent{Event: "test_started", TestID: id})
+	if err := demoSleep(ctx, demoSlowRunDelay); err != nil {
+		return 1, err
+	}
+	emit(vscode.RunEvent{Event: "passed", TestID: id, Message: "slow fake provisioning step completed"})
+	return 0, nil
 }
 
 func runGoLane(ctx context.Context, root, id string, pass bool, emit vscode.RunEventWriter) (int, error) {
@@ -423,6 +583,27 @@ func writeGoFixture(root string, pass bool) (string, error) {
 	return dir, nil
 }
 
+// laneDiagnostic reports one lane the demo's own validation refused. It is not
+// runnable: it carries a finding about a lane, not a lane to run.
+//
+// DHF-REQ: keel/requirement-51, keel/requirement-62
+func laneDiagnostic(laneName, rule, message string) vscode.TestItem {
+	stated := rule + ": " + message
+	return vscode.TestItem{
+		ID:          idLanes + "::diagnostic::" + laneName,
+		ParentID:    idLanes,
+		Label:       "lane diagnostic: " + stated,
+		Kind:        "group",
+		Runnable:    false,
+		Profiles:    []string{},
+		Description: stated,
+	}
+}
+
+func quoted(value string) string {
+	return "\"" + value + "\""
+}
+
 func group(id, parent, label string) vscode.TestItem {
 	return vscode.TestItem{ID: id, ParentID: parent, Label: label, Kind: "group", Runnable: false, Profiles: []string{}}
 }
@@ -456,8 +637,13 @@ func lane(root, id, parent, label, description string, resources []string) vscod
 	}
 }
 
-func test(id, parent, label, laneID string) vscode.TestItem {
-	return vscode.TestItem{ID: id, ParentID: parent, Label: label, Kind: "test", Framework: "keel-demo-dev", Runner: "keel-demo-dev", RunnerLabel: "Keel Demo Dev", Runnable: true, Profiles: []string{"run"}, LaneID: laneID}
+// test builds one demo test item. Every runnable item the demo serves carries a
+// description of its own, bounded to forty characters, so the
+// tree shows per-item prose rather than a family-wide sentence (keel/ac-583).
+//
+// DHF-REQ: keel/requirement-62
+func test(id, parent, label, description, laneID string) vscode.TestItem {
+	return vscode.TestItem{ID: id, ParentID: parent, Label: label, Kind: "test", Framework: "keel-demo-dev", Runner: "keel-demo-dev", RunnerLabel: "Keel Demo Dev", Runnable: true, Profiles: []string{"run"}, LaneID: laneID, Description: description}
 }
 
 func prereq(root, runID, resource, kind, want, missing, actionName string, reusable bool) testbridge.DesiredStateRow {
@@ -527,7 +713,7 @@ func hasDemoLanesFile(root string) bool {
 }
 
 func writeDemoReadyState(root string) error {
-	for _, resource := range []string{"docker-env", "postgres", "service-a", "service-b", "service-c", "sdk", "dns", "ping"} {
+	for _, resource := range []string{"docker-env", "postgres", "service-a", "service-b", "service-c", "sdk", "dns", "ping", "seed-cache"} {
 		if err := writeDemoPrereqReady(root, resource); err != nil {
 			return err
 		}

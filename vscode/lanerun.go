@@ -36,22 +36,42 @@ type LaneRun struct {
 //
 // DHF-REQ: keel/requirement-53, keel/requirement-138
 func LatestLaneRun(root, laneID string) *LaneRun {
+	return LatestRunsForIDs(root, []string{laneID})[laneID]
+}
+
+// LatestRunsForIDs answers LatestLaneRun for a whole set of ids in one pass over
+// the run directory, keyed by id and holding only the ids a run is attributable
+// to. Attribution is the same rule LatestLaneRun states; the only difference is
+// cost, and the difference matters: a tree stamps every runnable item it serves
+// on every refresh, so a per-id directory walk would re-read the retained
+// streams once per item.
+//
+// DHF-REQ: keel/requirement-53, keel/requirement-138
+func LatestRunsForIDs(root string, ids []string) map[string]*LaneRun {
+	best := map[string]*LaneRun{}
+	if len(ids) == 0 {
+		return best
+	}
+	wanted := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		wanted[id] = struct{}{}
+	}
 	runDir := filepath.Join(append([]string{root}, laneRunsDirParts...)...)
 	entries, err := os.ReadDir(runDir)
 	if err != nil {
-		return nil
+		return best
 	}
-	var best *LaneRun
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
 			continue
 		}
-		got := laneRunFromStream(filepath.Join(runDir, entry.Name()), laneID)
-		if got == nil {
-			continue
-		}
-		if best == nil || got.At.After(best.At) {
-			best = got
+		for id, got := range runsFromStream(filepath.Join(runDir, entry.Name())) {
+			if _, ok := wanted[id]; !ok {
+				continue
+			}
+			if held, ok := best[id]; !ok || got.At.After(held.At) {
+				best[id] = got
+			}
 		}
 	}
 	return best
@@ -71,10 +91,12 @@ func (r *LaneRun) Facts() *LastRunFacts {
 	return &LastRunFacts{At: r.At, DurationMS: &duration, ExitCode: &exitCode}
 }
 
-// laneRunFromStream reads one persisted stream and reports the run it records
-// only when that run was requested for exactly this lane and finished with an
-// exit code. An unparseable line is skipped rather than failing the read: a
-// truncated stream from an interrupted run must not cost the lane its history.
+// runsFromStream reads one persisted stream and reports, per id the stream
+// attributes a run to, the run it records. A stream may hold more than one run,
+// so the runs are keyed by the id each was requested for; a run requested for
+// anything other than exactly one id is attributable to no id and is dropped.
+// An unparseable line is skipped rather than failing the read: a truncated
+// stream from an interrupted run must not cost the item its history.
 //
 // It is the one place that decides whether a stream yields a run, so the two
 // ways a stream can fail to state a measurement are refused here rather than by
@@ -83,13 +105,14 @@ func (r *LaneRun) Facts() *LastRunFacts {
 // attributed, which keel/ac-564 already renders as an absent last_run.
 //
 // DHF-REQ: keel/requirement-138
-func laneRunFromStream(path, laneID string) *LaneRun {
+func runsFromStream(path string) map[string]*LaneRun {
+	runs := map[string]*LaneRun{}
 	file, err := os.Open(path)
 	if err != nil {
-		return nil
+		return runs
 	}
 	defer file.Close()
-	var started *RunEvent
+	starts := map[string]*RunEvent{}
 	finishes := map[string]*RunEvent{}
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -99,29 +122,29 @@ func laneRunFromStream(path, laneID string) *LaneRun {
 		}
 		switch event.Event {
 		case "run_started":
-			if len(event.Requested) == 1 && event.Requested[0].ID == laneID {
+			if len(event.Requested) == 1 {
 				copyEvent := event
-				started = &copyEvent
+				starts[event.Requested[0].ID] = &copyEvent
 			}
 		case "run_finished":
 			copyEvent := event
 			finishes[event.RunID] = &copyEvent
 		}
 	}
-	if started == nil {
-		return nil
+	for id, started := range starts {
+		finished := finishes[started.RunID]
+		if finished == nil || finished.ExitCode == nil {
+			continue
+		}
+		if finished.Time.Before(started.Time) {
+			continue
+		}
+		runs[id] = &LaneRun{
+			RunID:      started.RunID,
+			At:         started.Time,
+			DurationMS: finished.Time.Sub(started.Time).Milliseconds(),
+			ExitCode:   *finished.ExitCode,
+		}
 	}
-	finished := finishes[started.RunID]
-	if finished == nil || finished.ExitCode == nil {
-		return nil
-	}
-	if finished.Time.Before(started.Time) {
-		return nil
-	}
-	return &LaneRun{
-		RunID:      started.RunID,
-		At:         started.Time,
-		DurationMS: finished.Time.Sub(started.Time).Milliseconds(),
-		ExitCode:   *finished.ExitCode,
-	}
+	return runs
 }
