@@ -16,7 +16,8 @@ side of that tag.
   prose now travels as the scalar `description` string and carries nothing else;
   the machine facts that used to ride the array travel as the typed `last_run`
   and `findings` fields. A document still carrying `limitations` is refused by
-  name, so an unmigrated producer fails loudly instead of rendering blank.
+  name, so a producer that has not migrated fails loudly instead of rendering
+  blank.
 - Item labels no longer carry an ordinal prefix, and `sort_text` is no longer a
   producer input. The order in which the producer emits its items is the one
   ordering fact: the extension derives the sort key from the emission index, and
