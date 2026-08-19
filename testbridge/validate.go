@@ -111,6 +111,13 @@ func validateDiscovery(doc vscode.DiscoveryDocument) error {
 		if err := vscode.ValidateItemDescription(item); err != nil {
 			return err
 		}
+		// The schema declares last_run.duration_ms with "minimum": 0 and nothing
+		// evaluates that schema at run time, so the refusal validateRunEvent
+		// applies to the sibling carrier is stated here too (keel/ac-574).
+		// DHF-REQ: keel/requirement-138
+		if item.LastRun != nil && item.LastRun.DurationMS != nil && *item.LastRun.DurationMS < 0 {
+			return fmt.Errorf("keel/testbridge: discovery item %q has negative last_run.duration_ms %d", item.ID, *item.LastRun.DurationMS)
+		}
 		// DHF-REQ: keel/requirement-138
 		for _, finding := range item.Findings {
 			if finding.Rule == "" || finding.Message == "" {
