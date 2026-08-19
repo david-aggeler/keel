@@ -30,6 +30,7 @@ import {
   resetReconcileSignatureForTest,
   resultItemsForRunEvent,
   runEventApplicationSnapshot,
+  runAllProfileHandlerForTest,
   runProfileHandlerForTest,
   runStartInvalidationRunName,
   setWatcherDebounceMs,
@@ -3219,7 +3220,315 @@ process.exit(2);
       workspace.dispose();
     }
   });
+
+  // DHF-TEST: keel/requirement-71 (keel/ac-585)
+  //
+  // keel/issue-191: running a non-exclusive desired-state group left the first
+  // row passed and the rest rendered skipped, while the devtool had reported a
+  // settling event for every row. The assertion is the LAST state stamped onto
+  // each row — that is what the Explorer renders — not the set of states the
+  // row passed through.
+  test('a desired-state group run settles every executed row on the state its own event reported (fixture bridge)', async function () {
+    this.timeout(20_000);
+    const workspace = createPreconditionGroupWorkspace('keel-precondition-group-');
+    try {
+      const controller = await activateExclusiveGroupWorkspace();
+      const timeline: RunTimelineEntry[] = [];
+      const restore = recordRunTimeline(controller, timeline);
+      try {
+        await runProfileHandlerForTest(preconditionGroupId);
+      } finally {
+        restore();
+      }
+
+      const spawns = timeline.flatMap((entry) => entry.kind === 'spawn' ? [entry.ids] : []);
+      assert.deepEqual(spawns, [[preconditionGroupId]], `the group id itself is submitted once; timeline=${JSON.stringify(timeline)}`);
+
+      const finalStateById = renderedStateById(timeline);
+      assert.deepEqual(
+        preconditionGroupRowIds.map((id) => [id, finalStateById.get(id)]),
+        preconditionGroupRowIds.map((id) => [id, 'passed']),
+        `every row the devtool reported passed comes to rest passed; timeline=${JSON.stringify(timeline)}`
+      );
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  // DHF-TEST: keel/requirement-71 (keel/ac-585)
+  //
+  // The whole-tree selection shape — "Run All Tests", no include list. This is
+  // the run keel/issue-191's screenshot was taken from (1671/1671).
+  test('a whole-tree run settles every desired-state row on the state its own event reported', async function () {
+    this.timeout(20_000);
+    const workspace = createPreconditionGroupWorkspace('keel-precondition-all-');
+    try {
+      const controller = await activateExclusiveGroupWorkspace();
+      const timeline: RunTimelineEntry[] = [];
+      const restore = recordRunTimeline(controller, timeline);
+      try {
+        await runAllProfileHandlerForTest();
+      } finally {
+        restore();
+      }
+
+      const finalStateById = renderedStateById(timeline);
+      assert.deepEqual(
+        preconditionGroupRowIds.map((id) => [id, finalStateById.get(id)]),
+        preconditionGroupRowIds.map((id) => [id, 'passed']),
+        `every row the devtool reported passed comes to rest passed; timeline=${JSON.stringify(timeline)}`
+      );
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  // The same claim as the fixture case above, driven end to end through the
+  // REAL keel-dev binary against the module root — the configuration the owner
+  // observed in keel/issue-191. The fixture case isolates the VSIX apply path;
+  // this one admits everything the real devtool adds around it (run spooling,
+  // the external-run mirror, the post-run desired-state refresh).
+  test('a real keel-dev precondition group run settles every executed row on its own result', async function () {
+    this.timeout(120_000);
+    const devRoot = keelModuleRootFromTestLocation();
+    const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+    process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = devRoot;
+    const devConfigPath = path.join(devRoot, configRelativePath);
+    const previousConfig = fs.existsSync(devConfigPath) ? fs.readFileSync(devConfigPath, 'utf8') : undefined;
+    fs.mkdirSync(path.dirname(devConfigPath), { recursive: true });
+    fs.writeFileSync(devConfigPath, JSON.stringify({
+      version: currentConfigVersion,
+      command: realKeelDevBinary(),
+      args: [],
+      displayName: 'Keel'
+    }, null, 2) + '\n');
+    try {
+      const controller = await activateExclusiveGroupWorkspace();
+      const timeline: RunTimelineEntry[] = [];
+      const restore = recordRunTimeline(controller, timeline);
+      try {
+        await runProfileHandlerForTest(preconditionGroupId);
+      } finally {
+        restore();
+      }
+
+      const finalStateById = renderedStateById(timeline);
+      assert.deepEqual(
+        preconditionGroupRowIds.map((id) => [id, finalStateById.get(id)]),
+        preconditionGroupRowIds.map((id) => [id, 'passed']),
+        `every row the real devtool reported passed comes to rest passed; timeline=${JSON.stringify(timeline)}`
+      );
+    } finally {
+      if (previousConfig === undefined) {
+        fs.rmSync(devConfigPath, { force: true });
+      } else {
+        fs.writeFileSync(devConfigPath, previousConfig);
+      }
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
+    }
+  });
+
+  // DHF-TEST: keel/requirement-71 (keel/ac-585), keel/requirement-88 (keel/ac-283)
+  //
+  // The second devtool. keel-demo-dev's precondition group carries nine rows,
+  // and the workspace also holds a mutually-exclusive group — so this case
+  // proves the correction scales past three rows AND that it leaves the
+  // exclusive group's at-most-one-result rendering alone (keel/design_decision-4).
+  test('a real keel-demo-dev precondition group run settles every executed row, and does not disturb the exclusive group', async function () {
+    this.timeout(120_000);
+    const workspace = createRealDemoWorkspace('keel-demo-precondition-');
+    try {
+      const controller = await activateExclusiveGroupWorkspace();
+      const timeline: RunTimelineEntry[] = [];
+      const restore = recordRunTimeline(controller, timeline);
+      try {
+        await runProfileHandlerForTest(demoPreconditionGroupId);
+      } finally {
+        restore();
+      }
+
+      const rendered = renderedStateById(timeline);
+      const evented = timeline.flatMap((entry) => entry.kind === 'spawn' ? [] : [entry.id])
+        .filter((id) => id.startsWith('keel-demo-dev::desired-state::') && !id.includes('::group::'));
+      assert.ok(evented.length >= 9, `every row of the nine-row group is reached; timeline=${JSON.stringify(timeline)}`);
+      for (const id of new Set(evented)) {
+        assert.notEqual(
+          rendered.get(id),
+          undefined,
+          `row ${id} comes to rest on a state of its own; timeline=${JSON.stringify(timeline)}`
+        );
+      }
+      // Not one row of the group is left carrying a state inferred from a
+      // sibling: every stamp on a precondition row is its own reported result.
+      assert.deepEqual(
+        timeline.flatMap((entry) => entry.kind === 'skipped' && entry.id.startsWith(demoPreconditionRowPrefix) ? [entry.id] : []),
+        [],
+        `no precondition row is stamped skipped on a sibling's behalf; timeline=${JSON.stringify(timeline)}`
+      );
+
+      // The exclusive group is out of this unit's scope and must stay so: the
+      // run touches no row of it at all.
+      assert.deepEqual(
+        timeline.flatMap((entry) => entry.kind !== 'spawn' && entry.id.includes('::dataset::') ? [entry.id] : []),
+        [],
+        `the exclusive data-set group is untouched by a precondition-group run; timeline=${JSON.stringify(timeline)}`
+      );
+    } finally {
+      workspace.dispose();
+    }
+  });
 });
+
+const demoPreconditionGroupId = 'keel-demo-dev::desired-state::group::test-preconditions';
+const demoPreconditionRowPrefix = 'keel-demo-dev::desired-state::';
+
+// createRealDemoWorkspace stands up a temp workspace served by the REAL
+// keel-demo-dev binary, seeded through detect-lanes so the bridge serves its
+// desired-state groups (a bare root serves none — requirement-65).
+function createRealDemoWorkspace(prefix: string): ExclusiveGroupWorkspace {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+  process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = root;
+  fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'go.mod'), 'module github.com/david-aggeler/keel\n\ngo 1.25\n');
+  fs.writeFileSync(path.join(root, 'go.sum'), '');
+  fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+    version: currentConfigVersion,
+    command: realKeelDemoDevBinary(),
+    args: [],
+    displayName: 'Keel Demo Dev'
+  }, null, 2) + '\n');
+  cp.execFileSync(realKeelDemoDevBinary(), ['test-bridge', 'run', '--id', 'testbridge::maintenance::detect-lanes'], { cwd: root, stdio: 'ignore' });
+  return {
+    root,
+    dispose() {
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  };
+}
+
+// preconditionGroupId / preconditionGroupRowIds mirror keel-dev's real
+// three-row Test Preconditions group: a NON-exclusive desired-state group whose
+// rows all report their own result. keel/issue-191 was observed here first.
+const preconditionGroupId = 'keel::desired-state::group::test-preconditions';
+const preconditionGroupRowIds = [
+  'keel::desired-state::go-toolchain',
+  'keel::desired-state::keel-module-root',
+  'keel::desired-state::stub-binaries'
+];
+
+// createPreconditionGroupWorkspace stands up a workspace whose adapter serves
+// one non-exclusive desired-state group of three runnable rows. Running the
+// group emits a test_started and a passed for EVERY row, which is exactly what
+// both real devtools do (keel/issue-191 records both CLI streams). No
+// reconcile_results are served: the bridge computes them for mutually-exclusive
+// groups only, so nothing outside the run may restamp these rows.
+function createPreconditionGroupWorkspace(prefix: string): ExclusiveGroupWorkspace {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+  process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = root;
+  fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+  const adapter = path.join(root, 'precondition-group-adapter.js');
+  fs.writeFileSync(adapter, `
+const args = process.argv.slice(2);
+const now = () => new Date().toISOString();
+const groupId = ${JSON.stringify(preconditionGroupId)};
+const rows = ${JSON.stringify(preconditionGroupRowIds)};
+const labels = ['go toolchain', 'keel module root', 'stub binaries'];
+if (args.includes('--version')) {
+  process.stdout.write('dev\\n');
+  process.exit(0);
+}
+function discovery() {
+  return {
+    version: 1,
+    workspace: process.cwd(),
+    generated_at: now(),
+    items: [
+      { id: 'keel::desired-state', label: 'Desired State', kind: 'group', runnable: false, profiles: [] },
+      { id: groupId, parent_id: 'keel::desired-state', label: 'Test Preconditions', kind: 'group', runnable: true, profiles: ['run'], desired_state_group: { mutually_exclusive: false } },
+      ...rows.map((id, index) => ({
+        id, parent_id: groupId, label: labels[index], kind: 'group', runnable: true, profiles: ['run'],
+        desired_state_row: { current: labels[index], action: 'reuse', active: true }
+      })),
+      { id: 'keel::lanes', label: 'C - Lanes', kind: 'group', runnable: false, profiles: [] },
+      { id: 'keel::lane::fast', parent_id: 'keel::lanes', label: 'fast', kind: 'lane', runnable: true, profiles: ['run'] }
+    ]
+  };
+}
+function desiredState() {
+  return {
+    version: 3,
+    workspace: process.cwd(),
+    generated_at: now(),
+    groups: [{
+      label: 'Test Preconditions', order: 1, mutually_exclusive: false,
+      rows: rows.map((run_id, index) => ({
+        run_id, resource: labels[index], kind: 'precondition', desired: 'present', current: 'present',
+        status: 'satisfied', action: 'reuse', message: labels[index], reusable: true, owned: false, active: true
+      }))
+    }]
+  };
+}
+if (args.slice(0, 3).join(' ') === 'test-bridge discover --format') {
+  process.stdout.write(JSON.stringify(discovery()) + '\\n');
+  process.exit(0);
+}
+if (args.slice(0, 3).join(' ') === 'test-bridge desired-state --format') {
+  process.stdout.write(JSON.stringify(desiredState()) + '\\n');
+  process.exit(0);
+}
+if (args.slice(0, 2).join(' ') === 'test-bridge run') {
+  const requested = args.flatMap((value, index) => args[index - 1] === '--id' ? [value] : []);
+  const emit = (event) => process.stdout.write(JSON.stringify({ version: 1, time: now(), source: 'editor', run_id: 'precondition-run', ...event }) + '\\n');
+  // The group id expands to its rows; the group itself is never evented,
+  // exactly as the real devtool behaves (keel/issue-191 CLI evidence).
+  const expanded = [];
+  for (const id of requested) {
+    if (id === groupId) {
+      for (const row of rows) { if (!expanded.includes(row)) { expanded.push(row); } }
+    } else if (!expanded.includes(id)) {
+      expanded.push(id);
+    }
+  }
+  emit({ event: 'run_started', requested: expanded.map((id) => ({ id, label: id })) });
+  for (const id of expanded) {
+    emit({ event: 'test_started', test_id: id });
+    emit({ event: 'passed', test_id: id, duration_ms: 1 });
+  }
+  emit({ event: 'run_finished', exit_code: 0 });
+  process.exit(0);
+}
+process.stderr.write('unsupported command ' + args.join(' ') + '\\n');
+process.exit(2);
+`);
+  fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+    version: currentConfigVersion,
+    command: process.execPath,
+    args: [adapter],
+    displayName: 'Keel'
+  }, null, 2) + '\n');
+  return {
+    root,
+    dispose() {
+      if (previousDevWorkspace === undefined) {
+        delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
+      } else {
+        process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = previousDevWorkspace;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  };
+}
 
 // createExclusiveGroupWorkspace stands up a workspace whose adapter serves two
 // mutually-exclusive desired-state groups and one ordinary lane, so a run of a
@@ -3432,6 +3741,52 @@ function countDesiredStateReads(): { count(): number; restore(): void } {
 // assertion reads as the sequence of rendered states rather than a type guard.
 function stampedIds(timeline: readonly RunTimelineEntry[], kind: 'passed' | 'skipped'): string[] {
   return timeline.flatMap((entry) => entry.kind === kind ? [entry.id] : []);
+}
+
+// renderedStateById replays a stamp timeline the way VS Code's result model
+// does, so an assertion reads the state the Explorer SHOWS rather than the
+// last state the extension asked for. The two differ, and keel/issue-191 lives
+// in the gap: within one TestRun, VS Code drops a state update whose terminal
+// priority is LOWER than the one already recorded. Verbatim from the shipped
+// 1.134.0 workbench bundle (LiveTestResult.updateState), where DUi is the
+// terminal-priority table {Passed:0, Skipped:1, Failed:2, Errored:3}:
+//
+//   c=DUi[r.tasks[a].state], l=DUi[i];
+//   c!==void 0 && (l===void 0 || l<c) || this.fireUpdateAndRefresh(r,a,i,n)
+//
+// So a row stamped `skipped` (priority 1) IGNORES its own later `passed`
+// (priority 0). Across runs the guard does not apply — the newer run carries
+// its own result object — so the last run to stamp an item wins.
+const terminalStatePriority: Readonly<Record<string, number>> = { passed: 0, skipped: 1 };
+
+function renderedStateById(timeline: readonly RunTimelineEntry[]): Map<string, string> {
+  const perRun = new Map<string, Map<string, string>>();
+  const runOrder: string[] = [];
+  for (const entry of timeline) {
+    if (entry.kind === 'spawn') {
+      continue;
+    }
+    let states = perRun.get(entry.run);
+    if (!states) {
+      states = new Map<string, string>();
+      perRun.set(entry.run, states);
+      runOrder.push(entry.run);
+    }
+    const previous = states.get(entry.id);
+    const previousPriority = previous === undefined ? undefined : terminalStatePriority[previous];
+    const nextPriority = terminalStatePriority[entry.kind];
+    if (previousPriority !== undefined && (nextPriority === undefined || nextPriority < previousPriority)) {
+      continue;
+    }
+    states.set(entry.id, entry.kind);
+  }
+  const rendered = new Map<string, string>();
+  for (const run of runOrder) {
+    for (const [id, state] of perRun.get(run) ?? []) {
+      rendered.set(id, state);
+    }
+  }
+  return rendered;
 }
 
 function recordRunTimeline(controller: vscode.TestController, timeline: RunTimelineEntry[]): () => void {
