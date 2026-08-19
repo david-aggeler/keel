@@ -20,7 +20,7 @@ const (
 	vsixManifestRelPath = "vsix/package.json"
 )
 
-// runVersionParity is the authoring-time defence of the one-version invariant:
+// runVersionParity is the authoring-time defense of the one-version invariant:
 // it compares the root VERSION file with the version field of the VSIX manifest
 // and refuses the checkout when they differ.
 //
