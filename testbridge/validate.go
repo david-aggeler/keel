@@ -127,6 +127,20 @@ func validateDiscovery(doc vscode.DiscoveryDocument) error {
 				return fmt.Errorf("keel/testbridge: discovery item %q has invalid finding severity %q", item.ID, finding.Severity)
 			}
 		}
+		// The schema declares the condition kind a closed enum and its message
+		// with "minLength": 1, and nothing evaluates that schema at run time, so
+		// the sibling refusals the findings leg applies are stated here too
+		// (keel/ac-577, keel/ac-578). vscode.IsConditionKind is the single
+		// producer-side answer to what a valid kind is.
+		// DHF-REQ: keel/requirement-140
+		for _, condition := range item.Conditions {
+			if condition.Message == "" {
+				return fmt.Errorf("keel/testbridge: discovery item %q has a condition missing message", item.ID)
+			}
+			if !vscode.IsConditionKind(condition.Kind) {
+				return fmt.Errorf("keel/testbridge: discovery item %q has invalid condition kind %q", item.ID, condition.Kind)
+			}
+		}
 	}
 	// DHF-REQ: keel/requirement-97
 	for _, entry := range doc.Capabilities.ReconcileResults {
