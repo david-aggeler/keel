@@ -9,7 +9,14 @@
 // the JSON output format carries. The wrapper pins stream-json output, curates
 // progress events into "claude progress" log records, parses the final result
 // event, and surfaces tokens, cost, turns, and duration as the typed fields of
-// [Result].
+// [Result], with the whole decoded stream and a pointer to the terminal event
+// alongside them.
+//
+// Whether a run succeeded is not decided here. This adapter supplies two
+// per-CLI facts — the child's exit code and the terminal result event's
+// is_error flag — to the shared contract in [keel/exec.DecideCLIOutcome], which
+// every keel/exec CLI adapter shares. Either fact alone fails the run and
+// neither masks the other; the output ceiling outranks both.
 //
 // [Run] is the primary entry point; [Version] reports the claude binary's
 // version. The zero value of [Request] is not usable — Prompt is required; Dir

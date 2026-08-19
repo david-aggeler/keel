@@ -124,3 +124,49 @@ func TestRun_OutputCeilingStillReturnsNoResult(t *testing.T) {
 		t.Errorf("Run returned Result %+v at the output ceiling; want nil", res)
 	}
 }
+
+// TestRun_FailedRunWithEventsCarriesStderrOnTheError proves keel/ac-16's stderr
+// clause holds on the failure path the shared outcome contract opened. The
+// retired rule raised an error only when NO events had been parsed, so this
+// case — a decodable stream followed by a non-zero exit — previously produced
+// no error at all and had no stderr carriage to test. It is now the common
+// failure shape, and codex's stderr must still reach the caller or the failure
+// is undiagnosable.
+//
+// DHF-TEST: keel/requirement-7
+func TestRun_FailedRunWithEventsCarriesStderrOnTheError(t *testing.T) {
+	dir := t.TempDir()
+	const boom = "CODEX_BOOM_c3d4"
+	stub := writeStderrStub(t, successStream, boom, "", 4)
+
+	res, err := Run(context.Background(), Request{Prompt: "x", Dir: dir, Bin: stub})
+	if err == nil {
+		t.Fatal("Run returned nil err; want an error for a non-zero exit")
+	}
+	if res == nil {
+		t.Fatal("Run returned nil Result; want the decoded stream alongside the error")
+	}
+	if !strings.Contains(err.Error(), boom) {
+		t.Errorf("error %q does not carry codex's stderr marker %q; the failure cause was dropped", err.Error(), boom)
+	}
+}
+
+// TestRun_FailingTerminalEventCarriesStderrOnTheError proves the same clause on
+// the other new failure path: a terminal event reporting failure on a zero
+// exit.
+//
+// DHF-TEST: keel/requirement-7
+func TestRun_FailingTerminalEventCarriesStderrOnTheError(t *testing.T) {
+	dir := t.TempDir()
+	const boom = "CODEX_BOOM_e5f6"
+	lines := []string{`{"type":"task_started"}`, `{"type":"error","message":"codex blew up"}`}
+	stub := writeStderrStub(t, lines, boom, "", 0)
+
+	_, err := Run(context.Background(), Request{Prompt: "x", Dir: dir, Bin: stub})
+	if err == nil {
+		t.Fatal("Run returned nil err; want an error for a terminal event reporting failure")
+	}
+	if !strings.Contains(err.Error(), boom) {
+		t.Errorf("error %q does not carry codex's stderr marker %q", err.Error(), boom)
+	}
+}

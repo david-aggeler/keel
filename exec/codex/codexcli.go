@@ -32,7 +32,10 @@ type Event struct {
 	Raw json.RawMessage
 }
 
-// Result collects the full event stream of a codex exec run.
+// Result collects the full event stream of a codex exec run: the child's exit
+// code, every decoded event, and a pointer to the terminal event among them.
+//
+// DHF-REQ: keel/requirement-134, keel/requirement-7
 type Result struct {
 	// Events is every decoded event, in arrival order.
 	Events []Event
@@ -50,6 +53,8 @@ type Result struct {
 }
 
 // Request describes one headless `codex exec --json` invocation.
+//
+// DHF-REQ: keel/requirement-7
 type Request struct {
 	// Prompt is the user prompt, passed as the final positional arg.
 	Prompt string
