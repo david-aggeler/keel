@@ -40,18 +40,18 @@ func TestLanesProducerTextComesFromTheExportedRenderer(t *testing.T) {
 		t.Fatalf("discovery missing go-log lane: %+v", doc.Items)
 	}
 
-	// Whatever prose the producer still carries for a consumer that has not migrated,
-	// every element of it must be a string the renderer itself produced.
-	rendered := map[string]bool{lane.Description: true}
-	if hint := vscode.FormatLastRun(lane.LastRun); hint != "" {
-		rendered[hint] = true
+	// With the prose array retired, the producer contributes its own prose and
+	// its typed facts and composes nothing: the rendered line exists only on the
+	// consumer side, and the exported renderer is the one place it is spelled.
+	if lane.Description != "the lane prose" {
+		t.Fatalf("lane description = %q, want the producer's own prose alone", lane.Description)
+	}
+	if hint := vscode.FormatLastRun(lane.LastRun); hint != "" && strings.Contains(lane.Description, hint) {
+		t.Fatalf("lane description %q carries the rendered duration %q; the producer must not compose", lane.Description, hint)
 	}
 	for _, finding := range lane.Findings {
-		rendered[vscode.FormatFinding(finding)] = true
-	}
-	for _, limitation := range lane.Limitations {
-		if !rendered[limitation] {
-			t.Fatalf("lane limitation %q was composed outside the exported renderer; renderer produced %v", limitation, rendered)
+		if rendered := vscode.FormatFinding(finding); rendered != "" && strings.Contains(lane.Description, rendered) {
+			t.Fatalf("lane description %q carries the rendered finding %q", lane.Description, rendered)
 		}
 	}
 }

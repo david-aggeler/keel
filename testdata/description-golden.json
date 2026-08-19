@@ -406,11 +406,6 @@
         "runnable": true,
         "profiles": [
           "run"
-        ],
-        "limitations": [
-          "current=empty",
-          "action=reconcile",
-          "active=true"
         ]
       },
       "display": {

@@ -1373,7 +1373,7 @@ process.exit(2);
           range: { start_line: 1, start_column: 2, end_line: 3, end_column: 4 },
           runnable: true,
           profiles: ['run'],
-          limitations: ['slow']
+          description: 'slow'
         },
         { id: 'tree::alias', parent_id: 'tree::root', label: 'alias', kind: 'test', canonical_id: 'tree::child', runnable: true, profiles: ['run'] }
       ]

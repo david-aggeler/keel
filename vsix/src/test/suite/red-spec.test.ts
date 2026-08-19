@@ -584,7 +584,7 @@ function reconcileDiscovery(labelSuffix: string): DiscoveryDocument {
         kind: 'lane',
         runnable: true,
         profiles: ['run'],
-        limitations: [`updated by ${labelSuffix} discovery`]
+        description: `updated by ${labelSuffix} discovery`
       },
       changingLane
     ]
