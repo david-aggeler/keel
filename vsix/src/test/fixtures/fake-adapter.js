@@ -58,6 +58,10 @@ function upgradeConfig() {
       cfg.args = cfg.args.slice(0, -2);
     }
   }
+  if (cfg.version === 3) {
+    cfg.version = 4;
+    cfg.display = cfg.display ?? { description: true, lastRun: true, desiredState: true, findings: true };
+  }
   fs.writeFileSync(file, `${JSON.stringify(cfg, null, 2)}\n`);
 }
 

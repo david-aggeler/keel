@@ -1,6 +1,7 @@
 package vscode
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -49,6 +50,56 @@ type DisplayConfig struct {
 	LastRun      bool `json:"lastRun"`
 	DesiredState bool `json:"desiredState"`
 	Findings     bool `json:"findings"`
+}
+
+// UnmarshalJSON decodes a display block strictly: an unknown key is refused by
+// name rather than ignored, matching the strictness the rest of the config
+// read already applies. An absent key keeps its default of enabled, so a class
+// introduced by a later version cannot vanish from an older workspace's tree.
+//
+// DHF-REQ: keel/requirement-139
+func (c *DisplayConfig) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	decoded := DefaultDisplayConfig()
+	for key, value := range raw {
+		target := decoded.field(DisplayClass(key))
+		if target == nil {
+			return fmt.Errorf("keel/vscode: unknown display class %q in test bridge config; known classes are %s", key, strings.Join(displayClassNames(), ", "))
+		}
+		if err := json.Unmarshal(value, target); err != nil {
+			return fmt.Errorf("keel/vscode: display class %q must be a boolean: %w", key, err)
+		}
+	}
+	*c = decoded
+	return nil
+}
+
+// field returns a pointer to the toggle the named class reads, or nil when the
+// class is not one this renderer declares.
+func (c *DisplayConfig) field(class DisplayClass) *bool {
+	switch class {
+	case DisplayClassDescription:
+		return &c.Description
+	case DisplayClassLastRun:
+		return &c.LastRun
+	case DisplayClassDesiredState:
+		return &c.DesiredState
+	case DisplayClassFindings:
+		return &c.Findings
+	default:
+		return nil
+	}
+}
+
+func displayClassNames() []string {
+	names := make([]string, 0, len(DisplayClassOrder))
+	for _, class := range DisplayClassOrder {
+		names = append(names, string(class))
+	}
+	return names
 }
 
 // DefaultDisplayConfig enables every fact class.
@@ -142,12 +193,16 @@ func FormatLastRun(last *LastRunFacts) string {
 	if last == nil || last.DurationMS == nil || *last.DurationMS < 0 {
 		return ""
 	}
-	totalSeconds := float64(*last.DurationMS) / 1000
-	if totalSeconds > 90 {
-		seconds := int(totalSeconds + 0.5)
+	// The arithmetic works in whole milliseconds rather than in seconds so
+	// that this renderer and its VSIX mirror cannot round a boundary value
+	// differently.
+	durationMS := *last.DurationMS
+	if durationMS > 90_000 {
+		seconds := (durationMS + 500) / 1000
 		return fmt.Sprintf("· last %dm %02ds", seconds/60, seconds%60)
 	}
-	return fmt.Sprintf("· last %.1fs", totalSeconds)
+	tenths := (durationMS + 50) / 100
+	return fmt.Sprintf("· last %d.%ds", tenths/10, tenths%10)
 }
 
 // FormatFinding renders one typed validation finding.
@@ -160,14 +215,16 @@ func FormatFinding(finding Finding) string {
 	return finding.Rule + " " + finding.Severity + ": " + finding.Message
 }
 
-// desiredStateSegments renders the typed desired-state facts an item carries.
-// Group and row facts are one class: an item is at most one of the two, so the
-// single toggle governs whichever it is.
+// desiredStateSegments renders the typed desired-state facts of a row.
+//
+// A desired-state GROUP contributes nothing here on purpose. Its
+// mutually_exclusive flag is a bridge input, not a rendered fact: keel's
+// design_decision-5 reserves deciding a rendered state from that flag to the
+// bridge, which serves the decision as reconcile_results for the consumer to
+// replay verbatim. Rendering it as secondary text would put a second, weaker
+// answer to the same question on the screen.
 func desiredStateSegments(item TestItem) []string {
 	var segments []string
-	if group := item.DesiredStateGroup; group != nil && group.MutuallyExclusive {
-		segments = append(segments, "mutually_exclusive=true")
-	}
 	if row := item.DesiredStateRow; row != nil {
 		if row.Current != "" {
 			segments = append(segments, "current="+row.Current)

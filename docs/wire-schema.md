@@ -227,7 +227,7 @@ classDiagram
 
 ---
 
-## run-lock.json — unversioned  and  test-bridge-config.json — version 3
+## run-lock.json — unversioned  and  test-bridge-config.json — version 4
 
 ```mermaid
 classDiagram
@@ -243,8 +243,17 @@ classDiagram
         +List~string~ args
         +string displayName
         -Map~string~ env
+        -display display
     }
+    class display {
+        +bool description
+        +bool lastRun
+        +bool desiredState
+        +bool findings
+    }
+    test_bridge_config --> display
 ```
 
 - `run_lock` has **no `version` field** — the only unversioned document; a genuine inconsistency worth deciding on.
 - `test_bridge_config.env` is a map of string to string. Config versions independently of the module tag; `test-bridge config upgrade` owns its migration.
+- `test_bridge_config.display` is optional and carries one toggle per rendered fact class, in the order the extension composes them. An absent block means every class is enabled. An unknown key inside it is refused at config read (keel/requirement-139).

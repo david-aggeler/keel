@@ -8,7 +8,7 @@
   "properties": {
     "version": {
       "type": "integer",
-      "const": 3
+      "const": 4
     },
     "command": {
       "type": "string",
@@ -28,6 +28,24 @@
       "type": "object",
       "additionalProperties": {
         "type": "string"
+      }
+    },
+    "display": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "boolean"
+        },
+        "lastRun": {
+          "type": "boolean"
+        },
+        "desiredState": {
+          "type": "boolean"
+        },
+        "findings": {
+          "type": "boolean"
+        }
       }
     }
   }

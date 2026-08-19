@@ -55,17 +55,32 @@ gives up, not who has the last word.
 
 ```json
 {
-  "version": 3,
+  "version": 4,
   "command": "bin/keel-dev",
   "args": [],
   "displayName": "Keel",
   "env": {
     "OPTIONAL_KEY": "optional value"
+  },
+  "display": {
+    "description": true,
+    "lastRun": true,
+    "desiredState": true,
+    "findings": true
   }
 }
 ```
 
-`version`, `command`, `args`, and `displayName` are required. `env` is optional.
+`version`, `command`, `args`, and `displayName` are required. `env` and
+`display` are optional.
+
+`display` carries one toggle per rendered fact class — `description`,
+`lastRun`, `desiredState`, `findings`, in that rendered order. An absent block,
+and an absent key inside a present block, both mean enabled, so upgrading a
+workspace hides nothing that was visible beforehand. An unknown key is refused
+by name at config read rather than ignored. The toggles are repo-scoped because
+this file is committed; `testBridge.*` VS Code settings stay unsupported
+(keel/design_decision-8).
 The JSON Schema is embedded in `keel/vscode` as `test-bridge-config` and is
 drift-checked against the Go type. `CurrentConfigVersion` is the schema version
 constant.
