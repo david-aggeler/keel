@@ -244,6 +244,16 @@ func IsFindingSeverity(severity string) bool {
 	return ok
 }
 
+// IsErrorSeverity reports whether a finding's typed severity selects the
+// consumer's persistent error surface rather than the composed description.
+// The severity travels as a closed enum precisely so that this decision reads
+// one member and parses no message (keel/ac-559).
+//
+// DHF-REQ: keel/requirement-140
+func IsErrorSeverity(finding Finding) bool {
+	return finding.Severity == "error"
+}
+
 // DesiredStateGroupFacts are the typed desired-state facts a discovery item
 // carries when it is a desired-state group. Its presence is what identifies
 // the item as one.

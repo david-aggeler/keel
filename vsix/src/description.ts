@@ -137,7 +137,13 @@ function classSegments(item: DiscoveryItem, displayClass: DisplayClass): string[
     case 'desiredState':
       return desiredStateSegments(item);
     case 'findings':
-      return (item.findings ?? []).flatMap((finding) => nonEmpty(formatFinding(finding)));
+      // An error-severity finding is routed to vscode.TestItem.error instead,
+      // so the description must not carry it too: a text on both surfaces is
+      // one condition reported twice (keel/ac-559).
+      // DHF-REQ: keel/requirement-140
+      return (item.findings ?? [])
+        .filter((finding) => !isErrorSeverity(finding))
+        .flatMap((finding) => nonEmpty(formatFinding(finding)));
   }
 }
 
@@ -163,6 +169,19 @@ export function formatLastRun(last?: LastRunFacts): string {
   }
   const tenths = Math.floor((durationMS + 50) / 100);
   return `· last ${Math.floor(tenths / 10)}.${tenths % 10}s`;
+}
+
+/**
+ * Reports whether a finding's typed severity selects the persistent error
+ * surface rather than this composed description. It reads the enum member and
+ * nothing else — the severity is closed on the wire precisely so that no
+ * consumer parses a message to route it (keel/ac-551, keel/ac-559). It mirrors
+ * the canonical Go predicate `vscode.IsErrorSeverity`.
+ *
+ * DHF-REQ: keel/requirement-140
+ */
+export function isErrorSeverity(finding: Finding): boolean {
+  return finding.severity === 'error';
 }
 
 /** Renders one typed validation finding. */

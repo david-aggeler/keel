@@ -200,6 +200,14 @@ func classSegments(item TestItem, class DisplayClass) []string {
 	case DisplayClassFindings:
 		segments := make([]string, 0, len(item.Findings))
 		for _, finding := range item.Findings {
+			// An error-severity finding is routed to the consumer's error
+			// surface instead, so the description must not carry it too: a
+			// text on both surfaces is one condition reported twice
+			// (keel/ac-559).
+			// DHF-REQ: keel/requirement-140
+			if IsErrorSeverity(finding) {
+				continue
+			}
 			segments = append(segments, nonEmpty(FormatFinding(finding))...)
 		}
 		return segments
