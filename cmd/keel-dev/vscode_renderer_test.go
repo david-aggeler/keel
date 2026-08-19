@@ -40,7 +40,7 @@ func TestLanesProducerTextComesFromTheExportedRenderer(t *testing.T) {
 		t.Fatalf("discovery missing go-log lane: %+v", doc.Items)
 	}
 
-	// Whatever prose the producer still carries for an unmigrated consumer,
+	// Whatever prose the producer still carries for a consumer that has not migrated,
 	// every element of it must be a string the renderer itself produced.
 	rendered := map[string]bool{lane.Description: true}
 	if hint := vscode.FormatLastRun(lane.LastRun); hint != "" {

@@ -122,7 +122,7 @@ suite('description composition', () => {
   // producer that silently stopped emitting typed facts is an observed fact
   // rather than an invisible default.
   // DHF-TEST: keel/requirement-139
-  test('req-139 a factless openbrain-dev item falls back to its limitations prose', () => {
+  test('req-139 an openbrain-dev item with no typed facts falls back to its limitations prose', () => {
     const item: DiscoveryItem = {
       id: 'openbrain::lane::a',
       label: 'A',
@@ -136,7 +136,7 @@ suite('description composition', () => {
   });
 
   // DHF-TEST: keel/requirement-139
-  test('req-139 a factless keel-demo-dev item renders nothing at all', () => {
+  test('req-139 a keel-demo-dev item with no typed facts renders nothing at all', () => {
     const item: DiscoveryItem = { id: 'demo::lane::a', label: 'A', kind: 'lane', runnable: true, profiles: [] };
     assert.equal(hasRenderableFacts(item), false);
     assert.equal(composeDescription(item, defaultDisplayConfig()), undefined);

@@ -1238,8 +1238,8 @@ func TestVSCodeDiscoveryAppendsExactLaneDurationHint(t *testing.T) {
 	if got := strings.Join(lane.Limitations, " "); !strings.Contains(got, "last 9.8s") {
 		t.Fatalf("lane limitations = %q, want newest exact single-lane duration hint", got)
 	}
-	// keel/ac-565: the hint the producer still carries for an unmigrated
-	// consumer is the exported renderer's own output, byte for byte, rather
+	// keel/ac-565: the hint the producer still carries for a consumer that has
+	// not migrated is the exported renderer's own output, byte for byte, rather
 	// than a second format string that renders the same today.
 	// DHF-TEST: keel/requirement-139
 	if want := vscode.FormatLastRun(lane.LastRun); want == "" || !slices.Contains(lane.Limitations, want) {
