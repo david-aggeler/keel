@@ -1971,6 +1971,7 @@ func TestVSCodeSystemGateLanesDiscoverPrepareAndRun(t *testing.T) {
 
 	callsFile = stubTools(t, false, false)
 	goodRoot := moduleFixture(t)
+	alignFixtureVersions(t, goodRoot)
 	protocol.Reset()
 	if err := dispatchTestBridgeRun(contextWithVSCodeTestState(goodRoot, &protocol), "keel::lane::ci"); err != nil {
 		t.Fatalf("ci lane run: %v\nprotocol:\n%s\ncalls:\n%s", err, protocol.String(), calls(t, callsFile))

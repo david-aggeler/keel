@@ -31,6 +31,22 @@ func writeVersionFiles(t *testing.T, dir, versionFile, manifestVersion string) {
 	}
 }
 
+// alignFixtureVersions stamps a module fixture's VSIX manifest to that
+// fixture's VERSION. moduleFixture ships the two deliberately skewed, because
+// the pre-stamp skew is what makes the release verb's stamping step observable;
+// a test that runs the bare gate over the fixture is not testing that, and the
+// version-parity stage rightly refuses a skewed checkout.
+func alignFixtureVersions(t *testing.T, dir string) {
+	t.Helper()
+	version, err := readVersionFile(filepath.Join(dir, "VERSION"))
+	if err != nil {
+		t.Fatalf("read fixture VERSION: %v", err)
+	}
+	if err := stampVSIXPackageVersion(filepath.Join(dir, "vsix", "package.json"), version); err != nil {
+		t.Fatalf("stamp fixture manifest: %v", err)
+	}
+}
+
 // DHF-TEST: keel/requirement-141 (keel/ac-569)
 func TestVersionParityStageRedsTheGateOnASkewedCheckout(t *testing.T) {
 	requireTool(t, "git")

@@ -211,6 +211,9 @@ func TestSBOMConvergenceIgnoresArtifactsOutsideTheGenerationPass(t *testing.T) {
 func TestCIFailsOnSBOMConvergenceViolations(t *testing.T) {
 	stubTools(t, false, false)
 	root := moduleFixture(t)
+	// The gate must red on the NOTICE, so the fixture's other invariants —
+	// version parity among them — are put in order first.
+	alignFixtureVersions(t, root)
 	t.Chdir(root)
 
 	writeFile(t, root, "NOTICE", noticeFixture("cr-201", "2026-08-16"))
