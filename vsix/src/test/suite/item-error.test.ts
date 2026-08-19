@@ -73,6 +73,58 @@ suite('persistent conditions route to TestItem.error', () => {
     });
   });
 
+  // keel/ac-559, negative half first: a warning-severity finding must not reach
+  // the error surface. Every item carrying one would otherwise force-expand its
+  // parent at every refresh (platform fact F20).
+  // DHF-TEST: keel/requirement-140
+  test('req-140 a warning-severity finding stays in the description and raises no error row', () => {
+    withController((controller) => {
+      const tree = publishDiscovery(controller, os.tmpdir(), documentOf({
+        id: 'keel::lane::warned',
+        label: 'warned',
+        kind: 'lane',
+        runnable: true,
+        profiles: ['run'],
+        findings: [{ rule: 'lane-order', severity: 'warning', message: 'order drifted' }]
+      }));
+      const item = tree.itemsById.get('keel::lane::warned');
+      assert.equal(errorTextOf(item), undefined);
+      assert.equal(item?.description, 'lane-order warning: order drifted');
+    });
+  });
+
+  // keel/ac-559, positive half: the typed severity selects the surface, and the
+  // text reaches exactly one of them.
+  // DHF-TEST: keel/requirement-140
+  test('req-140 an error-severity finding reaches the error row and not the description', () => {
+    withController((controller) => {
+      const tree = publishDiscovery(controller, os.tmpdir(), documentOf(
+        {
+          id: 'keel::lane::blocked',
+          label: 'blocked',
+          kind: 'lane',
+          runnable: true,
+          profiles: ['run'],
+          findings: [{ rule: 'lane-prereq', severity: 'error', message: 'resource is unavailable' }]
+        },
+        {
+          id: 'keel::lane::warned',
+          label: 'warned',
+          kind: 'lane',
+          runnable: true,
+          profiles: ['run'],
+          findings: [{ rule: 'lane-order', severity: 'warning', message: 'order drifted' }]
+        }
+      ));
+      const blocked = tree.itemsById.get('keel::lane::blocked');
+      const warned = tree.itemsById.get('keel::lane::warned');
+      assert.equal(errorTextOf(blocked), 'lane-prereq error: resource is unavailable');
+      assert.equal(blocked?.description, undefined);
+      assert.equal(errorTextOf(warned), undefined);
+      assert.equal(warned?.description, 'lane-order warning: order drifted');
+    });
+  });
+
   // A republished tree must clear a condition that the producer stopped
   // emitting: a stale error row outlives the condition it reports otherwise.
   // DHF-TEST: keel/requirement-140

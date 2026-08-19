@@ -1,3 +1,4 @@
+import { formatFinding, isErrorSeverity } from './description';
 import { DiscoveryItem } from './protocol';
 
 /**
@@ -16,8 +17,17 @@ export const itemErrorSeparator = '\n';
 /**
  * Composes the value of `vscode.TestItem.error` for one discovery item.
  *
- * Every `condition` on the item reaches this surface, whatever its kind: a
- * condition is by definition a statement that stands outside any run.
+ * Two carriers reach this surface, and for the same reason — both state a
+ * condition that stands outside any run:
+ *
+ * - every `condition` on the item, whatever its kind; and
+ * - every `finding` whose typed severity is `error`.
+ *
+ * A warning-severity finding is deliberately absent. An item carrying `error`
+ * gains a permanent child row that sorts first and force-expands its parent
+ * (platform fact F20), which is proportionate for a condition that blocks the
+ * item and disproportionate for a warning — so a warning stays in the composed
+ * description alone (keel/ac-559).
  *
  * The return is `undefined`, never the empty string, when nothing qualifies:
  * an empty value still force-expands the parent, so "no condition" and "an
@@ -32,5 +42,15 @@ export function composeItemError(item: DiscoveryItem): string | undefined {
       texts.push(condition.message);
     }
   }
+  for (const finding of item.findings ?? []) {
+    if (!isErrorSeverity(finding)) {
+      continue;
+    }
+    const text = formatFinding(finding);
+    if (text) {
+      texts.push(text);
+    }
+  }
   return texts.length > 0 ? texts.join(itemErrorSeparator) : undefined;
 }
+
