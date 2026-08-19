@@ -38,6 +38,10 @@ const (
 	idTestGoPass = "go::test::passing::TestReferencePass"
 	idTestGoFail = "go::test::failing::TestReferenceFailure"
 
+	idTestFakeEnvironment = "fake::test::provisioning::Environment"
+	idTestFakeDatabase    = "fake::test::provisioning::Database"
+	idTestFakeServices    = "fake::test::provisioning::Services"
+
 	idDetectLanes    = testbridge.MaintenanceDetectLanesID
 	idBlockBadLane   = "keel-demo-dev::maintenance::block-bad-lane"
 	idUnblockBadLane = "keel-demo-dev::maintenance::unblock-bad-lane"
@@ -184,9 +188,11 @@ func (b demoBridge) Discover(ctx context.Context) (vscode.DiscoveryDocument, err
 		}
 		items = append(items, lanes...)
 		items = append(items,
-			test(idTestGoPass, idGoFramework, "TestReferencePass", idLaneGoPass),
-			test(idTestGoFail, idGoFramework, "TestReferenceFailure", idLaneGoFail),
-			test("fake::test::provisioning::Preview", idFakeFamily, "Preview provisioning story", idLaneFakeSmoke),
+			test(idTestGoPass, idGoFramework, "TestReferencePass", "a real Go test that passes", idLaneGoPass),
+			test(idTestGoFail, idGoFramework, "TestReferenceFailure", "a real Go test that fails", idLaneGoFail),
+			test(idTestFakeEnvironment, idFakeFamily, "Fake environment", "brings the fake environment up", idLaneFakeSmoke),
+			test(idTestFakeDatabase, idFakeFamily, "Fake database", "seeds the fake app database", idLaneFakeSmoke),
+			test(idTestFakeServices, idFakeFamily, "Fake services", "starts fake services a, b and c", idLaneFakeSmoke),
 		)
 	}
 	return vscode.DiscoveryDocument{
@@ -347,7 +353,7 @@ func (b demoBridge) runOne(ctx context.Context, root, id string, emit vscode.Run
 		return selectDemoDataSet(root, id, demoDataSetSmall, "reuse_small_data_set selected small data set", emit)
 	case idDataSetFull:
 		return selectDemoDataSet(root, id, demoDataSetFull, "select_full_data_set selected full data set", emit)
-	case idLaneFakeSmoke, "fake::test::provisioning::Preview":
+	case idLaneFakeSmoke, idTestFakeEnvironment, idTestFakeDatabase, idTestFakeServices:
 		emit(vscode.RunEvent{Event: "test_started", TestID: id})
 		emit(vscode.RunEvent{Event: "output", TestID: id, Message: "fake provisioning preview: environment/database/services need reconcile_during_run"})
 		emit(vscode.RunEvent{Event: "passed", TestID: id, Message: "fake provisioning preview rendered"})
@@ -456,8 +462,13 @@ func lane(root, id, parent, label, description string, resources []string) vscod
 	}
 }
 
-func test(id, parent, label, laneID string) vscode.TestItem {
-	return vscode.TestItem{ID: id, ParentID: parent, Label: label, Kind: "test", Framework: "keel-demo-dev", Runner: "keel-demo-dev", RunnerLabel: "Keel Demo Dev", Runnable: true, Profiles: []string{"run"}, LaneID: laneID}
+// test builds one demo test item. Every runnable item the demo serves carries a
+// description of its own, bounded to forty characters, so the
+// tree shows per-item prose rather than a family-wide sentence (keel/ac-583).
+//
+// DHF-REQ: keel/requirement-62
+func test(id, parent, label, description, laneID string) vscode.TestItem {
+	return vscode.TestItem{ID: id, ParentID: parent, Label: label, Kind: "test", Framework: "keel-demo-dev", Runner: "keel-demo-dev", RunnerLabel: "Keel Demo Dev", Runnable: true, Profiles: []string{"run"}, LaneID: laneID, Description: description}
 }
 
 func prereq(root, runID, resource, kind, want, missing, actionName string, reusable bool) testbridge.DesiredStateRow {
