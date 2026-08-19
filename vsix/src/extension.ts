@@ -777,7 +777,9 @@ async function runSelected(
   const clearedResultIds = new Set<string>();
   const selectedItemIds = new Set(selected.map((item) => item.id));
   const resultItemIds = new Set<string>();
-  const applyOptions = { coverage, workspaceRoot, modulePath: tree?.modulePath };
+  // One Set per run: applyRunEvent fills it from the `run_started` expansion
+  // and reads it on every later event (keel/ac-585).
+  const applyOptions = { coverage, workspaceRoot, modulePath: tree?.modulePath, requestedItemIds: new Set<string>() };
   const cancellation = token.onCancellationRequested(() => {
     cancelActiveRun(run, selected, child);
     forceKill = setTimeout(() => signalProcessGroup(child, 'SIGKILL'), 2000);
@@ -1097,6 +1099,28 @@ export async function runProfileHandlerForTest(protocolID: string, token?: vscod
   }
 }
 
+// runAllProfileHandlerForTest drives the real run profile with no include
+// list — the selection shape VS Code submits for "Run All Tests". It is the
+// only way a spec can observe the whole-tree run keel/issue-191 was reported
+// against; runProfileHandlerForTest always names exactly one row.
+//
+// Test seam. Production never calls this.
+export async function runAllProfileHandlerForTest(token?: vscode.CancellationToken): Promise<void> {
+  const controller = testControllerForRunProfile;
+  const profile = testRunProfileForRunProfile;
+  if (!controller || !profile) {
+    throw new Error('Keel test run profile is not active');
+  }
+  tree = undefined;
+  await refresh(controller);
+  const source = new vscode.CancellationTokenSource();
+  try {
+    await profile.runHandler(new vscode.TestRunRequest(undefined, undefined, profile), token ?? source.token);
+  } finally {
+    source.dispose();
+  }
+}
+
 // extensionOutput + currentTree are exported for externalRunMirror.ts
 // (and only that consumer). Kept here because the OutputChannel and
 // the published-tree state are owned by activate() in this file.
@@ -1142,6 +1166,13 @@ export interface ApplyRunEventOptions {
   coverage?: boolean;
   workspaceRoot?: string;
   modulePath?: string;
+  // Item ids this run declared it will execute, accumulated from the
+  // `run_started` frame's `requested` list. The set is per-run state that
+  // applyRunEvent fills on the first event and reads on every later one, so the
+  // caller owns one Set for the whole stream. Absent (or empty) means the
+  // producer served no expansion and the sibling-skip inference falls back to
+  // the selection footprint alone. See keel/requirement-71, keel/ac-585.
+  requestedItemIds?: Set<string>;
 }
 
 // DHF-REQ: keel/requirement-116
@@ -1162,6 +1193,7 @@ export function applyRunEvent(
   const items = event.test_id ? testItemsForRunEvent(event.test_id) : [];
   switch (event.event) {
     case 'run_started':
+      recordRequestedItemIds(event, options.requestedItemIds);
       appendRunOutput(run, event.message ?? 'Keel test run started');
       break;
     case 'test_started':
@@ -1179,7 +1211,7 @@ export function applyRunEvent(
           resultItemIds.add(item.id);
         }
       }
-      for (const item of skippedSiblingItemsForRunEvent(items, event.test_id, selectedItemIds, resultItemIds)) {
+      for (const item of skippedSiblingItemsForRunEvent(items, event.test_id, selectedItemIds, resultItemIds, options.requestedItemIds)) {
         // skipped reason (c): a leaf inside the selection's subtree that this
         // run will not execute and that carries no result of its own.
         // See keel/ac-428.
@@ -1273,12 +1305,13 @@ export interface RunEventApplicationSnapshot {
 export function runEventApplicationSnapshot(
   testId: string,
   selectedItemIds: ReadonlySet<string>,
-  resultItemIds: ReadonlySet<string>
+  resultItemIds: ReadonlySet<string>,
+  requestedItemIds?: ReadonlySet<string>
 ): RunEventApplicationSnapshot {
   const items = testItemsForRunEvent(testId);
   return {
     resultIds: resultItemsForRunEvent(items, testId).map(protocolIDForTestItem),
-    skippedSiblingIds: skippedSiblingItemsForRunEvent(items, testId, selectedItemIds, resultItemIds).map(protocolIDForTestItem)
+    skippedSiblingIds: skippedSiblingItemsForRunEvent(items, testId, selectedItemIds, resultItemIds, requestedItemIds).map(protocolIDForTestItem)
   };
 }
 
@@ -1312,11 +1345,52 @@ export function resultItemsForRunEvent(items: readonly vscode.TestItem[], explic
   return Array.from(result.values());
 }
 
+// recordRequestedItemIds resolves the `run_started` frame's expansion — the
+// ids the producer has already committed to executing — to published item ids.
+// A desired-state group id expands to its rows here, before the first row
+// settles, which is what lets the sibling-skip inference below leave those rows
+// alone. Resolution goes through testItemsForRunEvent so an alias is recorded
+// under the id its result will actually arrive on.
+//
+// DHF-REQ: keel/requirement-71
+function recordRequestedItemIds(event: RunEvent, requestedItemIds: Set<string> | undefined): void {
+  if (!requestedItemIds) {
+    return;
+  }
+  for (const request of event.requested ?? []) {
+    if (!request?.id) {
+      continue;
+    }
+    for (const item of testItemsForRunEvent(request.id)) {
+      requestedItemIds.add(item.id);
+    }
+  }
+}
+
+// skippedSiblingItemsForRunEvent implements ac-428's skipped reason (c): a leaf
+// inside the selection's subtree that this run will NOT execute and that
+// carries no result of its own.
+//
+// "will not execute" is the load-bearing half, and it is the run's own event
+// stream that says so — never an inference from a sibling's result
+// (keel/ac-585). A sibling the `run_started` frame listed as requested IS going
+// to report, so stamping it here is not a summary of the run, it is a wrong
+// answer that outranks the right one: VS Code's result model drops a state
+// update whose terminal priority is lower than the recorded one, and Skipped
+// outranks Passed. That is how keel/issue-191 discarded two of three rows of a
+// desired-state group — each row's own `passed` arrived and was ignored.
+//
+// The keel/issue-55 guard (the parent must be selected or have a selected
+// ancestor) stays exactly as it was: this narrows what the guard admits, it
+// does not remove it.
+//
+// DHF-REQ: keel/requirement-71
 function skippedSiblingItemsForRunEvent(
   items: readonly vscode.TestItem[],
   explicitResultId: string | undefined,
   selectedItemIds: ReadonlySet<string>,
-  resultItemIds: ReadonlySet<string>
+  resultItemIds: ReadonlySet<string>,
+  requestedItemIds?: ReadonlySet<string>
 ): vscode.TestItem[] {
   if (!explicitResultId) {
     return [];
@@ -1331,7 +1405,13 @@ function skippedSiblingItemsForRunEvent(
       continue;
     }
     parent.children.forEach((sibling) => {
-      if (sibling.id !== item.id && sibling.children.size === 0 && !selectedItemIds.has(sibling.id) && !resultItemIds.has(sibling.id)) {
+      if (
+        sibling.id !== item.id &&
+        sibling.children.size === 0 &&
+        !selectedItemIds.has(sibling.id) &&
+        !resultItemIds.has(sibling.id) &&
+        !requestedItemIds?.has(sibling.id)
+      ) {
         skipped.set(sibling.id, sibling);
       }
     });
