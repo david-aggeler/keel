@@ -648,8 +648,25 @@ func desiredStateDeclarationDiscoveryItems(ctx context.Context, root, parentID s
 			DesiredStateGroup: &vscode.DesiredStateGroupFacts{MutuallyExclusive: group.MutuallyExclusive},
 		}
 		items = append(items, groupItem)
+		rowIDs := make([]string, 0, len(derivedRows))
 		for _, row := range derivedRows {
-			items = append(items, desiredStateDeclarationDiscoveryItem(groupID, row.Declaration, row.State))
+			if row.Declaration.RunID != "" {
+				rowIDs = append(rowIDs, row.Declaration.RunID)
+			}
+		}
+		// A desired-state row reports the same measured last run a lane does:
+		// both are runnable items, and a tree that reports a duration for one
+		// and not the other differs in what it says about the same fact
+		// (keel/ac-579). The enclosing group is not a row — running it runs its
+		// rows — so no stream is attributable to it and it carries no
+		// measurement.
+		//
+		// DHF-REQ: keel/requirement-138
+		lastRuns := vscode.LatestRunsForIDs(root, rowIDs)
+		for _, row := range derivedRows {
+			item := desiredStateDeclarationDiscoveryItem(groupID, row.Declaration, row.State)
+			item.LastRun = lastRuns[item.ID].Facts()
+			items = append(items, item)
 		}
 		if group.MutuallyExclusive {
 			reconcile = append(reconcile, exclusiveGroupReconcileResults(derivedRows)...)
@@ -1134,11 +1151,26 @@ func runDesiredStateSelections(ctx context.Context, bridge Bridge, requests []ru
 			remaining = append(remaining, request)
 			continue
 		}
-		derived, err := deriveDesiredStateRow(ctx, runtimeRoot(rt, bridge), row)
+		// The row's started event precedes the work that settles it. Deriving
+		// first and announcing afterwards reported the row as running only once
+		// it had stopped running, so a row whose reconcile takes real time was
+		// never on screen in flight (keel/ac-580).
+		writer(vscode.RunEvent{Event: "test_started", TestID: id})
+		root := runtimeRoot(rt, bridge)
+		handled, reconcileExit, reconcileErr := reconcileDesiredStateRow(ctx, bridge, root, row, writer)
+		if reconcileErr != nil {
+			writer(vscode.RunEvent{Event: "failed", TestID: id, Message: reconcileErr.Error()})
+			return 1, remaining, reconcileErr
+		}
+		if handled && reconcileExit != 0 {
+			writer(vscode.RunEvent{Event: "failed", TestID: id, Message: fmt.Sprintf("reconcile of %s exited %d", row.Resource, reconcileExit)})
+			exitCode = 1
+			continue
+		}
+		derived, err := deriveDesiredStateRow(ctx, root, row)
 		if err != nil {
 			return 1, remaining, err
 		}
-		writer(vscode.RunEvent{Event: "test_started", TestID: id})
 		if derived.Status == "satisfied" {
 			writer(vscode.RunEvent{Event: "passed", TestID: id, Message: derived.Message})
 			emitExclusiveDesiredStateSiblingClears(request.ExclusiveSiblingIDs, id, writer)
@@ -1151,6 +1183,57 @@ func runDesiredStateSelections(ctx context.Context, bridge Bridge, requests []ru
 		return exitCode, remaining, fmt.Errorf("desired-state row failed")
 	}
 	return exitCode, remaining, nil
+}
+
+// DesiredStateRowRunRequest identifies the desired-state row a run is
+// executing, for a consumer that reconciles the row rather than only reporting
+// it.
+//
+// DHF-REQ: keel/requirement-75
+type DesiredStateRowRunRequest struct {
+	RunID    string
+	Resource string
+	Kind     string
+	Desired  string
+	Root     string
+}
+
+// DesiredStateRowReconciler is an optional consumer interface: perform the
+// row's named reconcile action during a run, between the row's test_started
+// event and the verdict the bridge settles it with. It reports whether it
+// handled the row, so a consumer reconciles the rows it owns an action for and
+// leaves every other row to the read-only path.
+//
+// A consumer that does not implement it is unaffected: a row's run stays a
+// re-read of the row's probe. A consumer that does implement it gets the
+// row's probe re-executed afterwards rather than reused, because the point of
+// reconciling is to change what the probe observes.
+//
+// DHF-REQ: keel/requirement-75, keel/requirement-129
+type DesiredStateRowReconciler interface {
+	ReconcileDesiredStateRow(context.Context, DesiredStateRowRunRequest, vscode.RunEventWriter) (bool, int, error)
+}
+
+// reconcileDesiredStateRow dispatches the optional consumer reconcile hook for
+// one row and drops that row's memoized probe outcome when the hook handled it.
+//
+// DHF-REQ: keel/requirement-75, keel/requirement-129
+func reconcileDesiredStateRow(ctx context.Context, bridge Bridge, root string, row DesiredStateRow, writer vscode.RunEventWriter) (bool, int, error) {
+	reconciler, ok := bridge.(DesiredStateRowReconciler)
+	if !ok {
+		return false, 0, nil
+	}
+	handled, exitCode, err := reconciler.ReconcileDesiredStateRow(ctx, DesiredStateRowRunRequest{
+		RunID:    row.RunID,
+		Resource: row.Resource,
+		Kind:     row.Kind,
+		Desired:  row.Desired,
+		Root:     root,
+	}, writer)
+	if handled {
+		forgetDesiredStateProbe(ctx, root, row)
+	}
+	return handled, exitCode, err
 }
 
 // ExclusiveResetRequest identifies the mutually-exclusive desired-state group
