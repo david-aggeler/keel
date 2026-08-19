@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 )
 
-const CurrentConfigVersion = 4
+const CurrentConfigVersion = 5
 
 // launcherOnlyArgsSinceVersion is the config version from which args carry the
 // launcher only, the protocol tokens being appended by the reader. It is
@@ -186,6 +186,16 @@ func MigrateTestBridgeConfig(cfg, template TestBridgeConfig) (TestBridgeConfig, 
 		// Every class enabled, so the upgraded workspace renders every fact it
 		// rendered before the toggles existed (keel/ac-556).
 		cfg.Version = 4
+		if cfg.Display == nil {
+			display := DefaultDisplayConfig()
+			cfg.Display = &display
+		}
+		return cfg, nil
+	case 4:
+		// The display block gains the label ordinal toggle. It stays off, which
+		// is what makes the upgrade state the visible change rather than undo
+		// it (keel/ac-562).
+		cfg.Version = 5
 		if cfg.Display == nil {
 			display := DefaultDisplayConfig()
 			cfg.Display = &display

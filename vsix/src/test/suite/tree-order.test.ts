@@ -1,6 +1,7 @@
 import * as assert from 'node:assert/strict';
 import * as os from 'node:os';
 import * as vscode from 'vscode';
+import { defaultDisplayConfig, parseDisplayConfig } from '../../description';
 import { DiscoveryDocument, DiscoveryItem } from '../../protocol';
 import { deriveEmissionIndex, publishDiscovery } from '../../tree';
 
@@ -138,5 +139,50 @@ suite('emission-order sort keys', () => {
     } finally {
       controller.dispose();
     }
+  });
+
+  // keel/ac-562: the ordinal prefix is a rendering option derived from the
+  // emission index. Enabled, every child label carries it; disabled, the same
+  // publish renders each label with no prefix and no other difference.
+  // DHF-TEST: keel/requirement-137
+  test('req-137 the ordinal prefix renders only when its display toggle is enabled', () => {
+    const off = vscode.tests.createTestController(`keelOrdinal-${process.pid}-off`, 'Keel Ordinal Off');
+    const on = vscode.tests.createTestController(`keelOrdinal-${process.pid}-on`, 'Keel Ordinal On');
+    try {
+      const document = laneDocument(['lint', 'test-fast']);
+      const plain = publishDiscovery(off, os.tmpdir(), document, 0, defaultDisplayConfig());
+      const prefixed = publishDiscovery(on, os.tmpdir(), document, 0, parseDisplayConfig({ ordinal: true }));
+
+      assert.equal(plain.itemsById.get('keel::lane::lint')?.label, 'lint');
+      assert.equal(plain.itemsById.get('keel::lane::test-fast')?.label, 'test-fast');
+      // The lanes group is the document's first root, so its frame letter is A
+      // and its children number from one.
+      assert.equal(prefixed.itemsById.get('keel::lane::lint')?.label, 'A.1 lint');
+      assert.equal(prefixed.itemsById.get('keel::lane::test-fast')?.label, 'A.2 test-fast');
+      // A root names its own frame position already; it gains no prefix.
+      assert.equal(prefixed.itemsById.get('keel::lanes')?.label, 'C - Lanes');
+      // Nothing else differs.
+      assert.equal(
+        prefixed.itemsById.get('keel::lane::lint')?.sortText,
+        plain.itemsById.get('keel::lane::lint')?.sortText
+      );
+      assert.equal(
+        prefixed.itemsById.get('keel::lane::lint')?.description,
+        plain.itemsById.get('keel::lane::lint')?.description
+      );
+    } finally {
+      off.dispose();
+      on.dispose();
+    }
+  });
+
+  // The toggle is off unless a workspace asks for it, which is what makes the
+  // lost prefix a stated change rather than a silent one (keel/ac-562).
+  // DHF-TEST: keel/requirement-137
+  test('req-137 the ordinal toggle defaults off and is refused when misspelled', () => {
+    assert.equal(defaultDisplayConfig().ordinal, false);
+    assert.equal(parseDisplayConfig({}).ordinal, false);
+    assert.equal(parseDisplayConfig({ ordinal: true }).ordinal, true);
+    assert.throws(() => parseDisplayConfig({ ordinals: true }), /ordinals/);
   });
 });
