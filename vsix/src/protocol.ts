@@ -53,8 +53,37 @@ export interface DiscoveryItem {
    * travel in the typed fields below (keel/requirement-127).
    */
   limitations?: string[];
+  /**
+   * The producer's own prose for this item — one string, never a composed
+   * line. Sequencing it against anything else is the consumer's job
+   * (keel/requirement-138).
+   */
+  description?: string;
+  /** Typed validation findings raised against this item. */
+  findings?: Finding[];
+  /**
+   * Typed measurement of the newest run attributable to this item alone.
+   * Absent — never zeroed — when no run is attributable.
+   */
+  last_run?: LastRunFacts;
   desired_state_group?: DesiredStateGroupFacts;
   desired_state_row?: DesiredStateRowFacts;
+}
+
+/** One typed validation finding raised against a discovery item. */
+export interface Finding {
+  rule: string;
+  severity: FindingSeverity;
+  message: string;
+}
+
+export type FindingSeverity = 'error' | 'warning';
+
+/** Typed measurement of the newest run attributable to one discovery item. */
+export interface LastRunFacts {
+  at: string;
+  duration_ms?: number;
+  exit_code?: number;
 }
 
 /** Typed desired-state facts a discovery item carries when it is a group. */

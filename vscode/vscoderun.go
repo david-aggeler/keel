@@ -128,9 +128,65 @@ type TestItem struct {
 	// Limitations carries human-readable prose only — lane descriptions,
 	// remediation hints, lint findings, error text. A consumer may render any
 	// element of it verbatim. Machine-readable facts belong in typed fields.
-	Limitations       []string                `json:"limitations,omitempty"`
+	Limitations []string `json:"limitations,omitempty"`
+	// Description is the producer's own human-readable prose for this item —
+	// one string, not a composed line. Sequencing prose against anything else
+	// belongs to the consumer, so the producer never joins.
+	//
+	// DHF-REQ: keel/requirement-138
+	Description string `json:"description,omitempty"`
+	// Findings are the typed validation findings raised against this item.
+	// Absent when the item raised none.
+	//
+	// DHF-REQ: keel/requirement-138
+	Findings []Finding `json:"findings,omitempty"`
+	// LastRun is the typed measurement of the newest run attributable to this
+	// item alone. Absent — never zeroed — when no run is attributable.
+	//
+	// DHF-REQ: keel/requirement-138
+	LastRun           *LastRunFacts           `json:"last_run,omitempty"`
 	DesiredStateGroup *DesiredStateGroupFacts `json:"desired_state_group,omitempty"`
 	DesiredStateRow   *DesiredStateRowFacts   `json:"desired_state_row,omitempty"`
+}
+
+// Finding is one typed validation finding a producer raises against a discovery
+// item. The severity is the fact a consumer selects a surface by, so it travels
+// as a closed enum rather than as a token inside a message a consumer would
+// have to parse.
+//
+// DHF-REQ: keel/requirement-138
+type Finding struct {
+	Rule     string `json:"rule"`
+	Severity string `json:"severity"`
+	Message  string `json:"message"`
+}
+
+// LastRunFacts is the typed measurement of the newest run attributable to one
+// discovery item. DurationMS and ExitCode are pointers so that a measured zero
+// stays distinguishable from an absent measurement — the conflation the
+// omitempty int64 on RunEvent.DurationMS already permits elsewhere on the wire.
+//
+// DHF-REQ: keel/requirement-138
+type LastRunFacts struct {
+	At         time.Time `json:"at"`
+	DurationMS *int64    `json:"duration_ms,omitempty"`
+	ExitCode   *int      `json:"exit_code,omitempty"`
+}
+
+// findingSeverities is the closed set of severity values a Finding may carry.
+var findingSeverities = map[string]struct{}{
+	"error":   {},
+	"warning": {},
+}
+
+// IsFindingSeverity reports whether severity is one of the closed enum values a
+// producer may stamp on a Finding. It is the single producer-side answer to
+// that question, so a validator elsewhere cannot drift from this value set.
+//
+// DHF-REQ: keel/requirement-138
+func IsFindingSeverity(severity string) bool {
+	_, ok := findingSeverities[severity]
+	return ok
 }
 
 // DesiredStateGroupFacts are the typed desired-state facts a discovery item
