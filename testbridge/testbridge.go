@@ -273,6 +273,64 @@ func IsDesiredStateGroupID(id string) bool {
 	return ok && isDesiredStateNode(node)
 }
 
+// LanesGroupIDSuffix and FrameworksGroupIDSuffix are the stable markers that
+// identify the C and D members of the top-level frame, matching the marker
+// discipline DesiredStateGroupIDSuffix already sets for B. A consumer names its
+// group <node>::lanes and <node>::frameworks; the bridge matches the suffix, so
+// the group's Label stays presentation and carries no protocol meaning.
+//
+// DHF-REQ: keel/requirement-137
+const (
+	LanesGroupIDSuffix      = "::lanes"
+	FrameworksGroupIDSuffix = "::frameworks"
+)
+
+// topLevelFrameOrder is keel's fixed sequence for the four top-level groups. A
+// producer owns the order of its own children; it does not own this frame, so
+// the bridge restores the sequence whatever order the groups were emitted in
+// (keel/ac-563). A root that is not a frame member ranks after all four and
+// keeps its emitted position relative to the other non-members.
+//
+// DHF-REQ: keel/requirement-137, keel/requirement-69
+var topLevelFrameOrder = []func(string) bool{
+	func(id string) bool { return id == MaintenanceGroupID },
+	IsDesiredStateGroupID,
+	func(id string) bool { return strings.HasSuffix(id, LanesGroupIDSuffix) },
+	func(id string) bool { return strings.HasSuffix(id, FrameworksGroupIDSuffix) },
+}
+
+// topLevelFrameRank ranks one root item within the fixed frame.
+func topLevelFrameRank(id string) int {
+	for rank, matches := range topLevelFrameOrder {
+		if matches(id) {
+			return rank
+		}
+	}
+	return len(topLevelFrameOrder)
+}
+
+// orderTopLevelFrame returns items with the root items resorted into the fixed
+// A, B, C, D frame and every non-root item left in its emitted position. Only
+// roots move: sibling order below a root is the producer's registration order
+// and is normative (keel/ac-547).
+//
+// DHF-REQ: keel/requirement-137
+func orderTopLevelFrame(items []vscode.TestItem) []vscode.TestItem {
+	roots := make([]vscode.TestItem, 0, len(items))
+	rest := make([]vscode.TestItem, 0, len(items))
+	for _, item := range items {
+		if item.ParentID == "" {
+			roots = append(roots, item)
+			continue
+		}
+		rest = append(rest, item)
+	}
+	sort.SliceStable(roots, func(i, j int) bool {
+		return topLevelFrameRank(roots[i].ID) < topLevelFrameRank(roots[j].ID)
+	})
+	return append(roots, rest...)
+}
+
 // ClearStateProvider supplies the only consumer-owned action behind the
 // bridge-owned Group-A vocabulary: clearing local devtool state.
 type ClearStateProvider interface {
@@ -301,7 +359,6 @@ type LaneFile struct {
 type LaneFileLane struct {
 	ID                string              `json:"id"`
 	Label             string              `json:"label"`
-	Order             string              `json:"order"`
 	Description       string              `json:"description"`
 	Framework         string              `json:"framework,omitempty"`
 	RequiredResources []string            `json:"required_resources,omitempty"`
@@ -317,7 +374,6 @@ type bridgeLanesFile struct {
 type bridgeLane struct {
 	ID                string              `json:"id"`
 	Label             string              `json:"label"`
-	Order             string              `json:"order,omitempty"`
 	Framework         string              `json:"framework,omitempty"`
 	RequiredResources []string            `json:"required_resources,omitempty"`
 	Members           []map[string]string `json:"members,omitempty"`
@@ -409,7 +465,12 @@ func discoverWithDerivedDesiredState(ctx context.Context, bridge Bridge) (vscode
 	if err != nil {
 		return vscode.DiscoveryDocument{}, err
 	}
-	return deriveDesiredStateDiscovery(ctx, bridge, doc)
+	doc, err = deriveDesiredStateDiscovery(ctx, bridge, doc)
+	if err != nil {
+		return vscode.DiscoveryDocument{}, err
+	}
+	doc.Items = orderTopLevelFrame(doc.Items)
+	return doc, nil
 }
 
 // DHF-REQ: keel/requirement-87
@@ -425,23 +486,21 @@ func bridgeMaintenanceItems() []vscode.TestItem {
 		{
 			ID:       MaintenanceGroupID,
 			Label:    "A - Test Bridge Maintenance",
-			SortText: "a",
 			Kind:     "group",
 			Profiles: []string{},
 		},
-		bridgeMaintenanceItem(MaintenanceDetectLanesID, "a.1 detect lanes", "a.001"),
-		bridgeMaintenanceItem(MaintenanceUnlockID, "a.2 unlock test bridge", "a.002"),
-		bridgeMaintenanceItem(MaintenanceClearResultsID, "a.3 clear test results", "a.003"),
-		bridgeMaintenanceItem(MaintenanceClearStateID, "a.4 clear local test state", "a.004"),
+		bridgeMaintenanceItem(MaintenanceDetectLanesID, "detect lanes"),
+		bridgeMaintenanceItem(MaintenanceUnlockID, "unlock test bridge"),
+		bridgeMaintenanceItem(MaintenanceClearResultsID, "clear test results"),
+		bridgeMaintenanceItem(MaintenanceClearStateID, "clear local test state"),
 	}
 }
 
-func bridgeMaintenanceItem(id, label, sortText string) vscode.TestItem {
+func bridgeMaintenanceItem(id, label string) vscode.TestItem {
 	return vscode.TestItem{
 		ID:          id,
 		ParentID:    MaintenanceGroupID,
 		Label:       label,
-		SortText:    sortText,
 		Kind:        "maintenance",
 		Framework:   "testbridge",
 		Runner:      "testbridge",
@@ -552,7 +611,6 @@ func desiredStateDiagnosticItem(parentID string, err error) vscode.TestItem {
 		Profiles: []string{},
 		// DHF-REQ: keel/requirement-138
 		Description: err.Error(),
-		Limitations: []string{err.Error()},
 	}
 }
 
@@ -584,15 +642,14 @@ func desiredStateDeclarationDiscoveryItems(ctx context.Context, root, parentID s
 			ID:                groupID,
 			ParentID:          parentID,
 			Label:             group.Label,
-			SortText:          fmt.Sprintf("b.%03d", group.Order),
 			Kind:              "group",
 			Runnable:          runnable,
 			Profiles:          profiles,
 			DesiredStateGroup: &vscode.DesiredStateGroupFacts{MutuallyExclusive: group.MutuallyExclusive},
 		}
 		items = append(items, groupItem)
-		for rowIndex, row := range derivedRows {
-			items = append(items, desiredStateDeclarationDiscoveryItem(groupID, groupItem.SortText, rowIndex+1, row.Declaration, row.State))
+		for _, row := range derivedRows {
+			items = append(items, desiredStateDeclarationDiscoveryItem(groupID, row.Declaration, row.State))
 		}
 		if group.MutuallyExclusive {
 			reconcile = append(reconcile, exclusiveGroupReconcileResults(derivedRows)...)
@@ -649,7 +706,7 @@ func desiredStateGroupHasRunnableRows(group DesiredStateGroup) bool {
 	return false
 }
 
-func desiredStateDeclarationDiscoveryItem(parentID, parentSort string, rowIndex int, row DesiredStateRow, derived vscode.DesiredState) vscode.TestItem {
+func desiredStateDeclarationDiscoveryItem(parentID string, row DesiredStateRow, derived vscode.DesiredState) vscode.TestItem {
 	action := derived.Action
 	id := row.RunID
 	if id == "" {
@@ -663,7 +720,6 @@ func desiredStateDeclarationDiscoveryItem(parentID, parentSort string, rowIndex 
 		ID:       id,
 		ParentID: parentID,
 		Label:    fmt.Sprintf("%s: %s", row.Resource, row.Desired),
-		SortText: fmt.Sprintf("%s.%03d", parentSort, rowIndex),
 		Kind:     "group",
 		Runnable: row.RunID != "",
 		Profiles: profiles,
@@ -1321,7 +1377,6 @@ func bridgeLaneFileRows(items []vscode.TestItem) []bridgeLane {
 		lanes = append(lanes, bridgeLane{
 			ID:                id,
 			Label:             bridgeLaneFileLabel(item, id),
-			Order:             bridgeLaneFileOrder(item),
 			Framework:         item.Framework,
 			RequiredResources: append([]string(nil), item.RequiredResources...),
 			Members:           bridgeLaneFileMembers(item, id),
@@ -1347,29 +1402,6 @@ func bridgeLaneFileLabel(item vscode.TestItem, id string) string {
 		label = id
 	}
 	return label
-}
-
-func bridgeLaneFileOrder(item vscode.TestItem) string {
-	if order := normalizedBridgeLaneOrder(item.SortText); order != "" {
-		return order
-	}
-	if fields := strings.Fields(item.Label); len(fields) > 0 {
-		return normalizedBridgeLaneOrder(fields[0])
-	}
-	return ""
-}
-
-func normalizedBridgeLaneOrder(value string) string {
-	value = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(value)), ".")
-	if len(value) < 3 || value[1] != '.' {
-		return ""
-	}
-	for _, r := range value[2:] {
-		if r < '0' || r > '9' {
-			return ""
-		}
-	}
-	return value
 }
 
 func bridgeLaneFileMembers(item vscode.TestItem, id string) []map[string]string {

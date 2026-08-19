@@ -68,17 +68,17 @@ func TestVSCodeDiscoveryCarriesTypedFindingsAndScalarDescription(t *testing.T) {
 	if strings.Contains(lane.Description, finding.Message) || strings.Contains(lane.Description, finding.Rule) {
 		t.Errorf("lane description = %q, want no finding text (keel/ac-551)", lane.Description)
 	}
-	// The tree must not move in this unit: limitations still carries the
-	// prose the extension reads today.
-	if got := strings.Join(lane.Limitations, " "); !strings.Contains(got, "the lane's own prose") || !strings.Contains(got, "V6 warning:") {
-		t.Errorf("lane limitations = %q, want the legacy prose channel unchanged", got)
+	// The prose channel is the scalar description and carries the producer's
+	// own prose alone (keel/ac-549).
+	if lane.Description != "the lane's own prose" {
+		t.Errorf("lane description = %q, want the producer's own prose alone (keel/ac-549)", lane.Description)
 	}
 }
 
 // TestVSCodeDiagnosticItemsCarryScalarDescription holds keel/ac-549 for the
 // items whose whole prose channel is one diagnostic string. Those are the
-// items that would go mute when limitations retires, so each has to carry the
-// same text scalar now.
+// items that would have gone mute when the prose array retired, so each has to
+// carry its text on the scalar channel.
 //
 // DHF-TEST: keel/requirement-138
 func TestVSCodeDiagnosticItemsCarryScalarDescription(t *testing.T) {
@@ -105,15 +105,17 @@ func TestVSCodeDiagnosticItemsCarryScalarDescription(t *testing.T) {
 	}
 	checked := 0
 	for _, item := range built.Items {
-		if len(item.Limitations) != 1 {
+		// A diagnostic item is the non-runnable item whose whole reason to
+		// exist is the text it reports.
+		if item.Runnable || (!strings.Contains(item.ID, "diagnostic") && item.Kind != "file") {
 			continue
 		}
 		checked++
-		if item.Description != item.Limitations[0] {
-			t.Errorf("item %q description = %q, want the same prose its limitations carry (keel/ac-549)", item.ID, item.Description)
+		if item.Description == "" {
+			t.Errorf("diagnostic item %q carries no description, so its text is mute (keel/ac-549)", item.ID)
 		}
 	}
 	if checked == 0 {
-		t.Fatal("fixture produced no single-prose item, so the invariant proved nothing")
+		t.Fatal("fixture produced no diagnostic item, so the invariant proved nothing")
 	}
 }

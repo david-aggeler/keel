@@ -378,8 +378,8 @@ func TestDiscoverDerivesDesiredStateGroupsFromProvider(t *testing.T) {
 	if !ok {
 		t.Fatalf("derived desired-state group missing: %+v", doc.Items)
 	}
-	if group.ParentID != "demo::desired-state" || group.Label != "Provisioning" || group.SortText != "b.020" || group.DesiredStateGroup == nil || !group.DesiredStateGroup.MutuallyExclusive {
-		t.Fatalf("derived group = %+v, want provider label/order/exclusivity under B", group)
+	if group.ParentID != "demo::desired-state" || group.Label != "Provisioning" || group.DesiredStateGroup == nil || !group.DesiredStateGroup.MutuallyExclusive {
+		t.Fatalf("derived group = %+v, want provider label and exclusivity under B", group)
 	}
 	runnable, ok := testItemByID(doc.Items, "demo::action::seed-small")
 	if !ok || runnable.ParentID != group.ID || !runnable.Runnable || !equalStrings(runnable.Profiles, []string{"run"}) {
@@ -856,21 +856,18 @@ func TestDiscoverInjectsBridgeOwnedMaintenanceVocabulary(t *testing.T) {
 	if got, want := doc.Capabilities.ClearStateTestIDs, []string{testbridge.MaintenanceClearStateID}; !equalStrings(got, want) {
 		t.Fatalf("clear_state_test_ids = %v, want %v", got, want)
 	}
-	for id, want := range map[string]struct {
-		label string
-		sort  string
-	}{
-		testbridge.MaintenanceDetectLanesID:  {label: "a.1 detect lanes", sort: "a.001"},
-		testbridge.MaintenanceUnlockID:       {label: "a.2 unlock test bridge", sort: "a.002"},
-		testbridge.MaintenanceClearResultsID: {label: "a.3 clear test results", sort: "a.003"},
-		testbridge.MaintenanceClearStateID:   {label: "a.4 clear local test state", sort: "a.004"},
+	for id, wantLabel := range map[string]string{
+		testbridge.MaintenanceDetectLanesID:  "detect lanes",
+		testbridge.MaintenanceUnlockID:       "unlock test bridge",
+		testbridge.MaintenanceClearResultsID: "clear test results",
+		testbridge.MaintenanceClearStateID:   "clear local test state",
 	} {
 		item, ok := testItemByID(doc.Items, id)
 		if !ok {
 			t.Fatalf("missing bridge-owned maintenance item %q", id)
 		}
-		if item.ParentID != testbridge.MaintenanceGroupID || item.Kind != "maintenance" || item.Label != want.label || item.SortText != want.sort || !item.Runnable {
-			t.Fatalf("maintenance item %q = %+v, want canonical parent label=%q sort=%q runnable", id, item, want.label, want.sort)
+		if item.ParentID != testbridge.MaintenanceGroupID || item.Kind != "maintenance" || item.Label != wantLabel || !item.Runnable {
+			t.Fatalf("maintenance item %q = %+v, want canonical parent label=%q runnable", id, item, wantLabel)
 		}
 		if item.Framework != "testbridge" {
 			t.Fatalf("maintenance item %q framework = %q, want bridge-owned neutral framework", id, item.Framework)
@@ -885,7 +882,6 @@ func TestBridgeOwnedVocabularyIsConsumerAgnostic(t *testing.T) {
 	fake.lanes = []vscode.TestItem{{
 		ID:        "openbrain-dev::lane::acceptance",
 		Label:     "",
-		SortText:  "c.010",
 		Kind:      "lane",
 		Framework: "openbrain-dev",
 		Runnable:  true,
@@ -1008,7 +1004,6 @@ func TestBridgeInjectedRunnableMaintenanceIDsHaveDefinedRunPaths(t *testing.T) {
 	fake.lanes = []vscode.TestItem{{
 		ID:                "demo::lane::fast",
 		Label:             "fast",
-		SortText:          "c.10",
 		Kind:              "lane",
 		Framework:         "go",
 		Runnable:          true,
@@ -1360,7 +1355,7 @@ func TestDiscoverDegradesDesiredStateProviderFailure(t *testing.T) {
 	decodeJSON(t, &protocol, &doc)
 
 	diagnostic, ok := testItemByID(doc.Items, "demo::desired-state::diagnostic::desired-state")
-	if !ok || diagnostic.ParentID != "demo::desired-state" || diagnostic.Runnable || !strings.Contains(strings.Join(diagnostic.Limitations, " "), "desired provider exploded") {
+	if !ok || diagnostic.ParentID != "demo::desired-state" || diagnostic.Runnable || !strings.Contains(diagnostic.Description, "desired provider exploded") {
 		t.Fatalf("diagnostic item = %+v ok=%v, want one non-runnable B child with provider error", diagnostic, ok)
 	}
 	for _, item := range doc.Items {
@@ -2070,12 +2065,11 @@ func TestRunDoesNotTreatLimitationStringAloneAsDesiredStateGroup(t *testing.T) {
 	root := t.TempDir()
 	fake := newFakeBridge(root)
 	fake.extraItems = []vscode.TestItem{{
-		ID:          "demo::custom::info",
-		Label:       "custom informational item",
-		Kind:        "group",
-		Runnable:    false,
-		Profiles:    []string{},
-		Limitations: []string{"mutually_exclusive=false"},
+		ID:       "demo::custom::info",
+		Label:    "custom informational item",
+		Kind:     "group",
+		Runnable: false,
+		Profiles: []string{},
 	}}
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: io.Discard})
 
@@ -3401,8 +3395,12 @@ func TestDiscoveryCarriesDesiredStateFactsAsTypedFields(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-127
-func TestLimitationsCarryNoDesiredStateFactEncoding(t *testing.T) {
+// TestDescriptionCarriesNoDesiredStateFactEncoding is the successor of the
+// limitations-era check: with the prose array retired, the scalar description
+// is the only prose channel and it must still carry no typed fact.
+//
+// DHF-TEST: keel/requirement-127, keel/requirement-138
+func TestDescriptionCarriesNoDesiredStateFactEncoding(t *testing.T) {
 	root := t.TempDir()
 	fake := newFakeBridge(root)
 	fake.extraItems = []vscode.TestItem{desiredStateGroupItem()}
@@ -3419,17 +3417,15 @@ func TestLimitationsCarryNoDesiredStateFactEncoding(t *testing.T) {
 	var discovery vscode.DiscoveryDocument
 	decodeJSON(t, dispatchRaw(t, fake, root, "discover"), &discovery)
 	for _, item := range discovery.Items {
-		for _, limitation := range item.Limitations {
-			for _, key := range []string{"mutually_exclusive", "active", "current", "action"} {
-				if strings.HasPrefix(limitation, key+"=") {
-					t.Fatalf("item %s limitation %q encodes desired-state fact %q; limitations carry prose only", item.ID, limitation, key)
-				}
+		for _, key := range []string{"mutually_exclusive", "active", "current", "action"} {
+			if strings.Contains(item.Description, key+"=") {
+				t.Fatalf("item %s description %q encodes desired-state fact %q; the prose channel carries prose only", item.ID, item.Description, key)
 			}
 		}
 	}
 
 	// The read side must recover the exclusive-group relationship from the typed
-	// facts, not from a limitations element: sibling clears still fire.
+	// facts, not from prose: sibling clears still fire.
 	var protocol bytes.Buffer
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{
 		Root:     root,
@@ -3443,7 +3439,7 @@ func TestLimitationsCarryNoDesiredStateFactEncoding(t *testing.T) {
 	}
 	events := decodeEvents(t, protocol.String())
 	if !eventMessageContainsAll(events, "cleared", smallID, smallID, fullID) {
-		t.Fatalf("exclusive sibling clear missing after limitations stopped carrying facts: %+v", events)
+		t.Fatalf("exclusive sibling clear missing after the prose channel stopped carrying facts: %+v", events)
 	}
 }
 

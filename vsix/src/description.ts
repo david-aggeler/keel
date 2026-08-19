@@ -19,16 +19,36 @@ export type DisplayClass = 'description' | 'lastRun' | 'desiredState' | 'finding
 /** The fixed sequence the fact classes render in. No producer can influence it. */
 export const displayClassOrder: DisplayClass[] = ['description', 'lastRun', 'desiredState', 'findings'];
 
+/**
+ * `ordinal` is a display toggle rather than a description segment: it governs
+ * the ordinal prefix rendered onto a label, derived at render time from the
+ * item's emission index. It is therefore absent from displayClassOrder, and it
+ * is the one toggle whose default is off — the shipped tree loses a prefix it
+ * used to show, and that change is deliberate (keel/ac-562).
+ *
+ * DHF-REQ: keel/requirement-137
+ */
+export type DisplayToggle = DisplayClass | 'ordinal';
+
+/** Every toggle the display block accepts. */
+export const displayToggles: DisplayToggle[] = [...displayClassOrder, 'ordinal'];
+
 export interface DisplayConfig {
   description: boolean;
   lastRun: boolean;
   desiredState: boolean;
   findings: boolean;
+  ordinal: boolean;
 }
 
-/** Every fact class enabled — the meaning of an absent `display` block. */
+/**
+ * Every fact class enabled and the label ordinal off — the meaning of an absent
+ * `display` block. The asymmetry is deliberate: an absent description class
+ * must not hide text a workspace already saw, while the ordinal prefix is the
+ * visible change keel/requirement-137 makes and a workspace opts back into it.
+ */
 export function defaultDisplayConfig(): DisplayConfig {
-  return { description: true, lastRun: true, desiredState: true, findings: true };
+  return { description: true, lastRun: true, desiredState: true, findings: true, ordinal: false };
 }
 
 /**
@@ -50,8 +70,8 @@ export function parseDisplayConfig(raw: unknown): DisplayConfig {
     throw new Error('test bridge config display must be an object');
   }
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (!isDisplayClass(key)) {
-      throw new Error(`test bridge config display has unknown class "${key}"; known classes are ${displayClassOrder.join(', ')}`);
+    if (!isDisplayToggle(key)) {
+      throw new Error(`test bridge config display has unknown class "${key}"; known classes are ${displayToggles.join(', ')}`);
     }
     if (typeof value !== 'boolean') {
       throw new Error(`test bridge config display class "${key}" must be a boolean`);
@@ -61,26 +81,21 @@ export function parseDisplayConfig(raw: unknown): DisplayConfig {
   return display;
 }
 
-function isDisplayClass(key: string): key is DisplayClass {
-  return (displayClassOrder as string[]).includes(key);
+function isDisplayToggle(key: string): key is DisplayToggle {
+  return (displayToggles as string[]).includes(key);
 }
 
 /**
  * Composes the value of `vscode.TestItem.description` for one discovery item.
  *
- * An item carrying typed facts renders through the renderer alone. Only an item
- * carrying no typed fact at all falls back to the legacy `limitations` prose
- * channel, which is what keeps a producer that has not migrated's tree unchanged. A typed
- * item whose classes are all switched off renders nothing rather than falling
- * back — otherwise the fallback would resurrect the text the toggles suppressed.
+ * Every item renders through the renderer alone. The legacy `limitations` prose
+ * channel is retired, so there is no fallback left to resurrect text a toggle
+ * suppressed: an item carrying no renderable fact renders nothing.
  *
- * DHF-REQ: keel/requirement-139
+ * DHF-REQ: keel/requirement-138, keel/requirement-139
  */
 export function composeDescription(item: DiscoveryItem, display: DisplayConfig): string | undefined {
-  if (hasRenderableFacts(item)) {
-    return renderDescription(item, display) || undefined;
-  }
-  return item.limitations?.join(descriptionSeparator);
+  return renderDescription(item, display) || undefined;
 }
 
 /**

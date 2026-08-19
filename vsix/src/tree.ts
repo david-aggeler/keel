@@ -30,10 +30,14 @@ export function publishDiscovery(
   const discoveryItemsById = new Map<string, DiscoveryItem>();
   const parentByItemId = new Map<string, vscode.TestItem>();
   const pending = topologicalOrder(discovery.items);
+  const emissionIndex = deriveEmissionIndex(discovery.items);
+  const ordinals = display.ordinal ? deriveOrdinalPrefixes(discovery.items, emissionIndex) : new Map<string, string>();
 
   for (const item of pending) {
-    const testItem = existing.itemsById.get(item.id) ?? toTestItem(controller, workspaceRoot, item, display);
-    updateTestItem(testItem, item, display);
+    const index = emissionIndex.get(item.id) ?? 0;
+    const ordinal = ordinals.get(item.id) ?? '';
+    const testItem = existing.itemsById.get(item.id) ?? toTestItem(controller, workspaceRoot, item, display, index, ordinal);
+    updateTestItem(testItem, item, display, index, ordinal);
     itemsById.set(item.id, testItem);
     discoveryItemsById.set(item.id, item);
     protocolIdByItemId.set(testItem.id, item.id);
@@ -158,20 +162,106 @@ function deleteMissingItems(
   }
 }
 
-function toTestItem(controller: vscode.TestController, workspaceRoot: string, item: DiscoveryItem, display: DisplayConfig): vscode.TestItem {
+function toTestItem(
+  controller: vscode.TestController,
+  workspaceRoot: string,
+  item: DiscoveryItem,
+  display: DisplayConfig,
+  emissionIndex: number,
+  ordinalPrefix: string
+): vscode.TestItem {
   const uri = item.uri ? vscode.Uri.file(path.join(workspaceRoot, item.uri)) : undefined;
   const testItem = controller.createTestItem(item.id, item.label, uri);
-  updateTestItem(testItem, item, display);
+  updateTestItem(testItem, item, display, emissionIndex, ordinalPrefix);
   return testItem;
+}
+
+/**
+ * Maps every item to the ordinal prefix its label renders with when the
+ * `ordinal` display toggle is on. The prefix is derived twice over from the
+ * emission sequence and read from no wire field: the letter is the item's
+ * top-level ancestor's position in the frame, upper-cased, and the number is
+ * the item's one-based index within its own parent. Renumbering therefore costs
+ * a producer nothing and no producer can disagree about it (keel/ac-562).
+ *
+ * A root carries no prefix — its label already names its frame position — and
+ * a frame deeper than the alphabet falls back to the number alone rather than
+ * inventing a letter.
+ *
+ * DHF-REQ: keel/requirement-137
+ */
+export function deriveOrdinalPrefixes(
+  items: readonly DiscoveryItem[],
+  emissionIndex: ReadonlyMap<string, number>
+): Map<string, string> {
+  const known = new Map(items.map((item) => [item.id, item]));
+  const rootOf = (item: DiscoveryItem): DiscoveryItem => {
+    let current = item;
+    // The walk is bounded by the item count: a parent chain that revisits an id
+    // would be a cycle, and stopping on a repeat keeps the render finite.
+    const seen = new Set<string>();
+    while (current.parent_id && known.has(current.parent_id) && !seen.has(current.id)) {
+      seen.add(current.id);
+      current = known.get(current.parent_id) as DiscoveryItem;
+    }
+    return current;
+  };
+  const prefixes = new Map<string, string>();
+  for (const item of items) {
+    const root = rootOf(item);
+    if (root.id === item.id) {
+      prefixes.set(item.id, '');
+      continue;
+    }
+    const rootIndex = emissionIndex.get(root.id) ?? 0;
+    const number = (emissionIndex.get(item.id) ?? 0) + 1;
+    const letter = rootIndex < 26 ? String.fromCharCode('A'.charCodeAt(0) + rootIndex) + '.' : '';
+    prefixes.set(item.id, `${letter}${number} `);
+  }
+  return prefixes;
+}
+
+/**
+ * Maps every item to its zero-based index within its parent's emission
+ * sequence. The producer's emission order is the one ordering fact: nothing is
+ * authored and nothing is parsed back out of a display field, so renumbering
+ * costs a producer nothing (keel/ac-546, keel/ac-547).
+ *
+ * The index is stated as a plain decimal. The platform comparator ends in
+ * compareFileNames, backed by Intl.Collator(undefined, {numeric: true}), so 2
+ * orders before 10 unpadded (platform fact F21). Comparison only ever runs
+ * within one sibling set, so no cross-parent key is needed either.
+ *
+ * DHF-REQ: keel/requirement-137
+ */
+export function deriveEmissionIndex(items: readonly DiscoveryItem[]): Map<string, number> {
+  const known = new Set(items.map((item) => item.id));
+  const nextByParent = new Map<string, number>();
+  const indexById = new Map<string, number>();
+  for (const item of items) {
+    // An unresolved parent_id makes the item a root here exactly as it does in
+    // topologicalOrder, so the two walks cannot disagree about who is a sibling.
+    const parent = item.parent_id && known.has(item.parent_id) ? item.parent_id : '';
+    const index = nextByParent.get(parent) ?? 0;
+    nextByParent.set(parent, index + 1);
+    indexById.set(item.id, index);
+  }
+  return indexById;
 }
 
 // The extension is the sole composer of the secondary text: the producer
 // contributes prose and facts, never order, separator, or format.
 //
 // DHF-REQ: keel/requirement-70, keel/requirement-139
-function updateTestItem(testItem: vscode.TestItem, item: DiscoveryItem, display: DisplayConfig): void {
-  testItem.label = item.label;
-  testItem.sortText = item.sort_text;
+function updateTestItem(
+  testItem: vscode.TestItem,
+  item: DiscoveryItem,
+  display: DisplayConfig,
+  emissionIndex: number,
+  ordinalPrefix: string
+): void {
+  testItem.label = ordinalPrefix + item.label;
+  testItem.sortText = String(emissionIndex);
   testItem.canResolveChildren = false;
   testItem.description = composeDescription(item, display);
   testItem.tags = item.required_resources?.map((resource) => new vscode.TestTag(resource)) ?? [];

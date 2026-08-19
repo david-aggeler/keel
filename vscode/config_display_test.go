@@ -4,18 +4,19 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
 
-// TestConfigUpgradeMigratesV3ToV4EnablingEveryClass holds keel/ac-556: a valid
-// version-3 config carrying no display block upgrades to version 4 with every
-// fact class enabled, and command, args, displayName and env survive the
+// TestConfigUpgradeMigratesV3ToCurrentEnablingEveryClass holds keel/ac-556: a
+// valid version-3 config carrying no display block climbs the whole ladder to
+// the current version with every fact class enabled, and command, args, displayName and env survive the
 // rewrite with their values intact — so upgrading a workspace hides nothing
 // that was visible beforehand.
 //
 // DHF-TEST: keel/requirement-139
-func TestConfigUpgradeMigratesV3ToV4EnablingEveryClass(t *testing.T) {
+func TestConfigUpgradeMigratesV3ToCurrentEnablingEveryClass(t *testing.T) {
 	root := t.TempDir()
 	path := TestBridgeConfigPath(root)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -30,16 +31,16 @@ func TestConfigUpgradeMigratesV3ToV4EnablingEveryClass(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpgradeTestBridgeConfig: %v", err)
 	}
-	if !res.Changed || res.FromVersion != 3 || res.ToVersion != 4 {
-		t.Fatalf("upgrade result = %+v, want a change from 3 to 4", res)
+	if !res.Changed || res.FromVersion != 3 || res.ToVersion != CurrentConfigVersion {
+		t.Fatalf("upgrade result = %+v, want a change from 3 to %d", res, CurrentConfigVersion)
 	}
 
 	cfg, err := ReadTestBridgeConfig(root)
 	if err != nil {
 		t.Fatalf("ReadTestBridgeConfig: %v", err)
 	}
-	if cfg.Version != 4 {
-		t.Fatalf("upgraded version = %d, want 4", cfg.Version)
+	if cfg.Version != CurrentConfigVersion {
+		t.Fatalf("upgraded version = %d, want %d", cfg.Version, CurrentConfigVersion)
 	}
 	if cfg.Command != "bin/custom" || cfg.DisplayName != "Custom" {
 		t.Fatalf("upgrade did not preserve command/displayName: %+v", cfg)
@@ -61,18 +62,18 @@ func TestConfigUpgradeMigratesV3ToV4EnablingEveryClass(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read upgraded config: %v", err)
 	}
-	for _, want := range []string{`"description": true`, `"lastRun": true`, `"desiredState": true`, `"findings": true`, `"version": 4`} {
+	for _, want := range []string{`"description": true`, `"lastRun": true`, `"desiredState": true`, `"findings": true`, `"ordinal": false`, `"version": ` + strconv.Itoa(CurrentConfigVersion)} {
 		if !strings.Contains(string(body), want) {
 			t.Fatalf("upgraded config body missing %s:\n%s", want, body)
 		}
 	}
 }
 
-// TestConfigUpgradeIsIdempotentAtV4 keeps the migration byte-stable: running
+// TestConfigUpgradeIsIdempotentAtCurrent keeps the migration byte-stable: running
 // it against a file that is already current rewrites nothing.
 //
 // DHF-TEST: keel/requirement-139
-func TestConfigUpgradeIsIdempotentAtV4(t *testing.T) {
+func TestConfigUpgradeIsIdempotentAtCurrent(t *testing.T) {
 	root := t.TempDir()
 	path := TestBridgeConfigPath(root)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -199,12 +200,49 @@ func TestDisplayConfigRoundTripsThroughJSON(t *testing.T) {
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(decoded) != len(DisplayClassOrder) {
-		t.Fatalf("display config has %d keys, want one per class (%d)", len(decoded), len(DisplayClassOrder))
+	if len(decoded) != len(DisplayClassOrder)+1 {
+		t.Fatalf("display config has %d keys, want one per class plus the ordinal toggle (%d)", len(decoded), len(DisplayClassOrder)+1)
 	}
 	for _, class := range DisplayClassOrder {
 		if !decoded[string(class)] {
 			t.Fatalf("display config carries no enabled key %q; got %v", class, decoded)
+		}
+	}
+	if enabled, ok := decoded[string(DisplayClassOrdinal)]; !ok || enabled {
+		t.Fatalf("display config ordinal key = %v (present=%v), want present and false", enabled, ok)
+	}
+}
+
+// TestDisplayConfigCarriesTheOrdinalToggleOffByDefault holds the config half of
+// keel/ac-562: the ordinal prefix is a display toggle like any other, but it is
+// the one class whose default is off, because the rendered tree loses a prefix
+// it used to show and that change is deliberate.
+//
+// DHF-TEST: keel/requirement-137
+func TestDisplayConfigCarriesTheOrdinalToggleOffByDefault(t *testing.T) {
+	if DefaultDisplayConfig().Enabled(DisplayClassOrdinal) {
+		t.Fatal("the ordinal toggle defaults to enabled; keel/ac-562 wants it off")
+	}
+	root := t.TempDir()
+	path := TestBridgeConfigPath(root)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	body := `{"version":` + strconv.Itoa(CurrentConfigVersion) + `,"command":"bin/keel-dev","args":[],"displayName":"Keel","display":{"ordinal":true}}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := ReadTestBridgeConfig(root)
+	if err != nil {
+		t.Fatalf("ReadTestBridgeConfig: %v", err)
+	}
+	if !cfg.DisplayOrDefault().Enabled(DisplayClassOrdinal) {
+		t.Fatalf("display = %+v, want the ordinal toggle enabled", cfg.Display)
+	}
+	// Enabling one toggle must not disable the classes the workspace never named.
+	for _, class := range DisplayClassOrder {
+		if !cfg.DisplayOrDefault().Enabled(class) {
+			t.Fatalf("class %q lost its default while the ordinal toggle was set", class)
 		}
 	}
 }

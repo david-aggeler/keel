@@ -174,14 +174,14 @@ func (b demoBridge) Discover(ctx context.Context) (vscode.DiscoveryDocument, err
 		group(idFrameworks, idRoot, "D - Frameworks"),
 		group(idGoFramework, idFrameworks, "Go"),
 		group(idFakeFamily, idFrameworks, "Fake infrastructure"),
-		maintenance(idBlockBadLane, idMaintenance, "A.10 block failing Go lane"),
-		maintenance(idUnblockBadLane, idMaintenance, "A.11 unblock failing Go lane"),
+		maintenance(idBlockBadLane, idMaintenance, "block failing Go lane"),
+		maintenance(idUnblockBadLane, idMaintenance, "unblock failing Go lane"),
 	}
 	if hasDemoLanesFile(ws.Root) {
 		items = append(items,
-			lane(ws.Root, idLaneGoPass, idLanes, "C.10 real Go pass", "runs a real Go test module that passes", []string{"go-toolchain"}),
-			lane(ws.Root, idLaneGoFail, idLanes, "C.20 real Go fail", "runs a real Go test module that fails on purpose", []string{"go-toolchain"}),
-			lane(ws.Root, idLaneFakeSmoke, idLanes, "C.30 fake provisioning smoke", "walks the fake provisioning story without touching real infrastructure", []string{"demo-environment", "demo-database", "demo-services"}),
+			lane(ws.Root, idLaneGoPass, idLanes, "real Go pass", "runs a real Go test module that passes", []string{"go-toolchain"}),
+			lane(ws.Root, idLaneGoFail, idLanes, "real Go fail", "runs a real Go test module that fails on purpose", []string{"go-toolchain"}),
+			lane(ws.Root, idLaneFakeSmoke, idLanes, "fake provisioning smoke", "walks the fake provisioning story without touching real infrastructure", []string{"demo-environment", "demo-database", "demo-services"}),
 			test(idTestGoPass, idGoFramework, "TestReferencePass", idLaneGoPass),
 			test(idTestGoFail, idGoFramework, "TestReferenceFailure", idLaneGoFail),
 			test("fake::test::provisioning::Preview", idFakeFamily, "Preview provisioning story", idLaneFakeSmoke),
@@ -283,9 +283,9 @@ func (b demoBridge) Lanes(ctx context.Context) ([]vscode.TestItem, error) {
 		return nil, err
 	}
 	return []vscode.TestItem{
-		lane(ws.Root, idLaneGoPass, idLanes, "C.10 real Go pass", "runs a real Go test module that passes", []string{"go-toolchain"}),
-		lane(ws.Root, idLaneGoFail, idLanes, "C.20 real Go fail", "runs a real Go test module that fails on purpose", []string{"go-toolchain"}),
-		lane(ws.Root, idLaneFakeSmoke, idLanes, "C.30 fake provisioning smoke", "walks the fake provisioning story without touching real infrastructure", []string{"demo-environment", "demo-database", "demo-services"}),
+		lane(ws.Root, idLaneGoPass, idLanes, "real Go pass", "runs a real Go test module that passes", []string{"go-toolchain"}),
+		lane(ws.Root, idLaneGoFail, idLanes, "real Go fail", "runs a real Go test module that fails on purpose", []string{"go-toolchain"}),
+		lane(ws.Root, idLaneFakeSmoke, idLanes, "fake provisioning smoke", "walks the fake provisioning story without touching real infrastructure", []string{"demo-environment", "demo-database", "demo-services"}),
 	}, nil
 }
 
@@ -387,7 +387,7 @@ func group(id, parent, label string) vscode.TestItem {
 }
 
 func maintenance(id, parent, label string) vscode.TestItem {
-	return vscode.TestItem{ID: id, ParentID: parent, Label: label, SortText: label, Kind: "maintenance", Framework: "keel-demo-dev", Runner: "keel-demo-dev", RunnerLabel: "Keel Demo Dev", Runnable: true, Profiles: []string{"run"}}
+	return vscode.TestItem{ID: id, ParentID: parent, Label: label, Kind: "maintenance", Framework: "keel-demo-dev", Runner: "keel-demo-dev", RunnerLabel: "Keel Demo Dev", Runnable: true, Profiles: []string{"run"}}
 }
 
 // lane builds one demo lane item. root is the workspace the lane's run history
@@ -402,7 +402,6 @@ func lane(root, id, parent, label, description string, resources []string) vscod
 		ID:                id,
 		ParentID:          parent,
 		Label:             label,
-		SortText:          label,
 		Kind:              "lane",
 		Framework:         "keel-demo-dev",
 		Runner:            "keel-demo-dev",
