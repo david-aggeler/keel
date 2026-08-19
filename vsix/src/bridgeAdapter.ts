@@ -3,9 +3,15 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
 import { DiscoveryDocument, DesiredStateDocument } from './protocol';
+import { DisplayConfig, defaultDisplayConfig, parseDisplayConfig } from './description';
 
 const execFile = promisify(cp.execFile);
-export const currentConfigVersion = 3;
+export const currentConfigVersion = 4;
+// The config version from which args carry the launcher only, the protocol
+// tokens being appended by the reader. Stated separately from
+// currentConfigVersion so a later bump keeps enforcing the rule against every
+// version that ever declared it.
+export const launcherOnlyArgsSinceVersion = 3;
 export const configRelativePath = path.join('.vscode', 'test-bridge.json');
 export const discoveryOutputMaxBufferBytes = 16 * 1024 * 1024;
 
@@ -16,6 +22,11 @@ export interface BridgeAdapterConfig {
   displayName: string;
   outputChannel: string;
   env?: Record<string, string>;
+  /**
+   * One toggle per rendered fact class, already resolved: an absent block in
+   * the file means every class is enabled (keel/requirement-139).
+   */
+  display: DisplayConfig;
 }
 
 export function adapterConfig(workspaceRoot: string): BridgeAdapterConfig {
@@ -26,7 +37,8 @@ export function adapterConfig(workspaceRoot: string): BridgeAdapterConfig {
     args: config.args,
     displayName: config.displayName,
     outputChannel: `${config.displayName} Test Bridge`,
-    env: config.env
+    env: config.env,
+    display: config.display
   };
 }
 
@@ -36,13 +48,14 @@ export function defaultAdapterConfig(workspaceRoot: string): BridgeAdapterConfig
     command: defaultAdapterCommand(workspaceRoot),
     args: [],
     displayName: 'Keel',
-    outputChannel: 'Keel Test Bridge'
+    outputChannel: 'Keel Test Bridge',
+    display: defaultDisplayConfig()
   };
 }
 
 // DHF-REQ: keel/requirement-59
 export function defaultConfigTemplate(): string {
-  return `${JSON.stringify(defaultAdapterConfig(''), ['version', 'command', 'args', 'displayName', 'env'], 2)}\n`;
+  return `${JSON.stringify(defaultAdapterConfig(''), ['version', 'command', 'args', 'displayName', 'env', 'display', 'description', 'lastRun', 'desiredState', 'findings'], 2)}\n`;
 }
 
 // DHF-REQ: keel/requirement-40
@@ -58,8 +71,8 @@ export function readAdapterConfig(workspaceRoot: string): BridgeAdapterConfig {
   if (!Array.isArray(parsed.args) || !parsed.args.every((arg) => typeof arg === 'string')) {
     throw new Error('test bridge config args must be strings');
   }
-  if (parsed.version >= currentConfigVersion && hasProtocolTokens(parsed.args)) {
-    throw new Error('test bridge config v3 args must be launcher-only');
+  if (parsed.version >= launcherOnlyArgsSinceVersion && hasProtocolTokens(parsed.args)) {
+    throw new Error(`test bridge config v${launcherOnlyArgsSinceVersion} args must be launcher-only`);
   }
   if (typeof parsed.displayName !== 'string' || parsed.displayName.length === 0) {
     throw new Error('test bridge config is missing displayName');
@@ -70,7 +83,8 @@ export function readAdapterConfig(workspaceRoot: string): BridgeAdapterConfig {
     args: parsed.args,
     displayName: parsed.displayName,
     outputChannel: `${parsed.displayName} Test Bridge`,
-    env: parsed.env
+    env: parsed.env,
+    display: parseDisplayConfig((parsed as { display?: unknown }).display)
   };
 }
 
