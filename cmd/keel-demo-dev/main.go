@@ -30,10 +30,12 @@ const (
 	idFrameworks  = "keel-demo-dev::frameworks"
 	idGoFramework = "keel-demo-dev::frameworks::go"
 	idFakeFamily  = "keel-demo-dev::frameworks::fake"
+	idSlowFamily  = "keel-demo-dev::frameworks::slow"
 
 	idLaneGoPass    = "keel-demo-dev::lane::go-pass"
 	idLaneGoFail    = "keel-demo-dev::lane::go-fail"
 	idLaneFakeSmoke = "keel-demo-dev::lane::fake-smoke"
+	idLaneSlow      = "keel-demo-dev::lane::slow-provisioning"
 
 	idTestGoPass = "go::test::passing::TestReferencePass"
 	idTestGoFail = "go::test::failing::TestReferenceFailure"
@@ -65,6 +67,19 @@ const (
 	demoDataSetSmall = "small"
 	demoDataSetFull  = "full"
 )
+
+// demoSlowLaneMembers are the slow lane's three members. Three rather than one,
+// because the behaviour the slow lane demonstrates is partial progress: members
+// settle one after another while the rest are still in flight (keel/ac-581).
+var demoSlowLaneMembers = []struct {
+	id          string
+	label       string
+	description string
+}{
+	{id: "slow::test::provisioning::Warmup", label: "Slow warmup", description: "waits out the fake warmup step"},
+	{id: "slow::test::provisioning::Migrate", label: "Slow migration", description: "waits out the fake migration step"},
+	{id: "slow::test::provisioning::Verify", label: "Slow verification", description: "waits out the fake verify step"},
+}
 
 // demoSlowRunDelayDefault is the fake work time the demo's slow precondition row
 // and slow lane take. It exists so a run is on screen long enough to watch:
@@ -195,6 +210,7 @@ func (b demoBridge) Discover(ctx context.Context) (vscode.DiscoveryDocument, err
 		group(idFrameworks, idRoot, "D - Frameworks"),
 		group(idGoFramework, idFrameworks, "Go"),
 		group(idFakeFamily, idFrameworks, "Fake infrastructure"),
+		group(idSlowFamily, idFrameworks, "Slow fake infrastructure"),
 		maintenance(idBlockBadLane, idMaintenance, "block failing Go lane"),
 		maintenance(idUnblockBadLane, idMaintenance, "unblock failing Go lane"),
 	}
@@ -211,6 +227,10 @@ func (b demoBridge) Discover(ctx context.Context) (vscode.DiscoveryDocument, err
 			test(idTestFakeDatabase, idFakeFamily, "Fake database", "seeds the fake app database", idLaneFakeSmoke),
 			test(idTestFakeServices, idFakeFamily, "Fake services", "starts fake services a, b and c", idLaneFakeSmoke),
 		)
+		for _, member := range demoSlowLaneMembers {
+			items = append(items, test(member.id, idSlowFamily, member.label, member.description, idLaneSlow))
+		}
+		items = append(items)
 	}
 	return vscode.DiscoveryDocument{
 		Version:     1,
@@ -357,6 +377,7 @@ func demoLanes(root string) ([]vscode.TestItem, error) {
 		lane(root, idLaneGoPass, idLanes, "real Go pass", "runs a real Go test module that passes", []string{"go-toolchain"}),
 		lane(root, idLaneGoFail, idLanes, "real Go fail", "runs a real Go test module that fails on purpose", []string{"go-toolchain"}),
 		lane(root, idLaneFakeSmoke, idLanes, "fake provisioning smoke", "walks the fake provisioning story without touching real infrastructure", []string{"demo-environment", "demo-database", "demo-services"}),
+		lane(root, idLaneSlow, idLanes, "slow fake provisioning", "three fake steps, each one slow on purpose", []string{"demo-environment"}),
 	}
 	blocked, err := blockedLane(root)
 	if err != nil {
@@ -410,6 +431,14 @@ func (b demoBridge) runOne(ctx context.Context, root, id string, emit vscode.Run
 		emit(vscode.RunEvent{Event: "output", TestID: id, Message: "fake provisioning preview: environment/database/services need reconcile_during_run"})
 		emit(vscode.RunEvent{Event: "passed", TestID: id, Message: "fake provisioning preview rendered"})
 		return 0, nil
+	case idLaneSlow:
+		for _, member := range demoSlowLaneMembers {
+			code, err := runSlowDemoStep(ctx, member.id, emit)
+			if code != 0 || err != nil {
+				return code, err
+			}
+		}
+		return 0, nil
 	case idLaneGoPass, idTestGoPass:
 		return runGoLane(ctx, root, id, true, emit)
 	case idLaneGoFail, idTestGoFail:
@@ -425,8 +454,28 @@ func (b demoBridge) runOne(ctx context.Context, root, id string, emit vscode.Run
 		}
 		return runGoLane(ctx, root, id, false, emit)
 	default:
+		for _, member := range demoSlowLaneMembers {
+			if id == member.id {
+				return runSlowDemoStep(ctx, id, emit)
+			}
+		}
 		return 1, fmt.Errorf("unknown demo test id %q", id)
 	}
+}
+
+// runSlowDemoStep runs one member of the slow lane: it announces the member,
+// spends the demo's fake work time, and settles it. Every member is slow, so
+// running the lane shows some members settled while others are still in flight
+// (keel/ac-581).
+//
+// DHF-REQ: keel/requirement-62
+func runSlowDemoStep(ctx context.Context, id string, emit vscode.RunEventWriter) (int, error) {
+	emit(vscode.RunEvent{Event: "test_started", TestID: id})
+	if err := demoSleep(ctx, demoSlowRunDelay); err != nil {
+		return 1, err
+	}
+	emit(vscode.RunEvent{Event: "passed", TestID: id, Message: "slow fake provisioning step completed"})
+	return 0, nil
 }
 
 func runGoLane(ctx context.Context, root, id string, pass bool, emit vscode.RunEventWriter) (int, error) {
