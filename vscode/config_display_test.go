@@ -105,7 +105,7 @@ func TestConfigUpgradeIsIdempotentAtV4(t *testing.T) {
 }
 
 // TestDefaultTestBridgeConfigEmitsEveryClassEnabled keeps the template honest:
-// a freshly initialised workspace states its display contract rather than
+// a freshly initialized workspace states its display contract rather than
 // leaving a reader to infer it.
 //
 // DHF-TEST: keel/requirement-139

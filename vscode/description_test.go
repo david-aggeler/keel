@@ -150,7 +150,7 @@ func TestFormatLastRunOmitsAnAbsentMeasurement(t *testing.T) {
 func TestRenderDescriptionOfAnItemWithoutFactsIsEmpty(t *testing.T) {
 	item := TestItem{ID: "openbrain::lane::a", Limitations: []string{"current=empty", "action=reconcile"}}
 	if got := RenderDescription(item, DefaultDisplayConfig()); got != "" {
-		t.Fatalf("RenderDescription() of a factless item = %q, want empty", got)
+		t.Fatalf("RenderDescription() of an item carrying no facts = %q, want empty", got)
 	}
 	if HasRenderableFacts(item) {
 		t.Fatal("HasRenderableFacts() reported facts on an item carrying only limitations")
