@@ -648,8 +648,25 @@ func desiredStateDeclarationDiscoveryItems(ctx context.Context, root, parentID s
 			DesiredStateGroup: &vscode.DesiredStateGroupFacts{MutuallyExclusive: group.MutuallyExclusive},
 		}
 		items = append(items, groupItem)
+		rowIDs := make([]string, 0, len(derivedRows))
 		for _, row := range derivedRows {
-			items = append(items, desiredStateDeclarationDiscoveryItem(groupID, row.Declaration, row.State))
+			if row.Declaration.RunID != "" {
+				rowIDs = append(rowIDs, row.Declaration.RunID)
+			}
+		}
+		// A desired-state row reports the same measured last run a lane does:
+		// both are runnable items, and a tree that reports a duration for one
+		// and not the other differs in what it says about the same fact
+		// (keel/ac-579). The enclosing group is not a row — running it runs its
+		// rows — so no stream is attributable to it and it carries no
+		// measurement.
+		//
+		// DHF-REQ: keel/requirement-138
+		lastRuns := vscode.LatestRunsForIDs(root, rowIDs)
+		for _, row := range derivedRows {
+			item := desiredStateDeclarationDiscoveryItem(groupID, row.Declaration, row.State)
+			item.LastRun = lastRuns[item.ID].Facts()
+			items = append(items, item)
 		}
 		if group.MutuallyExclusive {
 			reconcile = append(reconcile, exclusiveGroupReconcileResults(derivedRows)...)
