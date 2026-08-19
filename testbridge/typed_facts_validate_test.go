@@ -53,6 +53,51 @@ func TestValidateDiscoveryRefusesUnknownFindingSeverity(t *testing.T) {
 	}
 }
 
+// TestValidateDiscoveryRefusesNegativeLastRunDuration holds keel/ac-574: the
+// published schema declares last_run.duration_ms with "minimum": 0 and nothing
+// evaluates that schema at run time, so the boundary states the same refusal
+// validateRunEvent already applies to the sibling run-event carrier — whichever
+// producer composed the document.
+//
+// DHF-TEST: keel/requirement-138
+func TestValidateDiscoveryRefusesNegativeLastRunDuration(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		duration int64
+		wantErr  bool
+	}{
+		{name: "negative measurement", duration: -2000, wantErr: true},
+		{name: "measured zero", duration: 0},
+		{name: "measured duration", duration: 9800},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			duration := tc.duration
+			exitZero := 0
+			doc := typedFactsDiscoveryDoc(vscode.TestItem{
+				ID:      "demo::lane::one",
+				Label:   "one",
+				Kind:    "lane",
+				LastRun: &vscode.LastRunFacts{At: time.Now().UTC(), DurationMS: &duration, ExitCode: &exitZero},
+			})
+			err := ValidateDocument(doc)
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("ValidateDocument rejected duration_ms = %d: %v", tc.duration, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("ValidateDocument accepted a negative last_run.duration_ms")
+			}
+			for _, want := range []string{"demo::lane::one", "duration_ms"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("ValidateDocument err = %v, want it to name %q", err, want)
+				}
+			}
+		})
+	}
+}
+
 // TestValidateDiscoveryAcceptsTypedFacts guards against the refusals above
 // turning into a blanket rejection of the carriage they police.
 //
