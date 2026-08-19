@@ -155,7 +155,7 @@ func (l *sentinelLogger) InfoContext(context.Context, string, ...any) {}
 // DHF-TEST: keel/requirement-135
 func TestRun_ResultSurfacesTerminalEventFieldsAndVerbatimEvent(t *testing.T) {
 	const terminal = `{"type":"result","is_error":false,"result":"done","num_turns":4,"duration_ms":12345,` +
-		`"total_cost_usd":0.0123,"session_id":"sess-abc","usage":{"input_tokens":42,"output_tokens":17,` +
+		`"total_cost_usd":0.0123,"session_id":"session-abc","usage":{"input_tokens":42,"output_tokens":17,` +
 		`"cache_creation_input_tokens":1000,"cache_read_input_tokens":9000}}`
 	stub := writeStub(t, terminal, 0)
 
