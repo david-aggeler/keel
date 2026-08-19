@@ -178,10 +178,12 @@ func (b demoBridge) Discover(ctx context.Context) (vscode.DiscoveryDocument, err
 		maintenance(idUnblockBadLane, idMaintenance, "unblock failing Go lane"),
 	}
 	if hasDemoLanesFile(ws.Root) {
+		lanes, err := demoLanes(ws.Root)
+		if err != nil {
+			return vscode.DiscoveryDocument{}, err
+		}
+		items = append(items, lanes...)
 		items = append(items,
-			lane(ws.Root, idLaneGoPass, idLanes, "real Go pass", "runs a real Go test module that passes", []string{"go-toolchain"}),
-			lane(ws.Root, idLaneGoFail, idLanes, "real Go fail", "runs a real Go test module that fails on purpose", []string{"go-toolchain"}),
-			lane(ws.Root, idLaneFakeSmoke, idLanes, "fake provisioning smoke", "walks the fake provisioning story without touching real infrastructure", []string{"demo-environment", "demo-database", "demo-services"}),
 			test(idTestGoPass, idGoFramework, "TestReferencePass", idLaneGoPass),
 			test(idTestGoFail, idGoFramework, "TestReferenceFailure", idLaneGoFail),
 			test("fake::test::provisioning::Preview", idFakeFamily, "Preview provisioning story", idLaneFakeSmoke),
@@ -282,11 +284,46 @@ func (b demoBridge) Lanes(ctx context.Context) ([]vscode.TestItem, error) {
 	if err := writeDemoReadyState(ws.Root); err != nil {
 		return nil, err
 	}
-	return []vscode.TestItem{
-		lane(ws.Root, idLaneGoPass, idLanes, "real Go pass", "runs a real Go test module that passes", []string{"go-toolchain"}),
-		lane(ws.Root, idLaneGoFail, idLanes, "real Go fail", "runs a real Go test module that fails on purpose", []string{"go-toolchain"}),
-		lane(ws.Root, idLaneFakeSmoke, idLanes, "fake provisioning smoke", "walks the fake provisioning story without touching real infrastructure", []string{"demo-environment", "demo-database", "demo-services"}),
-	}, nil
+	return demoLanes(ws.Root)
+}
+
+// demoLanes builds the demo lane items and stamps the standing blocked-lane
+// condition onto the lane it applies to. The condition is reported at
+// discovery, where no run has taken place, because an unsatisfiable
+// prerequisite holds until it is repaired — asserting a failed run for it
+// would claim an outcome for a lane that never executed (keel/ac-558).
+//
+// DHF-REQ: keel/requirement-140
+func demoLanes(root string) ([]vscode.TestItem, error) {
+	items := []vscode.TestItem{
+		lane(root, idLaneGoPass, idLanes, "real Go pass", "runs a real Go test module that passes", []string{"go-toolchain"}),
+		lane(root, idLaneGoFail, idLanes, "real Go fail", "runs a real Go test module that fails on purpose", []string{"go-toolchain"}),
+		lane(root, idLaneFakeSmoke, idLanes, "fake provisioning smoke", "walks the fake provisioning story without touching real infrastructure", []string{"demo-environment", "demo-database", "demo-services"}),
+	}
+	blocked, err := blockedLane(root)
+	if err != nil {
+		return nil, err
+	}
+	if blocked == "" {
+		return items, nil
+	}
+	for i := range items {
+		if items[i].ID != blocked {
+			continue
+		}
+		items[i].Conditions = append(items[i].Conditions, vscode.Condition{
+			Kind:    "prerequisite_unsatisfied",
+			Message: blockedLaneMessage(blocked),
+		})
+	}
+	return items, nil
+}
+
+// blockedLaneMessage is the one wording of the blocking reason, read by the
+// discovery condition and by the run-scoped error alike, so the two surfaces
+// cannot describe the same block differently.
+func blockedLaneMessage(laneID string) string {
+	return "lane blocked: " + laneID
 }
 
 // DHF-REQ: keel/requirement-87
@@ -321,7 +358,11 @@ func (b demoBridge) runOne(ctx context.Context, root, id string, emit vscode.Run
 		if blocked, err := blockedLane(root); err != nil {
 			return 1, err
 		} else if blocked == idLaneGoFail {
-			emit(vscode.RunEvent{Event: "failed", TestID: idLaneGoFail, Message: "lane blocked: " + blocked})
+			// The lane cannot execute at all, so the run-scoped surface is
+			// `errored`, never `failed`: `failed` would assert an outcome for
+			// a test that never ran (keel/ac-558, keel/ac-568).
+			// DHF-REQ: keel/requirement-140
+			emit(vscode.RunEvent{Event: "errored", TestID: idLaneGoFail, Message: blockedLaneMessage(blocked)})
 			return 1, nil
 		}
 		return runGoLane(ctx, root, id, false, emit)

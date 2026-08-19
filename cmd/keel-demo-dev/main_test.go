@@ -187,7 +187,9 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 		t.Fatalf("blocked go-fail lane exit = 0, want non-zero\n%s", blockedOut)
 	}
 	events = decodeRunEvents(t, blockedOut)
-	assertRunEvent(t, events, "failed", "keel-demo-dev::lane::go-fail", "lane blocked")
+	// keel/ac-558: a blocked lane never executes, so its run errors rather
+	// than reporting an outcome it never had.
+	assertRunEvent(t, events, "errored", "keel-demo-dev::lane::go-fail", "lane blocked")
 
 	clearStateOut, code := runDemoDev(t, root, exe, "test-bridge", "run", "--id", testbridge.MaintenanceClearStateID)
 	if code != 0 {
@@ -417,7 +419,9 @@ func TestDemoBridgeCommandSpecCoversProviderAndRunPaths(t *testing.T) {
 	if err == nil {
 		t.Fatalf("blocked failing lane dispatch succeeded, want RunError")
 	}
-	assertRunEvent(t, decodeRunEvents(t, runOut), "failed", idLaneGoFail, "lane blocked")
+	// keel/ac-558: a blocked lane never executes, so its run errors rather
+	// than reporting an outcome it never had.
+	assertRunEvent(t, decodeRunEvents(t, runOut), "errored", idLaneGoFail, "lane blocked")
 
 	if _, err = dispatchDemoBridge(t, root, "test-bridge", "run", "--id", idUnblockBadLane); err != nil {
 		t.Fatalf("unblock maintenance dispatch: %v", err)
