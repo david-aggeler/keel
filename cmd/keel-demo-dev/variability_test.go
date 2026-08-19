@@ -242,3 +242,57 @@ func TestDemoPreconditionsGroupRunHoldsExactlyOneRowInFlight(t *testing.T) {
 		t.Fatalf("preconditions group held %d rows in flight for %s, want exactly 1: %v", len(slow), delay, slow)
 	}
 }
+
+// Running the slow lane holds each of its three members in flight for the
+// demo's fake work time, so lane-level partial progress — some members settled
+// while others still run — is observable (keel/ac-581).
+//
+// DHF-TEST: keel/requirement-62
+func TestDemoSlowLaneHoldsEachOfItsThreeMembersInFlight(t *testing.T) {
+	const delay = 150 * time.Millisecond
+	stubDemoSlowRunDelay(t, delay)
+	root := t.TempDir()
+
+	doc := demoDiscoveryAfterDetect(t, root)
+	assertDemoItem(t, doc.Items, idLaneSlow)
+	var members []vscode.TestItem
+	for _, item := range doc.Items {
+		if item.Kind == "test" && item.LaneID == idLaneSlow {
+			members = append(members, item)
+		}
+	}
+	if len(members) != 3 {
+		t.Fatalf("slow lane holds %d members, want 3: %+v", len(members), members)
+	}
+
+	out, err := dispatchDemoBridgeWithRunID(t, root, "run-slow-lane", "test-bridge", "run", "--id", idLaneSlow)
+	if err != nil {
+		t.Fatalf("slow lane run dispatch: %v\n%s", err, out)
+	}
+	events := decodeRunEvents(t, out)
+	gaps := demoSettleGaps(t, events)
+	for _, member := range members {
+		gap, ok := gaps[member.ID]
+		if !ok {
+			t.Fatalf("slow lane member %q reported no result: %v", member.ID, gaps)
+		}
+		if gap < delay {
+			t.Fatalf("slow lane member %q settled %s after it started, want at least %s", member.ID, gap, delay)
+		}
+		assertRunEvent(t, events, "passed", member.ID, "")
+	}
+	if len(gaps) != len(members) {
+		t.Fatalf("slow lane run reported %d results, want one per member: %v", len(gaps), gaps)
+	}
+}
+
+func assertDemoItem(t *testing.T, items []vscode.TestItem, id string) vscode.TestItem {
+	t.Helper()
+	for _, item := range items {
+		if item.ID == id {
+			return item
+		}
+	}
+	t.Fatalf("discovery serves no item %q", id)
+	return vscode.TestItem{}
+}
