@@ -91,15 +91,6 @@ func (r *LaneRun) Facts() *LastRunFacts {
 	return &LastRunFacts{At: r.At, DurationMS: &duration, ExitCode: &exitCode}
 }
 
-// laneRunFromStream reads one persisted stream and reports the run it records
-// only when that run was requested for exactly this lane and finished with an
-// exit code.
-//
-// DHF-REQ: keel/requirement-138
-func laneRunFromStream(path, laneID string) *LaneRun {
-	return runsFromStream(path)[laneID]
-}
-
 // runsFromStream reads one persisted stream and reports, per id the stream
 // attributes a run to, the run it records. A stream may hold more than one run,
 // so the runs are keyed by the id each was requested for; a run requested for

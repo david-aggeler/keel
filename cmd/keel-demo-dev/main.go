@@ -116,7 +116,7 @@ func demoSlowLaneMemberIDs() []string {
 }
 
 // demoSlowLaneMembers are the slow lane's three members. Three rather than one,
-// because the behaviour the slow lane demonstrates is partial progress: members
+// because the behavior the slow lane demonstrates is partial progress: members
 // settle one after another while the rest are still in flight (keel/ac-581).
 var demoSlowLaneMembers = []struct {
 	id          string
@@ -277,7 +277,6 @@ func (b demoBridge) Discover(ctx context.Context) (vscode.DiscoveryDocument, err
 		for _, member := range demoSlowLaneMembers {
 			items = append(items, test(member.id, idSlowFamily, member.label, member.description, idLaneSlow))
 		}
-		items = append(items)
 	}
 	return vscode.DiscoveryDocument{
 		Version:     1,
