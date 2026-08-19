@@ -1,7 +1,8 @@
 import * as assert from 'node:assert/strict';
 import * as os from 'node:os';
 import * as vscode from 'vscode';
-import { DiscoveryDocument, DiscoveryItem } from '../../protocol';
+import { applyRunEvent, setCurrentTreeForTest } from '../../extension';
+import { DiscoveryDocument, DiscoveryItem, RunEvent } from '../../protocol';
 import { publishDiscovery } from '../../tree';
 
 function documentOf(...items: DiscoveryItem[]): DiscoveryDocument {
@@ -189,6 +190,58 @@ suite('persistent conditions route to TestItem.error', () => {
         conditions: undefined
       }));
       assert.equal(errorTextOf(tree.itemsById.get('go::file::broken/broken_test.go')), undefined);
+    });
+  });
+
+  // keel/ac-568: the third leg of the taxonomy, asserted from its own side. A
+  // run that cannot execute at all stamps run.errored on the item hosting the
+  // run — adopting TestItem.error for the persistent conditions above must not
+  // annex the run-scoped one. Without this assertion the boundary is stated
+  // from one direction only.
+  // DHF-TEST: keel/requirement-140
+  test('req-140 a run that cannot execute errors on its item and leaves TestItem.error untouched', () => {
+    withController((controller) => {
+      const tree = publishDiscovery(controller, os.tmpdir(), documentOf({
+        id: 'keel::lane::go-fail',
+        label: 'real Go fail',
+        kind: 'lane',
+        runnable: true,
+        profiles: ['run']
+      }));
+      setCurrentTreeForTest(tree);
+      try {
+        const errored: string[] = [];
+        const failed: string[] = [];
+        const run = {
+          started() { /* no-op */ },
+          passed() { /* no-op */ },
+          failed(item: vscode.TestItem) { failed.push(item.id); },
+          errored(item: vscode.TestItem) { errored.push(item.id); },
+          skipped() { /* no-op */ },
+          appendOutput() { /* no-op */ }
+        };
+        const event: RunEvent = {
+          version: 1,
+          event: 'errored',
+          time: new Date().toISOString(),
+          test_id: 'keel::lane::go-fail',
+          message: 'lane blocked: keel::lane::go-fail'
+        };
+        applyRunEvent(
+          run as unknown as vscode.TestRun,
+          JSON.stringify(event),
+          new Set(['keel::lane::go-fail']),
+          new Set<string>()
+        );
+
+        assert.deepEqual(errored, ['keel::lane::go-fail']);
+        assert.deepEqual(failed, []);
+        // The run-scoped condition stays run-scoped: nothing about it reaches
+        // the persistent surface, which the item never carried.
+        assert.equal(errorTextOf(tree.itemsById.get('keel::lane::go-fail')), undefined);
+      } finally {
+        setCurrentTreeForTest(undefined);
+      }
     });
   });
 });
