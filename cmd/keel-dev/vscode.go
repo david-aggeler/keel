@@ -1171,8 +1171,11 @@ func discoverGoTestItems(_ context.Context, root string) ([]vscode.TestItem, err
 			}
 			if file.parseErr != nil {
 				item.Profiles = []string{}
-				// DHF-REQ: keel/requirement-138
-				item.Description = file.parseErr.Error()
+				// A file that will not parse is a discovery-time condition,
+				// not prose about the file: it has no run behind it and it
+				// stands until the source is fixed (keel/ac-557).
+				// DHF-REQ: keel/requirement-140
+				item.Conditions = []vscode.Condition{{Kind: "parse_error", Message: file.parseErr.Error()}}
 			}
 			items = append(items, item)
 			for _, test := range file.tests {

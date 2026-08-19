@@ -55,6 +55,13 @@ export interface DiscoveryItem {
   /** Typed validation findings raised against this item. */
   findings?: Finding[];
   /**
+   * Persistent non-result conditions standing against this item at discovery
+   * time. They outlive any run and have none behind them, so the extension
+   * routes them to `vscode.TestItem.error` rather than to a run result
+   * (keel/requirement-140).
+   */
+  conditions?: Condition[];
+  /**
    * Typed measurement of the newest run attributable to this item alone.
    * Absent — never zeroed — when no run is attributable.
    */
@@ -71,6 +78,14 @@ export interface Finding {
 }
 
 export type FindingSeverity = 'error' | 'warning';
+
+/** One persistent non-result condition standing against a discovery item. */
+export interface Condition {
+  kind: ConditionKind;
+  message: string;
+}
+
+export type ConditionKind = 'parse_error' | 'prerequisite_unsatisfied';
 
 /** Typed measurement of the newest run attributable to one discovery item. */
 export interface LastRunFacts {

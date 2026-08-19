@@ -263,7 +263,7 @@
           },
           {
             "rule": "lane-members",
-            "severity": "error",
+            "severity": "warning",
             "message": "member missing"
           }
         ]
@@ -274,8 +274,67 @@
         "desiredState": true,
         "findings": true
       },
-      "expected": "lane-order warning: order drifted; lane-members error: member missing",
+      "expected": "lane-order warning: order drifted; lane-members warning: member missing",
       "has_facts": true
+    },
+    {
+      "name": "an error-severity finding routes away from the description",
+      "item": {
+        "id": "keel::lane::b",
+        "label": "B - Go",
+        "kind": "lane",
+        "runnable": true,
+        "profiles": [
+          "run"
+        ],
+        "findings": [
+          {
+            "rule": "lane-prereq",
+            "severity": "error",
+            "message": "resource is unavailable"
+          },
+          {
+            "rule": "lane-order",
+            "severity": "warning",
+            "message": "order drifted"
+          }
+        ]
+      },
+      "display": {
+        "description": true,
+        "lastRun": true,
+        "desiredState": true,
+        "findings": true
+      },
+      "expected": "lane-order warning: order drifted",
+      "has_facts": true
+    },
+    {
+      "name": "an item whose only finding is error-severity renders no description at all",
+      "item": {
+        "id": "keel::lane::b",
+        "label": "B - Go",
+        "kind": "lane",
+        "runnable": true,
+        "profiles": [
+          "run"
+        ],
+        "findings": [
+          {
+            "rule": "lane-prereq",
+            "severity": "error",
+            "message": "resource is unavailable"
+          }
+        ]
+      },
+      "display": {
+        "description": true,
+        "lastRun": true,
+        "desiredState": true,
+        "findings": true
+      },
+      "expected": "",
+      "has_facts": false
     },
     {
       "name": "a run over ninety seconds renders minutes and seconds",
