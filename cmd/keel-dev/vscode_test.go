@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -467,7 +468,7 @@ func TestVSCodeConfigHandlersInitAndUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read upgraded config: %v", err)
 	}
-	if !strings.Contains(string(body), `"command": "bin/custom"`) || !strings.Contains(string(body), `"version": 3`) || !strings.Contains(string(body), `"args": []`) {
+	if !strings.Contains(string(body), `"command": "bin/custom"`) || !strings.Contains(string(body), `"version": 4`) || !strings.Contains(string(body), `"args": []`) {
 		t.Fatalf("upgraded config did not preserve command and stamp current version:\n%s", body)
 	}
 }
@@ -1237,6 +1238,13 @@ func TestVSCodeDiscoveryAppendsExactLaneDurationHint(t *testing.T) {
 	if got := strings.Join(lane.Limitations, " "); !strings.Contains(got, "last 9.8s") {
 		t.Fatalf("lane limitations = %q, want newest exact single-lane duration hint", got)
 	}
+	// keel/ac-565: the hint the producer still carries for a consumer that has
+	// not migrated is the exported renderer's own output, byte for byte, rather
+	// than a second format string that renders the same today.
+	// DHF-TEST: keel/requirement-139
+	if want := vscode.FormatLastRun(lane.LastRun); want == "" || !slices.Contains(lane.Limitations, want) {
+		t.Fatalf("lane limitations = %v, want the exported renderer's %q", lane.Limitations, want)
+	}
 	// The typed measurement is asserted against the same three fixture
 	// streams as the formatted hint, in the same test: the attribution
 	// regressing silently while the prose hint still renders is the failure
@@ -1744,12 +1752,9 @@ func TestVSCodeLaneEdgeCases(t *testing.T) {
 		t.Fatalf("invalid lane run err = %v\n%s", err, protocol.String())
 	}
 
-	if hint := laneDurationHint(&vscode.LaneRun{DurationMS: 192000}); hint != "· last 3m 12s" {
-		t.Fatalf("long duration hint = %q", hint)
-	}
-	if hint := laneDurationHint(nil); hint != "" {
-		t.Fatalf("nil duration hint = %q", hint)
-	}
+	// The duration format itself is no longer keel-dev's: it moved to the
+	// exported renderer under keel/ac-565 and is asserted there, against the
+	// golden fixture the VSIX composer reads too.
 	if got := goPackageMatchesPattern(".", "./"); !got {
 		t.Fatal("root go pattern should match root package")
 	}

@@ -8,7 +8,15 @@ import (
 	"path/filepath"
 )
 
-const CurrentConfigVersion = 3
+const CurrentConfigVersion = 4
+
+// launcherOnlyArgsSinceVersion is the config version from which args carry the
+// launcher only, the protocol tokens being appended by the reader. It is
+// stated separately from CurrentConfigVersion so that a later version bump
+// keeps enforcing the rule against every version that ever declared it.
+//
+// DHF-REQ: keel/requirement-59
+const launcherOnlyArgsSinceVersion = 3
 
 type TestBridgeConfig struct {
 	Version     int               `json:"version"`
@@ -16,6 +24,23 @@ type TestBridgeConfig struct {
 	Args        []string          `json:"args"`
 	DisplayName string            `json:"displayName"`
 	Env         map[string]string `json:"env,omitempty"`
+	// Display carries one toggle per rendered fact class. Absent — the shape
+	// every config below version 4 has — means every class is enabled, so a
+	// workspace that has not migrated renders exactly what it rendered before.
+	//
+	// DHF-REQ: keel/requirement-139
+	Display *DisplayConfig `json:"display,omitempty"`
+}
+
+// DisplayOrDefault resolves the effective display configuration: an absent
+// block enables every class.
+//
+// DHF-REQ: keel/requirement-139
+func (c TestBridgeConfig) DisplayOrDefault() DisplayConfig {
+	if c.Display == nil {
+		return DefaultDisplayConfig()
+	}
+	return *c.Display
 }
 
 type ConfigUpgradeResult struct {
@@ -30,11 +55,13 @@ type ConfigUpgradeResult struct {
 //
 // DHF-REQ: keel/requirement-40
 func DefaultTestBridgeConfig() TestBridgeConfig {
+	display := DefaultDisplayConfig()
 	return TestBridgeConfig{
 		Version:     CurrentConfigVersion,
 		Command:     "bin/keel-dev",
 		Args:        []string{},
 		DisplayName: "Keel",
+		Display:     &display,
 	}
 }
 
@@ -55,8 +82,8 @@ func ReadTestBridgeConfig(root string) (TestBridgeConfig, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return TestBridgeConfig{}, fmt.Errorf("keel/vscode: parse test bridge config: %w", err)
 	}
-	if cfg.Version >= CurrentConfigVersion && hasProtocolTokens(cfg.Args) {
-		return TestBridgeConfig{}, fmt.Errorf("keel/vscode: test bridge config v3 args must be launcher-only")
+	if cfg.Version >= launcherOnlyArgsSinceVersion && hasProtocolTokens(cfg.Args) {
+		return TestBridgeConfig{}, fmt.Errorf("keel/vscode: test bridge config v%d args must be launcher-only", launcherOnlyArgsSinceVersion)
 	}
 	return cfg, nil
 }
@@ -102,7 +129,7 @@ func UpgradeTestBridgeConfig(root string) (ConfigUpgradeResult, error) {
 		return ConfigUpgradeResult{}, fmt.Errorf("keel/vscode: test bridge config version %d is newer than this binary supports (%d); refusing to write", from, CurrentConfigVersion)
 	}
 	for cfg.Version < CurrentConfigVersion {
-		next, err := migrateTestBridgeConfig(cfg)
+		next, err := MigrateTestBridgeConfig(cfg, DefaultTestBridgeConfig())
 		if err != nil {
 			return ConfigUpgradeResult{}, err
 		}
@@ -121,31 +148,47 @@ func UpgradeTestBridgeConfig(root string) (ConfigUpgradeResult, error) {
 	return ConfigUpgradeResult{Path: target, Changed: true, FromVersion: from, ToVersion: cfg.Version}, nil
 }
 
-// DHF-REQ: keel/requirement-65
-func migrateTestBridgeConfig(cfg TestBridgeConfig) (TestBridgeConfig, error) {
+// MigrateTestBridgeConfig advances a config by exactly one version and is the
+// only statement of the migration ladder. Both upgrade entry points — this
+// package's and keel/testbridge's, which backs `keel-dev test-bridge
+// config-upgrade` — climb through it, so a rung added here cannot be skipped
+// by one of them. The template supplies the values an incomplete older config
+// is missing.
+//
+// DHF-REQ: keel/requirement-65, keel/requirement-139
+func MigrateTestBridgeConfig(cfg, template TestBridgeConfig) (TestBridgeConfig, error) {
 	switch cfg.Version {
 	case 0:
 		return TestBridgeConfig{}, fmt.Errorf("keel/vscode: test bridge config version is missing or unsupported")
 	case 1:
 		cfg.Version = 2
 		if cfg.Command == "" {
-			cfg.Command = DefaultTestBridgeConfig().Command
+			cfg.Command = template.Command
 		}
 		if len(cfg.Args) == 0 {
-			cfg.Args = append([]string(nil), DefaultTestBridgeConfig().Args...)
+			cfg.Args = append([]string(nil), template.Args...)
 		}
 		if cfg.DisplayName == "" {
-			cfg.DisplayName = DefaultTestBridgeConfig().DisplayName
+			cfg.DisplayName = template.DisplayName
 		}
 		return cfg, nil
 	case 2:
-		cfg.Version = CurrentConfigVersion
+		cfg.Version = 3
 		cfg.Args = trimLegacyVSCodeTestsPrefix(cfg.Args)
 		if cfg.Command == "" {
-			cfg.Command = DefaultTestBridgeConfig().Command
+			cfg.Command = template.Command
 		}
 		if cfg.DisplayName == "" {
-			cfg.DisplayName = DefaultTestBridgeConfig().DisplayName
+			cfg.DisplayName = template.DisplayName
+		}
+		return cfg, nil
+	case 3:
+		// Every class enabled, so the upgraded workspace renders every fact it
+		// rendered before the toggles existed (keel/ac-556).
+		cfg.Version = 4
+		if cfg.Display == nil {
+			display := DefaultDisplayConfig()
+			cfg.Display = &display
 		}
 		return cfg, nil
 	default:

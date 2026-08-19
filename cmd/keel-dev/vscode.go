@@ -770,16 +770,21 @@ func (s lanesState) discoveryItems() []vscode.TestItem {
 		// DHF-REQ: keel/requirement-138
 		lastRun := vscode.LatestLaneRun(s.root, eff.id)
 		item.LastRun = lastRun.Facts()
-		if hint := laneDurationHint(lastRun); hint != "" {
+		// The text is composed by the exported renderer, never here: keel-dev
+		// contributes facts and prose, never a format (keel/ac-565).
+		// DHF-REQ: keel/requirement-139
+		if hint := vscode.FormatLastRun(item.LastRun); hint != "" {
 			item.Limitations = append(item.Limitations, hint)
 		}
 		// Each finding travels as its own rule/severity/message triple; the
 		// concatenated line stays in limitations only until the consumer
 		// stops reading it (keel/ac-551).
 		// DHF-REQ: keel/requirement-138
+		// DHF-REQ: keel/requirement-139
 		for _, finding := range eff.findings {
-			item.Findings = append(item.Findings, vscode.Finding{Rule: finding.Rule, Severity: finding.Severity, Message: finding.Message})
-			item.Limitations = append(item.Limitations, finding.Rule+" "+finding.Severity+": "+finding.Message)
+			typed := vscode.Finding{Rule: finding.Rule, Severity: finding.Severity, Message: finding.Message}
+			item.Findings = append(item.Findings, typed)
+			item.Limitations = append(item.Limitations, vscode.FormatFinding(typed))
 		}
 		items = append(items, item)
 		items = append(items, s.coverItems(eff)...)
@@ -882,18 +887,6 @@ func (s lanesState) coverItems(eff effectiveLane) []vscode.TestItem {
 		addAlias(coversID, laneID, strings.TrimPrefix(laneID, "keel::lane::"), "lane", "", nil)
 	}
 	return items
-}
-
-func laneDurationHint(last *vscode.LaneRun) string {
-	if last == nil || last.DurationMS < 0 {
-		return ""
-	}
-	totalSeconds := float64(last.DurationMS) / 1000
-	if totalSeconds > 90 {
-		seconds := int(totalSeconds + 0.5)
-		return fmt.Sprintf("· last %dm %02ds", seconds/60, seconds%60)
-	}
-	return fmt.Sprintf("· last %.1fs", totalSeconds)
 }
 
 func lanesDiagnosticItem(id, message string) vscode.TestItem {
