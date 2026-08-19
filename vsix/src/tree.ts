@@ -1,6 +1,7 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { composeDescription, defaultDisplayConfig, DisplayConfig } from './description';
+import { composeItemError } from './itemError';
 import { DiscoveryCapabilities, DiscoveryDocument, DiscoveryItem } from './protocol';
 
 export interface PublishedTree {
@@ -86,6 +87,8 @@ export function replacePublishedTestItem(
   replacement.sortText = oldItem.sortText;
   replacement.canResolveChildren = oldItem.canResolveChildren;
   replacement.description = oldItem.description;
+  // DHF-REQ: keel/requirement-140
+  replacement.error = oldItem.error;
   replacement.tags = oldItem.tags;
   replacement.range = oldItem.range;
 
@@ -264,6 +267,11 @@ function updateTestItem(
   testItem.sortText = String(emissionIndex);
   testItem.canResolveChildren = false;
   testItem.description = composeDescription(item, display);
+  // The error slot is not a display class and carries no toggle: a condition
+  // serious enough to reach it is not something a workspace may hide
+  // (keel/requirement-140). It is assigned on every publish, including with
+  // undefined, so a condition the producer stopped reporting stops rendering.
+  testItem.error = composeItemError(item);
   testItem.tags = item.required_resources?.map((resource) => new vscode.TestTag(resource)) ?? [];
   if (item.range) {
     testItem.range = new vscode.Range(

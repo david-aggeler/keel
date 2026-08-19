@@ -135,6 +135,14 @@ type TestItem struct {
 	//
 	// DHF-REQ: keel/requirement-138
 	Findings []Finding `json:"findings,omitempty"`
+	// Conditions are the persistent non-result conditions standing against
+	// this item at discovery time — a source file that will not parse, a
+	// prerequisite that cannot be satisfied. They are not run results and
+	// have no run behind them, so they travel apart from both the prose
+	// channel and the run-event stream. Absent when the item carries none.
+	//
+	// DHF-REQ: keel/requirement-140
+	Conditions []Condition `json:"conditions,omitempty"`
 	// LastRun is the typed measurement of the newest run attributable to this
 	// item alone. Absent — never zeroed — when no run is attributable.
 	//
@@ -178,6 +186,34 @@ type Finding struct {
 	Rule     string `json:"rule"`
 	Severity string `json:"severity"`
 	Message  string `json:"message"`
+}
+
+// Condition is one persistent non-result condition standing against a discovery
+// item. Its lifetime is the reason it is not a run event: it holds until the
+// producer stops reporting it, whereas a run result asserts an outcome for one
+// execution that took place. The kind travels as a closed enum so a consumer
+// selects behaviour by it rather than by parsing the message.
+//
+// DHF-REQ: keel/requirement-140
+type Condition struct {
+	Kind    string `json:"kind"`
+	Message string `json:"message"`
+}
+
+// conditionKinds is the closed set of kind values a Condition may carry.
+var conditionKinds = map[string]struct{}{
+	"parse_error":              {},
+	"prerequisite_unsatisfied": {},
+}
+
+// IsConditionKind reports whether kind is one of the closed enum values a
+// producer may stamp on a Condition. It is the single producer-side answer to
+// that question, so a validator elsewhere cannot drift from this value set.
+//
+// DHF-REQ: keel/requirement-140
+func IsConditionKind(kind string) bool {
+	_, ok := conditionKinds[kind]
+	return ok
 }
 
 // LastRunFacts is the typed measurement of the newest run attributable to one

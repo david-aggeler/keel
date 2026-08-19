@@ -96,7 +96,7 @@ func TestVSCodeDiagnosticItemsCarryScalarDescription(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A Go test file that does not parse raises a file item carrying the
-	// parse error as its whole prose channel.
+	// parse error on the persistent-condition channel (keel/ac-557).
 	writeFile(t, root, filepath.Join("broken", "broken_test.go"), "package broken\n\nfunc TestX(t *testing.T {\n")
 
 	built, err := buildVSCodeDiscovery(root)
@@ -111,8 +111,12 @@ func TestVSCodeDiagnosticItemsCarryScalarDescription(t *testing.T) {
 			continue
 		}
 		checked++
-		if item.Description == "" {
-			t.Errorf("diagnostic item %q carries no description, so its text is mute (keel/ac-549)", item.ID)
+		// The invariant is that a diagnostic item's text reaches a channel,
+		// not that it reaches the prose one. keel/ac-557 moved the parse
+		// failure to the condition channel because it is a discovery-time
+		// condition rather than prose; a lanes diagnostic stays prose.
+		if item.Description == "" && len(item.Conditions) == 0 {
+			t.Errorf("diagnostic item %q carries neither description nor condition, so its text is mute (keel/ac-549, keel/ac-557)", item.ID)
 		}
 	}
 	if checked == 0 {
