@@ -93,8 +93,8 @@ Field rules:
 |---|---|---|
 | `version` | yes | Integer. Unknown major version → whole-file diagnostic (see 2.1). |
 | `id` | yes | `[a-z][a-z0-9-]*`, unique across lanes in the file. The consuming devtool maps it into that devtool's own lane namespace, e.g. `keel::lane::<id>` for keel-dev or `<consumer-namespace>::lane::<id>` for another consumer. IDs never carry ordinals. |
-| `label` | yes | Human label, no ordinal prefix (the devtool prepends `order`). |
-| `order` | yes | Dotted ordinal, e.g. `c.40`. Shape-checked only (`letter.digits`) — the devtool owns group placement, so renumbering top-level groups never invalidates lanes files. `detect-lanes` seeds gate lanes at `c.1` lint, `c.2` test-fast, `c.3` test-coverage, `c.10` vsix-ci, `c.30` ci; category detection starts at `c.40`. Duplicate orders still render (V7 warning; `sort_text` breaks ties by id). |
+| `label` | yes | Human label, no ordinal prefix. The label reaches the wire as written; the extension prepends the rendered ordinal only where a workspace sets `display.ordinal` (keel/requirement-137). |
+| `order` | yes | Dotted ordinal, e.g. `c.40`. Shape-checked only (`letter.digits`) — the devtool owns group placement, so renumbering top-level groups never invalidates lanes files. `detect-lanes` seeds gate lanes at `c.1` lint, `c.2` test-fast, `c.3` test-coverage, `c.10` vsix-ci, `c.30` ci; category detection starts at `c.40`. Duplicate orders still render (V7 warning; the order the devtool emits the lanes in breaks the tie). |
 | `description` | no | Free text; the devtool appends the measured duration hint (see §6). |
 | `members` | yes | Non-empty array. Member forms in 2.3. |
 | `prerequisites` | no | Resource ids surfaced as `required_resources`; checked by `PrepareLane`. Prerequisites of referenced lanes are inherited (union). |
@@ -154,7 +154,7 @@ validation warnings); non-zero = verb itself failed.
 
 | Verb | Status | Contract |
 |---|---|---|
-| `test-bridge tests discover` | exists | Full tree document. Lanes come exclusively from `.vscode/test-lanes.json`; each has ordinal label, `sort_text`, covers aliases, duration hint, `required_resources`. Lanes-file diagnostics appear as the 2.1 diagnostic item. |
+| `test-bridge tests discover` | exists | Full tree document. Lanes come exclusively from `.vscode/test-lanes.json`; each has a label, covers aliases, a typed `last_run` duration, and `required_resources`, and each is emitted in its display order. Lanes-file diagnostics appear as the 2.1 diagnostic item. |
 | `test-bridge tests desired-state [--id]` | exists; extension planned | The **desired-state detection** verb. `desired_state` rows gain real per-resource checks (go toolchain, module root, pnpm for vsix members, lanes-file validity as a resource). |
 | `test-bridge tests run --id` | exists | Accepts lane ids. Gate lane ids execute the compiled gate behavior; category/composed lanes execute their member sets. Run semantics in §7. |
 | `file-backed lane discovery` | implemented as lane inventory | Effective lane definitions as JSON: per lane — id, label, order, direct members, **expanded** member set, inherited prerequisites, validation findings, last measured duration. This is also the artifact a future CR-class→gate mapping consumes. |
@@ -276,9 +276,11 @@ the file write (when any) triggers watcher-driven re-discovery.
 
 ## 5. Discovery projection rules
 
-1. **Ordinals:** label = `<order> <label>`; `sort_text` = order with numeric
-   dotted segments zero-padded to 3 (`c.40` → `c.040`). Letters pass through.
-   IDs never contain ordinals (results and expanded state survive renumbering).
+1. **Ordinals:** `order` decides the sequence in which the devtool emits its
+   lanes, and that emission order is the wire's only ordering fact — no
+   ordering field travels with the item, and the label carries no `<order> `
+   prefix unless a workspace enables `display.ordinal`. IDs never contain
+   ordinals (results and expanded state survive renumbering).
 2. **Groups** (owner decision 2026-07-12): top-level `a. Maintenance` (kind
    `group`), `C - Lanes` (kind `group`), and `d. Frameworks` (kind `group`) —
    the single parent for language/framework-specific enumeration trees:
@@ -328,9 +330,10 @@ the file write (when any) triggers watcher-driven re-discovery.
    stream under `.devtools/vscode-runs/` whose `requested` set is **exactly**
    `[the lane]` — multi-selection runs never contribute (no over-attribution)
    and failed runs count (cost is not a green-runs-only statistic).
-3. Discovery appends the hint to the lane description: `· last 9.8s`
-   (`m s` above 90 s). The description travels on the wire `limitations`
-   channel and renders as the **dimmed secondary text** next to the label
+3. Discovery reports the measured cost as the typed `last_run` fact, which the
+   extension renders as `· last 9.8s` (`m s` above 90 s) — appended to the
+   producer's own scalar `description` and shown as the **dimmed secondary
+   text** next to the label
    (owner-confirmed placement, 2026-07-12) — the label itself stays clean.
    VS Code's own right-aligned run duration is session-ephemeral; this hint
    persists across restarts. Lanes with no attributable stream show no hint.
@@ -358,7 +361,7 @@ the file write (when any) triggers watcher-driven re-discovery.
 
 ## 8. VSIX changes required
 
-Deliberately minimal — the tree, aliases, sort_text, capabilities and
+Deliberately minimal — the tree, aliases, sibling ordering, capabilities and
 maintenance plumbing all exist:
 
 1. Add `.vscode/test-lanes.json` to the file-watch glob (one path, one-line

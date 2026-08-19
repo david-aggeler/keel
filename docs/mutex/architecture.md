@@ -15,8 +15,8 @@ flowchart TB
     end
 
     subgraph bridge["keel/testbridge (owns ALL mutex semantics — design_decision-5)"]
-        DERIVE["deriveDesiredStateGroupRows<br/>probes → status/action/active<br/>+ Unknown State synthesis<br/>(testbridge.go:619)"]
-        DISC["deriveDesiredStateDiscovery<br/>rows → discovery items<br/>state → Limitations strings<br/>(testbridge.go:330,413)"]
+        DERIVE["deriveDesiredStateGroupRows<br/>probes → status/action/active<br/>+ Unknown State synthesis<br/>(testbridge/testbridge.go:878)"]
+        DISC["deriveDesiredStateDiscovery<br/>rows → discovery items<br/>state → typed desired-state facts<br/>(testbridge/testbridge.go:529)"]
         RESOLVE["resolveRunRequests<br/>+ ExclusiveSiblingIDs<br/>(testbridge.go:984,1099)"]
         RUNV["handleRun<br/>run.lock, desired-state selections,<br/>cleared-sibling emission<br/>(testbridge.go:735,804,854)"]
         VAL["ValidateDocument<br/>exactly-one-active invariant<br/>(validate.go:126)"]
@@ -29,7 +29,7 @@ flowchart TB
     end
 
     subgraph vsix["Keel Test Bridge VSIX (verbatim renderer)"]
-        TREE["publishDiscovery<br/>limitations → TestItem.description<br/>(tree.ts:16,171)"]
+        TREE["publishDiscovery<br/>description → TestItem.description<br/>(tree.ts:18,269)"]
         APPLY["applyRunEvent<br/>'cleared' → clearedResultIds<br/>(extension.ts:895,976)"]
         RECON["invalidateClearedResults +<br/>refreshDesiredStateAfterRun +<br/>refreshMutexStates<br/>(extension.ts:419,335,359)"]
     end
@@ -64,7 +64,7 @@ of telling a different story, none authoritative.
 | # | Surface | Producer | Where it lives | Salience to the user | Reconciled when |
 |---|---|---|---|---|---|
 | 1 | Desired-state rows (`active`, `status`, `action`) | `deriveDesiredStateGroupRows` re-executes probes | `desired-state.json` v3; Test Results output text | Low (text panel) | Every `desired-state` call |
-| 2 | Discovery metadata (`desired_state_group.mutually_exclusive`; `desired_state_row.current`/`.action`/`.active`) | `desiredStateDeclarationDiscoveryItems` (testbridge.go:436,473) | `discovery.json`, typed and schema-covered (requirement-127) | **None** — no longer rendered; `Limitations` → `TestItem.description` (tree.ts:171) carries prose only | Every refresh |
+| 2 | Discovery metadata (`desired_state_group.mutually_exclusive`; `desired_state_row.current`/`.action`/`.active`) | `desiredStateDeclarationDiscoveryItems` (testbridge/testbridge.go:625) | `discovery.json`, typed and schema-covered (requirement-127) | **None** — no longer rendered; the scalar `description` → `TestItem.description` (tree.ts:269) carries prose only | Every refresh |
 | 3 | Run-event stream (`passed` winner, `cleared` siblings) | `runDesiredStateSelections` + `emitExclusiveDesiredStateSiblingClears` (testbridge.go:804,854) | JSONL during a run | Transient | Only **during a run** |
 | 4 | VS Code result icons | `run.passed/failed` + `invalidateTestResults` + item replacement | TestController result store — **sticky, survives refresh** (issue_fix-47/CR-78) | **Highest** — the green/red badge | Only after a run (`refreshMutexStates`, CR-119). **Never at rest** — `keel/issue-86` |
 

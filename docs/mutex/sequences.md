@@ -21,12 +21,12 @@ sequenceDiagram
     U->>EXT: refresh(controller) (ext:328)
     EXT->>CHAIN: enqueue refreshNow
     CHAIN->>DEV: test-bridge tests discover
-    DEV->>P: execute EVERY probe (deriveDesiredStateDiscovery, tb:330)
+    DEV->>P: execute EVERY probe (deriveDesiredStateDiscovery, tb:529)
     P-->>DEV: satisfied? current?
-    DEV->>DEV: compute active + synthesize Unknown State (tb:619)
-    DEV-->>EXT: discovery.json (state → limitations strings)
-    EXT->>TC: publishDiscovery — in-place reconcile by id (tree.ts:16)
-    Note over TC: TestItem.description updated<br/>(low-salience text, tree.ts:171)
+    DEV->>DEV: compute active + synthesize Unknown State (tb:878)
+    DEV-->>EXT: discovery.json (state → typed desired-state facts)
+    EXT->>TC: publishDiscovery — in-place reconcile by id (tree.ts:18)
+    Note over TC: TestItem.description updated<br/>(low-salience text, tree.ts:269)
     Note over TC: ❌ Result icons NOT touched.<br/>Results survive refresh by design<br/>(issue_fix-47 / CR-78).<br/>Stale green on deactivated members<br/>persists — keel/issue-86,<br/>rca-3 root #1 unremediated.
 ```
 
