@@ -23,6 +23,8 @@ type processLogger interface {
 }
 
 // Request describes one headless claude -p invocation.
+//
+// DHF-REQ: keel/requirement-135
 type Request struct {
 	// Prompt is the user prompt (may be a slash invocation like "/hello-world").
 	Prompt string
@@ -78,7 +80,20 @@ func (u Usage) TotalInput() int {
 	return u.InputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens
 }
 
-// Result is the parsed final event of a claude -p run.
+// Event is one decoded JSON line from the claude stream-json output.
+//
+// DHF-REQ: keel/requirement-135
+type Event struct {
+	// Type is the "type" field of the event line ("" if absent).
+	Type string
+	// Raw is the verbatim line as emitted (no trailing newline).
+	Raw json.RawMessage
+}
+
+// Result is a completed claude -p run: the terminal result event's fields, the
+// child's exit code, and the full decoded event stream behind them.
+//
+// DHF-REQ: keel/requirement-135, keel/requirement-134
 type Result struct {
 	Text       string          // final result text
 	IsError    bool            // result event is_error flag
@@ -87,6 +102,12 @@ type Result struct {
 	CostUSD    float64         // total_cost_usd
 	Usage      Usage           // token accounting
 	Raw        json.RawMessage // the verbatim result event for anything not surfaced
+	// ExitCode is the child's process exit status (-1 if it never produced one).
+	ExitCode int
+	// Events is every decoded event, in arrival order.
+	Events []Event
+	// Final points at the terminal `result` event inside Events.
+	Final *Event
 }
 
 // resultEvent is the wire shape of the final JSON object emitted by
@@ -103,15 +124,20 @@ type resultEvent struct {
 
 // Run executes one claude -p call and returns the parsed result.
 //
-// A non-zero exit with parseable JSON on stdout still returns the Result
-// (with an error when is_error is false — e.g. --max-turns exhaustion), so
-// callers can inspect partial metrics. A non-zero exit with empty stdout
-// returns only an error carrying stderr. A run killed at the output ceiling
-// returns no Result and an error satisfying
+// The outcome is not decided here: Run supplies the shared contract in
+// [procexec.DecideCLIOutcome] with claude's two per-CLI facts — the child's
+// exit code and the terminal result event's is_error flag — and reports what it
+// returns. A non-zero exit OR an is_error result therefore fails the run, and
+// neither fact can mask the other.
+//
+// A failed run whose stream carried a decodable result event returns the Result
+// alongside the error, so callers can still inspect the metrics. A failure with
+// no result event on stdout returns only an error carrying stderr. A run killed
+// at the output ceiling returns no Result and an error satisfying
 // errors.Is(err, [procexec.ErrOutputLimitExceeded]), whatever the result event
 // reported.
 //
-// DHF-REQ: keel/requirement-2, openbrain/requirement-615, keel/requirement-81
+// DHF-REQ: keel/requirement-135, keel/requirement-134, keel/requirement-2, openbrain/requirement-615, keel/requirement-81
 func Run(ctx context.Context, req Request) (*Result, error) {
 	if req.Prompt == "" {
 		return nil, fmt.Errorf("keel/exec/claude: empty prompt")
@@ -164,10 +190,13 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 		Logger:         logger,
 	})
 	var runErr error
+	exitCode := -1
 	if startErr != nil {
 		runErr = startErr
 	} else {
-		_, runErr = proc.Wait()
+		var procResult procexec.Result
+		procResult, runErr = proc.Wait()
+		exitCode = procResult.ExitCode
 	}
 
 	// The output ceiling is an infrastructure verdict about the run: keel/exec
@@ -208,11 +237,43 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 		CostUSD:    ev.CostUSD,
 		Usage:      ev.Usage,
 		Raw:        json.RawMessage(append([]byte(nil), out...)),
+		ExitCode:   exitCode,
+		Events:     stdout.Events(),
 	}
-	if runErr != nil && !ev.IsError {
-		return res, fmt.Errorf("keel/exec/claude: %s exited non-zero with non-error result: %w", bin, runErr)
+	res.Final = terminalEvent(res.Events)
+
+	// The success-or-failure decision belongs to keel/exec, not here: this
+	// adapter only supplies claude's two per-CLI facts and reports the verdict.
+	// The Result travels with the error so a failed run stays inspectable.
+	//
+	// DHF-REQ: keel/requirement-134
+	if outcome := procexec.DecideCLIOutcome(exitCode, ev.IsError); outcome.Failed {
+		return res, fmt.Errorf("keel/exec/claude: %s %s — stderr: %s",
+			bin, outcome.Reason, bytes.TrimSpace(stderr.Bytes()))
+	}
+
+	// A wait error the exit code did not express (an I/O failure while reaping,
+	// say) is an infrastructure fault like the ceiling above, not the outcome
+	// contract. Reporting it keeps it from passing silently.
+	if runErr != nil {
+		return res, fmt.Errorf("keel/exec/claude: %s wait: %w — stderr: %s",
+			bin, runErr, bytes.TrimSpace(stderr.Bytes()))
 	}
 	return res, nil
+}
+
+// terminalEvent returns a pointer to the run's terminal `result` event inside
+// events, so a caller reaches the same value the Result's typed fields were
+// decoded from rather than a copy.
+//
+// DHF-REQ: keel/requirement-135
+func terminalEvent(events []Event) *Event {
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Type == "result" {
+			return &events[i]
+		}
+	}
+	return nil
 }
 
 // Version returns claude's reported version by running `<bin> --version`. An
@@ -253,6 +314,7 @@ type claudeStreamWriter struct {
 	logger    processLogger
 	buf       []byte
 	resultRaw []byte
+	events    []Event
 	err       error
 }
 
@@ -292,6 +354,13 @@ func (w *claudeStreamWriter) ResultRaw() []byte {
 	return append([]byte(nil), w.resultRaw...)
 }
 
+// Events returns every decoded event in arrival order. The whole stream is
+// retained, not the terminal event alone, so a caller can inspect what happened
+// without re-parsing stdout (keel/requirement-134).
+func (w *claudeStreamWriter) Events() []Event {
+	return append([]Event(nil), w.events...)
+}
+
 func (w *claudeStreamWriter) consumeLine(line []byte) {
 	line = bytes.TrimSpace(line)
 	if len(line) == 0 {
@@ -301,7 +370,9 @@ func (w *claudeStreamWriter) consumeLine(line []byte) {
 	if err := json.Unmarshal(line, &ev); err != nil {
 		return
 	}
-	if stringValue(ev["type"]) == "result" {
+	eventType := stringValue(ev["type"])
+	w.events = append(w.events, Event{Type: eventType, Raw: append([]byte(nil), line...)})
+	if eventType == "result" {
 		w.resultRaw = append(w.resultRaw[:0], line...)
 		return
 	}
@@ -321,7 +392,11 @@ func (w *claudeStreamWriter) consumeLine(line []byte) {
 	}
 }
 
-// DHF-REQ: keel/requirement-2
+// claudeProgressDetail curates one log-ready progress line out of a claude
+// event. Which fields it reads, and the 160-character trim below, are
+// claude-specific presentation choices no other adapter inherits.
+//
+// DHF-REQ: keel/requirement-135, keel/requirement-2
 func claudeProgressDetail(ev map[string]any) string {
 	for _, src := range []map[string]any{progressObj(ev["message"]), ev} {
 		if src == nil {
@@ -365,10 +440,16 @@ func stringValue(v any) string {
 	return s
 }
 
+// progressDetailLimit is the length at which curated claude progress detail is
+// trimmed for the log. The value is owned by keel/requirement-135 (keel/ac-532),
+// not by this file.
+const progressDetailLimit = 160
+
+// DHF-REQ: keel/requirement-135
 func trimProgressDetail(s string) string {
 	s = strings.TrimSpace(s)
-	if len(s) <= 160 {
+	if len(s) <= progressDetailLimit {
 		return s
 	}
-	return s[:160] + "..."
+	return s[:progressDetailLimit] + "..."
 }

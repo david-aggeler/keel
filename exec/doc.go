@@ -26,6 +26,17 @@
 // logged command line, and Configure is an escape hatch for adjusting the
 // underlying [os/exec.Cmd] (process group, cancel behavior) before it starts.
 //
+// # CLI-adapter outcome contract
+//
+// [DecideCLIOutcome] is the one place keel decides whether a wrapped CLI run
+// succeeded. An adapter supplies the two per-CLI facts it can observe — the
+// child's exit code and its wrapped CLI's terminal-event verdict — and gets
+// back a [CLIOutcome]. Either fact alone fails the run and neither masks the
+// other. The output ceiling outranks the decision entirely, so an adapter
+// checks [ErrOutputLimitExceeded] and returns before calling. Keeping the rule
+// here rather than in each adapter is what lets a consumer ask "did this run
+// fail?" once, whichever CLI it is talking to.
+//
 // The keel/exec/claude and keel/exec/codex adapters are both built on this
 // facility, so headless claude and codex invocations inherit the same lifecycle
 // logging and redaction for free.
