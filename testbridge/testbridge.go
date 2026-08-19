@@ -273,6 +273,64 @@ func IsDesiredStateGroupID(id string) bool {
 	return ok && isDesiredStateNode(node)
 }
 
+// LanesGroupIDSuffix and FrameworksGroupIDSuffix are the stable markers that
+// identify the C and D members of the top-level frame, matching the marker
+// discipline DesiredStateGroupIDSuffix already sets for B. A consumer names its
+// group <node>::lanes and <node>::frameworks; the bridge matches the suffix, so
+// the group's Label stays presentation and carries no protocol meaning.
+//
+// DHF-REQ: keel/requirement-137
+const (
+	LanesGroupIDSuffix      = "::lanes"
+	FrameworksGroupIDSuffix = "::frameworks"
+)
+
+// topLevelFrameOrder is keel's fixed sequence for the four top-level groups. A
+// producer owns the order of its own children; it does not own this frame, so
+// the bridge restores the sequence whatever order the groups were emitted in
+// (keel/ac-563). A root that is not a frame member ranks after all four and
+// keeps its emitted position relative to the other non-members.
+//
+// DHF-REQ: keel/requirement-137, keel/requirement-69
+var topLevelFrameOrder = []func(string) bool{
+	func(id string) bool { return id == MaintenanceGroupID },
+	IsDesiredStateGroupID,
+	func(id string) bool { return strings.HasSuffix(id, LanesGroupIDSuffix) },
+	func(id string) bool { return strings.HasSuffix(id, FrameworksGroupIDSuffix) },
+}
+
+// topLevelFrameRank ranks one root item within the fixed frame.
+func topLevelFrameRank(id string) int {
+	for rank, matches := range topLevelFrameOrder {
+		if matches(id) {
+			return rank
+		}
+	}
+	return len(topLevelFrameOrder)
+}
+
+// orderTopLevelFrame returns items with the root items resorted into the fixed
+// A, B, C, D frame and every non-root item left in its emitted position. Only
+// roots move: sibling order below a root is the producer's registration order
+// and is normative (keel/ac-547).
+//
+// DHF-REQ: keel/requirement-137
+func orderTopLevelFrame(items []vscode.TestItem) []vscode.TestItem {
+	roots := make([]vscode.TestItem, 0, len(items))
+	rest := make([]vscode.TestItem, 0, len(items))
+	for _, item := range items {
+		if item.ParentID == "" {
+			roots = append(roots, item)
+			continue
+		}
+		rest = append(rest, item)
+	}
+	sort.SliceStable(roots, func(i, j int) bool {
+		return topLevelFrameRank(roots[i].ID) < topLevelFrameRank(roots[j].ID)
+	})
+	return append(roots, rest...)
+}
+
 // ClearStateProvider supplies the only consumer-owned action behind the
 // bridge-owned Group-A vocabulary: clearing local devtool state.
 type ClearStateProvider interface {
@@ -409,7 +467,12 @@ func discoverWithDerivedDesiredState(ctx context.Context, bridge Bridge) (vscode
 	if err != nil {
 		return vscode.DiscoveryDocument{}, err
 	}
-	return deriveDesiredStateDiscovery(ctx, bridge, doc)
+	doc, err = deriveDesiredStateDiscovery(ctx, bridge, doc)
+	if err != nil {
+		return vscode.DiscoveryDocument{}, err
+	}
+	doc.Items = orderTopLevelFrame(doc.Items)
+	return doc, nil
 }
 
 // DHF-REQ: keel/requirement-87
