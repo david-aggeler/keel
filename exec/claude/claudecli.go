@@ -23,6 +23,8 @@ type processLogger interface {
 }
 
 // Request describes one headless claude -p invocation.
+//
+// DHF-REQ: keel/requirement-135
 type Request struct {
 	// Prompt is the user prompt (may be a slash invocation like "/hello-world").
 	Prompt string
@@ -390,7 +392,11 @@ func (w *claudeStreamWriter) consumeLine(line []byte) {
 	}
 }
 
-// DHF-REQ: keel/requirement-2
+// claudeProgressDetail curates one log-ready progress line out of a claude
+// event. Which fields it reads, and the 160-character trim below, are
+// claude-specific presentation choices no other adapter inherits.
+//
+// DHF-REQ: keel/requirement-135, keel/requirement-2
 func claudeProgressDetail(ev map[string]any) string {
 	for _, src := range []map[string]any{progressObj(ev["message"]), ev} {
 		if src == nil {
@@ -434,10 +440,16 @@ func stringValue(v any) string {
 	return s
 }
 
+// progressDetailLimit is the length at which curated claude progress detail is
+// trimmed for the log. The value is owned by keel/requirement-135 (keel/ac-532),
+// not by this file.
+const progressDetailLimit = 160
+
+// DHF-REQ: keel/requirement-135
 func trimProgressDetail(s string) string {
 	s = strings.TrimSpace(s)
-	if len(s) <= 160 {
+	if len(s) <= progressDetailLimit {
 		return s
 	}
-	return s[:160] + "..."
+	return s[:progressDetailLimit] + "..."
 }
