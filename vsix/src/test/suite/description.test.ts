@@ -156,7 +156,7 @@ suite('description composition', () => {
       description: 'the lane prose',
       last_run: { at: '2026-08-18T10:00:00Z', duration_ms: 9800 }
     };
-    assert.equal(composeDescription(item, { description: false, lastRun: false, desiredState: false, findings: false }), undefined);
+    assert.equal(composeDescription(item, { description: false, lastRun: false, desiredState: false, findings: false, ordinal: false }), undefined);
   });
 
   // keel/ac-555 end to end: the published tree carries the composed text, and
@@ -181,7 +181,7 @@ suite('description composition', () => {
       const published = publishDiscovery(controller, '/tmp', discovery, 0, defaultDisplayConfig());
       assert.equal(published.itemsById.get('keel::lane::a')?.description, 'the lane prose; · last 9.8s; lane-order warning: order drifted');
 
-      const withoutLastRun = publishDiscovery(controller, '/tmp', discovery, 0, { description: true, lastRun: false, desiredState: true, findings: true });
+      const withoutLastRun = publishDiscovery(controller, '/tmp', discovery, 0, { description: true, lastRun: false, desiredState: true, findings: true, ordinal: false });
       assert.equal(withoutLastRun.itemsById.get('keel::lane::a')?.description, 'the lane prose; lane-order warning: order drifted');
     } finally {
       controller.dispose();
@@ -232,7 +232,7 @@ suite('display configuration', () => {
       displayName: 'Keel',
       display: { findings: false }
     });
-    assert.deepEqual(adapterConfig(partial).display, { description: true, lastRun: true, desiredState: true, findings: false });
+    assert.deepEqual(adapterConfig(partial).display, { description: true, lastRun: true, desiredState: true, findings: false, ordinal: false });
   });
 
   // DHF-TEST: keel/requirement-139

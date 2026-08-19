@@ -12,7 +12,8 @@
       "description": true,
       "lastRun": true,
       "desiredState": true,
-      "findings": true
+      "findings": true,
+      "ordinal": false
     }
   },
   "cases": [

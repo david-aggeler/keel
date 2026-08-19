@@ -6,7 +6,7 @@ import { DiscoveryDocument, DesiredStateDocument } from './protocol';
 import { DisplayConfig, defaultDisplayConfig, parseDisplayConfig } from './description';
 
 const execFile = promisify(cp.execFile);
-export const currentConfigVersion = 4;
+export const currentConfigVersion = 5;
 // The config version from which args carry the launcher only, the protocol
 // tokens being appended by the reader. Stated separately from
 // currentConfigVersion so a later bump keeps enforcing the rule against every
@@ -55,7 +55,7 @@ export function defaultAdapterConfig(workspaceRoot: string): BridgeAdapterConfig
 
 // DHF-REQ: keel/requirement-59
 export function defaultConfigTemplate(): string {
-  return `${JSON.stringify(defaultAdapterConfig(''), ['version', 'command', 'args', 'displayName', 'env', 'display', 'description', 'lastRun', 'desiredState', 'findings'], 2)}\n`;
+  return `${JSON.stringify(defaultAdapterConfig(''), ['version', 'command', 'args', 'displayName', 'env', 'display', 'description', 'lastRun', 'desiredState', 'findings', 'ordinal'], 2)}\n`;
 }
 
 // DHF-REQ: keel/requirement-40

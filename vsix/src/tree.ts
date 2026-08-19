@@ -31,11 +31,13 @@ export function publishDiscovery(
   const parentByItemId = new Map<string, vscode.TestItem>();
   const pending = topologicalOrder(discovery.items);
   const emissionIndex = deriveEmissionIndex(discovery.items);
+  const ordinals = display.ordinal ? deriveOrdinalPrefixes(discovery.items, emissionIndex) : new Map<string, string>();
 
   for (const item of pending) {
     const index = emissionIndex.get(item.id) ?? 0;
-    const testItem = existing.itemsById.get(item.id) ?? toTestItem(controller, workspaceRoot, item, display, index);
-    updateTestItem(testItem, item, display, index);
+    const ordinal = ordinals.get(item.id) ?? '';
+    const testItem = existing.itemsById.get(item.id) ?? toTestItem(controller, workspaceRoot, item, display, index, ordinal);
+    updateTestItem(testItem, item, display, index, ordinal);
     itemsById.set(item.id, testItem);
     discoveryItemsById.set(item.id, item);
     protocolIdByItemId.set(testItem.id, item.id);
@@ -165,12 +167,58 @@ function toTestItem(
   workspaceRoot: string,
   item: DiscoveryItem,
   display: DisplayConfig,
-  emissionIndex: number
+  emissionIndex: number,
+  ordinalPrefix: string
 ): vscode.TestItem {
   const uri = item.uri ? vscode.Uri.file(path.join(workspaceRoot, item.uri)) : undefined;
   const testItem = controller.createTestItem(item.id, item.label, uri);
-  updateTestItem(testItem, item, display, emissionIndex);
+  updateTestItem(testItem, item, display, emissionIndex, ordinalPrefix);
   return testItem;
+}
+
+/**
+ * Maps every item to the ordinal prefix its label renders with when the
+ * `ordinal` display toggle is on. The prefix is derived twice over from the
+ * emission sequence and read from no wire field: the letter is the item's
+ * top-level ancestor's position in the frame, upper-cased, and the number is
+ * the item's one-based index within its own parent. Renumbering therefore costs
+ * a producer nothing and no producer can disagree about it (keel/ac-562).
+ *
+ * A root carries no prefix — its label already names its frame position — and
+ * a frame deeper than the alphabet falls back to the number alone rather than
+ * inventing a letter.
+ *
+ * DHF-REQ: keel/requirement-137
+ */
+export function deriveOrdinalPrefixes(
+  items: readonly DiscoveryItem[],
+  emissionIndex: ReadonlyMap<string, number>
+): Map<string, string> {
+  const known = new Map(items.map((item) => [item.id, item]));
+  const rootOf = (item: DiscoveryItem): DiscoveryItem => {
+    let current = item;
+    // The walk is bounded by the item count: a parent chain that revisits an id
+    // would be a cycle, and stopping on a repeat keeps the render finite.
+    const seen = new Set<string>();
+    while (current.parent_id && known.has(current.parent_id) && !seen.has(current.id)) {
+      seen.add(current.id);
+      current = known.get(current.parent_id) as DiscoveryItem;
+    }
+    return current;
+  };
+  const prefixes = new Map<string, string>();
+  for (const item of items) {
+    const root = rootOf(item);
+    if (root.id === item.id) {
+      prefixes.set(item.id, '');
+      continue;
+    }
+    const rootIndex = emissionIndex.get(root.id) ?? 0;
+    const number = (emissionIndex.get(item.id) ?? 0) + 1;
+    const letter = rootIndex < 26 ? String.fromCharCode('A'.charCodeAt(0) + rootIndex) + '.' : '';
+    prefixes.set(item.id, `${letter}${number} `);
+  }
+  return prefixes;
 }
 
 /**
@@ -209,9 +257,10 @@ function updateTestItem(
   testItem: vscode.TestItem,
   item: DiscoveryItem,
   display: DisplayConfig,
-  emissionIndex: number
+  emissionIndex: number,
+  ordinalPrefix: string
 ): void {
-  testItem.label = item.label;
+  testItem.label = ordinalPrefix + item.label;
   testItem.sortText = String(emissionIndex);
   testItem.canResolveChildren = false;
   testItem.description = composeDescription(item, display);

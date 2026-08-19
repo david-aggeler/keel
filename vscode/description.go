@@ -25,6 +25,15 @@ const (
 	DisplayClassLastRun      DisplayClass = "lastRun"
 	DisplayClassDesiredState DisplayClass = "desiredState"
 	DisplayClassFindings     DisplayClass = "findings"
+	// DisplayClassOrdinal is a display toggle rather than a description
+	// segment: it governs the ordinal prefix the consumer renders onto a
+	// label, derived at render time from the item's emission index. It is
+	// therefore absent from DisplayClassOrder, and it is the one toggle whose
+	// default is off — the shipped tree loses a prefix it used to show, and
+	// that change is deliberate (keel/ac-562).
+	//
+	// DHF-REQ: keel/requirement-137
+	DisplayClassOrdinal DisplayClass = "ordinal"
 )
 
 // DisplayClassOrder is the fixed sequence the classes render in. It is the
@@ -50,6 +59,11 @@ type DisplayConfig struct {
 	LastRun      bool `json:"lastRun"`
 	DesiredState bool `json:"desiredState"`
 	Findings     bool `json:"findings"`
+	// Ordinal governs the label prefix, not a description segment, and it is
+	// the one toggle that defaults off.
+	//
+	// DHF-REQ: keel/requirement-137
+	Ordinal bool `json:"ordinal"`
 }
 
 // UnmarshalJSON decodes a display block strictly: an unknown key is refused by
@@ -67,7 +81,7 @@ func (c *DisplayConfig) UnmarshalJSON(data []byte) error {
 	for key, value := range raw {
 		target := decoded.field(DisplayClass(key))
 		if target == nil {
-			return fmt.Errorf("keel/vscode: unknown display class %q in test bridge config; known classes are %s", key, strings.Join(displayClassNames(), ", "))
+			return fmt.Errorf("keel/vscode: unknown display class %q in test bridge config; known classes are %s", key, strings.Join(displayToggleNames(), ", "))
 		}
 		if err := json.Unmarshal(value, target); err != nil {
 			return fmt.Errorf("keel/vscode: display class %q must be a boolean: %w", key, err)
@@ -89,22 +103,31 @@ func (c *DisplayConfig) field(class DisplayClass) *bool {
 		return &c.DesiredState
 	case DisplayClassFindings:
 		return &c.Findings
+	case DisplayClassOrdinal:
+		return &c.Ordinal
 	default:
 		return nil
 	}
 }
 
-func displayClassNames() []string {
-	names := make([]string, 0, len(DisplayClassOrder))
+// displayToggleNames is every toggle the display block accepts — the rendered
+// description classes plus the label ordinal. It is stated over the same
+// switch the decoder writes through, so a toggle cannot be accepted by one and
+// unnamed by the other.
+func displayToggleNames() []string {
+	names := make([]string, 0, len(DisplayClassOrder)+1)
 	for _, class := range DisplayClassOrder {
 		names = append(names, string(class))
 	}
-	return names
+	return append(names, string(DisplayClassOrdinal))
 }
 
-// DefaultDisplayConfig enables every fact class.
+// DefaultDisplayConfig enables every fact class and leaves the label ordinal
+// off. The asymmetry is deliberate: an absent description class must not hide
+// text a workspace already saw, while the ordinal prefix is the visible change
+// keel/requirement-137 makes and a workspace opts back into it.
 //
-// DHF-REQ: keel/requirement-139
+// DHF-REQ: keel/requirement-139, keel/requirement-137
 func DefaultDisplayConfig() DisplayConfig {
 	return DisplayConfig{Description: true, LastRun: true, DesiredState: true, Findings: true}
 }
@@ -122,6 +145,8 @@ func (c DisplayConfig) Enabled(class DisplayClass) bool {
 		return c.DesiredState
 	case DisplayClassFindings:
 		return c.Findings
+	case DisplayClassOrdinal:
+		return c.Ordinal
 	default:
 		return false
 	}

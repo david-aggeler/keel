@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -468,7 +469,7 @@ func TestVSCodeConfigHandlersInitAndUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read upgraded config: %v", err)
 	}
-	if !strings.Contains(string(body), `"command": "bin/custom"`) || !strings.Contains(string(body), `"version": 4`) || !strings.Contains(string(body), `"args": []`) {
+	if !strings.Contains(string(body), `"command": "bin/custom"`) || !strings.Contains(string(body), `"version": `+strconv.Itoa(vscode.CurrentConfigVersion)) || !strings.Contains(string(body), `"args": []`) {
 		t.Fatalf("upgraded config did not preserve command and stamp current version:\n%s", body)
 	}
 }
