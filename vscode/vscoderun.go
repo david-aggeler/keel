@@ -112,7 +112,6 @@ type TestItem struct {
 	ID                string   `json:"id"`
 	ParentID          string   `json:"parent_id,omitempty"`
 	Label             string   `json:"label"`
-	SortText          string   `json:"sort_text,omitempty"`
 	Kind              string   `json:"kind"`
 	Framework         string   `json:"framework,omitempty"`
 	Runner            string   `json:"runner,omitempty"`

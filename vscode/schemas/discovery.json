@@ -104,10 +104,6 @@
           "type": "string",
           "minLength": 1
         },
-        "sort_text": {
-          "type": "string",
-          "minLength": 1
-        },
         "kind": {
           "type": "string",
           "enum": ["root", "lane", "package", "file", "suite", "test", "project", "group", "maintenance"]

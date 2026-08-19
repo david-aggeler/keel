@@ -34,7 +34,6 @@ export interface DiscoveryItem {
   id: string;
   parent_id?: string;
   label: string;
-  sort_text?: string;
   kind: 'root' | 'lane' | 'package' | 'file' | 'suite' | 'test' | 'project' | 'group' | 'maintenance';
   framework?: string;
   runner?: string;
