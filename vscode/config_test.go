@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -182,7 +183,7 @@ func TestInitTestBridgeConfigPreservesExistingConfigAndReportsNoChange(t *testin
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	existing := []byte(`{"version":4,"command":"bin/custom","args":[],"displayName":"Custom"}` + "\n")
+	existing := []byte(`{"version":` + strconv.Itoa(CurrentConfigVersion) + `,"command":"bin/custom","args":[],"displayName":"Custom"}` + "\n")
 	if err := os.WriteFile(path, existing, 0o644); err != nil {
 		t.Fatal(err)
 	}

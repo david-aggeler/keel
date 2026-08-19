@@ -112,7 +112,6 @@ type TestItem struct {
 	ID                string   `json:"id"`
 	ParentID          string   `json:"parent_id,omitempty"`
 	Label             string   `json:"label"`
-	SortText          string   `json:"sort_text,omitempty"`
 	Kind              string   `json:"kind"`
 	Framework         string   `json:"framework,omitempty"`
 	Runner            string   `json:"runner,omitempty"`
@@ -125,10 +124,6 @@ type TestItem struct {
 	PlaywrightProject string   `json:"playwright_project,omitempty"`
 	CanonicalID       string   `json:"canonical_id,omitempty"`
 	RequiredResources []string `json:"required_resources,omitempty"`
-	// Limitations carries human-readable prose only — lane descriptions,
-	// remediation hints, lint findings, error text. A consumer may render any
-	// element of it verbatim. Machine-readable facts belong in typed fields.
-	Limitations []string `json:"limitations,omitempty"`
 	// Description is the producer's own human-readable prose for this item —
 	// one string, not a composed line. Sequencing prose against anything else
 	// belongs to the consumer, so the producer never joins.
@@ -147,6 +142,30 @@ type TestItem struct {
 	LastRun           *LastRunFacts           `json:"last_run,omitempty"`
 	DesiredStateGroup *DesiredStateGroupFacts `json:"desired_state_group,omitempty"`
 	DesiredStateRow   *DesiredStateRowFacts   `json:"desired_state_row,omitempty"`
+}
+
+// UnmarshalJSON refuses a discovery item that still carries the removed
+// `limitations` array, so a producer that has not migrated to the scalar
+// `description` channel fails loudly instead of having its prose silently
+// dropped. It mirrors the refusal DesiredStateDocument already applies to the
+// fields its v3 shape removed.
+//
+// DHF-REQ: keel/requirement-138
+func (t *TestItem) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["limitations"]; ok {
+		return fmt.Errorf("keel/vscode: removed field %q on discovery item; the prose channel is the scalar %q", "limitations", "description")
+	}
+	type testItem TestItem
+	var decoded testItem
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*t = TestItem(decoded)
+	return nil
 }
 
 // Finding is one typed validation finding a producer raises against a discovery

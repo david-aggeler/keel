@@ -466,6 +466,35 @@ suite('Keel Test Bridge config contract', () => {
     assert.ok(protocolCalls.every((call) => !new RegExp(`\\b${retiredVerb}\\b`).test(call)));
   });
 
+  // The headless twin of the real-binary assertion in red-spec.test.ts: the
+  // packaged end-to-end fixture is an in-repo producer too, so it is held to
+  // the same wire shape and cannot drift back to the retired one.
+  // DHF-TEST: keel/requirement-137
+  // Verifies: keel/ac-545, keel/ac-546
+  test('req-137 the packaged fixture producer emits ordinal-free labels and no sort_text', async function () {
+    this.timeout(10_000);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-fixture-wire-shape-'));
+    fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+    fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
+      version: currentConfigVersion,
+      command: process.execPath,
+      args: [path.resolve(__dirname, '../../../src/test/fixtures/fake-adapter.js')],
+      displayName: 'Keel'
+    }, null, 2) + '\n');
+
+    try {
+      const discovery = await discoverTests(root);
+      assert.ok(discovery.items.length > 0, 'the fixture should emit a non-empty document');
+      for (const item of discovery.items as unknown as Record<string, unknown>[]) {
+        const label = String(item.label);
+        assert.doesNotMatch(label, /^[a-z]\.[0-9]+ /i, `label ${label} carries an ordinal prefix`);
+        assert.ok(!('sort_text' in item), `item ${String(item.id)} still carries the retired sort_text member`);
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   // DHF-TEST: keel/requirement-60
   test('desired-state output renders groups, active rows, resources, and teardown split', () => {
     const lines = desiredStateDocumentOutputLines({
@@ -1368,13 +1397,12 @@ process.exit(2);
           id: 'tree::child',
           parent_id: 'tree::root',
           label: 'child',
-          sort_text: 'b',
           kind: 'test',
           uri: 'child.test.ts',
           range: { start_line: 1, start_column: 2, end_line: 3, end_column: 4 },
           runnable: true,
           profiles: ['run'],
-          limitations: ['slow']
+          description: 'slow'
         },
         { id: 'tree::alias', parent_id: 'tree::root', label: 'alias', kind: 'test', canonical_id: 'tree::child', runnable: true, profiles: ['run'] }
       ]
@@ -1384,7 +1412,9 @@ process.exit(2);
       const replacedChild = replacePublishedTestItem(controller, tree, 'tree::child');
       assert.ok(replacedChild);
       assert.equal(replacedChild.label, 'child');
-      assert.equal(replacedChild.sortText, 'b');
+      // The replacement carries the derived key forward: 'child' is the first
+      // child its parent emitted (keel/ac-546).
+      assert.equal(replacedChild.sortText, '0');
       assert.equal(replacedChild.description, 'slow');
       assert.equal(replacedChild.range?.start.line, 1);
       assert.equal(tree.parentByItemId.get('tree::child')?.id, 'tree::root');
@@ -1410,7 +1440,7 @@ process.exit(2);
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-go-package-settle-'));
     const items: DiscoveryItem[] = [
       { id: 'keel::frameworks', label: 'D - Frameworks', kind: 'group', runnable: false, profiles: [] },
-      { id: 'go::root', parent_id: 'keel::frameworks', label: 'd.1 Go', kind: 'root', framework: 'go', runner: 'go-test', runnable: true, profiles: ['run'] },
+      { id: 'go::root', parent_id: 'keel::frameworks', label: 'Go', kind: 'root', framework: 'go', runner: 'go-test', runnable: true, profiles: ['run'] },
       { id: 'go::pkg::log', parent_id: 'go::root', label: 'log', kind: 'package', framework: 'go', runner: 'go-test', runnable: true, profiles: ['run'] },
       { id: 'go::pkg::vscode', parent_id: 'go::root', label: 'vscode', kind: 'package', framework: 'go', runner: 'go-test', runnable: true, profiles: ['run'] }
     ];

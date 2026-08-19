@@ -19,7 +19,6 @@ import (
 	"regexp"
 	"runtime/debug"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -59,11 +58,11 @@ const (
 var vscodeLaneIDs = []string{vscodeLaneLint, vscodeLaneTestFast, vscodeLaneTestCoverage, vscodeLaneVSIXGate, vscodeLaneCI}
 
 var vscodeGateLaneDefs = []testFileLane{
-	{ID: "lint", Label: "lint", Order: "c.1", Description: "Run keel-dev lint checks.", Members: []laneMember{{Root: "go"}}},
-	{ID: "test-fast", Label: "test-fast", Order: "c.2", Description: "Run the fast Go test lane.", Members: []laneMember{{Root: "go"}}},
-	{ID: "test-coverage", Label: "test-coverage", Order: "c.3", Description: "Run the coverage test lane.", Members: []laneMember{{Root: "go"}}},
-	{ID: "vsix-ci", Label: "vsix ci", Order: "c.10", Description: "Run the VSIX gate.", Members: []laneMember{{Root: "vsix"}}},
-	{ID: "ci", Label: "ci", Order: "c.30", Description: "Run the full keel-dev CI gate.", Members: []laneMember{{Lane: "lint"}, {Lane: "test-coverage"}}},
+	{ID: "lint", Label: "lint", Description: "Run keel-dev lint checks.", Members: []laneMember{{Root: "go"}}},
+	{ID: "test-fast", Label: "test-fast", Description: "Run the fast Go test lane.", Members: []laneMember{{Root: "go"}}},
+	{ID: "test-coverage", Label: "test-coverage", Description: "Run the coverage test lane.", Members: []laneMember{{Root: "go"}}},
+	{ID: "vsix-ci", Label: "vsix ci", Description: "Run the VSIX gate.", Members: []laneMember{{Root: "vsix"}}},
+	{ID: "ci", Label: "ci", Description: "Run the full keel-dev CI gate.", Members: []laneMember{{Lane: "lint"}, {Lane: "test-coverage"}}},
 }
 
 var vsixCIToolResources = []string{"pnpm", "node", "xvfb-run"}
@@ -76,7 +75,6 @@ type testLanesFile struct {
 type testFileLane struct {
 	ID            string       `json:"id"`
 	Label         string       `json:"label"`
-	Order         string       `json:"order"`
 	Description   string       `json:"description"`
 	Members       []laneMember `json:"members"`
 	Prerequisites []string     `json:"prerequisites"`
@@ -134,9 +132,14 @@ type effectiveLane struct {
 }
 
 type lanesState struct {
-	root         string
-	path         string
-	file         testLanesFile
+	root string
+	path string
+	file testLanesFile
+	// order is the lane ids in the file's own sequence. The file's sequence is
+	// the lane ordering fact — there is no ordinal to sort by and nothing
+	// derives one, so a reader that needs lanes in order walks this slice
+	// rather than sorting a map (keel/ac-548).
+	order        []string
 	byID         map[string]testFileLane
 	effective    map[string]effectiveLane
 	diagnostics  []vscode.TestItem
@@ -154,7 +157,6 @@ type laneListRecord struct {
 	ID            string                `json:"id"`
 	Source        string                `json:"source"`
 	Label         string                `json:"label"`
-	Order         string                `json:"order"`
 	Description   string                `json:"description,omitempty"`
 	Members       []laneMemberListEntry `json:"members"`
 	Expanded      laneExpandedMembers   `json:"expanded"`
@@ -282,7 +284,7 @@ func (keelTestBridge) Lanes(ctx context.Context) ([]vscode.TestItem, error) {
 	generated := generatedLanesFile(root, families)
 	items := make([]vscode.TestItem, 0, len(generated.Lanes))
 	for _, lane := range generated.Lanes {
-		items = append(items, laneItem("keel::lane::"+lane.ID, lane.Order+" "+lane.Label, lane.Order))
+		items = append(items, laneItem("keel::lane::"+lane.ID, lane.Label))
 	}
 	return items, nil
 }
@@ -305,7 +307,6 @@ func (keelTestBridge) LaneFile(ctx context.Context) (testbridge.LaneFile, error)
 		file.Lanes = append(file.Lanes, testbridge.LaneFileLane{
 			ID:            lane.ID,
 			Label:         lane.Label,
-			Order:         lane.Order,
 			Description:   lane.Description,
 			Members:       laneMembersForBridge(lane.Members),
 			Prerequisites: append([]string(nil), lane.Prerequisites...),
@@ -332,9 +333,9 @@ func (keelTestBridge) Metadata() vscode.DevtoolMetadata {
 // DHF-REQ: keel/requirement-39, keel/requirement-43, keel/requirement-46, keel/requirement-48, keel/requirement-51, keel/requirement-65, keel/requirement-69
 func buildVSCodeDiscovery(root string) (vscode.DiscoveryDocument, error) {
 	items := []vscode.TestItem{
-		groupItem(vscodeGroupDesiredState, "", vscodeGroupDesiredStateLabel, "b"),
-		groupItem(vscodeGroupLanes, "", "C - Lanes", "c"),
-		groupItem(vscodeGroupFrameworks, "", "D - Frameworks", "d"),
+		groupItem(vscodeGroupDesiredState, "", vscodeGroupDesiredStateLabel),
+		groupItem(vscodeGroupLanes, "", "C - Lanes"),
+		groupItem(vscodeGroupFrameworks, "", "D - Frameworks"),
 	}
 	goItems, err := discoverGoTestItems(context.Background(), root)
 	if err != nil {
@@ -365,12 +366,11 @@ func buildVSCodeDiscovery(root string) (vscode.DiscoveryDocument, error) {
 	}, nil
 }
 
-func groupItem(id, parentID, label, sortText string) vscode.TestItem {
+func groupItem(id, parentID, label string) vscode.TestItem {
 	return vscode.TestItem{
 		ID:       id,
 		ParentID: parentID,
 		Label:    label,
-		SortText: sortText,
 		Kind:     "group",
 		Runnable: false,
 		Profiles: []string{},
@@ -462,24 +462,12 @@ func writeVSCodeLanesList(root string, out io.Writer) error {
 		Workspace:   workspaceNode(root),
 		GeneratedAt: time.Now().UTC(),
 	}
-	ids := make([]string, 0, len(lanes.effective))
-	for id := range lanes.effective {
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool {
-		a, b := lanes.effective[ids[i]], lanes.effective[ids[j]]
-		if a.lane.Order == b.lane.Order {
-			return a.lane.ID < b.lane.ID
-		}
-		return ordinalSortText(a.lane.Order) < ordinalSortText(b.lane.Order)
-	})
-	for _, id := range ids {
+	for _, id := range lanes.orderedIDs() {
 		eff := lanes.effective[id]
 		doc.Lanes = append(doc.Lanes, laneListRecord{
 			ID:          eff.id,
 			Source:      "file",
 			Label:       eff.lane.Label,
-			Order:       eff.lane.Order,
 			Description: eff.lane.Description,
 			Members:     laneMembersForList(eff.lane.Members),
 			Expanded: laneExpandedMembers{
@@ -499,16 +487,12 @@ func writeVSCodeLanesList(root string, out io.Writer) error {
 func generatedLanesFile(root string, families map[string]bool) testLanesFile {
 	updated := testLanesFile{Version: 1}
 	updated.Lanes = append(updated.Lanes, vscodeGateLaneDefs...)
-	nextSlot := 40
 	for _, family := range sortedKeys(families) {
 		id := detectedFamilyLaneID(family)
-		order := fmt.Sprintf("c.%d", nextSlot)
-		nextSlot++
 		member := detectedFamilyLaneMember(family)
 		updated.Lanes = append(updated.Lanes, testFileLane{
 			ID:          id,
 			Label:       detectedFamilyLaneLabel(family),
-			Order:       order,
 			Description: fmt.Sprintf("detected category - %d packages", familyPackageCount(root, family)),
 			Members:     []laneMember{member},
 		})
@@ -516,7 +500,7 @@ func generatedLanesFile(root string, families map[string]bool) testLanesFile {
 	return updated
 }
 
-func laneItem(id, label, sortText string) vscode.TestItem {
+func laneItem(id, label string) vscode.TestItem {
 	profiles := []string{"run"}
 	if id == vscodeLaneTestCoverage {
 		profiles = []string{"coverage"}
@@ -525,7 +509,6 @@ func laneItem(id, label, sortText string) vscode.TestItem {
 		ID:                id,
 		ParentID:          vscodeGroupLanes,
 		Label:             label,
-		SortText:          sortText,
 		Kind:              "lane",
 		Framework:         "go",
 		Runner:            "keel-dev",
@@ -586,9 +569,10 @@ func loadLanesState(root string) (lanesState, error) {
 			continue
 		}
 		seen[lane.ID] = true
+		state.order = append(state.order, lane.ID)
 		state.byID[lane.ID] = lane
 	}
-	for id := range state.byID {
+	for _, id := range state.order {
 		if _, err := state.expand(id, nil, 0); err != nil {
 			// Cycles and over-depth invalidate the discovery view of the file:
 			// record one file-level diagnostic. Detect-lanes can still replace
@@ -614,6 +598,21 @@ var (
 	errLaneDepth = errors.New("lane composition depth > 8")
 )
 
+// orderedIDs returns the ids of every lane that expanded, in the lane file's
+// own sequence. The sequence is the ordering fact: nothing derives an ordinal
+// from it and nothing parses one back out of a display field (keel/ac-548).
+//
+// DHF-REQ: keel/requirement-137
+func (s lanesState) orderedIDs() []string {
+	ids := make([]string, 0, len(s.effective))
+	for _, id := range s.order {
+		if _, ok := s.effective[id]; ok {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 func (s *lanesState) expand(id string, stack []string, depth int) (effectiveLane, error) {
 	if got, ok := s.effective[id]; ok {
 		return got, nil
@@ -632,10 +631,22 @@ func (s *lanesState) expand(id string, stack []string, depth int) (effectiveLane
 			return effectiveLane{}, fmt.Errorf("%w: %s", errLaneCycle, strings.Join(path, " -> "))
 		}
 	}
-	if lane.Label == "" || lane.Order == "" || len(lane.Members) == 0 {
-		return effectiveLane{}, fmt.Errorf("lane %q missing required label, order, or members", id)
+	if lane.Label == "" || len(lane.Members) == 0 {
+		return effectiveLane{}, fmt.Errorf("lane %q missing required label or members", id)
 	}
 	eff := effectiveLane{lane: lane, id: "keel::lane::" + id}
+	// A lanes file authored before the ordinal was retired may still carry the
+	// prefix inside its own label. Emitting it would put the ordering fact back
+	// on the label, which is the carrier keel/ac-545 closes, so the prefix is
+	// dropped here and the drop is reported rather than made silently.
+	if trimmed, found := trimLaneLabelOrdinal(lane.Label); found {
+		eff.lane.Label = trimmed
+		eff.findings = append(eff.findings, laneFinding{
+			Rule:     "V5",
+			Severity: "warning",
+			Message:  "lane label carried an ordinal prefix and it was dropped: sibling order is the lane file's own sequence (" + lane.Label + ")",
+		})
+	}
 	prereq := map[string]bool{}
 	for _, resource := range lane.Prerequisites {
 		prereq[resource] = true
@@ -737,54 +748,52 @@ func (s *lanesState) expand(id string, stack []string, depth int) (effectiveLane
 	return eff, nil
 }
 
+// laneLabelOrdinal is the ordinal grammar a lane label must not carry: a
+// letter, a dot, digits, and a space. It is matched case-insensitively because
+// the fact was authored lower-case and rendered upper-case, which is the drift
+// keel/requirement-137 retires.
+var laneLabelOrdinal = regexp.MustCompile(`(?i)^[a-z]\.[0-9]+ +`)
+
+// trimLaneLabelOrdinal removes a leading ordinal from an authored lane label
+// and reports whether one was there. An all-ordinal label keeps its text, so
+// trimming can never leave a lane with no label at all.
+//
+// DHF-REQ: keel/requirement-137
+func trimLaneLabelOrdinal(label string) (string, bool) {
+	match := laneLabelOrdinal.FindString(label)
+	if match == "" {
+		return label, false
+	}
+	trimmed := strings.TrimSpace(label[len(match):])
+	if trimmed == "" {
+		return label, false
+	}
+	return trimmed, true
+}
+
 func (s lanesState) discoveryItems() []vscode.TestItem {
 	items := append([]vscode.TestItem{}, s.diagnostics...)
 	if s.wholeFileErr != nil {
 		return items
 	}
-	ids := make([]string, 0, len(s.effective))
-	for id := range s.effective {
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool {
-		a, b := s.effective[ids[i]], s.effective[ids[j]]
-		if a.lane.Order == b.lane.Order {
-			return a.lane.ID < b.lane.ID
-		}
-		return ordinalSortText(a.lane.Order) < ordinalSortText(b.lane.Order)
-	})
-	for _, id := range ids {
+	for _, id := range s.orderedIDs() {
 		eff := s.effective[id]
-		item := laneItem(eff.id, eff.lane.Order+" "+eff.lane.Label, ordinalSortText(eff.lane.Order))
+		item := laneItem(eff.id, eff.lane.Label)
 		item.RequiredResources = eff.prerequisites
-		// The producer's own prose travels scalar; limitations keeps its copy
-		// until the consumer no longer needs the fallback (keel/ac-549).
+		// The producer's own prose travels scalar and alone: the consumer
+		// composes the rendered line from the typed facts (keel/ac-549).
 		// DHF-REQ: keel/requirement-138
 		item.Description = eff.lane.Description
-		if eff.lane.Description != "" {
-			item.Limitations = append(item.Limitations, eff.lane.Description)
-		}
-		// The typed measurement and the prose hint are written from one
-		// attribution, so the tree cannot move while the fact starts
-		// traveling typed (keel/ac-550, keel/ac-564).
+		// The measurement travels typed, never as formatted text, and stays
+		// absent when no run is attributable (keel/ac-550, keel/ac-564).
 		// DHF-REQ: keel/requirement-138
 		lastRun := vscode.LatestLaneRun(s.root, eff.id)
 		item.LastRun = lastRun.Facts()
-		// The text is composed by the exported renderer, never here: keel-dev
-		// contributes facts and prose, never a format (keel/ac-565).
-		// DHF-REQ: keel/requirement-139
-		if hint := vscode.FormatLastRun(item.LastRun); hint != "" {
-			item.Limitations = append(item.Limitations, hint)
-		}
-		// Each finding travels as its own rule/severity/message triple; the
-		// concatenated line stays in limitations only until the consumer
-		// stops reading it (keel/ac-551).
+		// Each finding travels as its own rule/severity/message triple
+		// (keel/ac-551).
 		// DHF-REQ: keel/requirement-138
-		// DHF-REQ: keel/requirement-139
 		for _, finding := range eff.findings {
-			typed := vscode.Finding{Rule: finding.Rule, Severity: finding.Severity, Message: finding.Message}
-			item.Findings = append(item.Findings, typed)
-			item.Limitations = append(item.Limitations, vscode.FormatFinding(typed))
+			item.Findings = append(item.Findings, vscode.Finding{Rule: finding.Rule, Severity: finding.Severity, Message: finding.Message})
 		}
 		items = append(items, item)
 		items = append(items, s.coverItems(eff)...)
@@ -899,7 +908,6 @@ func lanesDiagnosticItem(id, message string) vscode.TestItem {
 		Profiles: []string{},
 		// DHF-REQ: keel/requirement-138
 		Description: message,
-		Limitations: []string{message},
 	}
 }
 
@@ -1094,19 +1102,6 @@ func StableIDSegment(value string) string {
 	return out
 }
 
-func ordinalSortText(labelPrefix string) string {
-	parts := strings.Split(labelPrefix, ".")
-	for i := 1; i < len(parts); i++ {
-		if parts[i] == "" {
-			continue
-		}
-		if n, err := strconv.Atoi(parts[i]); err == nil {
-			parts[i] = fmt.Sprintf("%03d", n)
-		}
-	}
-	return strings.Join(parts, ".")
-}
-
 type discoveredGoPackage struct {
 	rel   string
 	files []discoveredGoFile
@@ -1136,8 +1131,7 @@ func discoverGoTestItems(_ context.Context, root string) ([]vscode.TestItem, err
 	items := []vscode.TestItem{{
 		ID:                "go::root",
 		ParentID:          vscodeGroupFrameworks,
-		Label:             "d.1 Go",
-		SortText:          ordinalSortText("d.1"),
+		Label:             "Go",
 		Kind:              "root",
 		Framework:         "go",
 		Runner:            "go-test",
@@ -1179,18 +1173,15 @@ func discoverGoTestItems(_ context.Context, root string) ([]vscode.TestItem, err
 				item.Profiles = []string{}
 				// DHF-REQ: keel/requirement-138
 				item.Description = file.parseErr.Error()
-				item.Limitations = []string{file.parseErr.Error()}
 			}
 			items = append(items, item)
 			for _, test := range file.tests {
 				testName := test.name
 				rng := test.rng
-				sortText := fmt.Sprintf("%06d", test.order)
 				items = append(items, vscode.TestItem{
 					ID:                "go::test::" + filepath.ToSlash(pkg.rel) + "::" + testName,
 					ParentID:          fileID,
 					Label:             testName,
-					SortText:          sortText,
 					Kind:              "test",
 					Framework:         "go",
 					Runner:            "go-test",
@@ -1292,8 +1283,7 @@ func discoverVSIXTestItems(root string) ([]vscode.TestItem, error) {
 	items := []vscode.TestItem{{
 		ID:                "vsix::root",
 		ParentID:          vscodeGroupFrameworks,
-		Label:             "d.2 Mocha (vsix)",
-		SortText:          ordinalSortText("d.2"),
+		Label:             "Mocha (vsix)",
 		Kind:              "root",
 		Framework:         "vsix",
 		Runner:            "mocha",
@@ -1731,7 +1721,7 @@ func runVSCodeFileLane(ctx context.Context, logger *slog.Logger, root, laneID, r
 	if !ok {
 		for _, item := range lanes.diagnostics {
 			if strings.Contains(item.ID, StableIDSegment(shortID)) {
-				return fmt.Errorf("vscode lane %s invalid: %s", laneID, strings.Join(item.Limitations, "; "))
+				return fmt.Errorf("vscode lane %s invalid: %s", laneID, item.Description)
 			}
 		}
 		return cli.NewUsageError("unknown vscode lane id %q", laneID)

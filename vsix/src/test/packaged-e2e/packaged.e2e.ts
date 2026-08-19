@@ -7,7 +7,7 @@ import * as vscode from 'vscode';
 interface PublishedTreeSnapshot {
   discoveryItemsById: Map<
     string,
-    { id: string; parent_id?: string; limitations?: string[]; desired_state_row?: { active: boolean } }
+    { id: string; parent_id?: string; description?: string; desired_state_row?: { active: boolean } }
   >;
 }
 

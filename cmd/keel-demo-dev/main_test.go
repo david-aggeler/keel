@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -144,9 +145,10 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	assertItem(t, discovery.Items, "go::test::passing::TestReferencePass", "test", true)
 	assertItem(t, discovery.Items, "go::test::failing::TestReferenceFailure", "test", true)
 	assertItem(t, discovery.Items, "keel-demo-dev::desired-state::group::test-preconditions", "group", true)
+	assertNoOrdinalLabels(t, discovery.Items)
 	dataSetGroup := assertItem(t, discovery.Items, "keel-demo-dev::desired-state::group::app-db-data-set", "group", false)
-	if dataSetGroup.SortText != "b.020" || dataSetGroup.DesiredStateGroup == nil || !dataSetGroup.DesiredStateGroup.MutuallyExclusive {
-		t.Fatalf("data-set discovery group = %+v, want order and exclusivity surfaced", dataSetGroup)
+	if dataSetGroup.DesiredStateGroup == nil || !dataSetGroup.DesiredStateGroup.MutuallyExclusive {
+		t.Fatalf("data-set discovery group = %+v, want exclusivity surfaced", dataSetGroup)
 	}
 	for _, id := range []string{"keel-demo-dev::desired-state::docker-env", "keel-demo-dev::desired-state::dataset::small"} {
 		item := assertItem(t, discovery.Items, id, "group", true)
@@ -988,12 +990,20 @@ func assertDemoLanesFile(t *testing.T, root string) {
 		`"id": "go-fail"`,
 		`"id": "fake-smoke"`,
 		`"framework": "keel-demo-dev"`,
-		`"order": "c.10"`,
 		`"root": "go"`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("test-lanes.json missing %s:\n%s", want, text)
 		}
+	}
+	// The lane file carries no ordinal at all now: emission order is the
+	// ordering fact and nothing parses one back out of a display field
+	// (keel/ac-548).
+	if strings.Contains(text, `"order"`) {
+		t.Fatalf("test-lanes.json still carries an order field:\n%s", text)
+	}
+	if got := strings.Index(text, `"id": "go-fail"`); got < strings.Index(text, `"id": "go-pass"`) {
+		t.Fatalf("test-lanes.json left the emission order:\n%s", text)
 	}
 }
 
@@ -1034,4 +1044,23 @@ func assertRunFinished(t *testing.T, events []vscode.RunEvent, exitCode int) {
 		}
 	}
 	t.Fatalf("missing run_finished exit_code=%d in %+v", exitCode, events)
+}
+
+// ordinalLabelGrammar is the ordinal prefix keel/ac-545 forbids on a label.
+var ordinalLabelGrammar = regexp.MustCompile(`(?i)^[a-z]\.[0-9]+ `)
+
+// assertNoOrdinalLabels holds keel/ac-545 for the reference consumer: no label
+// it emits is a carrier for the ordering fact.
+//
+// DHF-TEST: keel/requirement-137
+func assertNoOrdinalLabels(t *testing.T, items []vscode.TestItem) {
+	t.Helper()
+	if len(items) == 0 {
+		t.Fatal("discovery document carries no items")
+	}
+	for _, item := range items {
+		if ordinalLabelGrammar.MatchString(item.Label) {
+			t.Errorf("item %q label %q matches the ordinal grammar (keel/ac-545)", item.ID, item.Label)
+		}
+	}
 }

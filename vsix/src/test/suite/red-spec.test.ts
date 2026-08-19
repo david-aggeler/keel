@@ -41,9 +41,9 @@ suite('Keel Test Bridge expected-red specs', () => {
         assert.equal(detect.code, 0, detect.stderr + detect.stdout);
 
         const discovery = await discoverTests(root);
-        const top = discovery.items
-          .filter((item) => !item.parent_id)
-          .sort((a, b) => (a.sort_text ?? '').localeCompare(b.sort_text ?? ''));
+        // No sort: the frame is emission order now, so the document's own root
+        // sequence is the assertion (keel/ac-563).
+        const top = discovery.items.filter((item) => !item.parent_id);
         // Display assertion only: this is requirement-69's four-row tree as a
         // human reads it. Nothing derives from these strings — the bridge keys
         // the desired-state anchor on its id (keel/requirement-126), asserted
@@ -60,8 +60,9 @@ suite('Keel Test Bridge expected-red specs', () => {
           'keel::lanes',
           'keel::frameworks'
         ]);
-        for (const item of discovery.items.filter((candidate) => /^[a-z]\.[0-9]+ /i.test(candidate.label))) {
-          assert.equal(item.sort_text, zeroPaddedOrdinal(item.label.split(/\s+/, 1)[0]));
+        // keel/ac-545: no label carries the ordinal grammar, and no id ever did.
+        for (const item of discovery.items) {
+          assert.doesNotMatch(item.label, /^[a-z]\.[0-9]+ /i, `label ${item.label} carries an ordinal prefix`);
           assert.doesNotMatch(item.id, /::[a-z]\.[0-9]+(?:$|::)/i);
         }
       } finally {
@@ -558,7 +559,6 @@ function reconcileDiscovery(labelSuffix: string): DiscoveryDocument {
       id: 'keel::lane::stale',
       parent_id: 'keel::lanes',
       label: 'stale',
-      sort_text: 'c.002',
       kind: 'lane',
       runnable: true,
       profiles: ['run']
@@ -567,7 +567,6 @@ function reconcileDiscovery(labelSuffix: string): DiscoveryDocument {
       id: 'keel::lane::unit',
       parent_id: 'keel::lanes',
       label: 'unit',
-      sort_text: 'c.002',
       kind: 'lane',
       runnable: true,
       profiles: ['run']
@@ -582,22 +581,14 @@ function reconcileDiscovery(labelSuffix: string): DiscoveryDocument {
         id: 'keel::lane::lint',
         parent_id: 'keel::lanes',
         label: 'lint',
-        sort_text: 'c.001',
         kind: 'lane',
         runnable: true,
         profiles: ['run'],
-        limitations: [`updated by ${labelSuffix} discovery`]
+        description: `updated by ${labelSuffix} discovery`
       },
       changingLane
     ]
   };
-}
-
-function zeroPaddedOrdinal(ordinal: string): string {
-  return ordinal
-    .split('.')
-    .map((segment, index) => index === 0 ? segment.toLowerCase() : segment.padStart(3, '0'))
-    .join('.');
 }
 
 function realKeelDevBinary(): string {

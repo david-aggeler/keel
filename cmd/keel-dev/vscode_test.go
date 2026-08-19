@@ -12,8 +12,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -323,11 +323,11 @@ func TestKeelTestBridgeLaneProvidersUseBridgeRuntimeRoot(t *testing.T) {
 		t.Fatalf("Lanes: %v", err)
 	}
 	ci, ok := testItemByID(items, vscodeLaneCI)
-	if !ok || ci.Label != "c.30 ci" || ci.SortText != "c.30" || !stringSlicesEqual(ci.RequiredResources, []string{"go-toolchain", "keel-module-root", "stub-binaries"}) {
+	if !ok || ci.Label != "ci" || !stringSlicesEqual(ci.RequiredResources, []string{"go-toolchain", "keel-module-root", "stub-binaries"}) {
 		t.Fatalf("ci lane item = %+v, ok=%v", ci, ok)
 	}
 	execLane, ok := testItemByID(items, "keel::lane::go-exec")
-	if !ok || execLane.Label != "c.40 exec" || execLane.SortText != "c.40" {
+	if !ok || execLane.Label != "exec" {
 		t.Fatalf("go-exec lane item = %+v, ok=%v", execLane, ok)
 	}
 }
@@ -468,7 +468,7 @@ func TestVSCodeConfigHandlersInitAndUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read upgraded config: %v", err)
 	}
-	if !strings.Contains(string(body), `"command": "bin/custom"`) || !strings.Contains(string(body), `"version": 4`) || !strings.Contains(string(body), `"args": []`) {
+	if !strings.Contains(string(body), `"command": "bin/custom"`) || !strings.Contains(string(body), `"version": `+strconv.Itoa(vscode.CurrentConfigVersion)) || !strings.Contains(string(body), `"args": []`) {
 		t.Fatalf("upgraded config did not preserve command and stamp current version:\n%s", body)
 	}
 }
@@ -631,9 +631,11 @@ func TestVSCodeDiscoveryEmitsStructuredOrderedTree(t *testing.T) {
 	}
 
 	top := map[string]vscode.TestItem{}
+	var topIDs []string
 	for _, item := range doc.Items {
 		if item.ParentID == "" {
 			top[item.ID] = item
+			topIDs = append(topIDs, item.ID)
 		}
 		if strings.HasPrefix(item.Label, "c.") {
 			t.Fatalf("discovery emitted reserved c.* label: %+v", item)
@@ -644,38 +646,32 @@ func TestVSCodeDiscoveryEmitsStructuredOrderedTree(t *testing.T) {
 		assertDiscoveryKindAllowedBySchema(t, item.Kind)
 	}
 
-	wantTop := map[string]struct {
-		label string
-		sort  string
-	}{
-		"testbridge::maintenance": {label: "A - Test Bridge Maintenance", sort: "a"},
-		vscodeGroupDesiredState:   {label: vscodeGroupDesiredStateLabel, sort: "b"},
-		"keel::lanes":             {label: "C - Lanes", sort: "c"},
-		"keel::frameworks":        {label: "D - Frameworks", sort: "d"},
+	wantTop := map[string]string{
+		"testbridge::maintenance": "A - Test Bridge Maintenance",
+		vscodeGroupDesiredState:   vscodeGroupDesiredStateLabel,
+		"keel::lanes":             "C - Lanes",
+		"keel::frameworks":        "D - Frameworks",
 	}
 	if len(top) != len(wantTop) {
 		t.Fatalf("top-level groups = %+v, want exactly %d groups", top, len(wantTop))
 	}
-	for id, want := range wantTop {
+	for id, wantLabel := range wantTop {
 		item, ok := top[id]
 		if !ok {
 			t.Fatalf("top-level group %q missing; top-level items: %+v", id, top)
 		}
-		if item.Label != want.label || item.Kind != "group" || item.SortText != want.sort || item.Runnable {
-			t.Fatalf("top-level group %q = %+v, want label=%q kind=group sort_text=%q runnable=false", id, item, want.label, want.sort)
+		if item.Label != wantLabel || item.Kind != "group" || item.Runnable {
+			t.Fatalf("top-level group %q = %+v, want label=%q kind=group runnable=false", id, item, wantLabel)
 		}
 	}
+	// The frame is emission order now, not a sort key: keel/ac-563 holds it in
+	// the document, and the consumer derives its sort text from that sequence.
 	wantOrder := []string{"testbridge::maintenance", "keel::desired-state", "keel::lanes", "keel::frameworks"}
-	topIDs := make([]string, 0, len(top))
-	for id := range top {
-		topIDs = append(topIDs, id)
-	}
-	sort.Slice(topIDs, func(i, j int) bool { return top[topIDs[i]].SortText < top[topIDs[j]].SortText })
 	if !stringSlicesEqual(topIDs, wantOrder) {
-		t.Fatalf("top-level sorted ids = %v, want %v", topIDs, wantOrder)
+		t.Fatalf("top-level emission order = %v, want %v", topIDs, wantOrder)
 	}
 	desiredGroup, ok := discoveryItemByID(doc, "keel::desired-state::group::test-preconditions")
-	if !ok || desiredGroup.ParentID != "keel::desired-state" || desiredGroup.Label != "Test Preconditions" || desiredGroup.SortText != "b.010" || desiredGroup.DesiredStateGroup == nil || desiredGroup.DesiredStateGroup.MutuallyExclusive {
+	if !ok || desiredGroup.ParentID != "keel::desired-state" || desiredGroup.Label != "Test Preconditions" || desiredGroup.DesiredStateGroup == nil || desiredGroup.DesiredStateGroup.MutuallyExclusive {
 		t.Fatalf("desired-state group = %+v, ok=%v", desiredGroup, ok)
 	}
 	var desiredRow vscode.TestItem
@@ -685,7 +681,7 @@ func TestVSCodeDiscoveryEmitsStructuredOrderedTree(t *testing.T) {
 			break
 		}
 	}
-	if desiredRow.ID == "" || desiredRow.SortText != "b.010.001" || desiredRow.Label != "go-toolchain: available" || desiredRow.DesiredStateRow == nil || desiredRow.DesiredStateRow.Action != "reuse" {
+	if desiredRow.ID == "" || desiredRow.Label != "go-toolchain: available" || desiredRow.DesiredStateRow == nil || desiredRow.DesiredStateRow.Action != "reuse" {
 		t.Fatalf("desired-state row = %+v", desiredRow)
 	}
 
@@ -693,8 +689,8 @@ func TestVSCodeDiscoveryEmitsStructuredOrderedTree(t *testing.T) {
 	if !ok {
 		t.Fatal("discovery missing go::root")
 	}
-	if goRoot.ParentID != "keel::frameworks" || goRoot.Label != "d.1 Go" || goRoot.SortText != "d.001" {
-		t.Fatalf("go::root = %+v, want parent keel::frameworks label d.1 Go sort_text d.001", goRoot)
+	if goRoot.ParentID != "keel::frameworks" || goRoot.Label != "Go" {
+		t.Fatalf("go::root = %+v, want parent keel::frameworks and the ordinal-free label Go", goRoot)
 	}
 }
 
@@ -887,14 +883,14 @@ func TestVSCodeDiscoveryRendersFileLanesAndDiagnostics(t *testing.T) {
 	if !ok {
 		t.Fatalf("discovery missing file lane go-log: %+v", doc.Items)
 	}
-	if logLane.ParentID != "keel::lanes" || logLane.Label != "b.40 log subsystem" || logLane.SortText != "b.040" || !logLane.Runnable {
-		t.Fatalf("go-log lane = %+v, want runnable b.40 lane under Lanes", logLane)
+	if logLane.ParentID != "keel::lanes" || logLane.Label != "log subsystem" || !logLane.Runnable {
+		t.Fatalf("go-log lane = %+v, want the runnable ordinal-free lane under Lanes", logLane)
 	}
 	core, ok := discoveryItemByID(doc, "keel::lane::core")
 	if !ok {
 		t.Fatalf("discovery missing composed lane core: %+v", doc.Items)
 	}
-	if core.Label != "b.50 core rollup" || !stringSlicesEqual(core.RequiredResources, []string{"go-toolchain", "keel-module-root", "stub-binaries"}) {
+	if core.Label != "core rollup" || !stringSlicesEqual(core.RequiredResources, []string{"go-toolchain", "keel-module-root", "stub-binaries"}) {
 		t.Fatalf("core lane = %+v, want inherited required resources", core)
 	}
 	if _, ok := discoveryItemByID(doc, "keel::lane::bad"); ok {
@@ -1155,7 +1151,7 @@ func TestVSCodeDetectLanesMaintenanceItemRunsDetect(t *testing.T) {
 		t.Fatalf("discovery JSON: %v\n%s", err, discover.String())
 	}
 	item, ok := discoveryItemByID(doc, vscodeMaintenanceDetectLanes)
-	if !ok || item.Label != "a.1 detect lanes" || !item.Runnable {
+	if !ok || item.Label != "detect lanes" || !item.Runnable {
 		t.Fatalf("detect lanes maintenance item = %+v, ok=%v", item, ok)
 	}
 
@@ -1188,7 +1184,7 @@ func TestVSCodeRunStartedCarriesRequestedSelection(t *testing.T) {
 	if len(events) == 0 || events[0].Event != "run_started" {
 		t.Fatalf("events = %+v, want run_started first", events)
 	}
-	if got := events[0].Requested; len(got) != 1 || got[0].ID != vscodeLaneTestFast || got[0].Label != "c.2 test-fast" {
+	if got := events[0].Requested; len(got) != 1 || got[0].ID != vscodeLaneTestFast || got[0].Label != "test-fast" {
 		t.Fatalf("run_started requested = %+v, want exact selected lane", got)
 	}
 }
@@ -1235,15 +1231,12 @@ func TestVSCodeDiscoveryAppendsExactLaneDurationHint(t *testing.T) {
 	if !ok {
 		t.Fatalf("discovery missing go-log lane: %+v", doc.Items)
 	}
-	if got := strings.Join(lane.Limitations, " "); !strings.Contains(got, "last 9.8s") {
-		t.Fatalf("lane limitations = %q, want newest exact single-lane duration hint", got)
-	}
-	// keel/ac-565: the hint the producer still carries for a consumer that has
-	// not migrated is the exported renderer's own output, byte for byte, rather
-	// than a second format string that renders the same today.
+	// keel/ac-565: the measurement travels typed and the format lives only in
+	// the exported renderer, so the hint a consumer shows is derived here rather
+	// than carried as a second format string.
 	// DHF-TEST: keel/requirement-139
-	if want := vscode.FormatLastRun(lane.LastRun); want == "" || !slices.Contains(lane.Limitations, want) {
-		t.Fatalf("lane limitations = %v, want the exported renderer's %q", lane.Limitations, want)
+	if got := vscode.FormatLastRun(lane.LastRun); !strings.Contains(got, "last 9.8s") {
+		t.Fatalf("rendered last-run hint = %q, want newest exact single-lane duration", got)
 	}
 	// The typed measurement is asserted against the same three fixture
 	// streams as the formatted hint, in the same test: the attribution
@@ -1393,8 +1386,8 @@ func TestVSCodeDiscoveryEmitsLaneCoversAndVSIXFileItems(t *testing.T) {
 	if !ok || !ui.Runnable {
 		t.Fatalf("ui lane should render despite missing vsix warning: %+v ok=%v", ui, ok)
 	}
-	if !strings.Contains(strings.Join(ui.Limitations, " "), "V10") || !discoveryHasAlias(doc, "keel::lane::ui::covers", "vsix::file::src/test/suite/extension.test.ts") {
-		t.Fatalf("ui lane limitations/covers = %+v items=%+v", ui.Limitations, doc.Items)
+	if !laneHasFindingRule(ui, "V10") || !discoveryHasAlias(doc, "keel::lane::ui::covers", "vsix::file::src/test/suite/extension.test.ts") {
+		t.Fatalf("ui lane findings/covers = %+v items=%+v", ui.Findings, doc.Items)
 	}
 	// requirement-94 (ac-308): the vsix-member covers expands file→test.
 	vsixFileAliasID := "keel::lane::ui::covers::" + StableIDSegment("vsix::file::src/test/suite/extension.test.ts")
@@ -1829,7 +1822,7 @@ func TestVSCodeLaneAdditionalErrorBranches(t *testing.T) {
 
 func discoveryItemsContain(items []vscode.TestItem, text string) bool {
 	for _, item := range items {
-		if strings.Contains(item.Label, text) || strings.Contains(strings.Join(item.Limitations, "\n"), text) {
+		if strings.Contains(item.Label, text) || strings.Contains(item.Description, text) {
 			return true
 		}
 	}
@@ -1875,20 +1868,17 @@ func TestVSCodeMaintenanceItemsAdvertiseCapabilitiesAndRunActions(t *testing.T) 
 	if got, want := doc.Capabilities.ClearStateTestIDs, []string{testbridge.MaintenanceClearStateID}; !stringSlicesEqual(got, want) {
 		t.Fatalf("clear_state_test_ids = %v, want %v", got, want)
 	}
-	for id, want := range map[string]struct {
-		label string
-		sort  string
-	}{
-		testbridge.MaintenanceUnlockID:       {label: "a.2 unlock test bridge", sort: "a.002"},
-		testbridge.MaintenanceClearResultsID: {label: "a.3 clear test results", sort: "a.003"},
-		testbridge.MaintenanceClearStateID:   {label: "a.4 clear local test state", sort: "a.004"},
+	for id, wantLabel := range map[string]string{
+		testbridge.MaintenanceUnlockID:       "unlock test bridge",
+		testbridge.MaintenanceClearResultsID: "clear test results",
+		testbridge.MaintenanceClearStateID:   "clear local test state",
 	} {
 		item, ok := discoveryItemByID(doc, id)
 		if !ok {
 			t.Fatalf("discovery missing maintenance item %q", id)
 		}
-		if item.ParentID != testbridge.MaintenanceGroupID || item.Kind != "maintenance" || item.Label != want.label || item.SortText != want.sort || !item.Runnable {
-			t.Fatalf("maintenance item %q = %+v, want parent maintenance label=%q sort=%q runnable", id, item, want.label, want.sort)
+		if item.ParentID != testbridge.MaintenanceGroupID || item.Kind != "maintenance" || item.Label != wantLabel || !item.Runnable {
+			t.Fatalf("maintenance item %q = %+v, want parent maintenance label=%q runnable", id, item, wantLabel)
 		}
 	}
 
@@ -1949,19 +1939,16 @@ func TestVSCodeSystemGateLanesDiscoverPrepareAndRun(t *testing.T) {
 	if err := json.Unmarshal(discover.Bytes(), &doc); err != nil {
 		t.Fatalf("discovery JSON: %v\n%s", err, discover.String())
 	}
-	for id, want := range map[string]struct {
-		label string
-		sort  string
-	}{
-		"keel::lane::vsix-ci": {label: "c.10 vsix ci", sort: "c.010"},
-		"keel::lane::ci":      {label: "c.30 ci", sort: "c.030"},
+	for id, wantLabel := range map[string]string{
+		"keel::lane::vsix-ci": "vsix ci",
+		"keel::lane::ci":      "ci",
 	} {
 		item, ok := discoveryItemByID(doc, id)
 		if !ok {
 			t.Fatalf("discovery missing system gate lane %q", id)
 		}
-		if item.ParentID != "keel::lanes" || item.Kind != "lane" || item.Label != want.label || item.SortText != want.sort || !stringSlicesEqual(item.Profiles, []string{"run"}) {
-			t.Fatalf("system lane %q = %+v, want parent lanes label=%q sort=%q profiles=[run]", id, item, want.label, want.sort)
+		if item.ParentID != "keel::lanes" || item.Kind != "lane" || item.Label != wantLabel || !stringSlicesEqual(item.Profiles, []string{"run"}) {
+			t.Fatalf("system lane %q = %+v, want parent lanes label=%q profiles=[run]", id, item, wantLabel)
 		}
 	}
 
@@ -2046,7 +2033,7 @@ func TestVSCodeDiscoveryEmitsGoTestTreeFromParser(t *testing.T) {
 		kind     string
 		runnable bool
 	}{
-		"go::root":                      {parent: "keel::frameworks", label: "d.1 Go", kind: "root", runnable: true},
+		"go::root":                      {parent: "keel::frameworks", label: "Go", kind: "root", runnable: true},
 		"go::pkg::log":                  {parent: "go::root", label: "log", kind: "package", runnable: true},
 		"go::file::log/logging_test.go": {parent: "go::pkg::log", label: "logging_test.go", kind: "file", runnable: true},
 		"go::test::log::TestLog":        {parent: "go::file::log/logging_test.go", label: "TestLog", kind: "test", runnable: true},
@@ -2308,8 +2295,8 @@ func TestVSCodeDiscoveryReportsGoParseErrorsAsDiagnosticFileItems(t *testing.T) 
 	if item.ParentID != "go::pkg::broken" || item.Kind != "file" || item.Runnable || item.URI != "broken/broken_test.go" {
 		t.Fatalf("parse diagnostic item = %+v, want non-runnable file item under package", item)
 	}
-	if len(item.Limitations) == 0 || !strings.Contains(strings.Join(item.Limitations, "\n"), "expected") {
-		t.Fatalf("parse diagnostic limitations = %v, want parse error text", item.Limitations)
+	if !strings.Contains(item.Description, "expected") {
+		t.Fatalf("parse diagnostic description = %q, want parse error text", item.Description)
 	}
 }
 
@@ -2343,8 +2330,8 @@ func TestVSCodeDiscoveryReportsPackageParseErrorsAsDiagnosticFileItems(t *testin
 	if item.Kind != "file" || item.Runnable || item.URI != "broken/ok_test.go" {
 		t.Fatalf("package diagnostic item = %+v, want non-runnable file item", item)
 	}
-	if len(item.Limitations) == 0 || !strings.Contains(strings.Join(item.Limitations, "\n"), "broken.go") {
-		t.Fatalf("package diagnostic limitations = %v, want package parse error text", item.Limitations)
+	if !strings.Contains(item.Description, "broken.go") {
+		t.Fatalf("package diagnostic description = %q, want package parse error text", item.Description)
 	}
 	if _, ok := discoveryItemByID(doc, "go::test::broken::TestOK"); ok {
 		t.Fatalf("discovery included runnable test from invalid package: %+v", doc.Items)
@@ -3389,7 +3376,7 @@ func discoveryHasDiagnosticContaining(doc vscode.DiscoveryDocument, text string)
 		if item.Kind != "group" || item.Runnable {
 			continue
 		}
-		if strings.Contains(item.Label, text) || strings.Contains(strings.Join(item.Limitations, "\n"), text) {
+		if strings.Contains(item.Label, text) || strings.Contains(item.Description, text) {
 			return true
 		}
 	}
@@ -4088,4 +4075,16 @@ exit 0`)
 			t.Fatalf("stale results.jsonl content leaked into the run stream: %+v", events)
 		}
 	}
+}
+
+// laneHasFindingRule reports whether the item carries a typed finding for the
+// named rule. The rule travels typed now, so a test asks the field rather than
+// searching prose (keel/ac-551).
+func laneHasFindingRule(item vscode.TestItem, rule string) bool {
+	for _, finding := range item.Findings {
+		if finding.Rule == rule {
+			return true
+		}
+	}
+	return false
 }

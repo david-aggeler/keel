@@ -37,7 +37,6 @@ function pythonVenvDiscoveryItem() {
     id: 'keel::action::provision-python-venv',
     parent_id: 'testbridge::desired-state::group::test-preconditions',
     label: active ? 'python-venv satisfied: provisioned -> provisioned' : 'python-venv reconcilable: missing -> provisioned',
-    sort_text: 'b.010.002',
     kind: 'maintenance',
     runnable: true,
     profiles: ['run'],
@@ -62,6 +61,11 @@ function upgradeConfig() {
     cfg.version = 4;
     cfg.display = cfg.display ?? { description: true, lastRun: true, desiredState: true, findings: true };
   }
+  if (cfg.version === 4) {
+    cfg.version = 5;
+    cfg.display = cfg.display ?? { description: true, lastRun: true, desiredState: true, findings: true };
+    cfg.display.ordinal = cfg.display.ordinal ?? false;
+  }
   fs.writeFileSync(file, `${JSON.stringify(cfg, null, 2)}\n`);
 }
 
@@ -83,32 +87,32 @@ if (command === 'test-bridge discover --format') {
       clear_state_test_ids: ['testbridge::maintenance::clear-state']
     },
     items: [
-      { id: 'testbridge::maintenance', label: 'A - Test Bridge Maintenance', sort_text: 'a', kind: 'group', runnable: false, profiles: [] },
+      { id: 'testbridge::maintenance', label: 'A - Test Bridge Maintenance', kind: 'group', runnable: false, profiles: [] },
       // The anchor's label is deliberately not the one keel-dev ships: the
       // extension keys the desired-state root on its id, never on the row text
       // (keel/requirement-126).
-      { id: 'testbridge::desired-state', label: 'b - fixture desired state', sort_text: 'b', kind: 'group', runnable: false, profiles: [] },
-      { id: 'testbridge::desired-state::group::test-preconditions', parent_id: 'testbridge::desired-state', label: 'Test Preconditions', sort_text: 'b.010', kind: 'group', runnable: false, profiles: [], desired_state_group: { mutually_exclusive: false } },
-      { id: 'testbridge::desired-state::test-preconditions::python::available::reuse', parent_id: 'testbridge::desired-state::group::test-preconditions', label: 'python satisfied: available -> available', sort_text: 'b.010.001', kind: 'group', runnable: false, profiles: [], desired_state_row: { current: 'available', action: 'reuse', active: false } },
+      { id: 'testbridge::desired-state', label: 'b - fixture desired state', kind: 'group', runnable: false, profiles: [] },
+      { id: 'testbridge::desired-state::group::test-preconditions', parent_id: 'testbridge::desired-state', label: 'Test Preconditions', kind: 'group', runnable: false, profiles: [], desired_state_group: { mutually_exclusive: false } },
+      { id: 'testbridge::desired-state::test-preconditions::python::available::reuse', parent_id: 'testbridge::desired-state::group::test-preconditions', label: 'python satisfied: available -> available', kind: 'group', runnable: false, profiles: [], desired_state_row: { current: 'available', action: 'reuse', active: false } },
       pythonVenvDiscoveryItem(),
-      { id: 'keel::lanes', label: 'C - Lanes', sort_text: 'c', kind: 'group', runnable: false, profiles: [] },
-      { id: 'keel::frameworks', label: 'D - Frameworks', sort_text: 'd', kind: 'group', runnable: false, profiles: [] },
+      { id: 'keel::lanes', label: 'C - Lanes', kind: 'group', runnable: false, profiles: [] },
+      { id: 'keel::frameworks', label: 'D - Frameworks', kind: 'group', runnable: false, profiles: [] },
       { id: 'keel::agents', parent_id: 'keel::frameworks', label: 'Agents', kind: 'root', framework: 'keel', runner: 'go-test', runner_label: 'Go test', runnable: true, profiles: ['run'] },
       { id: 'keel::file::agents/test_memory.go', parent_id: 'keel::agents', label: 'test_memory.go', kind: 'file', framework: 'keel', runner: 'go-test', runner_label: 'Go test', uri: 'agents/test_memory.go', runnable: true, profiles: ['run'] },
       { id: 'keel::test::agents/test_memory.go::TestRecall', parent_id: 'keel::file::agents/test_memory.go', label: 'TestRecall', kind: 'test', framework: 'keel', runner: 'go-test', runner_label: 'Go test', uri: 'agents/test_memory.go', runnable: true, profiles: ['run'], required_resources: ['go'] },
       { id: 'keel::test::agents/test_memory.go::TestStore', parent_id: 'keel::file::agents/test_memory.go', label: 'TestStore', kind: 'test', framework: 'keel', runner: 'go-test', runner_label: 'Go test', uri: 'agents/test_memory.go', runnable: true, profiles: ['run'], required_resources: ['go'] },
-      { id: 'go::root', parent_id: 'keel::frameworks', label: 'd.1 Go', sort_text: 'd.001', kind: 'root', framework: 'go', runner: 'go-test', runner_label: 'Go test', runnable: true, profiles: ['run'], required_resources: ['go-toolchain', 'keel-module-root'] },
+      { id: 'go::root', parent_id: 'keel::frameworks', label: 'Go', kind: 'root', framework: 'go', runner: 'go-test', runner_label: 'Go test', runnable: true, profiles: ['run'], required_resources: ['go-toolchain', 'keel-module-root'] },
       { id: 'go::pkg::log', parent_id: 'go::root', label: 'log', kind: 'package', framework: 'go', runner: 'go-test', runner_label: 'Go test', runnable: true, profiles: ['run'], required_resources: ['go-toolchain', 'keel-module-root'] },
       { id: 'go::test::log::TestLog', parent_id: 'go::pkg::log', label: 'TestLog', kind: 'test', framework: 'go', runner: 'go-test', runner_label: 'Go test', runnable: true, profiles: ['run'], required_resources: ['go-toolchain', 'keel-module-root'] },
       { id: 'go::test::log::TestMetrics', parent_id: 'go::pkg::log', label: 'TestMetrics', kind: 'test', framework: 'go', runner: 'go-test', runner_label: 'Go test', runnable: true, profiles: ['run'], required_resources: ['go-toolchain', 'keel-module-root'] },
       { id: 'keel::lane::smoke', parent_id: 'keel::lanes', label: 'Smoke', kind: 'lane', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'] },
       { id: 'alias::keel::lane::smoke::keel::test::agents/test_memory.go::TestRecall', parent_id: 'keel::lane::smoke', label: 'TestRecall', kind: 'test', framework: 'keel', runner: 'go-test', runner_label: 'Go test', canonical_id: 'keel::test::agents/test_memory.go::TestRecall', runnable: true, profiles: ['run'] },
       { id: 'keel::lane::test-coverage', parent_id: 'keel::lanes', label: 'test-coverage', kind: 'lane', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['coverage'] },
-      { id: 'keel::lane::vsix-ci', parent_id: 'keel::lanes', label: 'c.10 vsix ci', sort_text: 'c.010', kind: 'lane', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'], required_resources: ['go-toolchain', 'keel-module-root', 'stub-binaries', 'pnpm'] },
-      { id: 'keel::lane::ci', parent_id: 'keel::lanes', label: 'c.30 ci', sort_text: 'c.030', kind: 'lane', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'], required_resources: ['go-toolchain', 'keel-module-root', 'stub-binaries'] },
-      { id: 'testbridge::maintenance::unlock', parent_id: 'testbridge::maintenance', label: 'a.2 unlock test bridge', sort_text: 'a.002', kind: 'maintenance', framework: 'testbridge', runner: 'testbridge', runner_label: 'testbridge', runnable: true, profiles: ['run'] },
-      { id: 'testbridge::maintenance::clear-results', parent_id: 'testbridge::maintenance', label: 'a.3 clear test results', sort_text: 'a.003', kind: 'maintenance', framework: 'testbridge', runner: 'testbridge', runner_label: 'testbridge', runnable: true, profiles: ['run'] },
-      { id: 'testbridge::maintenance::clear-state', parent_id: 'testbridge::maintenance', label: 'a.4 clear local test state', sort_text: 'a.004', kind: 'maintenance', framework: 'testbridge', runner: 'testbridge', runner_label: 'testbridge', runnable: true, profiles: ['run'] }
+      { id: 'keel::lane::vsix-ci', parent_id: 'keel::lanes', label: 'vsix ci', kind: 'lane', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'], required_resources: ['go-toolchain', 'keel-module-root', 'stub-binaries', 'pnpm'] },
+      { id: 'keel::lane::ci', parent_id: 'keel::lanes', label: 'ci', kind: 'lane', framework: 'keel', runner: 'keel-dev', runner_label: 'Keel devtool', runnable: true, profiles: ['run'], required_resources: ['go-toolchain', 'keel-module-root', 'stub-binaries'] },
+      { id: 'testbridge::maintenance::unlock', parent_id: 'testbridge::maintenance', label: 'unlock test bridge', kind: 'maintenance', framework: 'testbridge', runner: 'testbridge', runner_label: 'testbridge', runnable: true, profiles: ['run'] },
+      { id: 'testbridge::maintenance::clear-results', parent_id: 'testbridge::maintenance', label: 'clear test results', kind: 'maintenance', framework: 'testbridge', runner: 'testbridge', runner_label: 'testbridge', runnable: true, profiles: ['run'] },
+      { id: 'testbridge::maintenance::clear-state', parent_id: 'testbridge::maintenance', label: 'clear local test state', kind: 'maintenance', framework: 'testbridge', runner: 'testbridge', runner_label: 'testbridge', runnable: true, profiles: ['run'] }
     ]
   }, null, 2));
   process.stdout.write('\n');
