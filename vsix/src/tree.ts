@@ -1,5 +1,6 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
+import { composeDescription, defaultDisplayConfig, DisplayConfig } from './description';
 import { DiscoveryCapabilities, DiscoveryDocument, DiscoveryItem } from './protocol';
 
 export interface PublishedTree {
@@ -17,7 +18,8 @@ export function publishDiscovery(
   controller: vscode.TestController,
   workspaceRoot: string,
   discovery: DiscoveryDocument,
-  generation = 0
+  generation = 0,
+  display: DisplayConfig = defaultDisplayConfig()
 ): PublishedTree {
   void generation;
   const existing = collectExistingItems(controller);
@@ -30,8 +32,8 @@ export function publishDiscovery(
   const pending = topologicalOrder(discovery.items);
 
   for (const item of pending) {
-    const testItem = existing.itemsById.get(item.id) ?? toTestItem(controller, workspaceRoot, item);
-    updateTestItem(testItem, item);
+    const testItem = existing.itemsById.get(item.id) ?? toTestItem(controller, workspaceRoot, item, display);
+    updateTestItem(testItem, item, display);
     itemsById.set(item.id, testItem);
     discoveryItemsById.set(item.id, item);
     protocolIdByItemId.set(testItem.id, item.id);
@@ -156,19 +158,22 @@ function deleteMissingItems(
   }
 }
 
-function toTestItem(controller: vscode.TestController, workspaceRoot: string, item: DiscoveryItem): vscode.TestItem {
+function toTestItem(controller: vscode.TestController, workspaceRoot: string, item: DiscoveryItem, display: DisplayConfig): vscode.TestItem {
   const uri = item.uri ? vscode.Uri.file(path.join(workspaceRoot, item.uri)) : undefined;
   const testItem = controller.createTestItem(item.id, item.label, uri);
-  updateTestItem(testItem, item);
+  updateTestItem(testItem, item, display);
   return testItem;
 }
 
-// DHF-REQ: keel/requirement-70
-function updateTestItem(testItem: vscode.TestItem, item: DiscoveryItem): void {
+// The extension is the sole composer of the secondary text: the producer
+// contributes prose and facts, never order, separator, or format.
+//
+// DHF-REQ: keel/requirement-70, keel/requirement-139
+function updateTestItem(testItem: vscode.TestItem, item: DiscoveryItem, display: DisplayConfig): void {
   testItem.label = item.label;
   testItem.sortText = item.sort_text;
   testItem.canResolveChildren = false;
-  testItem.description = item.limitations?.join('; ');
+  testItem.description = composeDescription(item, display);
   testItem.tags = item.required_resources?.map((resource) => new vscode.TestTag(resource)) ?? [];
   if (item.range) {
     testItem.range = new vscode.Range(

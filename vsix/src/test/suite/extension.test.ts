@@ -151,7 +151,7 @@ suite('Keel Test Bridge config contract', () => {
   });
 
   // DHF-TEST: keel/requirement-59
-  test('default template is launcher-only config v3', () => {
+  test('default template is launcher-only config at the current version', () => {
     const parsed = JSON.parse(defaultConfigTemplate()) as { version: number; command: string; args: string[]; displayName: string };
     assert.equal(parsed.version, currentConfigVersion);
     assert.equal(parsed.command, 'bin/keel-dev');
@@ -434,7 +434,7 @@ suite('Keel Test Bridge config contract', () => {
 
     await upgradeConfig(root);
     const migrated = readAdapterConfig(root);
-    assert.equal(migrated.version, 3);
+    assert.equal(migrated.version, currentConfigVersion);
     assert.deepEqual(migrated.args, [fixture]);
 
     const discovery = await discoverTests(root);

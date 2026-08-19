@@ -58,7 +58,7 @@ func UpgradeConfig(root string, template vscode.TestBridgeConfig) (ConfigResult,
 		return ConfigResult{}, fmt.Errorf("keel/testbridge: test bridge config version %d is newer than this binary supports (%d); refusing to write", from, vscode.CurrentConfigVersion)
 	}
 	for cfg.Version < vscode.CurrentConfigVersion {
-		next, err := migrateConfig(cfg, template)
+		next, err := vscode.MigrateTestBridgeConfig(cfg, template)
 		if err != nil {
 			return ConfigResult{}, err
 		}
@@ -75,46 +75,6 @@ func UpgradeConfig(root string, template vscode.TestBridgeConfig) (ConfigResult,
 		return ConfigResult{}, err
 	}
 	return ConfigResult{Path: target, Changed: true, FromVersion: from, ToVersion: cfg.Version}, nil
-}
-
-// DHF-REQ: keel/requirement-65
-func migrateConfig(cfg, template vscode.TestBridgeConfig) (vscode.TestBridgeConfig, error) {
-	switch cfg.Version {
-	case 0:
-		return vscode.TestBridgeConfig{}, fmt.Errorf("keel/testbridge: test bridge config version is missing or unsupported")
-	case 1:
-		cfg.Version = 2
-		if cfg.Command == "" {
-			cfg.Command = template.Command
-		}
-		if len(cfg.Args) == 0 {
-			cfg.Args = append([]string(nil), template.Args...)
-		}
-		if cfg.DisplayName == "" {
-			cfg.DisplayName = template.DisplayName
-		}
-		return cfg, nil
-	case 2:
-		cfg.Version = vscode.CurrentConfigVersion
-		cfg.Args = trimLegacyVSCodeTestsPrefix(cfg.Args)
-		if cfg.Command == "" {
-			cfg.Command = template.Command
-		}
-		if cfg.DisplayName == "" {
-			cfg.DisplayName = template.DisplayName
-		}
-		return cfg, nil
-	default:
-		return vscode.TestBridgeConfig{}, fmt.Errorf("keel/testbridge: unsupported test bridge config version %d", cfg.Version)
-	}
-}
-
-func trimLegacyVSCodeTestsPrefix(args []string) []string {
-	out := append([]string(nil), args...)
-	if len(out) >= 2 && out[len(out)-2] == "vscode" && out[len(out)-1] == "tests" {
-		return out[:len(out)-2]
-	}
-	return out
 }
 
 func readConfig(path string) (vscode.TestBridgeConfig, error) {

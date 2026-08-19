@@ -469,7 +469,7 @@ async function refreshNow(controller: vscode.TestController): Promise<void> {
   }
   try {
     const discovery = await discoverTests(workspaceRoot);
-    tree = publishDiscovery(controller, workspaceRoot, discovery);
+    tree = publishDiscovery(controller, workspaceRoot, discovery, 0, currentAdapterConfig().display);
     applyReconcileResultsCapability(controller, tree);
     output.appendLine(`Published ${discovery.items.length} Keel test items from ${workspaceRoot}.`);
     void externalRunMirror?.syncWorkspace();
