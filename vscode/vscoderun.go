@@ -192,7 +192,7 @@ type Finding struct {
 // item. Its lifetime is the reason it is not a run event: it holds until the
 // producer stops reporting it, whereas a run result asserts an outcome for one
 // execution that took place. The kind travels as a closed enum so a consumer
-// selects behaviour by it rather than by parsing the message.
+// selects behavior by it rather than by parsing the message.
 //
 // DHF-REQ: keel/requirement-140
 type Condition struct {
