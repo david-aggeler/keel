@@ -89,7 +89,7 @@ func TestVSCodeDiscoveryRoutesGoParseFailureToTheConditionChannel(t *testing.T) 
 // TestVSCodeDiscoveryRoutesPackageParseFailureToTheConditionChannel holds the
 // same criterion for the sibling case: a test file that parses but sits in a
 // package with an invalid non-test file. The condition belongs to the same
-// channel — the item is unrunnable for a discovery-time reason either way.
+// channel — the item is not runnable for a discovery-time reason either way.
 //
 // DHF-TEST: keel/requirement-140
 func TestVSCodeDiscoveryRoutesPackageParseFailureToTheConditionChannel(t *testing.T) {
