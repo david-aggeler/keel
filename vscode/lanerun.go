@@ -75,6 +75,14 @@ func (r *LaneRun) Facts() *LastRunFacts {
 // only when that run was requested for exactly this lane and finished with an
 // exit code. An unparseable line is skipped rather than failing the read: a
 // truncated stream from an interrupted run must not cost the lane its history.
+//
+// It is the one place that decides whether a stream yields a run, so the two
+// ways a stream can fail to state a measurement are refused here rather than by
+// each consumer of the attribution (keel/ac-573): the finish must belong to the
+// same run as the start, and it must not precede it. Either way no run is
+// attributed, which keel/ac-564 already renders as an absent last_run.
+//
+// DHF-REQ: keel/requirement-138
 func laneRunFromStream(path, laneID string) *LaneRun {
 	file, err := os.Open(path)
 	if err != nil {
@@ -82,7 +90,7 @@ func laneRunFromStream(path, laneID string) *LaneRun {
 	}
 	defer file.Close()
 	var started *RunEvent
-	var finished *RunEvent
+	finishes := map[string]*RunEvent{}
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		var event RunEvent
@@ -97,10 +105,17 @@ func laneRunFromStream(path, laneID string) *LaneRun {
 			}
 		case "run_finished":
 			copyEvent := event
-			finished = &copyEvent
+			finishes[event.RunID] = &copyEvent
 		}
 	}
-	if started == nil || finished == nil || finished.ExitCode == nil {
+	if started == nil {
+		return nil
+	}
+	finished := finishes[started.RunID]
+	if finished == nil || finished.ExitCode == nil {
+		return nil
+	}
+	if finished.Time.Before(started.Time) {
 		return nil
 	}
 	return &LaneRun{
