@@ -4,6 +4,25 @@ Newest first. The Keel Test Bridge extension and the `github.com/david-aggeler/k
 Go module ship on one tag at one version — an entry here describes the extension
 side of that tag.
 
+## v0.8.1
+
+### Breaking
+
+- The test-bridge config version rises from 3 to 5. `.vscode/test-bridge.json`
+  gains a `display` block whose per-class toggles select what the extension
+  renders, and version 5 adds the `display.ordinal` toggle to it. The migration
+  ladder runs on activation, so an older workspace file is upgraded in place.
+- The discovery item's `limitations` prose array leaves the wire. The producer's
+  prose now travels as the scalar `description` string and carries nothing else;
+  the machine facts that used to ride the array travel as the typed `last_run`
+  and `findings` fields. A document still carrying `limitations` is refused by
+  name, so a producer that has not migrated fails loudly instead of rendering
+  blank.
+- Item labels no longer carry an ordinal prefix, and `sort_text` is no longer a
+  producer input. The order in which the producer emits its items is the one
+  ordering fact: the extension derives the sort key from the emission index, and
+  renders a label prefix only where a workspace sets `display.ordinal` to true.
+
 ## v0.8.0
 
 ### Breaking
@@ -13,8 +32,9 @@ side of that tag.
   reads them all. Upgrade VS Code to 1.125 or later before installing this VSIX.
 - The desired-state wire document changes shape. `mutually_exclusive`, `active`,
   `current` and `action` leave the `Limitations` display array and become typed
-  fields covered by the JSON schemas. `Limitations` returns to prose. The extension
-  no longer recovers state by substring match.
+  fields covered by the JSON schemas. That left `Limitations` carrying prose
+  alone; v0.8.1 retired the array outright in favour of the scalar `description`.
+  The extension no longer recovers state by substring match.
 - A row's `active` fact is derived from the row's own probe, in every group. A
   producer can no longer declare a row active while its probe reports the resource
   unsatisfied.
