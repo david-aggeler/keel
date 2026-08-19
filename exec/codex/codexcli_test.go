@@ -632,14 +632,16 @@ func writeStderrStub(t *testing.T, lines []string, stderrText, markerFile string
 	return path
 }
 
-// TestRun_NonZeroExitWithEventsReturnsResultWithExitCodeAndNoError proves a
-// non-zero codex exit is NOT swallowed when stdout still produced events: Run
-// returns a non-nil Result (err nil, per codexcli.go's documented contract),
-// the parsed events are populated, Final is the terminal event, and the
-// process's non-zero exit code is observable as Result.ExitCode.
+// TestRun_NonZeroExitWithEventsStaysFullyInspectable proves a failed run whose
+// stream was decodable loses nothing: the parsed events are populated, Final is
+// the terminal event, and the process's non-zero exit code is observable as
+// Result.ExitCode — all alongside the error the shared outcome contract now
+// requires for a non-zero exit (keel/ac-524, keel/ac-534). Before the ruling on
+// keel/issue-162 this same case returned a nil error, which is what let a
+// failed codex run read as a success.
 //
-// DHF-TEST: keel/requirement-7
-func TestRun_NonZeroExitWithEventsReturnsResultWithExitCodeAndNoError(t *testing.T) {
+// DHF-TEST: keel/requirement-7, keel/requirement-134
+func TestRun_NonZeroExitWithEventsStaysFullyInspectable(t *testing.T) {
 	dir := t.TempDir()
 	argvFile := filepath.Join(dir, "argv.txt")
 	stdinLenFile := filepath.Join(dir, "stdinlen.txt")
@@ -647,11 +649,8 @@ func TestRun_NonZeroExitWithEventsReturnsResultWithExitCodeAndNoError(t *testing
 	stub := writeStreamStub(t, argvFile, stdinLenFile, streamLines, 2)
 
 	res, err := Run(context.Background(), Request{Prompt: "x", Dir: dir, Bin: stub})
-	// Contract (codexcli.go line 151-164): events parsed → (res, nil) even on
-	// non-zero exit. The exit code is carried on the result, not raised as an
-	// error.
-	if err != nil {
-		t.Fatalf("Run returned err %v; want nil when events were parsed despite non-zero exit", err)
+	if err == nil {
+		t.Fatal("Run returned nil err; a non-zero exit fails the run whatever the stream contained")
 	}
 	if res == nil {
 		t.Fatal("Run returned nil Result; want non-nil so ExitCode/events are inspectable")
