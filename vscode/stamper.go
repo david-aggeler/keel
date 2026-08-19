@@ -152,3 +152,40 @@ func sanitizeArtifactURI(workspace string, artifact *RunArtifact) (RunArtifact, 
 	}
 	return out, true, ""
 }
+
+// typedFactTokens maps a key=value token that must never appear in a discovery
+// item's prose channel to the typed wire field that carries the fact instead.
+// The set is stated as tokens rather than as a regular expression so a
+// diagnostic can name the exact string it found.
+//
+// DHF-REQ: keel/requirement-138
+var typedFactTokens = []struct {
+	token string
+	field string
+}{
+	{"mutually_exclusive=", "desired_state_group.mutually_exclusive"},
+	{"current=", "desired_state_row.current"},
+	{"action=", "desired_state_row.action"},
+	{"active=", "desired_state_row.active"},
+}
+
+// ValidateItemDescription refuses a discovery item whose Description re-encodes
+// a typed fact as key=value prose, and names both the token it found and the
+// typed field that should have carried it.
+//
+// The refusal sits at the producer boundary on purpose. A de-duplicating
+// heuristic in the consumer would have to match on prose, which is the failure
+// mode keel/requirement-138 exists to escape: the reference consumer was found
+// emitting current=, action=, active= and mutually_exclusive= as text with the
+// typed fields absent, and the record forbidding it did not stop it.
+//
+// DHF-REQ: keel/requirement-138
+func ValidateItemDescription(item TestItem) error {
+	for _, fact := range typedFactTokens {
+		if !strings.Contains(item.Description, fact.token) {
+			continue
+		}
+		return fmt.Errorf("keel/vscode: discovery item %q re-encodes a typed fact as prose: description carries %q, which belongs in the typed field %q", item.ID, fact.token, fact.field)
+	}
+	return nil
+}

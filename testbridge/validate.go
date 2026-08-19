@@ -107,6 +107,19 @@ func validateDiscovery(doc vscode.DiscoveryDocument) error {
 				return fmt.Errorf("keel/testbridge: discovery item %q has invalid profile %q", item.ID, profile)
 			}
 		}
+		// DHF-REQ: keel/requirement-138
+		if err := vscode.ValidateItemDescription(item); err != nil {
+			return err
+		}
+		// DHF-REQ: keel/requirement-138
+		for _, finding := range item.Findings {
+			if finding.Rule == "" || finding.Message == "" {
+				return fmt.Errorf("keel/testbridge: discovery item %q has a finding missing rule or message", item.ID)
+			}
+			if !vscode.IsFindingSeverity(finding.Severity) {
+				return fmt.Errorf("keel/testbridge: discovery item %q has invalid finding severity %q", item.ID, finding.Severity)
+			}
+		}
 	}
 	// DHF-REQ: keel/requirement-97
 	for _, entry := range doc.Capabilities.ReconcileResults {
