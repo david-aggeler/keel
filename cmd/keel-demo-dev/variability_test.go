@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -295,4 +296,43 @@ func assertDemoItem(t *testing.T, items []vscode.TestItem, id string) vscode.Tes
 	}
 	t.Fatalf("discovery serves no item %q", id)
 	return vscode.TestItem{}
+}
+
+// The demo serves a lane whose declaration fails validation on purpose, so the
+// diagnostic rendering is demo content rather than an artefact of a broken
+// workspace, and the lanes that validate stay discoverable and runnable
+// (keel/ac-584, keel/requirement-51).
+//
+// DHF-TEST: keel/requirement-62, keel/requirement-51
+func TestDemoServesLaneValidationDiagnosticAsDemoContent(t *testing.T) {
+	doc := demoDiscoveryAfterDetect(t, t.TempDir())
+
+	var diagnostics []vscode.TestItem
+	for _, item := range demoItemsWithParent(doc.Items, idLanes) {
+		if item.Kind == "lane" {
+			continue
+		}
+		diagnostics = append(diagnostics, item)
+	}
+	if len(diagnostics) != 1 {
+		t.Fatalf("C - Lanes holds %d diagnostics, want exactly the deliberate one: %+v", len(diagnostics), diagnostics)
+	}
+	diagnostic := diagnostics[0]
+	if diagnostic.Runnable {
+		t.Fatalf("lane diagnostic %q is runnable; a diagnostic reports, it does not run", diagnostic.ID)
+	}
+	stated := diagnostic.Label + " " + diagnostic.Description
+	if !strings.Contains(stated, demoBrokenLaneName) {
+		t.Fatalf("lane diagnostic does not name the lane that failed validation: %q", stated)
+	}
+	if !strings.Contains(stated, demoLaneMembersRule) {
+		t.Fatalf("lane diagnostic does not name the rule the lane failed: %q", stated)
+	}
+
+	for _, id := range []string{idLaneGoPass, idLaneGoFail, idLaneFakeSmoke, idLaneSlow} {
+		lane := assertDemoItem(t, doc.Items, id)
+		if lane.Kind != "lane" || !lane.Runnable {
+			t.Fatalf("lane %q kind = %q runnable = %v after a sibling failed validation, want a runnable lane", id, lane.Kind, lane.Runnable)
+		}
+	}
 }

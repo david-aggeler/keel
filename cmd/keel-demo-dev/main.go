@@ -68,6 +68,45 @@ const (
 	demoDataSetFull  = "full"
 )
 
+// demoLaneMembersRule is the Test Lanes validation rule a lane breaks when it
+// declares no members (spec Section 11, rule V2).
+const demoLaneMembersRule = "V2"
+
+// demoBrokenLaneName is the lane the demo declares invalid on purpose.
+const demoBrokenLaneName = "broken-fixture"
+
+// demoLaneDeclaration is one authored lane in the demo's lane inventory: the
+// lane's identity and the member test items it runs.
+type demoLaneDeclaration struct {
+	id          string
+	name        string
+	label       string
+	description string
+	resources   []string
+	members     []string
+}
+
+// demoLaneDeclarations is the demo's authored lane inventory. The last entry
+// declares no members on purpose, so the tree always carries one lane-validation
+// diagnostic beside four lanes that validate (keel/ac-584).
+var demoLaneDeclarations = []demoLaneDeclaration{
+	{id: idLaneGoPass, name: "go-pass", label: "real Go pass", description: "runs a real Go test module that passes", resources: []string{"go-toolchain"}, members: []string{idTestGoPass}},
+	{id: idLaneGoFail, name: "go-fail", label: "real Go fail", description: "runs a real Go test module that fails on purpose", resources: []string{"go-toolchain"}, members: []string{idTestGoFail}},
+	{id: idLaneFakeSmoke, name: "fake-smoke", label: "fake provisioning smoke", description: "walks the fake provisioning story without touching real infrastructure", resources: []string{"demo-environment", "demo-database", "demo-services"}, members: []string{idTestFakeEnvironment, idTestFakeDatabase, idTestFakeServices}},
+	{id: idLaneSlow, name: "slow-provisioning", label: "slow fake provisioning", description: "three fake steps, each one slow on purpose", resources: []string{"demo-environment"}, members: demoSlowLaneMemberIDs()},
+	{id: "keel-demo-dev::lane::" + demoBrokenLaneName, name: demoBrokenLaneName, label: "broken fixture lane", description: "declares no members on purpose"},
+}
+
+// demoSlowLaneMemberIDs lists the slow lane's members from the one table that
+// declares them, so the lane and the tree cannot disagree about what it runs.
+func demoSlowLaneMemberIDs() []string {
+	ids := make([]string, 0, len(demoSlowLaneMembers))
+	for _, member := range demoSlowLaneMembers {
+		ids = append(ids, member.id)
+	}
+	return ids
+}
+
 // demoSlowLaneMembers are the slow lane's three members. Three rather than one,
 // because the behaviour the slow lane demonstrates is partial progress: members
 // settle one after another while the rest are still in flight (keel/ac-581).
@@ -373,11 +412,18 @@ func (b demoBridge) Lanes(ctx context.Context) ([]vscode.TestItem, error) {
 //
 // DHF-REQ: keel/requirement-140
 func demoLanes(root string) ([]vscode.TestItem, error) {
-	items := []vscode.TestItem{
-		lane(root, idLaneGoPass, idLanes, "real Go pass", "runs a real Go test module that passes", []string{"go-toolchain"}),
-		lane(root, idLaneGoFail, idLanes, "real Go fail", "runs a real Go test module that fails on purpose", []string{"go-toolchain"}),
-		lane(root, idLaneFakeSmoke, idLanes, "fake provisioning smoke", "walks the fake provisioning story without touching real infrastructure", []string{"demo-environment", "demo-database", "demo-services"}),
-		lane(root, idLaneSlow, idLanes, "slow fake provisioning", "three fake steps, each one slow on purpose", []string{"demo-environment"}),
+	items := make([]vscode.TestItem, 0, len(demoLaneDeclarations))
+	for _, declared := range demoLaneDeclarations {
+		if len(declared.members) == 0 {
+			// A lane that declares no members cannot run anything, so it is
+			// reported rather than served — and reporting it is the point: the
+			// diagnostic rendering is demo content here, not the trace of a
+			// broken workspace (keel/ac-584). Discovery continues with every
+			// lane that validates (keel/requirement-51).
+			items = append(items, laneDiagnostic(declared.name, demoLaneMembersRule, "lane "+quoted(declared.name)+" declares no members"))
+			continue
+		}
+		items = append(items, lane(root, declared.id, idLanes, declared.label, declared.description, declared.resources))
 	}
 	blocked, err := blockedLane(root)
 	if err != nil {
@@ -528,6 +574,27 @@ func writeGoFixture(root string, pass bool) (string, error) {
 		return "", err
 	}
 	return dir, nil
+}
+
+// laneDiagnostic reports one lane the demo's own validation refused. It is not
+// runnable: it carries a finding about a lane, not a lane to run.
+//
+// DHF-REQ: keel/requirement-51, keel/requirement-62
+func laneDiagnostic(laneName, rule, message string) vscode.TestItem {
+	stated := rule + ": " + message
+	return vscode.TestItem{
+		ID:          idLanes + "::diagnostic::" + laneName,
+		ParentID:    idLanes,
+		Label:       "lane diagnostic: " + stated,
+		Kind:        "group",
+		Runnable:    false,
+		Profiles:    []string{},
+		Description: stated,
+	}
+}
+
+func quoted(value string) string {
+	return "\"" + value + "\""
 }
 
 func group(id, parent, label string) vscode.TestItem {
