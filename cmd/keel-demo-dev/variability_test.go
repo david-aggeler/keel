@@ -336,3 +336,31 @@ func TestDemoServesLaneValidationDiagnosticAsDemoContent(t *testing.T) {
 		}
 	}
 }
+
+// Every runnable lane and test item the demo serves carries a description of its
+// own, and none crowds the label it follows: forty characters is the bound
+// (keel/ac-583). The bound governs the authored description only, never the
+// secondary text a consumer composes from several fact classes.
+//
+// DHF-TEST: keel/requirement-62, keel/requirement-138
+func TestDemoRunnableItemDescriptionsAreShortAndPresent(t *testing.T) {
+	doc := demoDiscoveryAfterDetect(t, t.TempDir())
+
+	bounded := 0
+	for _, item := range doc.Items {
+		if !item.Runnable || (item.Kind != "lane" && item.Kind != "test") {
+			continue
+		}
+		bounded++
+		if item.Description == "" {
+			t.Errorf("%s item %q carries no description", item.Kind, item.ID)
+			continue
+		}
+		if len(item.Description) > demoDescriptionLimit {
+			t.Errorf("%s item %q description is %d characters, want at most %d: %q", item.Kind, item.ID, len(item.Description), demoDescriptionLimit, item.Description)
+		}
+	}
+	if bounded == 0 {
+		t.Fatal("discovery serves no runnable lane or test items to bound")
+	}
+}
