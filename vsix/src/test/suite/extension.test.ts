@@ -1368,7 +1368,6 @@ process.exit(2);
           id: 'tree::child',
           parent_id: 'tree::root',
           label: 'child',
-          sort_text: 'b',
           kind: 'test',
           uri: 'child.test.ts',
           range: { start_line: 1, start_column: 2, end_line: 3, end_column: 4 },
@@ -1384,7 +1383,9 @@ process.exit(2);
       const replacedChild = replacePublishedTestItem(controller, tree, 'tree::child');
       assert.ok(replacedChild);
       assert.equal(replacedChild.label, 'child');
-      assert.equal(replacedChild.sortText, 'b');
+      // The replacement carries the derived key forward: 'child' is the first
+      // child its parent emitted (keel/ac-546).
+      assert.equal(replacedChild.sortText, '0');
       assert.equal(replacedChild.description, 'slow');
       assert.equal(replacedChild.range?.start.line, 1);
       assert.equal(tree.parentByItemId.get('tree::child')?.id, 'tree::root');

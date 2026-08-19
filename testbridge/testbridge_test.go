@@ -378,8 +378,8 @@ func TestDiscoverDerivesDesiredStateGroupsFromProvider(t *testing.T) {
 	if !ok {
 		t.Fatalf("derived desired-state group missing: %+v", doc.Items)
 	}
-	if group.ParentID != "demo::desired-state" || group.Label != "Provisioning" || group.SortText != "b.020" || group.DesiredStateGroup == nil || !group.DesiredStateGroup.MutuallyExclusive {
-		t.Fatalf("derived group = %+v, want provider label/order/exclusivity under B", group)
+	if group.ParentID != "demo::desired-state" || group.Label != "Provisioning" || group.DesiredStateGroup == nil || !group.DesiredStateGroup.MutuallyExclusive {
+		t.Fatalf("derived group = %+v, want provider label and exclusivity under B", group)
 	}
 	runnable, ok := testItemByID(doc.Items, "demo::action::seed-small")
 	if !ok || runnable.ParentID != group.ID || !runnable.Runnable || !equalStrings(runnable.Profiles, []string{"run"}) {
@@ -856,21 +856,18 @@ func TestDiscoverInjectsBridgeOwnedMaintenanceVocabulary(t *testing.T) {
 	if got, want := doc.Capabilities.ClearStateTestIDs, []string{testbridge.MaintenanceClearStateID}; !equalStrings(got, want) {
 		t.Fatalf("clear_state_test_ids = %v, want %v", got, want)
 	}
-	for id, want := range map[string]struct {
-		label string
-		sort  string
-	}{
-		testbridge.MaintenanceDetectLanesID:  {label: "a.1 detect lanes", sort: "a.001"},
-		testbridge.MaintenanceUnlockID:       {label: "a.2 unlock test bridge", sort: "a.002"},
-		testbridge.MaintenanceClearResultsID: {label: "a.3 clear test results", sort: "a.003"},
-		testbridge.MaintenanceClearStateID:   {label: "a.4 clear local test state", sort: "a.004"},
+	for id, wantLabel := range map[string]string{
+		testbridge.MaintenanceDetectLanesID:  "detect lanes",
+		testbridge.MaintenanceUnlockID:       "unlock test bridge",
+		testbridge.MaintenanceClearResultsID: "clear test results",
+		testbridge.MaintenanceClearStateID:   "clear local test state",
 	} {
 		item, ok := testItemByID(doc.Items, id)
 		if !ok {
 			t.Fatalf("missing bridge-owned maintenance item %q", id)
 		}
-		if item.ParentID != testbridge.MaintenanceGroupID || item.Kind != "maintenance" || item.Label != want.label || item.SortText != want.sort || !item.Runnable {
-			t.Fatalf("maintenance item %q = %+v, want canonical parent label=%q sort=%q runnable", id, item, want.label, want.sort)
+		if item.ParentID != testbridge.MaintenanceGroupID || item.Kind != "maintenance" || item.Label != wantLabel || !item.Runnable {
+			t.Fatalf("maintenance item %q = %+v, want canonical parent label=%q runnable", id, item, wantLabel)
 		}
 		if item.Framework != "testbridge" {
 			t.Fatalf("maintenance item %q framework = %q, want bridge-owned neutral framework", id, item.Framework)
@@ -885,7 +882,6 @@ func TestBridgeOwnedVocabularyIsConsumerAgnostic(t *testing.T) {
 	fake.lanes = []vscode.TestItem{{
 		ID:        "openbrain-dev::lane::acceptance",
 		Label:     "",
-		SortText:  "c.010",
 		Kind:      "lane",
 		Framework: "openbrain-dev",
 		Runnable:  true,
@@ -1008,7 +1004,6 @@ func TestBridgeInjectedRunnableMaintenanceIDsHaveDefinedRunPaths(t *testing.T) {
 	fake.lanes = []vscode.TestItem{{
 		ID:                "demo::lane::fast",
 		Label:             "fast",
-		SortText:          "c.10",
 		Kind:              "lane",
 		Framework:         "go",
 		Runnable:          true,

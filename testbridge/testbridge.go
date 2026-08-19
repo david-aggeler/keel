@@ -359,7 +359,6 @@ type LaneFile struct {
 type LaneFileLane struct {
 	ID                string              `json:"id"`
 	Label             string              `json:"label"`
-	Order             string              `json:"order"`
 	Description       string              `json:"description"`
 	Framework         string              `json:"framework,omitempty"`
 	RequiredResources []string            `json:"required_resources,omitempty"`
@@ -375,7 +374,6 @@ type bridgeLanesFile struct {
 type bridgeLane struct {
 	ID                string              `json:"id"`
 	Label             string              `json:"label"`
-	Order             string              `json:"order,omitempty"`
 	Framework         string              `json:"framework,omitempty"`
 	RequiredResources []string            `json:"required_resources,omitempty"`
 	Members           []map[string]string `json:"members,omitempty"`
@@ -488,23 +486,21 @@ func bridgeMaintenanceItems() []vscode.TestItem {
 		{
 			ID:       MaintenanceGroupID,
 			Label:    "A - Test Bridge Maintenance",
-			SortText: "a",
 			Kind:     "group",
 			Profiles: []string{},
 		},
-		bridgeMaintenanceItem(MaintenanceDetectLanesID, "a.1 detect lanes", "a.001"),
-		bridgeMaintenanceItem(MaintenanceUnlockID, "a.2 unlock test bridge", "a.002"),
-		bridgeMaintenanceItem(MaintenanceClearResultsID, "a.3 clear test results", "a.003"),
-		bridgeMaintenanceItem(MaintenanceClearStateID, "a.4 clear local test state", "a.004"),
+		bridgeMaintenanceItem(MaintenanceDetectLanesID, "detect lanes"),
+		bridgeMaintenanceItem(MaintenanceUnlockID, "unlock test bridge"),
+		bridgeMaintenanceItem(MaintenanceClearResultsID, "clear test results"),
+		bridgeMaintenanceItem(MaintenanceClearStateID, "clear local test state"),
 	}
 }
 
-func bridgeMaintenanceItem(id, label, sortText string) vscode.TestItem {
+func bridgeMaintenanceItem(id, label string) vscode.TestItem {
 	return vscode.TestItem{
 		ID:          id,
 		ParentID:    MaintenanceGroupID,
 		Label:       label,
-		SortText:    sortText,
 		Kind:        "maintenance",
 		Framework:   "testbridge",
 		Runner:      "testbridge",
@@ -647,15 +643,14 @@ func desiredStateDeclarationDiscoveryItems(ctx context.Context, root, parentID s
 			ID:                groupID,
 			ParentID:          parentID,
 			Label:             group.Label,
-			SortText:          fmt.Sprintf("b.%03d", group.Order),
 			Kind:              "group",
 			Runnable:          runnable,
 			Profiles:          profiles,
 			DesiredStateGroup: &vscode.DesiredStateGroupFacts{MutuallyExclusive: group.MutuallyExclusive},
 		}
 		items = append(items, groupItem)
-		for rowIndex, row := range derivedRows {
-			items = append(items, desiredStateDeclarationDiscoveryItem(groupID, groupItem.SortText, rowIndex+1, row.Declaration, row.State))
+		for _, row := range derivedRows {
+			items = append(items, desiredStateDeclarationDiscoveryItem(groupID, row.Declaration, row.State))
 		}
 		if group.MutuallyExclusive {
 			reconcile = append(reconcile, exclusiveGroupReconcileResults(derivedRows)...)
@@ -712,7 +707,7 @@ func desiredStateGroupHasRunnableRows(group DesiredStateGroup) bool {
 	return false
 }
 
-func desiredStateDeclarationDiscoveryItem(parentID, parentSort string, rowIndex int, row DesiredStateRow, derived vscode.DesiredState) vscode.TestItem {
+func desiredStateDeclarationDiscoveryItem(parentID string, row DesiredStateRow, derived vscode.DesiredState) vscode.TestItem {
 	action := derived.Action
 	id := row.RunID
 	if id == "" {
@@ -726,7 +721,6 @@ func desiredStateDeclarationDiscoveryItem(parentID, parentSort string, rowIndex 
 		ID:       id,
 		ParentID: parentID,
 		Label:    fmt.Sprintf("%s: %s", row.Resource, row.Desired),
-		SortText: fmt.Sprintf("%s.%03d", parentSort, rowIndex),
 		Kind:     "group",
 		Runnable: row.RunID != "",
 		Profiles: profiles,
@@ -1384,7 +1378,6 @@ func bridgeLaneFileRows(items []vscode.TestItem) []bridgeLane {
 		lanes = append(lanes, bridgeLane{
 			ID:                id,
 			Label:             bridgeLaneFileLabel(item, id),
-			Order:             bridgeLaneFileOrder(item),
 			Framework:         item.Framework,
 			RequiredResources: append([]string(nil), item.RequiredResources...),
 			Members:           bridgeLaneFileMembers(item, id),
@@ -1410,29 +1403,6 @@ func bridgeLaneFileLabel(item vscode.TestItem, id string) string {
 		label = id
 	}
 	return label
-}
-
-func bridgeLaneFileOrder(item vscode.TestItem) string {
-	if order := normalizedBridgeLaneOrder(item.SortText); order != "" {
-		return order
-	}
-	if fields := strings.Fields(item.Label); len(fields) > 0 {
-		return normalizedBridgeLaneOrder(fields[0])
-	}
-	return ""
-}
-
-func normalizedBridgeLaneOrder(value string) string {
-	value = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(value)), ".")
-	if len(value) < 3 || value[1] != '.' {
-		return ""
-	}
-	for _, r := range value[2:] {
-		if r < '0' || r > '9' {
-			return ""
-		}
-	}
-	return value
 }
 
 func bridgeLaneFileMembers(item vscode.TestItem, id string) []map[string]string {
