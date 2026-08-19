@@ -100,39 +100,38 @@ suite('description composition', () => {
   // keel/ac-553: the rendered text depends on the facts, never on the producer.
   // DHF-TEST: keel/requirement-139
   test('req-139 two producers emitting identical facts render identical text', () => {
-    const facts = (id: string, limitations?: string[]): DiscoveryItem => ({
+    const facts = (id: string): DiscoveryItem => ({
       id,
       label: 'shared',
       kind: 'lane',
       runnable: true,
       profiles: [],
-      limitations,
       description: 'the same prose',
       last_run: { at: '2026-08-18T10:00:00Z', duration_ms: 1500 },
       desired_state_row: { current: 'running', action: 'reuse', active: true },
       findings: [{ rule: 'r', severity: 'error', message: 'm' }]
     });
-    const fromKeelDev = composeDescription(facts('keel::lane::a', ['the same prose', '· last 1.5s']), defaultDisplayConfig());
+    const fromKeelDev = composeDescription(facts('keel::lane::a'), defaultDisplayConfig());
     const fromOpenbrainDev = composeDescription(facts('openbrain::lane::a'), defaultDisplayConfig());
     assert.equal(fromKeelDev, fromOpenbrainDev);
     assert.ok(fromKeelDev && fromKeelDev.length > 0);
   });
 
-  // The fallback path, asserted by its own named test per producer shape, so a
-  // producer that silently stopped emitting typed facts is an observed fact
-  // rather than an invisible default.
-  // DHF-TEST: keel/requirement-139
-  test('req-139 an openbrain-dev item with no typed facts falls back to its limitations prose', () => {
+  // The fallback is retired: with the prose array gone from the wire, an item
+  // carrying no typed fact renders nothing whatever producer emitted it. This is
+  // asserted per producer shape so a producer that silently stopped emitting
+  // typed facts is an observed fact rather than an invisible default.
+  // DHF-TEST: keel/requirement-138, keel/requirement-139
+  test('req-138 an openbrain-dev item with no typed facts renders nothing, the fallback being retired', () => {
     const item: DiscoveryItem = {
       id: 'openbrain::lane::a',
       label: 'A',
       kind: 'lane',
       runnable: true,
-      profiles: [],
-      limitations: ['current=empty', 'action=reconcile', 'active=true']
+      profiles: []
     };
     assert.equal(hasRenderableFacts(item), false);
-    assert.equal(composeDescription(item, defaultDisplayConfig()), 'current=empty; action=reconcile; active=true');
+    assert.equal(composeDescription(item, defaultDisplayConfig()), undefined);
   });
 
   // DHF-TEST: keel/requirement-139
@@ -142,17 +141,16 @@ suite('description composition', () => {
     assert.equal(composeDescription(item, defaultDisplayConfig()), undefined);
   });
 
-  // A suppressed class must stay suppressed: an item that carries typed facts
-  // never falls back to the prose channel that would resurrect them.
-  // DHF-TEST: keel/requirement-139
-  test('req-139 a typed item with every class disabled does not fall back to limitations', () => {
+  // A suppressed class must stay suppressed: there is no prose channel left to
+  // resurrect what the toggles removed.
+  // DHF-TEST: keel/requirement-138, keel/requirement-139
+  test('req-139 a typed item with every class disabled renders nothing', () => {
     const item: DiscoveryItem = {
       id: 'keel::lane::a',
       label: 'A',
       kind: 'lane',
       runnable: true,
       profiles: [],
-      limitations: ['the lane prose', '· last 9.8s'],
       description: 'the lane prose',
       last_run: { at: '2026-08-18T10:00:00Z', duration_ms: 9800 }
     };
@@ -171,7 +169,6 @@ suite('description composition', () => {
         kind: 'lane',
         runnable: true,
         profiles: [],
-        limitations: ['ignored prose'],
         description: 'the lane prose',
         last_run: { at: '2026-08-18T10:00:00Z', duration_ms: 9800 },
         findings: [{ rule: 'lane-order', severity: 'warning', message: 'order drifted' }]

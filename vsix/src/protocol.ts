@@ -47,12 +47,6 @@ export interface DiscoveryItem {
   canonical_id?: string;
   required_resources?: string[];
   /**
-   * Human-readable prose only — lane descriptions, remediation hints, lint
-   * findings, error text. Safe to render verbatim. Machine-readable facts
-   * travel in the typed fields below (keel/requirement-127).
-   */
-  limitations?: string[];
-  /**
    * The producer's own prose for this item — one string, never a composed
    * line. Sequencing it against anything else is the consumer's job
    * (keel/requirement-138).

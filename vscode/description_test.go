@@ -92,11 +92,10 @@ func TestRenderDescriptionToggleSuppressesExactlyItsClass(t *testing.T) {
 //
 // DHF-TEST: keel/requirement-139
 func TestRenderDescriptionIsProducerIndependent(t *testing.T) {
-	facts := func(id string, limitations []string) TestItem {
+	facts := func(id string) TestItem {
 		return TestItem{
 			ID:              id,
 			Label:           "shared label",
-			Limitations:     limitations,
 			Description:     "the same prose",
 			LastRun:         &LastRunFacts{DurationMS: int64Ptr(1500)},
 			DesiredStateRow: &DesiredStateRowFacts{Current: "running", Action: "reuse", Active: true},
@@ -104,8 +103,8 @@ func TestRenderDescriptionIsProducerIndependent(t *testing.T) {
 		}
 	}
 
-	fromKeelDev := RenderDescription(facts("keel::lane::a", []string{"the same prose", "· last 1.5s"}), DefaultDisplayConfig())
-	fromOpenbrainDev := RenderDescription(facts("openbrain::lane::a", nil), DefaultDisplayConfig())
+	fromKeelDev := RenderDescription(facts("keel::lane::a"), DefaultDisplayConfig())
+	fromOpenbrainDev := RenderDescription(facts("openbrain::lane::a"), DefaultDisplayConfig())
 	if fromKeelDev != fromOpenbrainDev {
 		t.Fatalf("producers rendered differently\n keel-dev: %q\n openbrain-dev: %q", fromKeelDev, fromOpenbrainDev)
 	}
@@ -141,18 +140,18 @@ func TestFormatLastRunOmitsAnAbsentMeasurement(t *testing.T) {
 	}
 }
 
-// TestRenderDescriptionOfAnItemWithoutFactsIsEmpty holds the consumer-side
-// fallback precondition: an item carrying no typed fact renders nothing, so a
-// consumer can tell "the renderer had nothing to say" from "the renderer said
-// something short" without inspecting the item itself.
+// TestRenderDescriptionOfAnItemWithoutFactsIsEmpty holds the renderer's floor:
+// an item carrying no typed fact renders nothing at all. With the prose array
+// retired there is no fallback channel left to resurrect text from, so an empty
+// render is the whole answer (keel/ac-549).
 //
 // DHF-TEST: keel/requirement-139
 func TestRenderDescriptionOfAnItemWithoutFactsIsEmpty(t *testing.T) {
-	item := TestItem{ID: "openbrain::lane::a", Limitations: []string{"current=empty", "action=reconcile"}}
+	item := TestItem{ID: "openbrain::lane::a"}
 	if got := RenderDescription(item, DefaultDisplayConfig()); got != "" {
 		t.Fatalf("RenderDescription() of an item carrying no facts = %q, want empty", got)
 	}
 	if HasRenderableFacts(item) {
-		t.Fatal("HasRenderableFacts() reported facts on an item carrying only limitations")
+		t.Fatal("HasRenderableFacts() reported facts on an item carrying none")
 	}
 }

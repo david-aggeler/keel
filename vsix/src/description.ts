@@ -88,19 +88,14 @@ function isDisplayToggle(key: string): key is DisplayToggle {
 /**
  * Composes the value of `vscode.TestItem.description` for one discovery item.
  *
- * An item carrying typed facts renders through the renderer alone. Only an item
- * carrying no typed fact at all falls back to the legacy `limitations` prose
- * channel, which is what keeps a producer that has not migrated's tree unchanged. A typed
- * item whose classes are all switched off renders nothing rather than falling
- * back — otherwise the fallback would resurrect the text the toggles suppressed.
+ * Every item renders through the renderer alone. The legacy `limitations` prose
+ * channel is retired, so there is no fallback left to resurrect text a toggle
+ * suppressed: an item carrying no renderable fact renders nothing.
  *
- * DHF-REQ: keel/requirement-139
+ * DHF-REQ: keel/requirement-138, keel/requirement-139
  */
 export function composeDescription(item: DiscoveryItem, display: DisplayConfig): string | undefined {
-  if (hasRenderableFacts(item)) {
-    return renderDescription(item, display) || undefined;
-  }
-  return item.limitations?.join(descriptionSeparator);
+  return renderDescription(item, display) || undefined;
 }
 
 /**

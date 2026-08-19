@@ -12,7 +12,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1232,15 +1231,12 @@ func TestVSCodeDiscoveryAppendsExactLaneDurationHint(t *testing.T) {
 	if !ok {
 		t.Fatalf("discovery missing go-log lane: %+v", doc.Items)
 	}
-	if got := strings.Join(lane.Limitations, " "); !strings.Contains(got, "last 9.8s") {
-		t.Fatalf("lane limitations = %q, want newest exact single-lane duration hint", got)
-	}
-	// keel/ac-565: the hint the producer still carries for a consumer that has
-	// not migrated is the exported renderer's own output, byte for byte, rather
-	// than a second format string that renders the same today.
+	// keel/ac-565: the measurement travels typed and the format lives only in
+	// the exported renderer, so the hint a consumer shows is derived here rather
+	// than carried as a second format string.
 	// DHF-TEST: keel/requirement-139
-	if want := vscode.FormatLastRun(lane.LastRun); want == "" || !slices.Contains(lane.Limitations, want) {
-		t.Fatalf("lane limitations = %v, want the exported renderer's %q", lane.Limitations, want)
+	if got := vscode.FormatLastRun(lane.LastRun); !strings.Contains(got, "last 9.8s") {
+		t.Fatalf("rendered last-run hint = %q, want newest exact single-lane duration", got)
 	}
 	// The typed measurement is asserted against the same three fixture
 	// streams as the formatted hint, in the same test: the attribution
@@ -1390,8 +1386,8 @@ func TestVSCodeDiscoveryEmitsLaneCoversAndVSIXFileItems(t *testing.T) {
 	if !ok || !ui.Runnable {
 		t.Fatalf("ui lane should render despite missing vsix warning: %+v ok=%v", ui, ok)
 	}
-	if !strings.Contains(strings.Join(ui.Limitations, " "), "V10") || !discoveryHasAlias(doc, "keel::lane::ui::covers", "vsix::file::src/test/suite/extension.test.ts") {
-		t.Fatalf("ui lane limitations/covers = %+v items=%+v", ui.Limitations, doc.Items)
+	if !laneHasFindingRule(ui, "V10") || !discoveryHasAlias(doc, "keel::lane::ui::covers", "vsix::file::src/test/suite/extension.test.ts") {
+		t.Fatalf("ui lane findings/covers = %+v items=%+v", ui.Findings, doc.Items)
 	}
 	// requirement-94 (ac-308): the vsix-member covers expands file→test.
 	vsixFileAliasID := "keel::lane::ui::covers::" + StableIDSegment("vsix::file::src/test/suite/extension.test.ts")
@@ -1826,7 +1822,7 @@ func TestVSCodeLaneAdditionalErrorBranches(t *testing.T) {
 
 func discoveryItemsContain(items []vscode.TestItem, text string) bool {
 	for _, item := range items {
-		if strings.Contains(item.Label, text) || strings.Contains(strings.Join(item.Limitations, "\n"), text) {
+		if strings.Contains(item.Label, text) || strings.Contains(item.Description, text) {
 			return true
 		}
 	}
@@ -2299,8 +2295,8 @@ func TestVSCodeDiscoveryReportsGoParseErrorsAsDiagnosticFileItems(t *testing.T) 
 	if item.ParentID != "go::pkg::broken" || item.Kind != "file" || item.Runnable || item.URI != "broken/broken_test.go" {
 		t.Fatalf("parse diagnostic item = %+v, want non-runnable file item under package", item)
 	}
-	if len(item.Limitations) == 0 || !strings.Contains(strings.Join(item.Limitations, "\n"), "expected") {
-		t.Fatalf("parse diagnostic limitations = %v, want parse error text", item.Limitations)
+	if !strings.Contains(item.Description, "expected") {
+		t.Fatalf("parse diagnostic description = %q, want parse error text", item.Description)
 	}
 }
 
@@ -2334,8 +2330,8 @@ func TestVSCodeDiscoveryReportsPackageParseErrorsAsDiagnosticFileItems(t *testin
 	if item.Kind != "file" || item.Runnable || item.URI != "broken/ok_test.go" {
 		t.Fatalf("package diagnostic item = %+v, want non-runnable file item", item)
 	}
-	if len(item.Limitations) == 0 || !strings.Contains(strings.Join(item.Limitations, "\n"), "broken.go") {
-		t.Fatalf("package diagnostic limitations = %v, want package parse error text", item.Limitations)
+	if !strings.Contains(item.Description, "broken.go") {
+		t.Fatalf("package diagnostic description = %q, want package parse error text", item.Description)
 	}
 	if _, ok := discoveryItemByID(doc, "go::test::broken::TestOK"); ok {
 		t.Fatalf("discovery included runnable test from invalid package: %+v", doc.Items)
@@ -3380,7 +3376,7 @@ func discoveryHasDiagnosticContaining(doc vscode.DiscoveryDocument, text string)
 		if item.Kind != "group" || item.Runnable {
 			continue
 		}
-		if strings.Contains(item.Label, text) || strings.Contains(strings.Join(item.Limitations, "\n"), text) {
+		if strings.Contains(item.Label, text) || strings.Contains(item.Description, text) {
 			return true
 		}
 	}
@@ -4079,4 +4075,16 @@ exit 0`)
 			t.Fatalf("stale results.jsonl content leaked into the run stream: %+v", events)
 		}
 	}
+}
+
+// laneHasFindingRule reports whether the item carries a typed finding for the
+// named rule. The rule travels typed now, so a test asks the field rather than
+// searching prose (keel/ac-551).
+func laneHasFindingRule(item vscode.TestItem, rule string) bool {
+	for _, finding := range item.Findings {
+		if finding.Rule == rule {
+			return true
+		}
+	}
+	return false
 }

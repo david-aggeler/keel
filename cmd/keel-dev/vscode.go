@@ -780,34 +780,20 @@ func (s lanesState) discoveryItems() []vscode.TestItem {
 		eff := s.effective[id]
 		item := laneItem(eff.id, eff.lane.Label)
 		item.RequiredResources = eff.prerequisites
-		// The producer's own prose travels scalar; limitations keeps its copy
-		// until the consumer no longer needs the fallback (keel/ac-549).
+		// The producer's own prose travels scalar and alone: the consumer
+		// composes the rendered line from the typed facts (keel/ac-549).
 		// DHF-REQ: keel/requirement-138
 		item.Description = eff.lane.Description
-		if eff.lane.Description != "" {
-			item.Limitations = append(item.Limitations, eff.lane.Description)
-		}
-		// The typed measurement and the prose hint are written from one
-		// attribution, so the tree cannot move while the fact starts
-		// traveling typed (keel/ac-550, keel/ac-564).
+		// The measurement travels typed, never as formatted text, and stays
+		// absent when no run is attributable (keel/ac-550, keel/ac-564).
 		// DHF-REQ: keel/requirement-138
 		lastRun := vscode.LatestLaneRun(s.root, eff.id)
 		item.LastRun = lastRun.Facts()
-		// The text is composed by the exported renderer, never here: keel-dev
-		// contributes facts and prose, never a format (keel/ac-565).
-		// DHF-REQ: keel/requirement-139
-		if hint := vscode.FormatLastRun(item.LastRun); hint != "" {
-			item.Limitations = append(item.Limitations, hint)
-		}
-		// Each finding travels as its own rule/severity/message triple; the
-		// concatenated line stays in limitations only until the consumer
-		// stops reading it (keel/ac-551).
+		// Each finding travels as its own rule/severity/message triple
+		// (keel/ac-551).
 		// DHF-REQ: keel/requirement-138
-		// DHF-REQ: keel/requirement-139
 		for _, finding := range eff.findings {
-			typed := vscode.Finding{Rule: finding.Rule, Severity: finding.Severity, Message: finding.Message}
-			item.Findings = append(item.Findings, typed)
-			item.Limitations = append(item.Limitations, vscode.FormatFinding(typed))
+			item.Findings = append(item.Findings, vscode.Finding{Rule: finding.Rule, Severity: finding.Severity, Message: finding.Message})
 		}
 		items = append(items, item)
 		items = append(items, s.coverItems(eff)...)
@@ -922,7 +908,6 @@ func lanesDiagnosticItem(id, message string) vscode.TestItem {
 		Profiles: []string{},
 		// DHF-REQ: keel/requirement-138
 		Description: message,
-		Limitations: []string{message},
 	}
 }
 
@@ -1188,7 +1173,6 @@ func discoverGoTestItems(_ context.Context, root string) ([]vscode.TestItem, err
 				item.Profiles = []string{}
 				// DHF-REQ: keel/requirement-138
 				item.Description = file.parseErr.Error()
-				item.Limitations = []string{file.parseErr.Error()}
 			}
 			items = append(items, item)
 			for _, test := range file.tests {
@@ -1737,7 +1721,7 @@ func runVSCodeFileLane(ctx context.Context, logger *slog.Logger, root, laneID, r
 	if !ok {
 		for _, item := range lanes.diagnostics {
 			if strings.Contains(item.ID, StableIDSegment(shortID)) {
-				return fmt.Errorf("vscode lane %s invalid: %s", laneID, strings.Join(item.Limitations, "; "))
+				return fmt.Errorf("vscode lane %s invalid: %s", laneID, item.Description)
 			}
 		}
 		return cli.NewUsageError("unknown vscode lane id %q", laneID)

@@ -611,7 +611,6 @@ func desiredStateDiagnosticItem(parentID string, err error) vscode.TestItem {
 		Profiles: []string{},
 		// DHF-REQ: keel/requirement-138
 		Description: err.Error(),
-		Limitations: []string{err.Error()},
 	}
 }
 
