@@ -125,6 +125,49 @@ suite('persistent conditions route to TestItem.error', () => {
     });
   });
 
+  // keel/ac-567: TestItem.error is a single value, so two qualifying conditions
+  // on one item must accumulate into it. A dropped condition here is invisible —
+  // the item still shows an error row, so nothing signals the second problem.
+  // DHF-TEST: keel/requirement-140
+  test('req-140 several persistent conditions on one item accumulate into one error value', () => {
+    withController((controller) => {
+      const tree = publishDiscovery(controller, os.tmpdir(), documentOf({
+        id: 'keel::lane::doubly-blocked',
+        label: 'doubly blocked',
+        kind: 'lane',
+        runnable: true,
+        profiles: ['run'],
+        conditions: [{ kind: 'prerequisite_unsatisfied', message: 'lane blocked: demo-database' }],
+        findings: [{ rule: 'lane-prereq', severity: 'error', message: 'resource is unavailable' }]
+      }));
+      const text = errorTextOf(tree.itemsById.get('keel::lane::doubly-blocked'));
+      assert.ok(text?.includes('lane blocked: demo-database'), `error text ${String(text)} dropped the condition`);
+      assert.ok(text?.includes('lane-prereq error: resource is unavailable'), `error text ${String(text)} dropped the finding`);
+    });
+  });
+
+  // Two conditions of the same kind accumulate for the same reason.
+  // DHF-TEST: keel/requirement-140
+  test('req-140 two conditions on one item both survive', () => {
+    withController((controller) => {
+      const tree = publishDiscovery(controller, os.tmpdir(), documentOf({
+        id: 'go::file::broken/broken_test.go',
+        label: 'broken_test.go',
+        kind: 'file',
+        runnable: false,
+        profiles: [],
+        conditions: [
+          { kind: 'parse_error', message: 'expected declaration' },
+          { kind: 'prerequisite_unsatisfied', message: 'go toolchain is unavailable' }
+        ]
+      }));
+      assert.equal(
+        errorTextOf(tree.itemsById.get('go::file::broken/broken_test.go')),
+        'expected declaration\ngo toolchain is unavailable'
+      );
+    });
+  });
+
   // A republished tree must clear a condition that the producer stopped
   // emitting: a stale error row outlives the condition it reports otherwise.
   // DHF-TEST: keel/requirement-140
