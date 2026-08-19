@@ -68,6 +68,14 @@ const (
 	demoDataSetFull  = "full"
 )
 
+// demoDescriptionLimit bounds the authored description of every runnable lane
+// and test item the demo serves. A description longer than this crowds the
+// label it follows in the tree; an absent one leaves the item unexplained
+// (keel/ac-583). It bounds the demo's own authored prose only — never the
+// secondary text a consumer composes from several fact classes
+// (keel/requirement-139).
+const demoDescriptionLimit = 40
+
 // demoLaneMembersRule is the Test Lanes validation rule a lane breaks when it
 // declares no members (spec Section 11, rule V2).
 const demoLaneMembersRule = "V2"
@@ -90,10 +98,10 @@ type demoLaneDeclaration struct {
 // declares no members on purpose, so the tree always carries one lane-validation
 // diagnostic beside four lanes that validate (keel/ac-584).
 var demoLaneDeclarations = []demoLaneDeclaration{
-	{id: idLaneGoPass, name: "go-pass", label: "real Go pass", description: "runs a real Go test module that passes", resources: []string{"go-toolchain"}, members: []string{idTestGoPass}},
-	{id: idLaneGoFail, name: "go-fail", label: "real Go fail", description: "runs a real Go test module that fails on purpose", resources: []string{"go-toolchain"}, members: []string{idTestGoFail}},
-	{id: idLaneFakeSmoke, name: "fake-smoke", label: "fake provisioning smoke", description: "walks the fake provisioning story without touching real infrastructure", resources: []string{"demo-environment", "demo-database", "demo-services"}, members: []string{idTestFakeEnvironment, idTestFakeDatabase, idTestFakeServices}},
-	{id: idLaneSlow, name: "slow-provisioning", label: "slow fake provisioning", description: "three fake steps, each one slow on purpose", resources: []string{"demo-environment"}, members: demoSlowLaneMemberIDs()},
+	{id: idLaneGoPass, name: "go-pass", label: "real Go pass", description: "runs a real Go module that passes", resources: []string{"go-toolchain"}, members: []string{idTestGoPass}},
+	{id: idLaneGoFail, name: "go-fail", label: "real Go fail", description: "runs a real Go module that fails", resources: []string{"go-toolchain"}, members: []string{idTestGoFail}},
+	{id: idLaneFakeSmoke, name: "fake-smoke", label: "fake provisioning smoke", description: "walks the fake provisioning story", resources: []string{"demo-environment", "demo-database", "demo-services"}, members: []string{idTestFakeEnvironment, idTestFakeDatabase, idTestFakeServices}},
+	{id: idLaneSlow, name: "slow-provisioning", label: "slow fake provisioning", description: "three fake steps, each one slow", resources: []string{"demo-environment"}, members: demoSlowLaneMemberIDs()},
 	{id: "keel-demo-dev::lane::" + demoBrokenLaneName, name: demoBrokenLaneName, label: "broken fixture lane", description: "declares no members on purpose"},
 }
 
