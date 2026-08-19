@@ -13,13 +13,21 @@ the frontmatter, and delete the file — this directory must trend to empty
 | `architecture_description-root.md` | architecture_description | ROOT (one per product); `chapters[]` lists the test-bridge chapter |
 | `architecture_description-test-bridge.md` | architecture_description | chapter: VS Code Test Bridge & lanes (concept chapter) |
 | `architecture_description-adapter-cli.md` | architecture_description | chapter: Adapter invocation contract — exact VSIX ↔ devtool CLI wire (`keel/architecture_description-3`) |
-| `interface_spec.md` | interface_spec | one per product; §4 points at the lanes spec |
 | `threat_model.md` | threat_model | one per product; initial STRIDE pass deliberately marked pending |
 | `attachments/test-lanes-spec.md` | (attachment) | normative lanes contract; canonical copy already attached to `keel/exploration-2`; attach to the interface_spec on ingestion |
 
-Cross-references between these files use PLACEHOLDER refs
-(`keel/architecture_description-1`, `-2`, `keel/interface_spec-1`) — fix them
-to the real sequence ids assigned at ingestion time.
+<!-- DHF-REQ: keel/requirement-133 -->
+The interface specification is **no longer staged here**. It completed the
+ingestion path this file describes: its body became the gold `interface_spec`
+tree — root `keel/interface_spec-1` with chapters `-2` … `-7` — and the staged
+file was deleted at `4a5ce05` under `keel/change_request-131`. Read the records,
+not this folder, for the interface contract. Its index row is removed, not
+redirected to another file, because the tree is now the only holder.
+
+Cross-references between the remaining files use PLACEHOLDER refs
+(`keel/architecture_description-1`, `-2`) — fix them to the real sequence ids
+assigned at ingestion time. `keel/interface_spec-1` is no longer a placeholder;
+it is the assigned root of the ingested tree above.
 
 Provenance: authored 2026-07-12 from the keel/exploration-2 dialogue
 (test-bridge tree, lanes, contract) and repo analysis; reviewed by the
