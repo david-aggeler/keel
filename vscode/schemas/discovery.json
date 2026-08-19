@@ -204,6 +204,24 @@
             }
           }
         },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "message"],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["parse_error", "prerequisite_unsatisfied"]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
         "last_run": {
           "type": "object",
           "additionalProperties": false,

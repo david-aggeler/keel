@@ -46,6 +46,7 @@ func TestSchemasDriftAgainstGoTypes(t *testing.T) {
 		{"discovery desired-state row facts", reflect.TypeOf(DesiredStateRowFacts{}), desiredStateRowFactsRef},
 		{"discovery last-run facts", reflect.TypeOf(LastRunFacts{}), lastRunFactsRef},
 		{"discovery finding", reflect.TypeOf(Finding{}), findingRef},
+		{"discovery condition", reflect.TypeOf(Condition{}), conditionRef},
 		{"desired-state", reflect.TypeOf(DesiredStateDocument{}), ""},
 		{"desired-state devtool", reflect.TypeOf(DevtoolMetadata{}), "#/properties/devtool"},
 		{"desired-state group", reflect.TypeOf(DesiredStateGroup{}), "#/$defs/group"},
@@ -75,6 +76,7 @@ func TestSchemasDriftAgainstGoTypes(t *testing.T) {
 	assertEnumMatches(t, loaded["run-event"].Properties["artifact"].Properties["kind"].Enum, sortedKeys(artifactKinds))
 	assertEnumMatches(t, schemaAtRef(loaded["discovery"], desiredStateRowFactsRef).Properties["action"].Enum, sortedKeys(desiredStateActions))
 	assertEnumMatches(t, schemaAtRef(loaded["discovery"], findingRef).Properties["severity"].Enum, sortedKeys(findingSeverities))
+	assertEnumMatches(t, schemaAtRef(loaded["discovery"], conditionRef).Properties["kind"].Enum, sortedKeys(conditionKinds))
 	assertEnumMatches(t, schemaAtRef(loaded["desired-state"], "#/$defs/desired_state").Properties["action"].Enum, sortedKeys(desiredStateActions))
 }
 
@@ -289,6 +291,10 @@ const lastRunFactsRef = "#/$defs/test_item/properties/last_run"
 // findingRef is where the discovery schema describes one typed lane validation
 // finding.
 const findingRef = "#/$defs/test_item/properties/findings/items"
+
+// conditionRef is where the discovery schema describes one persistent
+// non-result condition standing against an item.
+const conditionRef = "#/$defs/test_item/properties/conditions/items"
 
 // TestDiscoveryItemCarriesTypedFactsAndScalarDescription pins the carriage
 // keel/requirement-138 introduces: the prose channel is a scalar `description`
