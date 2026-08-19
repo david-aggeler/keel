@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/david-aggeler/keel/cli"
 	procexec "github.com/david-aggeler/keel/exec"
 	logging "github.com/david-aggeler/keel/log"
 	zip "golang.org/x/mod/zip"
@@ -85,13 +86,56 @@ func ciSteps(ctx context.Context, logger *slog.Logger, dir string) []step {
 	return ciStepsWithConfig(ctx, logger, dir, cfg)
 }
 
-func ciStepsWithConfig(ctx context.Context, logger *slog.Logger, dir string, cfg keelDevConfig) []step {
+// gateInputs are the per-checkout inputs the battery is built from: the file
+// lists each file-selecting stage gates, the shell scripts, the cspell
+// means-of-compliance text, and the tool pins. Collecting them is the only I/O
+// in building the battery, so the stage inventory can be derived from the same
+// builder with an empty gateInputs and no I/O at all (keel/ac-544). The stage
+// set does not vary with these inputs — a stage with nothing to gate becomes a
+// green no-op of the same name, never a missing command.
+//
+// DHF-REQ: keel/requirement-136 (keel/ac-544)
+type gateInputs struct {
+	scripts      []string
+	gofmtFiles   []string
+	gofmtErr     error
+	cspellFiles  []string
+	cspellErr    error
+	cspellRemedy string
+	lintFiles    []string
+	lintErr      error
+	pins         map[string]toolPin
+}
+
+func collectGateInputs(ctx context.Context, logger *slog.Logger, dir string, cfg keelDevConfig) gateInputs {
+	in := gateInputs{cspellRemedy: cspellRemedy(dir), pins: cfg.toolPins()}
 	// Shell scripts are enumerated up front so shellcheck/shfmt receive explicit
 	// paths (no shell is involved to expand a glob). Sorted for stable output.
-	scripts, _ := filepath.Glob(filepath.Join(dir, "scripts", "*.sh"))
-	gofmtFiles, gofmtListErr := trackedFilesWithExt(ctx, logger, dir, cfg.Gate.Excludes, ".go")
-	cspellFiles, cspellListErr := trackedFilesWithExt(ctx, logger, dir, cfg.Gate.Excludes, ".go", ".md")
-	lintFiles, lintListErr := trackedLintFiles(ctx, logger, dir, cfg.Gate.Excludes)
+	in.scripts, _ = filepath.Glob(filepath.Join(dir, "scripts", "*.sh"))
+	in.gofmtFiles, in.gofmtErr = trackedFilesWithExt(ctx, logger, dir, cfg.Gate.Excludes, ".go")
+	in.cspellFiles, in.cspellErr = trackedFilesWithExt(ctx, logger, dir, cfg.Gate.Excludes, ".go", ".md")
+	in.lintFiles, in.lintErr = trackedLintFiles(ctx, logger, dir, cfg.Gate.Excludes)
+	return in
+}
+
+func ciStepsWithConfig(ctx context.Context, logger *slog.Logger, dir string, cfg keelDevConfig) []step {
+	return ciStepsFrom(collectGateInputs(ctx, logger, dir, cfg))
+}
+
+// noopGateStage keeps a stage present, and green, when the checkout gives it
+// nothing to gate. The stage's verdict is what it would have been had the stage
+// been dropped; keeping the name means the declared command surface is the same
+// in every checkout.
+func noopGateStage(context.Context, *slog.Logger, string) error { return nil }
+
+// ciStepsFrom builds the ordered battery from already-collected inputs. It is
+// the single declaration of what stages exist and in which order they run: the
+// bare `keel-dev ci` battery, a single named stage, and the declared command
+// surface are all derived from this one slice.
+func ciStepsFrom(in gateInputs) []step {
+	scripts, gofmtFiles, gofmtListErr := in.scripts, in.gofmtFiles, in.gofmtErr
+	cspellFiles, cspellListErr := in.cspellFiles, in.cspellErr
+	lintFiles, lintListErr := in.lintFiles, in.lintErr
 	gofmtStep := step{
 		name:    "gofmt",
 		program: "gofmt",
@@ -115,7 +159,7 @@ func ciStepsWithConfig(ctx context.Context, logger *slog.Logger, dir string, cfg
 		quietStderr: true,
 		// Only the spelling verdict carries a remedy: the two fallbacks below fail
 		// on file selection, which the dictionary cannot fix.
-		remedy: cspellRemedy(dir),
+		remedy: in.cspellRemedy,
 	}
 	if cspellListErr != nil {
 		cspellStep = step{name: "cspell", fn: func(context.Context, *slog.Logger, string) error { return cspellListErr }}
@@ -169,23 +213,30 @@ func ciStepsWithConfig(ctx context.Context, logger *slog.Logger, dir string, cfg
 		{name: "gitleaks", tool: "gitleaks", program: "gitleaks", args: []string{"detect", "--no-banner", "--redact"}, quietStderr: true},
 	}
 
-	if len(scripts) > 0 {
-		// DHF-REQ: keel/requirement-12 (keel/ac-43)
-		steps = append(steps, step{name: "shellcheck", tool: "shellcheck", program: "shellcheck", args: scripts, quietStderr: true})
-		// DHF-REQ: keel/requirement-12 (keel/ac-44)
-		steps = append(steps, step{
-			name: "shfmt", tool: "shfmt", program: "shfmt",
-			args:        append([]string{"-d"}, scripts...),
-			quietStderr: true,
-			stdoutFails: func(out string) string {
-				diff := strings.TrimSpace(out)
-				if diff == "" {
-					return ""
-				}
-				return "shfmt found unformatted shell scripts:\n" + diff
-			},
-		})
+	// DHF-REQ: keel/requirement-12 (keel/ac-43)
+	shellcheckStep := step{name: "shellcheck", tool: "shellcheck", program: "shellcheck", args: scripts, quietStderr: true}
+	// DHF-REQ: keel/requirement-12 (keel/ac-44)
+	shfmtStep := step{
+		name: "shfmt", tool: "shfmt", program: "shfmt",
+		args:        append([]string{"-d"}, scripts...),
+		quietStderr: true,
+		stdoutFails: func(out string) string {
+			diff := strings.TrimSpace(out)
+			if diff == "" {
+				return ""
+			}
+			return "shfmt found unformatted shell scripts:\n" + diff
+		},
 	}
+	// A checkout with no shell scripts has nothing for either stage to gate. They
+	// stay in the battery as green no-ops rather than disappearing, so the stage
+	// set — and therefore the declared command surface — is checkout-independent
+	// (keel/ac-544).
+	if len(scripts) == 0 {
+		shellcheckStep = step{name: "shellcheck", fn: noopGateStage}
+		shfmtStep = step{name: "shfmt", fn: noopGateStage}
+	}
+	steps = append(steps, shellcheckStep, shfmtStep)
 
 	// DHF-REQ: keel/requirement-12 (keel/ac-41) — advisory: reported, never fatal.
 	// -test counts each package's tests as reachability roots (keel/issue-9): keel
@@ -199,7 +250,7 @@ func ciStepsWithConfig(ctx context.Context, logger *slog.Logger, dir string, cfg
 	// and the fast static checks should fail before it does.
 	steps = append(steps, step{name: "test", fn: runTestWithCoverage})
 
-	resolver := newToolResolver(cfg.toolPins())
+	resolver := newToolResolver(in.pins)
 	attachToolResolver(steps, resolver)
 	// The pin preflight runs before the first external tool: it resolves and
 	// verifies EVERY pin in one pass, so a run enumerates all drifted or
@@ -212,6 +263,38 @@ func ciStepsWithConfig(ctx context.Context, logger *slog.Logger, dir string, cfg
 			return resolver.verifyPins(ctx, logger, tools)
 		},
 	})
+}
+
+// gateStageNames returns the gate's stage names in battery order. It builds the
+// battery from the same declaration a real run uses, with empty inputs and no
+// I/O: the stage set is invariant over the checkout, so this is exactly the list
+// a run executes. The declared command surface is derived from here, which is
+// why there is no second list of stage names to maintain (keel/ac-544); the
+// two-way match against a real run is pinned by
+// TestGateStageInventoryMatchesTheRunningBatteryBothWays.
+//
+// DHF-REQ: keel/requirement-136 (keel/ac-544)
+func gateStageNames() []string {
+	steps := ciStepsFrom(gateInputs{})
+	names := make([]string, 0, len(steps))
+	for _, s := range steps {
+		names = append(names, s.name)
+	}
+	return names
+}
+
+// selectGateStage returns the named stage out of an already-built battery, so a
+// single stage is the very same step value the battery would have run — same
+// arguments, same tool pin, same means-of-compliance text.
+//
+// DHF-REQ: keel/requirement-136 (keel/ac-543)
+func selectGateStage(steps []step, name string) (step, bool) {
+	for _, s := range steps {
+		if s.name == name {
+			return s, true
+		}
+	}
+	return step{}, false
 }
 
 // cspellConfigFile is the committed rulebook the cspell stage evaluates.
@@ -411,7 +494,21 @@ func runCIWithRunLog(ctx context.Context, logger *slog.Logger, runLog runLogLoca
 	if err != nil {
 		return gateOperationalError("config", "", 0, err)
 	}
-	for _, s := range ciStepsWithConfig(ctx, logger, dir, cfg) {
+	if err := runGateSteps(ctx, logger, runLog, dir, ciStepsWithConfig(ctx, logger, dir, cfg)); err != nil {
+		return err
+	}
+	logger.Info("ci gate green")
+	return nil
+}
+
+// runGateSteps runs an ordered slice of gate steps fail-fast. It is the single
+// execution path for both the bare battery and one named stage: the per-stage
+// records and the OperationalError carrier around the first failure are produced
+// here, so a stage's verdict and failure output cannot differ between the two.
+//
+// DHF-REQ: keel/requirement-136 (keel/ac-542, keel/ac-543)
+func runGateSteps(ctx context.Context, logger *slog.Logger, runLog runLogLocator, dir string, steps []step) error {
+	for _, s := range steps {
 		startLine := 0
 		logFile := ""
 		if runLog != nil {
@@ -426,8 +523,62 @@ func runCIWithRunLog(ctx context.Context, logger *slog.Logger, runLog runLogLoca
 		}
 		logger.Info("gate passed", "gate", s.name)
 	}
-	logger.Info("ci gate green")
 	return nil
+}
+
+// runGateStage runs exactly one stage of the gate, addressed by name, and no
+// other. The stage is selected out of the battery the bare gate would have run,
+// then executed through the shared path above, so clearing a stage alone clears
+// it for the gate. An unknown name is refused naming the offending token — the
+// stage list it could have been is part of the diagnostic.
+//
+// DHF-REQ: keel/requirement-136 (keel/ac-541, keel/ac-543)
+func runGateStage(ctx context.Context, logger *slog.Logger, runLog runLogLocator, dir, name string) error {
+	if runLogLogger, ok := runLog.(*logging.Logger); ok {
+		runLogLogger.Section("gate " + name)
+	} else {
+		logger.Info("gate "+name, "banner", "section", "name", "gate "+name)
+	}
+	// CR-74: the expected-red debt is printed on every gate run, never silent —
+	// a run of one stage is still a gate run.
+	if err := logExpectedRed(logger, dir); err != nil {
+		return gateOperationalError("expected-red", "", 0, err)
+	}
+	cfg, err := loadKeelDevConfig(dir)
+	if err != nil {
+		return gateOperationalError("config", "", 0, err)
+	}
+	selected, ok := selectGateStage(ciStepsWithConfig(ctx, logger, dir, cfg), name)
+	if !ok {
+		return cli.NewUsageError("unknown gate stage %q\nstages: %s", name, strings.Join(gateStageNames(), ", "))
+	}
+	if err := runGateSteps(ctx, logger, runLog, dir, []step{selected}); err != nil {
+		return err
+	}
+	logger.Info("gate stage green", "gate", name)
+	return nil
+}
+
+// classifyGateArgvError names the offending token when a caller asks for a gate
+// stage that does not exist. Shared dispatch reports a namespace miss as a bare
+// usage line; keel/user_need-7 asks a refusal to say what it refused.
+//
+// DHF-REQ: keel/requirement-136
+func classifyGateArgvError(words []string, err error) error {
+	if err == nil || len(words) < 2 {
+		return err
+	}
+	var usage cli.UsageError
+	if !errors.As(err, &usage) {
+		return err
+	}
+	stages := gateStageNames()
+	for _, name := range stages {
+		if words[1] == name {
+			return err
+		}
+	}
+	return cli.NewUsageError("unknown gate stage %q\nusage: keel-dev gate <stage>\nstages: %s", words[1], strings.Join(stages, ", "))
 }
 
 func gateOperationalError(stepName, logFile string, startLine int, err error) error {

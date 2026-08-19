@@ -57,6 +57,7 @@ func commandTree() *cli.CommandSpec {
 		},
 		Subcommands: []*cli.CommandSpec{
 			{Name: "ci", Use: "ci", Short: "Run the verification gate: gofmt, build, vet, lint, test.", Positionals: []cli.PositionalSpec{{Name: "args", Min: 0, Max: 0}}, Handler: handleCI},
+			gateCommandSpec(),
 			{Name: "release", Use: "release vX.Y.Z", Short: "Cut a release after a clean preflight.", Positionals: []cli.PositionalSpec{{Name: "version", Min: 1, Max: 1}}, Handler: handleRelease},
 			{Name: "verify", Use: "verify vX.Y.Z", Short: "Re-verify anonymous module fetch for an existing tag.", Positionals: []cli.PositionalSpec{{Name: "version", Min: 1, Max: 1}}, Handler: handleVerify},
 			testBridgeCommandSpec(),
@@ -71,6 +72,42 @@ func commandTree() *cli.CommandSpec {
 func handleCI(ctx context.Context, _ []string) error {
 	state := stateFrom(ctx)
 	return runCIWithRunLog(ctx, state.logger, state.runLog, state.root)
+}
+
+// gateCommandSpec declares one leaf command per gate stage, derived from the
+// battery itself, so the reported command surface and the stage set a run
+// executes cannot drift apart (keel/ac-544).
+//
+// The stages hang off their own namespace rather than under `ci` because
+// keel/requirement-106 admits no node that both does work and holds children:
+// `ci` keeps the bare battery every transition_gates declaration resolves to
+// (keel/ac-542), and `gate <stage>` addresses one stage of it.
+//
+// DHF-REQ: keel/requirement-136 (keel/ac-541, keel/ac-544)
+func gateCommandSpec() *cli.CommandSpec {
+	names := gateStageNames()
+	stages := make([]*cli.CommandSpec, 0, len(names))
+	for _, name := range names {
+		stages = append(stages, &cli.CommandSpec{
+			Name:        name,
+			Use:         "gate " + name,
+			Short:       "Run the " + name + " gate stage on its own.",
+			Positionals: []cli.PositionalSpec{{Name: "args", Min: 0, Max: 0}},
+			Handler:     handleGateStage(name),
+		})
+	}
+	return &cli.CommandSpec{
+		Name:        "gate",
+		Short:       "Run one stage of the verification gate on its own.",
+		Subcommands: stages,
+	}
+}
+
+func handleGateStage(name string) cli.Handler {
+	return func(ctx context.Context, _ []string) error {
+		state := stateFrom(ctx)
+		return runGateStage(ctx, state.logger, state.runLog, state.root, name)
+	}
 }
 
 func handleRelease(ctx context.Context, args []string) error {

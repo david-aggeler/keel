@@ -217,7 +217,13 @@ func handleWorktreeCompare(ctx context.Context, args []string) error {
 // DHF-REQ: keel/requirement-114 (keel/ac-414)
 func dispatchKeelDev(ctx context.Context, tree *cli.CommandSpec, words []string) error {
 	err := tree.Dispatch(ctx, words)
-	if len(words) == 0 || words[0] != "worktree" {
+	if len(words) == 0 {
+		return err
+	}
+	if words[0] == "gate" {
+		return classifyGateArgvError(words, err)
+	}
+	if words[0] != "worktree" {
 		return err
 	}
 	return classifyWorktreeArgvError(tree, words, err)
