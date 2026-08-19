@@ -53,11 +53,13 @@ per-consumer variation (lane sets, maintenance items) is data, not code.
 
 **Mechanics — wire contract.** Types and embedded JSON Schemas live in
 `keel/vscode` (`vscoderun.go`, `schemas/*.json`); the item model carries
-`sort_text` (VS Code has no sorting concept — order is encoded as label prefix
-plus sortText), `uri`/`range` (click-to-source), `limitations` (prose, rendered
-as description), `required_resources` (tags), `canonical_id` (alias items,
-the covers mechanism), and the typed `desired_state_group` /
-`desired_state_row` facts that carry desired-state state off the prose field. Run events are projected onto canonical test ids by the
+`uri`/`range` (click-to-source), the scalar `description` (the producer's own
+prose, and nothing else), `required_resources` (tags), `canonical_id` (alias
+items, the covers mechanism), the typed `last_run` and `findings` facts, and
+the typed `desired_state_group` / `desired_state_row` facts that carry
+desired-state state off the prose field. Ordering is not a wire field: the
+producer's emission order is the ordering fact, and the extension derives the
+VS Code sort key from the emission index (keel/requirement-137). Run events are projected onto canonical test ids by the
 projectors in `keel/vscode`; the VSIX mirrors alias state via `canonical_id`.
 Detail contract: interface_spec §2 (schema'd documents) and §4 (lanes file).
 
@@ -76,9 +78,11 @@ d. Frameworks     parent for language-specific test trees
 (c. deliberately unassigned — gap for a future group, no renumbering needed)
 ```
 
-Letters order top-level groups, numeric children carry family gaps; ordinals
-live only in labels + `sort_text`, never in item ids, so renumbering is free
-and results survive scheme changes.
+Letters order top-level groups and numeric children carry family gaps, but the
+ordinal is a rendering option, not data: it never enters an item id, it is not
+on the wire, and a label carries it only where a workspace enables
+`display.ordinal`. Renumbering is therefore free and results survive scheme
+changes.
 
 **Mechanics — lanes** *(implemented across keel/change_request-53,
 keel/change_request-55, and keel/change_request-76)*.
