@@ -127,3 +127,67 @@ func typedFactsDiscoveryDoc(items ...vscode.TestItem) vscode.DiscoveryDocument {
 		Items:       items,
 	}
 }
+
+// TestValidateDiscoveryRefusesInvalidCondition holds keel/ac-577 and keel/ac-578
+// at the producer boundary: the closed kind enum and the non-empty message are
+// declared in vscode/schemas/discovery.json and in vscode.IsConditionKind, and
+// nothing evaluates that schema at run time, so ValidateDocument is where both
+// declarations become binding. The accepting rows keep the leg from being
+// satisfied by an unconditional refusal.
+//
+// DHF-TEST: keel/requirement-140
+func TestValidateDiscoveryRefusesInvalidCondition(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		condition vscode.Condition
+		wantNamed []string
+	}{
+		{
+			name:      "off-enum kind",
+			condition: vscode.Condition{Kind: "anything", Message: "the lane is blocked"},
+			wantNamed: []string{"demo::lane::one", "anything"},
+		},
+		{
+			name:      "empty kind",
+			condition: vscode.Condition{Kind: "", Message: "the lane is blocked"},
+			wantNamed: []string{"demo::lane::one"},
+		},
+		{
+			name:      "empty message",
+			condition: vscode.Condition{Kind: "parse_error", Message: ""},
+			wantNamed: []string{"demo::lane::one"},
+		},
+		{
+			name:      "parse_error accepted",
+			condition: vscode.Condition{Kind: "parse_error", Message: "expected declaration"},
+		},
+		{
+			name:      "prerequisite_unsatisfied accepted",
+			condition: vscode.Condition{Kind: "prerequisite_unsatisfied", Message: "app-db is not reachable"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := typedFactsDiscoveryDoc(vscode.TestItem{
+				ID:         "demo::lane::one",
+				Label:      "one",
+				Kind:       "lane",
+				Conditions: []vscode.Condition{tc.condition},
+			})
+			err := ValidateDocument(doc)
+			if len(tc.wantNamed) == 0 {
+				if err != nil {
+					t.Fatalf("ValidateDocument rejected a well-formed condition %+v: %v", tc.condition, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("ValidateDocument accepted an invalid condition %+v", tc.condition)
+			}
+			for _, want := range tc.wantNamed {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("ValidateDocument err = %v, want it to name %q", err, want)
+				}
+			}
+		})
+	}
+}
