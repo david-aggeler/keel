@@ -757,6 +757,10 @@ func (s lanesState) discoveryItems() []vscode.TestItem {
 		eff := s.effective[id]
 		item := laneItem(eff.id, eff.lane.Order+" "+eff.lane.Label, ordinalSortText(eff.lane.Order))
 		item.RequiredResources = eff.prerequisites
+		// The producer's own prose travels scalar; limitations keeps its copy
+		// until the consumer no longer needs the fallback (keel/ac-549).
+		// DHF-REQ: keel/requirement-138
+		item.Description = eff.lane.Description
 		if eff.lane.Description != "" {
 			item.Limitations = append(item.Limitations, eff.lane.Description)
 		}
@@ -769,7 +773,12 @@ func (s lanesState) discoveryItems() []vscode.TestItem {
 		if hint := laneDurationHint(lastRun); hint != "" {
 			item.Limitations = append(item.Limitations, hint)
 		}
+		// Each finding travels as its own rule/severity/message triple; the
+		// concatenated line stays in limitations only until the consumer
+		// stops reading it (keel/ac-551).
+		// DHF-REQ: keel/requirement-138
 		for _, finding := range eff.findings {
+			item.Findings = append(item.Findings, vscode.Finding{Rule: finding.Rule, Severity: finding.Severity, Message: finding.Message})
 			item.Limitations = append(item.Limitations, finding.Rule+" "+finding.Severity+": "+finding.Message)
 		}
 		items = append(items, item)
@@ -889,12 +898,14 @@ func laneDurationHint(last *vscode.LaneRun) string {
 
 func lanesDiagnosticItem(id, message string) vscode.TestItem {
 	return vscode.TestItem{
-		ID:          "keel::lane-diagnostic::" + StableIDSegment(id),
-		ParentID:    vscodeGroupLanes,
-		Label:       "lanes diagnostic: " + message,
-		Kind:        "group",
-		Runnable:    false,
-		Profiles:    []string{},
+		ID:       "keel::lane-diagnostic::" + StableIDSegment(id),
+		ParentID: vscodeGroupLanes,
+		Label:    "lanes diagnostic: " + message,
+		Kind:     "group",
+		Runnable: false,
+		Profiles: []string{},
+		// DHF-REQ: keel/requirement-138
+		Description: message,
 		Limitations: []string{message},
 	}
 }
@@ -1173,6 +1184,8 @@ func discoverGoTestItems(_ context.Context, root string) ([]vscode.TestItem, err
 			}
 			if file.parseErr != nil {
 				item.Profiles = []string{}
+				// DHF-REQ: keel/requirement-138
+				item.Description = file.parseErr.Error()
 				item.Limitations = []string{file.parseErr.Error()}
 			}
 			items = append(items, item)
