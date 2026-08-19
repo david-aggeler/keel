@@ -43,6 +43,10 @@ interface ExternalRunStreamState {
   selectedItemIds: Set<string>;
   selectedProtocolIds: Set<string>;
   resultItemIds: Set<string>;
+  // The ids this stream's `run_started` frame declared it will execute. Per
+  // stream, filled by applyRunEvent; it keeps the sibling-skip inference off a
+  // row whose own result is still on its way (keel/ac-585).
+  requestedItemIds: Set<string>;
   protocolResultIds: Set<string>;
   clearedResultIds: Set<string>;
   lineCount: number;
@@ -275,7 +279,7 @@ export class ExternalRunMirror implements vscode.Disposable {
       if (terminal?.test_id) {
         state.protocolResultIds.add(terminal.test_id);
       }
-      const applied = applyRunEvent(state.run, line, state.selectedItemIds, state.resultItemIds);
+      const applied = applyRunEvent(state.run, line, state.selectedItemIds, state.resultItemIds, { requestedItemIds: state.requestedItemIds });
       if (terminal?.test_id) {
         this.latestTerminalByProtocolId.set(terminal.test_id, terminalEventTime(terminal));
       }
@@ -319,6 +323,7 @@ export class ExternalRunMirror implements vscode.Disposable {
       selectedItemIds: new Set(selectedItems.map((item) => item.id)),
       selectedProtocolIds: new Set(first?.test_id ? [first.test_id] : []),
       resultItemIds: new Set<string>(),
+      requestedItemIds: new Set<string>(),
       protocolResultIds: new Set<string>(),
       clearedResultIds: new Set<string>(),
       lineCount: 0,
@@ -396,7 +401,7 @@ export class ExternalRunMirror implements vscode.Disposable {
         run_id: state.runId,
         test_id: testId,
         message: `The run producer emitted nothing for ${staleMs}ms and no terminal event arrived; the run may still be executing. ${state.lineCount} stream line(s) received so far.`
-      } satisfies RunEvent), state.selectedItemIds, state.resultItemIds);
+      } satisfies RunEvent), state.selectedItemIds, state.resultItemIds, { requestedItemIds: state.requestedItemIds });
       state.protocolResultIds.add(testId);
     }
     applyRunEvent(state.run, JSON.stringify({
@@ -405,7 +410,7 @@ export class ExternalRunMirror implements vscode.Disposable {
       time,
       run_id: state.runId,
       exit_code: 1
-    } satisfies RunEvent), state.selectedItemIds, state.resultItemIds);
+    } satisfies RunEvent), state.selectedItemIds, state.resultItemIds, { requestedItemIds: state.requestedItemIds });
     state.finished = true;
     state.staleClosed = true;
     state.run.end();
