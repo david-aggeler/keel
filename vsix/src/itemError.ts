@@ -5,7 +5,7 @@ import { DiscoveryItem } from './protocol';
  * The separator joining the texts an item's error row carries.
  *
  * `vscode.TestItem.error` is a single value and the platform renders one child
- * row per item whatever it holds (platform fact F19 in
+ * row per item whatever it holds (the error slot is not a result in
  * `keel/interface_spec-7`), so several qualifying conditions accumulate into
  * one value rather than overwriting each other. A newline is the separator
  * because the row is prose read by a human, not a composed secondary line.
@@ -25,9 +25,9 @@ export const itemErrorSeparator = '\n';
  *
  * A warning-severity finding is deliberately absent. An item carrying `error`
  * gains a permanent child row that sorts first and force-expands its parent
- * (platform fact F20), which is proportionate for a condition that blocks the
- * item and disproportionate for a warning — so a warning stays in the composed
- * description alone (keel/ac-559).
+ * (the error row's structural cost), which is proportionate for a condition
+ * that blocks the item and disproportionate for a warning — so a warning stays
+ * in the composed description alone (keel/ac-559).
  *
  * The return is `undefined`, never the empty string, when nothing qualifies:
  * an empty value still force-expands the parent, so "no condition" and "an
@@ -53,4 +53,3 @@ export function composeItemError(item: DiscoveryItem): string | undefined {
   }
   return texts.length > 0 ? texts.join(itemErrorSeparator) : undefined;
 }
-

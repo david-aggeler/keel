@@ -232,7 +232,7 @@ export function deriveOrdinalPrefixes(
  *
  * The index is stated as a plain decimal. The platform comparator ends in
  * compareFileNames, backed by Intl.Collator(undefined, {numeric: true}), so 2
- * orders before 10 unpadded (platform fact F21). Comparison only ever runs
+ * orders before 10 unpadded (the sibling comparator). Comparison only ever runs
  * within one sibling set, so no cross-parent key is needed either.
  *
  * DHF-REQ: keel/requirement-137

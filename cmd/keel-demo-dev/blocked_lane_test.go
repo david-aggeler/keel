@@ -10,9 +10,9 @@ import (
 // keel/ac-558: a lane whose declared prerequisite cannot be satisfied carries
 // the blocking reason at discovery, where no run took place, and no `failed`
 // event is ever emitted for it. A failed result is the wrong lifetime — it
-// asserts an outcome for a test that never executed, and per platform fact F10
-// in keel/interface_spec-7 it is restored after a window reload with no run
-// behind it.
+// asserts an outcome for a test that never executed, and per the persisted
+// results return after reload fact in keel/interface_spec-7 it is restored
+// after a window reload with no run behind it.
 //
 // DHF-TEST: keel/requirement-140
 func TestBlockedLaneSurfacesAsAPersistentConditionAndNeverAsAFailedRun(t *testing.T) {
