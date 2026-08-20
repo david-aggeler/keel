@@ -8,7 +8,25 @@ bin/
 # run-queue per-unit worktrees are rooted under <repo>/worktrees/; never track them
 worktrees/
 .claude/legacy/
-.claude/skills/issue-grooming/
+# Catalog-materialized skills and agents are owned by OpenBrain, not by this repo.
+# They are produced by `openbrain-client init-skills` and must never be edited here,
+# so tracking them makes the repo a second writable copy of a record plane it does not
+# own -- and one with no delete path: a skill withdrawn in gold is unfetchable, so the
+# reconcile restores it from .claude/legacy/ instead of removing it. Gold is the source.
+# Run `openbrain-client init-skills` in a fresh clone or worktree to materialize them.
+#
+# Ignore every skill, then re-include the locally-authored ones. A local skill is a repo
+# file under the repo change-control rule; a materialized one carries an
+# x-openbrain-content-hash stamp in its front matter. gitignore cannot read the stamp, so
+# this list is maintained by hand -- add a line here when a new local skill is authored.
+.claude/skills/*
+!.claude/skills/asd-ste100/
+!.claude/skills/build/
+!.claude/skills/decide/
+!.claude/skills/merge/
+!.claude/skills/publish/
+.claude/agents/
+.claude/materialization.json
 # gitignored sandbox for `openbrain-client init --dev` (KD10, CR-0249)
 consumer-claude/
 
