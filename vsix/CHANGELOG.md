@@ -23,6 +23,38 @@ side of that tag.
   ordering fact: the extension derives the sort key from the emission index, and
   renders a label prefix only where a workspace sets `display.ordinal` to true.
 
+### Added
+
+- `cr-221`: discovery items can carry typed `description`, `findings` and
+  `last_run` fields. Producers can now send lane duration, last-run exit code
+  and validation findings as structured facts instead of embedding them in prose.
+- `cr-222`: `.vscode/test-bridge.json` gains display toggles for the description
+  classes the extension composes, so a workspace can choose which secondary
+  facts appear in Test Explorer while keeping one shared render order.
+- `cr-224`: persistent non-result conditions have a dedicated wire channel and
+  render through `TestItem.error`, so parse failures, blocked lanes and
+  error-severity findings no longer masquerade as ordinary run results.
+
+### Changed
+
+- `cr-219`: the Go module's `exec/codex` and `exec/claude` adapters share one
+  outcome contract. Below the output ceiling, a non-zero exit or a failing
+  terminal event fails the run, and callers get the decoded result back with the
+  error where the CLI produced one.
+- `cr-223`: the Breaking entries above describe its wire-shape change: config
+  version 5, removal of `limitations`, and emission-index ordering with optional
+  ordinal rendering.
+- `cr-224`: warning-severity findings stay in the composed description, while
+  error-severity findings move to the persistent error surface. Several
+  persistent conditions on one item accumulate into a single error value instead
+  of overwriting each other.
+
+### Development
+
+- `cr-220`: every `keel-dev ci` stage is also invocable on its own by name, with
+  the same verdict and failure text it has inside the full gate. Bare
+  `keel-dev ci` still runs the complete battery in order.
+
 ## v0.8.0
 
 ### Breaking
