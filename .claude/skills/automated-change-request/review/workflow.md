@@ -1,7 +1,7 @@
 ---
 name: automated-change-request/review
 description: 'Produce an advisory DHF annotation coverage report and a formal_review record, runnable by a non-resident executor (codex). Use when implementation is complete (status=implementation_review) and the unit is ready for transition-gate review.'
-x-openbrain-content-hash: sha256:80921b8115ee4c9bef273c7fc6ba3397ff89feea8a488776b219dfd8f3f58722
+x-openbrain-content-hash: sha256:fa40285d12d233e557ca861189d446548294f4c234013215178c43a3fd4de3c2
 ---
 
 # Automated Review
@@ -28,6 +28,46 @@ produce a `formal_review` record. Run linearly, no fan-out.
 - **Sparse writes:** `update_change_request` with only the changed keys via `fields:`;
   re-read after the status write.
 - **Gate, don't ask:** you are the sole reviewer by default; do not block for one.
+- **Record what blocks you, before you stop.** If something blocks this verb and is not
+  part of this unit's acceptance contract, record it before you reach the landing state or
+  report the halt: `create_action_item` when resolving it needs an owner decision;
+  `create_issue`, carrying the command run and the output observed, when it is a defect in
+  the product or the pipeline. If it does not block you, or it is this unit's own scope, do
+  not file — implement it or report it in this verb's own output.
+
+## The `formal_review` write procedure
+
+Three steps below write a `formal_review` — the blocking acceptance finding (step 2b),
+the red-gate finding (step 3), and the verdict (step 4). All three write it **this** way.
+This section defines the procedure; do not run it on its own — run it at the point the
+step that names it tells you to.
+<!-- DHF-REQ: openbrain/requirement-1178, openbrain/ac-3837, openbrain/ac-3838, openbrain/ac-3839 -->
+
+1. **Finish the analysis first, and compose the whole record before you reach for a
+   receipt.** Everything whose duration you do not control — reading the diff, running
+   gate stages, dispatching sub-agents, walking the acceptance atoms, composing the
+   findings — belongs before this procedure begins. Have the finished `subject_refs`,
+   `outcome` and `details` text in hand.
+2. **Take the search receipt immediately before the write.** Call
+   `search_formal_review product=keel` with a query describing the review you
+   are about to write, and carry the `search_receipt` it returns straight into the next
+   call. Nothing goes between these two calls — no gate stage, no diff read, no sub-agent
+   dispatch, no further analysis. The receipt is a freshness proof with a **5-minute**
+   life, so a receipt taken before a stretch of work you do not bound has expired by the
+   time you write. (The `template_receipt` from `get_template_for` is the long-lived one —
+   24 hours — so it may be taken at any earlier point in the session.)
+3. `create_formal_review`, presenting both receipts.
+4. **On a `search_receipt_expired` rejection, re-acquire and retry.** Re-run
+   `search_formal_review` and retry the **identical** create with the fresh receipt. This
+   is safe by construction: receipt validation is non-destructive and touches no
+   persistent storage, so a rejected create left nothing behind that the retry would
+   duplicate. Halt only if the retry fails for a reason **other** than receipt expiry.
+5. **A create you could not complete is an unwritten record — report it as one.** State
+   that the record was not written and name the rejection code you received, verbatim. A
+   refusal citing duplicate risk is **not** evidence that the earlier write committed:
+   never report a `formal_review` ref you did not receive from a successful create, and
+   never send the operator looking for one. Reporting an unwritten verdict honestly is
+   what makes the runner's halt actionable.
 
 ## 1. Precondition check
 
@@ -93,11 +133,12 @@ or partial slice can pass every gate.
    - behavior in the diff that **contradicts** an AC, or scope well beyond the contract
      with no requirement backing it.
 5. **On any blocking finding:** do not create an approving review and do not advance to
-   `ready_to_merge`. Create a `formal_review` with outcome `follow_up_required`, naming
-   this change request in `subject_refs` and quoting each uncovered atom with its ref, then
-   `update_change_request` with `fields: { status: "in_progress" }` and re-read to
-   confirm — same routing as a red gate (step 3.6). The runner re-dispatches `dev` with
-   your findings as the to-do.
+   `ready_to_merge`. Write a `formal_review` **via the write procedure above** with outcome
+   `follow_up_required`, naming this change request in `subject_refs` and quoting each
+   uncovered atom with its ref — the atom-by-atom walk is finished at this point, so the
+   receipt is taken now and not before it. Then `update_change_request` with
+   `fields: { status: "in_progress" }` and re-read to confirm — same routing as a red gate
+   (step 3.6). The runner re-dispatches `dev` with your findings as the to-do.
 6. Non-blocking observations belong in the review notes, not in this gate — ordered by the
    Principles above.
 
@@ -129,8 +170,10 @@ Review cannot pass a HEAD whose declared in-session gate is red.
      **3 times total**. Do not run a 4th time.
    - If the failing stage has side effects, do not retry; treat the first non-zero exit
      as the final failure.
-   - Create a `formal_review` with outcome `follow_up_required` naming the failing rung,
-     run count, stage, and last failing output verbatim.
+   - Write a `formal_review` **via the write procedure above** with outcome
+     `follow_up_required` naming the failing rung, run count, stage, and last failing
+     output verbatim. The gate runs are finished at this point — take the receipt after
+     the last one, never before the first.
    - `update_change_request` with `fields: { status: "in_progress" }` and re-read to
      confirm. This routes the unit back to `dev`: the runner reads `in_progress`,
      reads your `formal_review`, and re-dispatches `dev` with it as the to-do.
@@ -146,7 +189,9 @@ backstop.
 ## 4. Produce the formal_review record
 
 You are the **sole reviewer** by default — do not wait for an operator to name
-reviewers. Call `create_formal_review` with:
+reviewers. Compose the record in full, then write it **via the write procedure above** —
+by this point every gate stage, diff read and coverage walk is behind you, which is
+exactly the ordering the procedure requires. The create carries:
 
 - `subject_refs`: the ref to this change request (`keel/change_request-<id>`).
 - `outcome`: your verdict from the annotation report, the **acceptance-coverage table
@@ -165,7 +210,9 @@ gate is red you have already written `formal_review` + `in_progress` in step 3.6
 skip to the report line at the end of step 5.
 
 If an interactive operator has named additional reviewers, create one
-`formal_review` per reviewer; otherwise the single record above is the review.
+`formal_review` per reviewer; otherwise the single record above is the review. Each
+create is a separate write and takes its **own** freshly-issued search receipt
+immediately before it — one receipt does not cover a run of creates.
 
 ## 5. Transition
 
@@ -180,3 +227,8 @@ If an interactive operator has named additional reviewers, create one
 `ready_to_merge` or `in_progress`. Report the outcome and that `merge` (or `dev`
 on a blocking review) is the next verb. **Do not run it in this session** — one
 verb, one session.
+
+**If the `formal_review` could not be written at all** (the write procedure's step 5
+case), report the verdict you reached, that it was **not** persisted, and the rejection
+code you received, verbatim. Do not name a `formal_review` ref — there is none — and do
+not describe the outcome in words that imply a record exists.

@@ -2,9 +2,9 @@
 name: automated-change-request
 description: "Executor-portable autonomous tail of the change-request lifecycle for keel — dev, review, merge, verify, salvage — written so a non-resident linear executor (e.g. codex) can run each verb in a fresh session with no project memory. Use when the user says: '/automated-change-request', 'run the automated tail', 'dev this CR headless', 'codex dev', 'codex review', 'codex merge', 'verify this tail', 'autonomous dev/review/merge/verify/salvage', 'drive this approved CR to closed', 'salvage this tail'"
 allowed-tools: mcp__gold__get_change_request, mcp__gold__update_change_request, mcp__gold__search_change_request, mcp__gold__get_requirement, mcp__gold__get_ac, mcp__gold__list_ac, mcp__gold__list_inbound_refs, mcp__gold__create_formal_review, mcp__gold__create_issue, mcp__gold__create_action_item, mcp__gold__create_issue_fix, mcp__gold__list_issue_fix, mcp__gold__update_issue, mcp__gold__get_issue, mcp__gold__admin_list_product_versions
-x-openbrain-source: automated-change-request/v16
-x-openbrain-content-source-hash: sha256:a3eae3c4532dc2152c5047d2eed59b1b34b6646bf5eaacc3cb5f38eb470056fe
-x-openbrain-content-hash: sha256:45a828e180ac8fd49685ce2cbaece399b5dda0758396e365045d2df8917cb909
+x-openbrain-source: automated-change-request/v17
+x-openbrain-content-source-hash: sha256:9b98f3fe8e8587712add57612a9d488267cfcf3dd184a4169f22def658cac0d3
+x-openbrain-content-hash: sha256:bf3f685b59cafd9e4ee1f16fbeef6dd2828c6e682bba841b270c67cc3ed51d99
 ---
 
 # Automated Change Request
@@ -52,6 +52,13 @@ it names. Therefore:
 5. **Gate, don't ask.** You cannot field interactive questions. Where the human path
    would ask the owner, each verb here gives you a determinate default or an explicit
    hand-back. Take the default or hand back — never block waiting for an answer.
+6. **Record what blocks you, before you stop.** If something blocks the verb you are
+   running and is not part of this unit's acceptance contract, record it before you reach
+   the landing state or report the halt: `create_action_item` when resolving it needs an
+   owner decision; `create_issue`, carrying the command run and the output observed, when
+   it is a defect in the product or the pipeline. If it does not block you, or it is this
+   unit's own scope, do not file — implement it or report it in the verb's own output.
+   Each verb file states this rule itself; the trigger is obstruction, not inspection.
 
 ## Verbs
 

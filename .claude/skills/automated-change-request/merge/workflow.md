@@ -1,7 +1,7 @@
 ---
 name: automated-change-request/merge
 description: 'Land a reviewed unit on main through the dependency guard and configured merge command, runnable by a non-resident executor (codex). Use when status=ready_to_merge and the unit is cleared to merge.'
-x-openbrain-content-hash: sha256:b53eadbd613c91965c3df505b738b2a437a4611fa4c5be14ddd84631ac1f8011
+x-openbrain-content-hash: sha256:1a5fae864da315aa3eac6e68c026575a490cd2022e47a62de4c62d76bd5964e2
 ---
 
 # Automated Merge
@@ -25,6 +25,12 @@ runner owns those after this verb exits. On a green landing the verb **ends at
   `fields:`; re-read after each status write.
 - **Gate, don't ask:** owner-only steps default to an explicit hand-back — never block
   waiting for an answer.
+- **Record what blocks you, before you stop.** If something blocks this verb and is not
+  part of this unit's acceptance contract, record it before you reach the landing state or
+  report the halt: `create_action_item` when resolving it needs an owner decision;
+  `create_issue`, carrying the command run and the output observed, when it is a defect in
+  the product or the pipeline. If it does not block you, or it is this unit's own scope, do
+  not file — implement it or report it in this verb's own output.
 
 ## 1. Precondition check
 

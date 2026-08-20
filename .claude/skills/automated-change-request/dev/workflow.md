@@ -1,13 +1,14 @@
 ---
 name: automated-change-request/dev
-description: 'Implement an approved unit via a linear vertical-slice TDD loop, runnable by a non-resident executor (codex). Use when executor=agent and status is either approved (fresh claim) or in_progress with a prior blocking formal_review (rework resume), and the operator says "dev this CR headless" or "codex dev".'
-x-openbrain-content-hash: sha256:876a73649f140ec9a05594cbe1cf0d764a93d711c5f92223dff981cdbe517228
+description: 'Implement an approved unit via a linear vertical-slice TDD loop, runnable by a non-resident executor (codex). Use when executor=agent and status is approved (fresh claim), in_progress with a prior blocking formal_review (rework resume), or in_progress with commits ahead of base and no such review (interrupted run), and the operator says "dev this CR headless" or "codex dev".'
+x-openbrain-content-hash: sha256:dc85e4467da5a248f1c118ae41ee357e742a515709aff2772376b69adf680ae2
 ---
 
 # Automated Dev
 
 **Transition:** `approved → in_progress` (fresh entry) **or** `in_progress → in_progress`
-(rework resume) → `implementation_review` (on a complete, green, non-empty-diff unit)
+(rework resume, interrupted run) → `implementation_review` (on a complete, green,
+non-empty-diff unit)
 
 **Goal:** Implement the unit's requirements **and their acceptance criteria** with a
 vertical-slice TDD loop, **run linearly by one executor** — no subagent fan-out.
@@ -28,32 +29,64 @@ then each requirement's ACs (its GWT atoms) — the ACs are what each slice's te
 - **Sparse writes:** `update_change_request` with only the changed keys via `fields:`
   (top-level args = full REPLACE → silent field drop); re-read after a status write.
 - **Gate, don't ask:** take the determinate path or halt; never wait for an answer.
+- **Record what blocks you, before you stop.** If something blocks this verb and is not
+  part of this unit's acceptance contract, record it before you reach the landing state or
+  report the halt: `create_action_item` when resolving it needs an owner decision;
+  `create_issue`, carrying the command run and the output observed, when it is a defect in
+  the product or the pipeline. If it does not block you, or it is this unit's own scope, do
+  not file — implement it or report it in this verb's own output.
 
 ## 1. Precondition check
 
 1. `get_change_request product=keel id=<id>`.
 2. Confirm `executor == agent`. If it differs, **halt** and report the actual executor —
    this unit is not for an autonomous executor.
-3. Confirm the status is one of the **two** admissible entry states. There is no third;
-   decide mechanically, do not interpret.
+3. Confirm the status is one of the **three** admissible entry states. Read the table
+   top to bottom and take the **first** row that matches; decide mechanically, do not
+   interpret.
    <!-- DHF-REQ: openbrain/requirement-867 -->
 
    | Observed `status` | Entry state | Action |
    |---|---|---|
    | `approved` | **fresh claim** | proceed; step 2 writes `in_progress`. |
    | `in_progress` **and** a `formal_review` with `outcome: follow_up_required` naming this change request in `subject_refs` exists | **rework resume** | proceed; step 2 skips the status write (the unit is already `in_progress`). Treat that review's findings as this round's work. |
-   | `in_progress` **and no** such `formal_review` exists | not resumable | **halt** and report — the unit was never carried to `implementation_review`, so it may never have been approved. |
+   | `in_progress`, **no** such `formal_review`, **and** the unit branch carries at least one commit ahead of its base | **interrupted run** | proceed; step 2 skips the status write (the unit is already `in_progress`). There are no findings to act on — step 2's resume check reads the branch for what is already done. |
+   | `in_progress`, **no** such `formal_review`, **and no** commit ahead of base | not resumable | **halt** and report — the unit claimed `in_progress` and produced nothing, so there is neither committed work to resume nor recorded findings to act on. |
    | anything else | not eligible | **halt** and report the actual status. |
 
-   The distinguishing signal for a resume is the **prior blocking `formal_review`**, never
-   the `in_progress` status alone: a rework round is one a reviewer (or a post-merge revert,
-   or a verify no-op reopen) routed back to `dev`, and it leaves that record behind. Read it
-   with `list_formal_review product=keel` (or `search_formal_review`) and match
-   `subject_refs` on `keel/change_request-<seq>`; the newest matching row is the one
-   that routed this unit back. It is legitimate for the corrective work of that round to
-   have been applied outside a `dev` child (by the run-queue supervisor or by hand) — step 2's
-   resume check reads the branch, so already-committed slices are recognized as done rather
-   than redone.
+   **Two different signals distinguish the two resumes, and the order above is load-bearing.**
+
+   A **rework resume** is signalled by the **prior blocking `formal_review`** — a round that
+   a reviewer, a post-merge revert (either the `merge` verb's own in-session gate or the
+   runner-owned gate that runs after `merge` has exited), or a `verify` no-op reopen routed
+   back to `dev`, leaving that record behind. **Which actor wrote it does not change what you
+   do**: every one of those routes leaves the same pair — `in_progress` plus a blocking
+   review naming this unit — and the findings in the review are this round's work either way.
+   Read it with `list_formal_review product=keel` (or
+   `search_formal_review`) and match `subject_refs` on
+   `keel/change_request-<seq>`; the newest matching row is the one that routed
+   this unit back. It is legitimate for the corrective work of that round to have been
+   applied outside a `dev` child (by the run-queue supervisor or by hand).
+
+   An **interrupted run** is signalled by **commits ahead of the base**, and only by that. A
+   prior `dev` session claimed the unit and was cut off mid-flight — turn-budget truncation,
+   crash, out-of-memory, operator kill — so it left work on the branch but no record of why
+   it stopped. Establish the count before you decide:
+
+   ```bash
+   git rev-list --count main..HEAD
+   ```
+
+   A count greater than zero is the whole discriminator, and it is a required conjunct, not
+   supporting rationale: without it the **interrupted run** row would swallow the
+   **not resumable** row and admit a unit that has nothing to resume. Do not substitute a
+   judgement about whether the unit "looks" resumable, and do not treat an uncommitted
+   working tree as evidence — only commits count.
+
+   Where a resumed unit picks up its remaining work is the same for both resumes and is not
+   inferred here: **step 2's resume check reads the branch**, so already-committed slices are
+   recognized as done rather than redone, and the slice loop restarts at the first resolved
+   requirement ref with no committed slice.
 4. Resolve the requirement refs kind-aware (see `../SKILL.md` § acceptance contract) —
    this is the slice list; each slice proves that requirement's acceptance criteria.
 
@@ -93,9 +126,10 @@ it.**
    it** (the runner did not set the session up; do not commit to the default
    branch).
 
-2. Claim the unit. **On a rework resume (step 1's second row) the unit is already
-   `in_progress` — skip this write entirely and continue at sub-step 3**; re-writing the
-   same status is a no-op that only risks a spurious rejection. On a fresh claim,
+2. Claim the unit. **On either resume — rework or interrupted run (step 1's second and
+   third rows) — the unit is already `in_progress`: skip this write entirely and continue
+   at sub-step 3**; re-writing the same status is a no-op that only risks a spurious
+   rejection. On a fresh claim,
    `update_change_request` with sparse fields only.
    <!-- DHF-REQ: openbrain/requirement-870 -->
    The claim write's sparse fields = status (plus last_edited_by) only: use

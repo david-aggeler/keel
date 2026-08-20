@@ -2,9 +2,9 @@
 name: run-queue
 description: "Resident-session orchestrator that drains a batch of approved change_requests one CR at a time. Each single CR is driven by a SEPARATE LLM instance (a fresh `openbrain-client run-queue` child), while the resident session supervises: it resolves the target into a CR set, reuses the client's qualify (approved+agent) + depends_on dependency-order contract, enforces an auto_merge:true stop-and-ask preflight, dispatches one `--list change_request-<n>` child at a time (never `--epic`), and decides what to do when a child halts. Use when the user says: '/run-queue', 'run-queue iteration-2', 'run-queue epic-4', 'run-queue cr-4', 'run-queue cr-4 using claude', 'drain the queue', 'run the approved CRs of', 'work the queue for'"
 allowed-tools: mcp__gold__list_change_request, mcp__gold__get_change_request, mcp__gold__search_change_request, mcp__gold__get_epic, mcp__gold__get_iteration, mcp__gold__update_iteration, mcp__gold__list_inbound_refs, mcp__gold__list_relations_for, mcp__gold__update_change_request, mcp__gold__create_issue, mcp__gold__create_action_item
-x-openbrain-source: run-queue/v4
-x-openbrain-content-source-hash: sha256:d239edfb201c5e4e83ead7d993a8bbdf792b3496507eca46eb9bfa73cfe74fbf
-x-openbrain-content-hash: sha256:526c30f29624e0c55b7cfff3a95f45dbef55c001c1deb96f24e7967dc0d8a65d
+x-openbrain-source: run-queue/v5
+x-openbrain-content-source-hash: sha256:1d8bf18abf6646a4ddf56cfd58f9752c1e739148159662c0a1fefd499e794c7c
+x-openbrain-content-hash: sha256:c53f11226c02680845dd5048896fe347f7813d1da0b1a31d2867ef167f71f8e5
 ---
 
 # Run Queue
@@ -107,6 +107,38 @@ Every qualifying CR **must** carry `auto_merge: true`. **If any qualifying CR ha
 or absent, STOP before dispatching anything and ask the user** — list the offending CRs. (Do not
 silently proceed: the child would do all the dev/review work and only then park the unit for a human
 at `ready_to_merge`, wasting the run.) Proceed only once the user confirms or flips the flags.
+
+### 3b — Mark the lane active before the first dispatch
+
+A CR that is about to be worked belongs to a lane that is about to be **drained**, and `active` is
+what says so. Do this **before** the first child launches, not after the loop — the point is to
+fence the roster while the run is in flight.
+
+**This is keyed on the CR's own `iteration` field, not on the target form.** A `cr-N` target drained
+out of a lane marks that lane active exactly as an `iteration-N` target does; a CR with no
+`iteration` has no lane and this step is a no-op for it. Collect the distinct lanes across the
+qualified set and, for each:
+
+```text
+update_iteration(product, id=iteration-N, fields: {
+  status: "active",
+  last_edited_by: "claude",
+})
+```
+
+- **Sparse `fields:` only** — a top-level update is a full REPLACE that drops every omitted field.
+- **Idempotent.** Already `active` → do nothing.
+- `draft` or `ready` → set `active`. Both are roster-open states; the drain is what ends that.
+- **Never reopen a finished lane.** `completed` or `closed` with a member you are about to dispatch
+  is a bookkeeping contradiction, not something to silently fix by flipping the status back. Report
+  it and let the user decide whether the lane or the CR's `iteration` field is wrong.
+
+**Why it matters beyond bookkeeping.** `issue-grooming` step 4 targets only `draft` and `ready`
+lanes, so an `active` lane stops receiving new members — a roster that changed under a run which
+had already qualified its set would leave the new member neither worked by the run in flight nor
+visible as waiting. Marking the lane `active` here is what raises that fence. The reverse direction
+stays open: `issue-grooming` may still move records **out** of an active lane, which is how a lane
+that is nearly done gets cleared to complete.
 
 ### 4 — Dispatch one child per CR
 

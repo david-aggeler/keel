@@ -1,7 +1,7 @@
 ---
 name: automated-change-request/salvage
 description: "Analyze an interrupted autonomous-tail run after run-queue detects gold status ahead of branch/worktree evidence; classify recovery as salvage, hand-back, reset, or manual, with suggest-only default and opt-in auto-apply for the green salvage class."
-x-openbrain-content-hash: sha256:ed2187912db682058ec7ed383f3b42e8df4f9d4368f9f028becb4eeef4259b28
+x-openbrain-content-hash: sha256:37c9e724300a31b42a9fe9e8a9c78f1dad0aea81496797ec20728e6a279b4ba6
 ---
 
 # Automated Salvage
@@ -20,6 +20,12 @@ detector-triggered recovery stage, not part of the normal tail.
   successful package tests for the dirty work.
 - Record the recommendation durably in a `formal_review` linked to the change request. The
   runner also surfaces the halt outcome, but logs alone are not enough.
+- **Record what blocks you, before you stop.** If something blocks this verb and is not
+  part of this unit's acceptance contract, record it before you reach the landing state or
+  report the halt: `create_action_item` when resolving it needs an owner decision;
+  `create_issue`, carrying the command run and the output observed, when it is a defect in
+  the product or the pipeline. If it does not block you, or it is this unit's own scope, do
+  not file — implement it or report it in this verb's own output.
 
 ## 1. Read State
 

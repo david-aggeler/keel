@@ -1,7 +1,7 @@
 ---
 name: automated-change-request/verify
 description: 'Independently verify post-merge scope fidelity, complete the gold wrap-up, and close a merged autonomous unit, runnable by headless Claude after merge.'
-x-openbrain-content-hash: sha256:142abaf7f879d67b7e00976d9ebc79bd33b2d1c577632079aff20c8c444fde01
+x-openbrain-content-hash: sha256:69189884281bed800a0c11eb383cb87fb0258c796c7c0d795a914e9a4d88b082
 ---
 
 # Automated Verify
@@ -24,6 +24,12 @@ the Codex executor that produced dev/review/merge.
   `fields:`. Re-read after a status write.
 - **Gate, don't ask:** owner-only sub-decisions take the determinate default below
   or are recorded and handed back — never block waiting for an answer.
+- **Record what blocks you, before you stop.** If something blocks this verb and is not
+  part of this unit's acceptance contract, record it before you reach the landing state or
+  report the halt: `create_action_item` when resolving it needs an owner decision;
+  `create_issue`, carrying the command run and the output observed, when it is a defect in
+  the product or the pipeline. If it does not block you, or it is this unit's own scope, do
+  not file — implement it or report it in this verb's own output.
 
 ## 1. Precondition check
 
@@ -82,6 +88,10 @@ the Codex executor that produced dev/review/merge.
      discrepancies, not owner-only scope exclusions.
 
 ## 3. Verdict routing
+
+This is the contract's obstruction-routing rule applied to the one obstruction `verify`
+looks for on purpose — a post-merge scope shortfall — with the same two destinations and
+the same resolver test. It is not a second rule.
 
 Choose exactly one route:
 
