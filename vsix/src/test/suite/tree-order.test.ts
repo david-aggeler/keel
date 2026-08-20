@@ -53,7 +53,7 @@ suite('emission-order sort keys', () => {
   });
 
   // keel/ac-546 again, on the numeric-collation claim: the key is unpadded
-  // because the platform comparator collates numerically (platform fact F21),
+  // because the platform comparator collates numerically (the sibling comparator),
   // so a ten-sibling parent still keeps 2 before 10.
   // DHF-TEST: keel/requirement-137
   test('req-137 the derived key is a plain unpadded decimal', () => {
@@ -90,7 +90,7 @@ suite('emission-order sort keys', () => {
 
   // keel/ac-560: two siblings that share a uri and each carry a range are
   // ordered by the platform on range.startLineNumber before it reads sortText
-  // (platform fact F21). The extension must not defeat that: it forwards both
+  // (the sibling comparator). The extension must not defeat that: it forwards both
   // ranges verbatim and still derives the emission key, leaving the decision
   // where the platform makes it.
   // DHF-TEST: keel/requirement-137

@@ -55,7 +55,7 @@ suite('persistent conditions route to TestItem.error', () => {
   });
 
   // An item carrying no condition must leave the slot untouched: setting it
-  // force-expands the parent for good (platform fact F20 in
+  // force-expands the parent for good (the error row's structural cost in
   // keel/interface_spec-7), so an empty value is not the same as no value.
   // DHF-TEST: keel/requirement-140
   test('req-140 an item carrying no condition carries no error', () => {
@@ -76,7 +76,7 @@ suite('persistent conditions route to TestItem.error', () => {
 
   // keel/ac-559, negative half first: a warning-severity finding must not reach
   // the error surface. Every item carrying one would otherwise force-expand its
-  // parent at every refresh (platform fact F20).
+  // parent at every refresh (the error row's structural cost).
   // DHF-TEST: keel/requirement-140
   test('req-140 a warning-severity finding stays in the description and raises no error row', () => {
     withController((controller) => {
