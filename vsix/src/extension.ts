@@ -500,13 +500,15 @@ async function resetKeelTestResults(controller: vscode.TestController): Promise<
 // by the run keeps its result.
 //
 // It does NOT deliver a genuine no-result, and no per-item path can:
-// invalidateTestResults only marks a result outdated (F3), and item replacement
-// drops the icon only for a live in-session result — persistence-restored
-// results re-associate by id to the replacement (F14, falsified live in the
-// issue-89 reopen). Per-item Unset is unreachable on this platform; only the
-// global testing.clearTestResults reaches it (F16 / keel/ac-429). This comment
-// previously claimed deactivated siblings "show none" — that was the
-// pre-F14 belief, corrected under keel/change_request-165.
+// invalidateTestResults only marks a result outdated (invalidate marks
+// outdated), and item replacement drops the icon only for a live in-session
+// result — persistence-restored results re-associate by id to the replacement
+// (results re-associate by id, falsified live in the issue-89 reopen). Per-item
+// Unset is unreachable on this platform; only the global
+// testing.clearTestResults reaches it (the Unset ceiling / keel/ac-429). This
+// comment previously claimed deactivated siblings "show none" — that was the
+// old belief about result re-association by id, corrected under
+// keel/change_request-165.
 export function invalidateClearedResults(controller: vscode.TestController, clearedResultIds: ReadonlySet<string>): void {
   if (clearedResultIds.size === 0) {
     return;
@@ -543,8 +545,9 @@ let lastReconcileSignature: string | undefined;
 // ends. Overwriting is the only rendering mechanism proven live — it beats
 // persistence-restored results by construction, where result REMOVAL
 // (invalidate, TestItem replacement) provably cannot: VS Code re-associates
-// persisted results to new TestItems by id (keel/interface_spec-7 F14). No
-// branching on the exclusivity wire flag (design_decision-5).
+// persisted results to new TestItems by id (keel/interface_spec-7, results
+// re-associate by id). No branching on the exclusivity wire flag
+// (design_decision-5).
 //
 // DHF-REQ: keel/requirement-97
 export function applyReconcileResultsCapability(controller: vscode.TestController, publishedTree: PublishedTree): void {
@@ -574,7 +577,7 @@ export function applyReconcileResultsCapability(controller: vscode.TestControlle
     } else {
       // skipped reason (d): a non-active member of a mutually-exclusive
       // desired-state group (requirement-88). Genuine no-result is
-      // unreachable per item (F16), so ⊘ is the owner-chosen rendering.
+      // unreachable per item (the Unset ceiling), so ⊘ is the owner-chosen rendering.
       // See keel/ac-428.
       run.skipped(item);
     }
@@ -602,7 +605,7 @@ export const runStartInvalidationRunName = 'desired-state run-start invalidation
 // scope, and the peers are never added to the submitted id set (keel/ac-515).
 // Overwriting is the only rendering mechanism proven live; per-item Unset is
 // unreachable on this platform, so `skipped` is the transitional value
-// (keel/requirement-97, F16).
+// (keel/requirement-97, the Unset ceiling).
 //
 // Returns true when a stamp was made, so the caller knows the group is now
 // carrying a transitional rendering that MUST be settled on bridge-served

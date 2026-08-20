@@ -354,7 +354,7 @@ suite('Keel Test Bridge expected-red specs', () => {
   // TestRun per refresh apply, one-to-one and in order; an unchanged list
   // does not re-stamp (signature guard); a changed list stamps again.
   // Behavioral contract only — the object-identity proxy was falsified by
-  // owner live validation (persisted results re-associate by id, F14);
+  // owner live validation (persisted results re-associate by id);
   // rendered efficacy is proven by the owner (ac-322).
   //
   // DHF-TEST: keel/requirement-97
