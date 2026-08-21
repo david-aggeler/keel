@@ -225,6 +225,29 @@ func demoDevCommandTree(bridge testbridge.Bridge) *cli.CommandSpec {
 
 type demoBridge struct{}
 
+type demoPrereqDeclaration struct {
+	runID      string
+	resource   string
+	kind       string
+	want       string
+	missing    string
+	actionName string
+	reusable   bool
+	slow       bool
+}
+
+var demoPreconditions = []demoPrereqDeclaration{
+	{runID: idDesiredDockerEnv, resource: "docker-env", kind: "dependency", want: "ready", missing: "absent", actionName: "provision_demo_environment"},
+	{runID: idDesiredPostgres, resource: "postgres", kind: "fixture-data", want: "present+seeded", missing: "missing", actionName: "create_and_seed_demo_database"},
+	{runID: idDesiredServiceA, resource: "service-a", kind: "service", want: "running", missing: "stopped", actionName: "start_demo_service", reusable: true},
+	{runID: idDesiredServiceB, resource: "service-b", kind: "service", want: "running", missing: "stopped", actionName: "start_demo_service", reusable: true},
+	{runID: idDesiredServiceC, resource: "service-c", kind: "service", want: "running", missing: "stopped", actionName: "start_demo_service", reusable: true},
+	{runID: idDesiredSDK, resource: "sdk", kind: "tool", want: "installed", missing: "missing", actionName: "install_demo_sdk", reusable: true},
+	{runID: idDesiredDNS, resource: "dns", kind: "host-port-set", want: "resolves", missing: "missing", actionName: "seed_demo_dns", reusable: true},
+	{runID: idDesiredPing, resource: "ping", kind: "dependency", want: "reachable", missing: "timeout", actionName: "probe_demo_endpoint", reusable: true},
+	{runID: idDesiredSeedCache, resource: "seed-cache", kind: "fixture-data", want: "warmed", missing: "cold", actionName: "warm_demo_seed_cache", slow: true},
+}
+
 func (demoBridge) Workspace() testbridge.Workspace {
 	return testbridge.Workspace{Root: workingRoot(), Node: "keel-demo-dev", ModulePath: "github.com/david-aggeler/keel-demo-dev"}
 }
@@ -306,17 +329,7 @@ func (b demoBridge) DesiredState(ctx context.Context, ids []string) (testbridge.
 			{
 				Label: "Test Preconditions",
 				Order: 10,
-				Rows: []testbridge.DesiredStateRow{
-					prereq(root, idDesiredDockerEnv, "docker-env", "dependency", "ready", "absent", "provision_demo_environment", false),
-					prereq(root, idDesiredPostgres, "postgres", "fixture-data", "present+seeded", "missing", "create_and_seed_demo_database", false),
-					prereq(root, idDesiredServiceA, "service-a", "service", "running", "stopped", "start_demo_service", true),
-					prereq(root, idDesiredServiceB, "service-b", "service", "running", "stopped", "start_demo_service", true),
-					prereq(root, idDesiredServiceC, "service-c", "service", "running", "stopped", "start_demo_service", true),
-					prereq(root, idDesiredSDK, "sdk", "tool", "installed", "missing", "install_demo_sdk", true),
-					prereq(root, idDesiredDNS, "dns", "host-port-set", "resolves", "missing", "seed_demo_dns", true),
-					prereq(root, idDesiredPing, "ping", "dependency", "reachable", "timeout", "probe_demo_endpoint", true),
-					prereq(root, idDesiredSeedCache, "seed-cache", "fixture-data", "warmed", "cold", "warm_demo_seed_cache", false),
-				},
+				Rows:  demoPreconditionRows(root),
 			},
 			{
 				Label:             "app-db data set",
@@ -333,24 +346,27 @@ func (b demoBridge) DesiredState(ctx context.Context, ids []string) (testbridge.
 	}, nil
 }
 
-// ReconcileDesiredStateRow performs the seed-cache row's named action during a
-// run. It is the one demo row whose action takes real time, so the Explorer
-// shows a precondition row in flight rather than only its settled result
-// (keel/ac-580). The work is fake: it waits, and it touches nothing.
-//
-// Every other row is left to the bridge's read-only path by reporting the row
-// unhandled.
+// ReconcileDesiredStateRow performs every precondition row's named action
+// during a run by writing the row's fake ready marker. The seed-cache action is
+// also the one demo row whose action takes real time, so the Explorer shows a
+// precondition row in flight rather than only its settled result (keel/ac-580).
 //
 // DHF-REQ: keel/requirement-62, keel/requirement-75
 func (demoBridge) ReconcileDesiredStateRow(ctx context.Context, req testbridge.DesiredStateRowRunRequest, emit vscode.RunEventWriter) (bool, int, error) {
-	if req.RunID != idDesiredSeedCache {
+	decl, ok := demoPreconditionByRunID(req.RunID)
+	if !ok {
 		return false, 0, nil
 	}
-	emit(vscode.RunEvent{Event: "output", TestID: req.RunID, Message: "warm_demo_seed_cache is warming the fake seed cache"})
-	if err := demoSleep(ctx, demoSlowRunDelay); err != nil {
+	emit(vscode.RunEvent{Event: "output", TestID: req.RunID, Message: decl.actionName + " is reconciling fake " + decl.resource})
+	if decl.slow {
+		if err := demoSleep(ctx, demoSlowRunDelay); err != nil {
+			return true, 1, err
+		}
+	}
+	if err := writeDemoPrereqReady(req.Root, decl.resource); err != nil {
 		return true, 1, err
 	}
-	emit(vscode.RunEvent{Event: "output", TestID: req.RunID, Message: "warm_demo_seed_cache warmed the fake seed cache"})
+	emit(vscode.RunEvent{Event: "output", TestID: req.RunID, Message: decl.actionName + " reconciled fake " + decl.resource})
 	return true, 0, nil
 }
 
@@ -405,9 +421,6 @@ func (b demoBridge) ClearState(_ context.Context, req testbridge.RunRequest, _ v
 // DHF-REQ: keel/requirement-87
 func (b demoBridge) Lanes(ctx context.Context) ([]vscode.TestItem, error) {
 	ws := b.workspace(ctx)
-	if err := writeDemoReadyState(ws.Root); err != nil {
-		return nil, err
-	}
 	return demoLanes(ws.Root)
 }
 
@@ -688,6 +701,23 @@ func prereq(root, runID, resource, kind, want, missing, actionName string, reusa
 	}
 }
 
+func demoPreconditionRows(root string) []testbridge.DesiredStateRow {
+	rows := make([]testbridge.DesiredStateRow, 0, len(demoPreconditions))
+	for _, decl := range demoPreconditions {
+		rows = append(rows, prereq(root, decl.runID, decl.resource, decl.kind, decl.want, decl.missing, decl.actionName, decl.reusable))
+	}
+	return rows
+}
+
+func demoPreconditionByRunID(runID string) (demoPrereqDeclaration, bool) {
+	for _, decl := range demoPreconditions {
+		if decl.runID == runID {
+			return decl, true
+		}
+	}
+	return demoPrereqDeclaration{}, false
+}
+
 func dataSet(runID, resource, want, activeDataSet, actionName string) testbridge.DesiredStateRow {
 	return testbridge.DesiredStateRow{
 		RunID:    runID,
@@ -727,18 +757,6 @@ func demoDataSetPath(root string) string {
 func hasDemoLanesFile(root string) bool {
 	_, err := os.Stat(demoLanesPath(root))
 	return err == nil
-}
-
-func writeDemoReadyState(root string) error {
-	for _, resource := range []string{"docker-env", "postgres", "service-a", "service-b", "service-c", "sdk", "dns", "ping", "seed-cache"} {
-		if err := writeDemoPrereqReady(root, resource); err != nil {
-			return err
-		}
-	}
-	if err := os.MkdirAll(filepath.Dir(demoDataSetPath(root)), 0o755); err != nil {
-		return err
-	}
-	return nil
 }
 
 func writeDemoPrereqReady(root, resource string) error {
