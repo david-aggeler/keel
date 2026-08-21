@@ -411,9 +411,16 @@ func (b demoBridge) Run(ctx context.Context, req testbridge.RunRequest, emit vsc
 }
 
 // DHF-REQ: keel/requirement-87
+// DHF-REQ: keel/requirement-146
 func (b demoBridge) ClearState(_ context.Context, req testbridge.RunRequest, _ vscode.RunEventWriter) (int, error) {
-	if err := os.RemoveAll(filepath.Join(req.Root, ".devtools", "keel-demo-dev")); err != nil {
-		return 1, err
+	for _, path := range []string{
+		blockStatePath(req.Root),
+		filepath.Join(req.Root, ".devtools", "keel-demo-dev", "go-lanes"),
+		demoDataSetPath(req.Root),
+	} {
+		if err := os.RemoveAll(path); err != nil {
+			return 1, err
+		}
 	}
 	return 0, nil
 }
