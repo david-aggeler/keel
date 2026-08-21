@@ -163,11 +163,11 @@ func TestKeelDemoDevServesReferenceConsumerTestBridge(t *testing.T) {
 	}
 	var desiredState vscode.DesiredStateDocument
 	decodeJSON(t, desiredStateOut, &desiredState)
-	assertDesiredState(t, desiredState.Groups, "docker-env", "ready", "ready", "verified")
-	assertDesiredState(t, desiredState.Groups, "postgres", "present+seeded", "present+seeded", "verified")
-	assertDesiredState(t, desiredState.Groups, "service-a", "running", "running", "verified")
-	assertDesiredState(t, desiredState.Groups, "service-b", "running", "running", "verified")
-	assertDesiredState(t, desiredState.Groups, "service-c", "running", "running", "verified")
+	assertDesiredState(t, desiredState.Groups, "docker-env", "ready", "absent", "provision_demo_environment")
+	assertDesiredState(t, desiredState.Groups, "postgres", "present+seeded", "missing", "create_and_seed_demo_database")
+	assertDesiredState(t, desiredState.Groups, "service-a", "running", "stopped", "start_demo_service")
+	assertDesiredState(t, desiredState.Groups, "service-b", "running", "stopped", "start_demo_service")
+	assertDesiredState(t, desiredState.Groups, "service-c", "running", "stopped", "start_demo_service")
 	assertExclusiveDataSetGroup(t, desiredState.Groups)
 
 	failOut, code := runDemoDev(t, root, exe, "test-bridge", "run", "--id", "keel-demo-dev::lane::go-fail")
@@ -327,20 +327,60 @@ func TestKeelDemoDevDesiredStateRowsAreRunnable(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, code = runDemoDev(t, root, exe, "test-bridge", "run", "--id", "keel-demo-dev::desired-state::docker-env")
-	if code == 0 {
-		t.Fatalf("broken docker-env row exit = 0, want non-zero\n%s", out)
-	}
-	assertRunEvent(t, decodeRunEvents(t, out), "failed", "keel-demo-dev::desired-state::docker-env", "provision_demo_environment")
-
-	detectOut, code = runDemoDev(t, root, exe, "test-bridge", "run", "--id", idDetectLanes)
 	if code != 0 {
-		t.Fatalf("repair detect-lanes exit = %d, want 0\n%s", code, detectOut)
-	}
-	out, code = runDemoDev(t, root, exe, "test-bridge", "run", "--id", "keel-demo-dev::desired-state::docker-env")
-	if code != 0 {
-		t.Fatalf("repaired docker-env row exit = %d, want 0\n%s", code, out)
+		t.Fatalf("broken docker-env row exit = %d, want repaired success\n%s", code, out)
 	}
 	assertRunEvent(t, decodeRunEvents(t, out), "passed", "keel-demo-dev::desired-state::docker-env", "provision_demo_environment")
+}
+
+// DHF-TEST: keel/requirement-62
+func TestKeelDemoDevPreconditionRowReconcilesItselfWithoutDetectLanes(t *testing.T) {
+	exe := buildDemoDev(t)
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Dir(demoLanesPath(root)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(demoLanesPath(root), []byte(`{"version":1,"lanes":[]}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := runDemoDev(t, root, exe, "test-bridge", "run", "--id", idDesiredDockerEnv)
+	if code != 0 {
+		t.Fatalf("unsatisfied docker-env row exit = %d, want 0\n%s", code, out)
+	}
+	events := decodeRunEvents(t, out)
+	assertRunEvent(t, events, "passed", idDesiredDockerEnv, "provision_demo_environment")
+	assertRunFinished(t, events, 0)
+
+	desiredStateOut, code := runDemoDev(t, root, exe, "test-bridge", "desired-state", "--format", "json", "--id", idDesiredDockerEnv)
+	if code != 0 {
+		t.Fatalf("post-run desired-state exit = %d, want 0\n%s", code, desiredStateOut)
+	}
+	var desiredState vscode.DesiredStateDocument
+	decodeJSON(t, desiredStateOut, &desiredState)
+	assertDesiredState(t, desiredState.Groups, "docker-env", "ready", "ready", "verified")
+}
+
+// DHF-TEST: keel/requirement-62
+func TestKeelDemoDevDetectLanesDoesNotWritePreconditionReadyState(t *testing.T) {
+	exe := buildDemoDev(t)
+	root := t.TempDir()
+
+	detectOut, code := runDemoDev(t, root, exe, "test-bridge", "run", "--id", idDetectLanes)
+	if code != 0 {
+		t.Fatalf("detect-lanes maintenance exit = %d, want 0\n%s", code, detectOut)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".devtools", "keel-demo-dev", "ready")); !os.IsNotExist(err) {
+		t.Fatalf("detect-lanes wrote precondition ready state, stat err = %v", err)
+	}
+
+	desiredStateOut, code := runDemoDev(t, root, exe, "test-bridge", "desired-state", "--format", "json", "--id", idDesiredDockerEnv)
+	if code != 0 {
+		t.Fatalf("post-detect desired-state exit = %d, want 0\n%s", code, desiredStateOut)
+	}
+	var desiredState vscode.DesiredStateDocument
+	decodeJSON(t, desiredStateOut, &desiredState)
+	assertDesiredState(t, desiredState.Groups, "docker-env", "ready", "absent", "provision_demo_environment")
 }
 
 // DHF-TEST: keel/requirement-62
@@ -385,7 +425,7 @@ func TestDemoBridgeCommandSpecCoversProviderAndRunPaths(t *testing.T) {
 	}
 	var desiredState vscode.DesiredStateDocument
 	decodeJSON(t, desiredStateOut, &desiredState)
-	assertDesiredState(t, desiredState.Groups, "postgres", "present+seeded", "present+seeded", "verified")
+	assertDesiredState(t, desiredState.Groups, "postgres", "present+seeded", "missing", "create_and_seed_demo_database")
 
 	defaultDesiredStateOut, err := dispatchDemoBridge(t, root, "test-bridge", "desired-state", "--format", "json")
 	if err != nil {
@@ -396,7 +436,7 @@ func TestDemoBridgeCommandSpecCoversProviderAndRunPaths(t *testing.T) {
 	if defaultDesiredState.Version != 3 {
 		t.Fatalf("default desired-state version = %d, want 3", defaultDesiredState.Version)
 	}
-	assertDesiredState(t, defaultDesiredState.Groups, "docker-env", "ready", "ready", "verified")
+	assertDesiredState(t, defaultDesiredState.Groups, "docker-env", "ready", "absent", "provision_demo_environment")
 	assertExclusiveDataSetGroup(t, defaultDesiredState.Groups)
 
 	runOut, err := dispatchDemoBridge(t, root, "test-bridge", "run", "--id", idLaneFakeSmoke)

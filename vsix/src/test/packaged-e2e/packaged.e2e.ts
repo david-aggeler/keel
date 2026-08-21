@@ -26,7 +26,7 @@ interface RunEvent {
 const requireExtension = createRequire(__filename);
 
 suite('packaged VSIX e2e lane', () => {
-  // DHF-TEST: keel/requirement-76
+  // DHF-TEST: keel/requirement-62, keel/requirement-76
   test('installed package drives the keel-demo-dev lifecycle through a real TestController', async function () {
     this.timeout(120_000);
 
@@ -54,6 +54,10 @@ suite('packaged VSIX e2e lane', () => {
     assertMissing(tree, 'keel-demo-dev::lane::fake-smoke');
 
     await runAndRead(workspaceRoot, api, 'testbridge::maintenance::detect-lanes');
+    assert.ok(
+      !fs.existsSync(path.join(workspaceRoot, '.devtools', 'keel-demo-dev', 'ready')),
+      'detect-lanes must not write precondition ready markers'
+    );
     await vscode.commands.executeCommand('keel.tests.refresh');
     tree = requireTree(api);
     assertPresent(tree, 'keel-demo-dev::lane::go-pass');
@@ -78,8 +82,6 @@ suite('packaged VSIX e2e lane', () => {
     }
 
     fs.rmSync(path.join(workspaceRoot, '.devtools', 'keel-demo-dev', 'ready', 'docker-env'), { force: true });
-    assertRunEvent(await runAndRead(workspaceRoot, api, 'keel-demo-dev::desired-state::docker-env'), 'failed', 'keel-demo-dev::desired-state::docker-env');
-    await runAndRead(workspaceRoot, api, 'testbridge::maintenance::detect-lanes');
     assertRunEvent(await runAndRead(workspaceRoot, api, 'keel-demo-dev::desired-state::docker-env'), 'passed', 'keel-demo-dev::desired-state::docker-env');
 
     await runAndRead(workspaceRoot, api, 'keel-demo-dev::desired-state::dataset::full');
