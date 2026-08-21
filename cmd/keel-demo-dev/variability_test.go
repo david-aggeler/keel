@@ -249,6 +249,8 @@ func TestDemoPreconditionsGroupRunHoldsExactlyOneRowInFlight(t *testing.T) {
 // while others still run — is observable (keel/ac-581).
 //
 // DHF-TEST: keel/requirement-62
+// DHF-TEST: keel/requirement-99
+// DHF-TEST: keel/ac-597
 func TestDemoSlowLaneHoldsEachOfItsThreeMembersInFlight(t *testing.T) {
 	const delay = 150 * time.Millisecond
 	stubDemoSlowRunDelay(t, delay)
@@ -271,7 +273,16 @@ func TestDemoSlowLaneHoldsEachOfItsThreeMembersInFlight(t *testing.T) {
 		t.Fatalf("slow lane run dispatch: %v\n%s", err, out)
 	}
 	events := decodeRunEvents(t, out)
+	assertRunEvent(t, events, "test_started", idLaneSlow, "")
+	assertRunEvent(t, events, "passed", idLaneSlow, "")
+	if got := countTerminalEvents(events, idLaneSlow); got != 1 {
+		t.Fatalf("slow lane reported %d terminal events for %q, want exactly 1: %+v", got, idLaneSlow, events)
+	}
+	laneTerminalIndex := terminalEventIndex(events, idLaneSlow)
 	gaps := demoSettleGaps(t, events)
+	if _, ok := gaps[idLaneSlow]; !ok {
+		t.Fatalf("slow lane id %q reported no result: %v", idLaneSlow, gaps)
+	}
 	for _, member := range members {
 		gap, ok := gaps[member.ID]
 		if !ok {
@@ -281,10 +292,40 @@ func TestDemoSlowLaneHoldsEachOfItsThreeMembersInFlight(t *testing.T) {
 			t.Fatalf("slow lane member %q settled %s after it started, want at least %s", member.ID, gap, delay)
 		}
 		assertRunEvent(t, events, "passed", member.ID, "")
+		if memberTerminalIndex := terminalEventIndex(events, member.ID); laneTerminalIndex <= memberTerminalIndex {
+			t.Fatalf("slow lane terminal index = %d, want after member %q terminal index %d", laneTerminalIndex, member.ID, memberTerminalIndex)
+		}
 	}
-	if len(gaps) != len(members) {
-		t.Fatalf("slow lane run reported %d results, want one per member: %v", len(gaps), gaps)
+	if want := len(members) + 1; len(gaps) != want {
+		t.Fatalf("slow lane run reported %d results, want lane plus one per member (%d): %v", len(gaps), want, gaps)
 	}
+}
+
+func countTerminalEvents(events []vscode.RunEvent, testID string) int {
+	var count int
+	for _, event := range events {
+		if event.TestID != testID {
+			continue
+		}
+		switch event.Event {
+		case "passed", "failed", "errored", "skipped":
+			count++
+		}
+	}
+	return count
+}
+
+func terminalEventIndex(events []vscode.RunEvent, testID string) int {
+	for i, event := range events {
+		if event.TestID != testID {
+			continue
+		}
+		switch event.Event {
+		case "passed", "failed", "errored", "skipped":
+			return i
+		}
+	}
+	return -1
 }
 
 func assertDemoItem(t *testing.T, items []vscode.TestItem, id string) vscode.TestItem {

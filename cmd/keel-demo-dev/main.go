@@ -485,13 +485,7 @@ func (b demoBridge) runOne(ctx context.Context, root, id string, emit vscode.Run
 		emit(vscode.RunEvent{Event: "passed", TestID: id, Message: "fake provisioning preview rendered"})
 		return 0, nil
 	case idLaneSlow:
-		for _, member := range demoSlowLaneMembers {
-			code, err := runSlowDemoStep(ctx, member.id, emit)
-			if code != 0 || err != nil {
-				return code, err
-			}
-		}
-		return 0, nil
+		return runSlowDemoLane(ctx, id, emit)
 	case idLaneGoPass, idTestGoPass:
 		return runGoLane(ctx, root, id, true, emit)
 	case idLaneGoFail, idTestGoFail:
@@ -514,6 +508,29 @@ func (b demoBridge) runOne(ctx context.Context, root, id string, emit vscode.Run
 		}
 		return 1, fmt.Errorf("unknown demo test id %q", id)
 	}
+}
+
+// runSlowDemoLane settles the requested lane id in addition to its members,
+// even though discovery publishes those members under the slow framework family.
+//
+// DHF-REQ: keel/requirement-99
+func runSlowDemoLane(ctx context.Context, id string, emit vscode.RunEventWriter) (int, error) {
+	emit(vscode.RunEvent{Event: "test_started", TestID: id})
+	for _, member := range demoSlowLaneMembers {
+		code, err := runSlowDemoStep(ctx, member.id, emit)
+		if code != 0 || err != nil {
+			event := "failed"
+			message := "slow fake provisioning lane failed"
+			if err != nil {
+				event = "errored"
+				message = err.Error()
+			}
+			emit(vscode.RunEvent{Event: event, TestID: id, Message: message})
+			return code, err
+		}
+	}
+	emit(vscode.RunEvent{Event: "passed", TestID: id, Message: "slow fake provisioning lane completed"})
+	return 0, nil
 }
 
 // runSlowDemoStep runs one member of the slow lane: it announces the member,
