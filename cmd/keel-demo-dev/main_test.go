@@ -528,14 +528,16 @@ func TestRunEntrypointRoutesProtocolHelpVersionAndErrors(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-11, keel/requirement-87, keel/requirement-98
+// DHF-TEST: keel/requirement-11, keel/requirement-87, keel/requirement-98, keel/requirement-146
 func TestDemoBridgeDirectMaintenanceMutatesWorkspaceState(t *testing.T) {
 	root := t.TempDir()
-	stateDir := filepath.Join(root, ".devtools", "keel-demo-dev")
-	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, ".devtools", "keel-demo-dev", "go-lanes", "stale"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(stateDir, "stale"), []byte("state"), 0o644); err != nil {
+	if err := os.WriteFile(blockStatePath(root), []byte(`{"blocked_lane":"keel-demo-dev::lane::go-fail"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(demoDataSetPath(root), []byte(demoDataSetFull+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -546,8 +548,14 @@ func TestDemoBridgeDirectMaintenanceMutatesWorkspaceState(t *testing.T) {
 	if err != nil || code != 0 {
 		t.Fatalf("ClearState = code %d err %v, want success", code, err)
 	}
-	if _, err := os.Stat(stateDir); !os.IsNotExist(err) {
-		t.Fatalf("ClearState left state dir present, stat err = %v", err)
+	for _, path := range []string{
+		blockStatePath(root),
+		filepath.Join(root, ".devtools", "keel-demo-dev", "go-lanes"),
+		demoDataSetPath(root),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("ClearState left owned state %s present, stat err = %v", path, err)
+		}
 	}
 
 	code, err = selectDemoDataSet(root, idDataSetFull, demoDataSetFull, "selected full", emit)
@@ -578,6 +586,52 @@ func TestDemoBridgeDirectMaintenanceMutatesWorkspaceState(t *testing.T) {
 	logger.Info("info")
 	logger.InfoContext(context.Background(), "info context")
 	logger.Error("error")
+}
+
+// DHF-TEST: keel/requirement-146
+func TestDemoBridgeClearStateKeepsPreconditionsSatisfiedAndRemovesOwnedState(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Dir(demoLanesPath(root)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(demoLanesPath(root), []byte(`{"version":1,"lanes":[]}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, decl := range demoPreconditions {
+		if err := writeDemoPrereqReady(root, decl.resource); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".devtools", "keel-demo-dev", "go-lanes", "stale"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(blockStatePath(root), []byte(`{"blocked_lane":"keel-demo-dev::lane::go-fail"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(demoDataSetPath(root), []byte(demoDataSetFull+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := dispatchDemoBridge(t, root, "test-bridge", "run", "--id", testbridge.MaintenanceClearStateID); err != nil {
+		t.Fatalf("clear-state dispatch: %v", err)
+	}
+	out, err := dispatchDemoBridge(t, root, "test-bridge", "desired-state", "--format", "json", "--id", idPreconditionsGroup)
+	if err != nil {
+		t.Fatalf("desired-state after clear-state: %v", err)
+	}
+	var doc vscode.DesiredStateDocument
+	decodeJSON(t, out, &doc)
+	assertAllDemoPreconditionsSatisfied(t, doc.Groups)
+
+	for _, path := range []string{
+		blockStatePath(root),
+		filepath.Join(root, ".devtools", "keel-demo-dev", "go-lanes"),
+		demoDataSetPath(root),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("ClearState left owned state %s present, stat err = %v", path, err)
+		}
+	}
 }
 
 // DHF-TEST: keel/requirement-11, keel/requirement-62
@@ -985,6 +1039,25 @@ func assertDesiredState(t *testing.T, groups []vscode.DesiredStateGroup, resourc
 		}
 	}
 	t.Fatalf("missing desired-state row %s in %+v", resource, groups)
+}
+
+func assertAllDemoPreconditionsSatisfied(t *testing.T, groups []vscode.DesiredStateGroup) {
+	t.Helper()
+	for _, group := range groups {
+		if group.Label != "Test Preconditions" {
+			continue
+		}
+		if len(group.Rows) != len(demoPreconditions) {
+			t.Fatalf("Test Preconditions rows = %d, want %d: %+v", len(group.Rows), len(demoPreconditions), group.Rows)
+		}
+		for _, row := range group.Rows {
+			if row.Current != row.Desired || row.Action != "reuse" || !row.Active {
+				t.Fatalf("precondition row after clear-state = %+v, want current=desired, action reuse, active true", row)
+			}
+		}
+		return
+	}
+	t.Fatalf("missing Test Preconditions group in %+v", groups)
 }
 
 func desiredStateRowByResource(t *testing.T, rows []vscode.DesiredState, resource string) vscode.DesiredState {
