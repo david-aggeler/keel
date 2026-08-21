@@ -34,7 +34,8 @@
       "minLength": 1
     },
     "live": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "True when the frame belongs to a committed test execution; false when the frame previews a resolved dry-run selection without executing tests."
     },
     "requested": {
       "type": "array",

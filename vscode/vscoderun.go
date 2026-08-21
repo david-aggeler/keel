@@ -21,12 +21,14 @@ import (
 //
 // DHF-REQ: keel/requirement-23
 type RunEvent struct {
-	Version    int          `json:"version"`
-	Event      string       `json:"event"`
-	Time       time.Time    `json:"time"`
-	RunID      string       `json:"run_id,omitempty"`
-	Source     string       `json:"source,omitempty"`
-	Workspace  string       `json:"workspace,omitempty"`
+	Version   int       `json:"version"`
+	Event     string    `json:"event"`
+	Time      time.Time `json:"time"`
+	RunID     string    `json:"run_id,omitempty"`
+	Source    string    `json:"source,omitempty"`
+	Workspace string    `json:"workspace,omitempty"`
+	// Live declares whether this frame belongs to a real test execution.
+	// Dry-run preview frames set it false; committed runs set it true.
 	Live       *bool        `json:"live,omitempty"`
 	Requested  []RunRequest `json:"requested,omitempty"`
 	TestID     string       `json:"test_id,omitempty"`

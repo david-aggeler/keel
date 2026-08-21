@@ -224,7 +224,7 @@ func TestBridgeDispatchLogsDryRunAndValidationFailures(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-147
+// DHF-TEST: keel/requirement-147 (keel/ac-609)
 func TestRunDryRunEmitsResolvedRequestsOnly(t *testing.T) {
 	root := t.TempDir()
 	fake := newFakeBridge(root)
@@ -247,6 +247,9 @@ func TestRunDryRunEmitsResolvedRequestsOnly(t *testing.T) {
 	if len(singleEvents) != 1 || singleEvents[0].Event != "run_started" || !reflect.DeepEqual(singleEvents[0].Requested, wantSingle) {
 		t.Fatalf("single events = %+v, want one run_started frame with requests %+v", singleEvents, wantSingle)
 	}
+	if singleEvents[0].Live == nil || *singleEvents[0].Live {
+		t.Fatalf("single dry-run run_started live = %v, want false", singleEvents[0].Live)
+	}
 	protocol.Reset()
 
 	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--dry-run", "--id", "demo::lanes"}); err != nil {
@@ -268,8 +271,20 @@ func TestRunDryRunEmitsResolvedRequestsOnly(t *testing.T) {
 	if len(events) != 1 || events[0].Event != "run_started" || !reflect.DeepEqual(events[0].Requested, wantRequested) {
 		t.Fatalf("events = %+v, want one run_started frame with expanded requests %+v", events, wantRequested)
 	}
-	if events[0].Live == nil || !*events[0].Live {
-		t.Fatalf("run_started live = %v, want true", events[0].Live)
+	if events[0].Live == nil || *events[0].Live {
+		t.Fatalf("dry-run run_started live = %v, want false", events[0].Live)
+	}
+
+	protocol.Reset()
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--id", "demo::lane::fast"}); err != nil {
+		t.Fatalf("real run dispatch: %v", err)
+	}
+	realEvents := decodeEvents(t, protocol.String())
+	if len(realEvents) == 0 || realEvents[0].Event != "run_started" || !reflect.DeepEqual(realEvents[0].Requested, wantSingle) {
+		t.Fatalf("real events = %+v, want opening run_started frame with requests %+v", realEvents, wantSingle)
+	}
+	if realEvents[0].Live == nil || !*realEvents[0].Live {
+		t.Fatalf("real run_started live = %v, want true", realEvents[0].Live)
 	}
 }
 
