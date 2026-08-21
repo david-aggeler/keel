@@ -1035,6 +1035,7 @@ var runSourceSurfaces = []string{defaultRunSource, editorRunSource}
 const editorRunSource = "editor"
 
 // DHF-REQ: keel/requirement-58, keel/requirement-107
+// DHF-REQ: keel/requirement-147
 // DHF-REQ: keel/requirement-86
 // DHF-REQ: keel/requirement-36
 func handleRun(bridge Bridge, ids *[]string, dryRun *bool, source *string) cli.Handler {
@@ -1050,6 +1051,8 @@ func handleRun(bridge Bridge, ids *[]string, dryRun *bool, source *string) cli.H
 			return err
 		}
 		if *dryRun {
+			writer := newRunProtocolWriter(rt, bridge.Workspace(), newRunID(rt), *source)
+			writer(vscode.RunEvent{Event: "run_started", Live: boolPtr(true), Requested: runResolutionRequests(requests)})
 			return nil
 		}
 		selected = runResolutionIDs(requests)
@@ -1966,17 +1969,7 @@ func newRunWriter(rt Runtime, workspace Workspace, runID, source string) (vscode
 		return nil, nil, err
 	}
 	closeFn := func() { _ = external.Close() }
-	stamper := vscode.EventStamper{
-		Now:       rt.Now,
-		RunID:     runID,
-		Source:    source,
-		Workspace: workspaceNode(workspace, root),
-		Logf: func(message string) {
-			if rt.Log != nil {
-				rt.Log.Warn("testbridge protocol event rejected", "detail", message)
-			}
-		},
-	}
+	stamper := newRunEventStamper(rt, workspace, root, runID, source)
 	out := rt.Protocol
 	if out == nil {
 		out = io.Discard
@@ -2009,6 +2002,52 @@ func newRunWriter(rt Runtime, workspace Workspace, runID, source string) (vscode
 			}
 		}
 	}, closeFn, nil
+}
+
+func newRunProtocolWriter(rt Runtime, workspace Workspace, runID, source string) vscode.RunEventWriter {
+	if source == "" {
+		source = defaultRunSource
+	}
+	root := rt.Root
+	if root == "" {
+		root = workspace.Root
+	}
+	stamper := newRunEventStamper(rt, workspace, root, runID, source)
+	out := rt.Protocol
+	if out == nil {
+		out = io.Discard
+	}
+	return func(event vscode.RunEvent) {
+		stamped := stamper.Stamp(event)
+		if err := ValidateDocument(stamped); err != nil {
+			if rt.Log != nil {
+				rt.Log.Error("validate testbridge run event", "error", err.Error())
+			}
+			return
+		}
+		line, err := vscode.MarshalRunEventJSONL(stamped)
+		if err != nil {
+			if rt.Log != nil {
+				rt.Log.Error("marshal testbridge run event", "error", err.Error())
+			}
+			return
+		}
+		_, _ = out.Write(line)
+	}
+}
+
+func newRunEventStamper(rt Runtime, workspace Workspace, root, runID, source string) vscode.EventStamper {
+	return vscode.EventStamper{
+		Now:       rt.Now,
+		RunID:     runID,
+		Source:    source,
+		Workspace: workspaceNode(workspace, root),
+		Logf: func(message string) {
+			if rt.Log != nil {
+				rt.Log.Warn("testbridge protocol event rejected", "detail", message)
+			}
+		},
+	}
 }
 
 type completedRunStream struct {
