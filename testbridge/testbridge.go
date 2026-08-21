@@ -1307,34 +1307,67 @@ func emitExclusiveDesiredStateSiblingClears(ids []string, selectedID string, wri
 	}
 }
 
-// DHF-REQ: keel/requirement-86, keel/requirement-88
+// DHF-REQ: keel/requirement-71, keel/requirement-86, keel/requirement-88
 func runRemainingSelections(ctx context.Context, bridge Bridge, requests []runResolution, runID, root string, writer vscode.RunEventWriter) (int, []string, error) {
-	runBatch := func(batch []runResolution) (int, []string, error) {
+	type batchResult struct {
+		exitCode  int
+		errored   []string
+		err       error
+		attempted bool
+	}
+	runBatch := func(batch []runResolution) batchResult {
 		if len(batch) == 0 {
-			return 0, nil, nil
+			return batchResult{}
 		}
 		ids := runResolutionIDs(batch)
 		if err := ctx.Err(); err != nil {
-			return 1, ids, err
+			return batchResult{exitCode: 1, err: err}
 		}
 		exitCode, err := bridge.Run(ctx, RunRequest{IDs: ids, RunID: runID, Root: root}, writer)
-		if err != nil || exitCode != 0 {
-			return exitCode, ids, err
+		if err != nil {
+			return batchResult{exitCode: exitCode, errored: ids, err: err, attempted: true}
+		}
+		if exitCode != 0 {
+			return batchResult{exitCode: exitCode, attempted: true}
 		}
 		for _, request := range batch {
 			emitExclusiveDesiredStateSiblingClears(request.ExclusiveSiblingIDs, request.Request.ID, writer)
 		}
-		return exitCode, nil, nil
+		return batchResult{attempted: true}
+	}
+	emitSkipped := func(pending []runResolution, reason string) {
+		for _, request := range pending {
+			writer(vscode.RunEvent{Event: "skipped", TestID: request.Request.ID, Message: reason})
+		}
+	}
+	mergeExit := func(current, next int) int {
+		if next != 0 {
+			return next
+		}
+		return current
 	}
 
+	exitCode := 0
 	batch := make([]runResolution, 0, len(requests))
-	for _, request := range requests {
+	for i, request := range requests {
 		if bridgeHandlesMaintenanceRun(request.Request.ID) {
-			if exitCode, ids, err := runBatch(batch); err != nil || exitCode != 0 {
-				return exitCode, ids, err
+			result := runBatch(batch)
+			if result.err != nil {
+				if result.attempted {
+					emitSkipped(requests[i:], result.err.Error())
+				} else {
+					emitSkipped(append(batch, requests[i:]...), result.err.Error())
+				}
+				return result.exitCode, result.errored, result.err
 			}
+			exitCode = mergeExit(exitCode, result.exitCode)
 			batch = batch[:0]
 			if exitCode, err := runBridgeMaintenance(ctx, bridge, root, runID, request.Request.ID, writer); err != nil || exitCode != 0 {
+				if err != nil {
+					emitSkipped(requests[i+1:], err.Error())
+				} else {
+					emitSkipped(requests[i+1:], fmt.Sprintf("run stopped after %s exited %d", request.Request.ID, exitCode))
+				}
 				return exitCode, []string{request.Request.ID}, err
 			}
 			continue
@@ -1343,15 +1376,37 @@ func runRemainingSelections(ctx context.Context, bridge Bridge, requests []runRe
 			batch = append(batch, request)
 			continue
 		}
-		if exitCode, ids, err := runBatch(batch); err != nil || exitCode != 0 {
-			return exitCode, ids, err
+		result := runBatch(batch)
+		if result.err != nil {
+			if result.attempted {
+				emitSkipped(requests[i:], result.err.Error())
+			} else {
+				emitSkipped(append(batch, requests[i:]...), result.err.Error())
+			}
+			return result.exitCode, result.errored, result.err
 		}
+		exitCode = mergeExit(exitCode, result.exitCode)
 		batch = batch[:0]
-		if exitCode, ids, err := runBatch([]runResolution{request}); err != nil || exitCode != 0 {
-			return exitCode, ids, err
+		result = runBatch([]runResolution{request})
+		if result.err != nil {
+			if result.attempted {
+				emitSkipped(requests[i+1:], result.err.Error())
+			} else {
+				emitSkipped(requests[i:], result.err.Error())
+			}
+			return result.exitCode, result.errored, result.err
 		}
+		exitCode = mergeExit(exitCode, result.exitCode)
 	}
-	return runBatch(batch)
+	result := runBatch(batch)
+	if result.err != nil {
+		if !result.attempted {
+			emitSkipped(batch, result.err.Error())
+		}
+		return result.exitCode, result.errored, result.err
+	}
+	exitCode = mergeExit(exitCode, result.exitCode)
+	return exitCode, nil, nil
 }
 
 func bridgeHandlesMaintenanceRun(id string) bool {
