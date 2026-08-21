@@ -253,11 +253,11 @@ func TestBridgeTerminalLogIncludesRunLevelErrors(t *testing.T) {
 		t.Fatalf("run dispatch err = %#v, want non-zero RunError", err)
 	}
 	records := capture.AllJSON()
-	if !hasBridgeTerminalMessageRecord(records, "demo::lane::fast", "errored", 1, "runner failed before test id") {
-		t.Fatalf("records = %+v, want keyed terminal error record", records)
+	if !hasBridgeTerminalMessageRecord(records, "", "errored", 1, "runner failed before test id") {
+		t.Fatalf("records = %+v, want run-level terminal error record", records)
 	}
-	if !eventsContain(decodeEvents(t, protocol.String()), "errored", "demo::lane::fast", "runner failed before test id") {
-		t.Fatalf("protocol = %s, want keyed errored event for requested id", protocol.String())
+	if !eventsContain(decodeEvents(t, protocol.String()), "errored", "", "runner failed before test id") {
+		t.Fatalf("protocol = %s, want run-level errored event", protocol.String())
 	}
 }
 
@@ -1581,6 +1581,52 @@ func TestRunExecutesMultipleDesiredStateRows(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-71
+func TestRunMixedDesiredStateRowsDoesNotRestampSettledRowsErrored(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	calls := map[string]int{}
+	const readyID = "demo::desired-state::db"
+	const missingID = "demo::desired-state::cache"
+	fake.desiredGroups = []testbridge.DesiredStateGroup{{
+		Label: "Provisioning",
+		Order: 10,
+		Rows: []testbridge.DesiredStateRow{
+			probedCountingRow(calls, readyID, "db", "seeded", true, "db ready"),
+			probedCountingRow(calls, missingID, "cache", "warm", false, "warm cache"),
+		},
+	}}
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return "run-mixed-desired-state" }})
+
+	err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{
+		"test-bridge", "run",
+		"--id", readyID,
+		"--id", missingID,
+	})
+	if err == nil {
+		t.Fatal("mixed desired-state run returned nil error, want non-zero from failed cache row")
+	}
+	events := decodeEvents(t, protocol.String())
+	for _, id := range []string{readyID, missingID} {
+		if got := terminalEventCount(events, id); got != 1 {
+			t.Fatalf("terminal count for desired-state row %q = %d in events %+v, want exactly one", id, got, events)
+		}
+		if eventsContain(events, "errored", id, "desired-state row failed") {
+			t.Fatalf("desired-state row %q received selection-level errored restamp: %+v", id, events)
+		}
+	}
+	if got := terminalEventFor(events, readyID); got != "passed" {
+		t.Fatalf("satisfied desired-state row terminal = %q, want passed\nevents: %+v", got, events)
+	}
+	if got := terminalEventFor(events, missingID); got != "failed" {
+		t.Fatalf("unsatisfied desired-state row terminal = %q, want failed\nevents: %+v", got, events)
+	}
+	if events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode == 0 {
+		t.Fatalf("run_finished = %+v, want non-zero exit code", events[len(events)-1])
+	}
+}
+
 // DHF-TEST: keel/requirement-84
 func TestRunExpandsRunnableDesiredStateGroupToRows(t *testing.T) {
 	root := t.TempDir()
@@ -2408,8 +2454,8 @@ func TestRunErrorsAndLockConflictsUsePackagePaths(t *testing.T) {
 	if !errors.As(err, &runErr) || runErr.ExitCode != 1 || !strings.Contains(runErr.Error(), "runner failed") || runErr.Unwrap() == nil {
 		t.Fatalf("run error = %#v, want RunError wrapping runner failure", err)
 	}
-	if !eventsContain(decodeEvents(t, protocol.String()), "errored", "demo::lane::fast", "runner failed") {
-		t.Fatalf("run-error protocol = %s, want keyed errored event for requested id", protocol.String())
+	if !eventsContain(decodeEvents(t, protocol.String()), "errored", "", "runner failed") {
+		t.Fatalf("run-error protocol = %s, want run-level errored event", protocol.String())
 	}
 
 	if err := os.MkdirAll(filepath.Dir(testbridge.RunLockPath(root)), 0o755); err != nil {
@@ -3172,6 +3218,16 @@ func terminalEventIDs(events []vscode.RunEvent) []string {
 		}
 	}
 	return ids
+}
+
+func terminalEventFor(events []vscode.RunEvent, testID string) string {
+	var terminal string
+	for _, event := range events {
+		if event.TestID == testID && isTerminalTestEvent(event.Event) {
+			terminal = event.Event
+		}
+	}
+	return terminal
 }
 
 func isTerminalTestEvent(event string) bool {
