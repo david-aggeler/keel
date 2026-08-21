@@ -88,19 +88,20 @@ type DiscoveryCapabilities struct {
 	ClearResultsTestIDs       []string `json:"clear_results_test_ids,omitempty"`
 	ClearStateTestIDs         []string `json:"clear_state_test_ids,omitempty"`
 	// ReconcileResults is the bridge-computed rendered truth for
-	// mutually-exclusive desired-state rows: one stamp per row with a run
-	// id (active row passed, every other row skipped). Consumers replay
-	// the entries verbatim through a non-persisted test run on every
-	// discovery refresh, overwriting stale (including persistence-restored)
-	// results.
-	// DHF-REQ: keel/requirement-97
+	// desired-state rows. Exclusive groups serve one stamp per row with a
+	// run id (active row passed, every other row skipped). Non-exclusive
+	// groups serve passed for satisfied run-id-bearing rows and no entry
+	// for every other row. Consumers replay the entries verbatim through a
+	// non-persisted test run on every discovery refresh, overwriting stale
+	// (including persistence-restored) results.
+	// DHF-REQ: keel/requirement-97, keel/requirement-145
 	ReconcileResults []ReconcileResult `json:"reconcile_results,omitempty"`
 }
 
 // ReconcileResult is one bridge-computed rendered-state stamp for a
-// mutually-exclusive desired-state row.
+// desired-state row.
 //
-// DHF-REQ: keel/requirement-97
+// DHF-REQ: keel/requirement-97, keel/requirement-145
 type ReconcileResult struct {
 	TestID  string `json:"test_id"`
 	State   string `json:"state"`
