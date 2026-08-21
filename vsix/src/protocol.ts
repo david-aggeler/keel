@@ -169,6 +169,7 @@ export interface RunEvent {
   // initiated the run. A stream carrying no recognized value is unattributed.
   source?: 'vscode' | 'external' | 'editor';
   workspace?: string;
+  // True for committed test execution; false for a dry-run preview frame.
   live?: boolean;
   requested?: Array<{ id: string; label: string }>;
   test_id?: string;

@@ -1076,7 +1076,8 @@ func handleRun(bridge Bridge, ids *[]string, dryRun *bool, source *string) cli.H
 		}
 		if *dryRun {
 			writer := newRunProtocolWriter(rt, bridge.Workspace(), newRunID(rt), *source)
-			writer(vscode.RunEvent{Event: "run_started", Live: boolPtr(true), Requested: runResolutionRequests(requests)})
+			// DHF-REQ: keel/requirement-147 (keel/ac-609)
+			writer(vscode.RunEvent{Event: "run_started", Live: boolPtr(false), Requested: runResolutionRequests(requests)})
 			return nil
 		}
 		selected = runResolutionIDs(requests)
