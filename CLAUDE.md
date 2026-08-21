@@ -38,6 +38,15 @@ Keel's vision, change_request, issue, issue_fix, exploration, test_strategy, epi
 
 EVERY code change goes through a CR. No silent fixes.
 
+**A SoR record update is NOT a code change and needs NO CR.** Editing a
+gold record — requirement, ac, issue, architecture_description,
+interface_spec, design_decision, iteration, any HELIX01 type — is record-plane
+work with its own change control. Do it directly through `mcp__gold__*`. Do
+not open a CR for it, do not route it through a bug-fix sweep, and do not
+wait for approval to make the edit. A CR whose whole diff is a record edit
+touches no file, so no merge gate can close it. See *Scope of the rule*
+below.
+
 The loop, always:
 
 1. File records first. Defect or gap → `issue`. Then a `change_request`
@@ -58,7 +67,10 @@ markdown, configs, scripts, the VSIX. It does NOT cover:
 
 - **SoR records.** Creating or updating a gold record (architecture
   description, requirement, issue, review, …) needs no CR. The record
-  plane is its own change control.
+  plane is its own change control. This holds however large the edit is:
+  rewriting a whole interface_spec chapter is still a record update. An
+  issue whose fix is typed into gold is closed by making the edit and
+  recording it in the issue's Resolution — not by a CR and a merge SHA.
 - **Catalog items.** Materialized skills, templates, methods, runbooks,
   executors are owned by OpenBrain. Do not edit them here — fix them at
   the source. Locally-authored skills under `.claude/skills/` that were
