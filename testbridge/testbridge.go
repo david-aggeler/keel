@@ -1109,7 +1109,7 @@ func handleRun(bridge Bridge, ids *[]string, dryRun *bool, source *string) cli.H
 		var erroredIDs []string
 		exitCode, remaining, runErr := runDesiredStateSelections(ctx, bridge, requests, writer)
 		if runErr != nil {
-			erroredIDs = settled.StartedUnsettledRunResolutionIDs(requests)
+			erroredIDs = settled.UnsettledRunResolutionIDs(requests)
 		}
 		if runErr == nil && len(remaining) > 0 {
 			exitCode, erroredIDs, runErr = runRemainingSelections(ctx, bridge, remaining, runID, root, writer)
@@ -1143,14 +1143,12 @@ func bridgeLockExempt(bridge Bridge, ids []string) bool {
 
 type runEventSettlementTracker struct {
 	write   vscode.RunEventWriter
-	started map[string]struct{}
 	settled map[string]struct{}
 }
 
 func newRunEventSettlementTracker(write vscode.RunEventWriter) *runEventSettlementTracker {
 	return &runEventSettlementTracker{
 		write:   write,
-		started: map[string]struct{}{},
 		settled: map[string]struct{}{},
 	}
 }
@@ -1162,9 +1160,6 @@ func newRunEventSettlementTracker(write vscode.RunEventWriter) *runEventSettleme
 // DHF-REQ: keel/requirement-71
 func (t *runEventSettlementTracker) Write(event vscode.RunEvent) {
 	if event.TestID != "" {
-		if event.Event == "test_started" {
-			t.started[event.TestID] = struct{}{}
-		}
 		if vscode.IsTerminalRunEvent(event.Event) {
 			if _, ok := t.settled[event.TestID]; ok {
 				return
@@ -1175,7 +1170,8 @@ func (t *runEventSettlementTracker) Write(event vscode.RunEvent) {
 	t.write(event)
 }
 
-func (t *runEventSettlementTracker) StartedUnsettledRunResolutionIDs(requests []runResolution) []string {
+// DHF-REQ: keel/requirement-71
+func (t *runEventSettlementTracker) UnsettledRunResolutionIDs(requests []runResolution) []string {
 	ids := make([]string, 0, len(requests))
 	seen := map[string]struct{}{}
 	for _, request := range requests {
@@ -1187,9 +1183,6 @@ func (t *runEventSettlementTracker) StartedUnsettledRunResolutionIDs(requests []
 			continue
 		}
 		seen[id] = struct{}{}
-		if _, ok := t.started[id]; !ok {
-			continue
-		}
 		if _, ok := t.settled[id]; ok {
 			continue
 		}
