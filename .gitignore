@@ -8,24 +8,22 @@ bin/
 # run-queue per-unit worktrees are rooted under <repo>/worktrees/; never track them
 worktrees/
 .claude/legacy/
-# Catalog-materialized skills and agents are owned by OpenBrain, not by this repo.
-# They are produced by `openbrain-client init-skills` and must never be edited here,
-# so tracking them makes the repo a second writable copy of a record plane it does not
-# own -- and one with no delete path: a skill withdrawn in gold is unfetchable, so the
-# reconcile restores it from .claude/legacy/ instead of removing it. Gold is the source.
-# Run `openbrain-client init-skills` in a fresh clone or worktree to materialize them.
+# Catalog-materialized skills and agents ARE tracked here, deliberately. See
+# .claude/README.md for the reasoning and the maintenance duty that comes with it.
 #
-# Ignore every skill, then re-include the locally-authored ones. A local skill is a repo
-# file under the repo change-control rule; a materialized one carries an
-# x-openbrain-content-hash stamp in its front matter. gitignore cannot read the stamp, so
-# this list is maintained by hand -- add a line here when a new local skill is authored.
-.claude/skills/*
-!.claude/skills/asd-ste100/
-!.claude/skills/build/
-!.claude/skills/decide/
-!.claude/skills/merge/
-!.claude/skills/publish/
-.claude/agents/
+# They are owned by OpenBrain and gold stays the source, so tracking them does make the
+# repo a second copy of a record plane it does not own. That cost is accepted because
+# the alternative cost more: keel/issue-200 untracked them on 2026-08-20 (commit
+# 8a94209), and every run-queue worktree created afterwards carried only the five
+# locally-authored skills, so the dev verb's skill-currentness gate aborted each unit
+# with outcome=skill_stale before any work started (keel/issue-201). Nothing in the
+# worktree bring-up path materializes them, and that path lives in openbrain-client,
+# not here -- so this repo cannot fix it at the source. Owner ruling 2026-08-21: track
+# them, so a worktree is usable the moment it is created.
+#
+# The duty: a skill withdrawn in gold does not disappear from here on its own.
+# `openbrain-client init-skills` restores an unfetchable skill from .claude/legacy/
+# rather than deleting it, so a withdrawal has to be committed by hand.
 .claude/materialization.json
 # gitignored sandbox for `openbrain-client init --dev` (KD10, CR-0249)
 consumer-claude/
