@@ -133,10 +133,11 @@ var demoSlowLaneMembers = []struct {
 // every other demo item settles in microseconds, which renders the transitional
 // state of a run unobservable (keel/ac-580, keel/ac-581). It is fake demo time —
 // it reaches no real infrastructure.
-const demoSlowRunDelayDefault = 10 * time.Second
+// DHF-REQ: keel/requirement-62
+const demoSlowRunDelayDefault = 5 * time.Second
 
 // demoSlowRunDelay is the fake work time in force. It is a variable for one
-// reason: the demo's own tests shorten it, so the keel gate never waits ten
+// reason: the demo's own tests shorten it, so the keel gate never waits five
 // seconds for demo content. There is no flag, environment variable, or config
 // row behind it — for anyone running keel-demo-dev the slow row and the slow
 // lane are always slow.
