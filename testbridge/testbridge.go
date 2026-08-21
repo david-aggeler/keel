@@ -1059,6 +1059,8 @@ func handleRun(bridge Bridge, ids *[]string, dryRun *bool, source *string) cli.H
 			return err
 		}
 		defer closeWriter()
+		settled := newRunEventSettlementTracker(writer)
+		writer = settled.Write
 		exitCode := 1
 		writer(vscode.RunEvent{Event: "run_started", Live: boolPtr(true), Requested: runResolutionRequests(requests)})
 		if !bridgeLockExempt(bridge, selected) {
@@ -1080,13 +1082,18 @@ func handleRun(bridge Bridge, ids *[]string, dryRun *bool, source *string) cli.H
 		var erroredIDs []string
 		exitCode, remaining, runErr := runDesiredStateSelections(ctx, bridge, requests, writer)
 		if runErr != nil {
-			erroredIDs = runResolutionIDs(requests)
+			erroredIDs = settled.StartedUnsettledRunResolutionIDs(requests)
 		}
 		if runErr == nil && len(remaining) > 0 {
 			exitCode, erroredIDs, runErr = runRemainingSelections(ctx, bridge, remaining, runID, root, writer)
 		}
 		if runErr != nil {
-			vscode.EmitErroredForTestIDs(erroredIDs, runErr.Error(), writer)
+			erroredIDs = settled.UnsettledIDs(erroredIDs)
+			if len(erroredIDs) > 0 {
+				vscode.EmitErroredForTestIDs(erroredIDs, runErr.Error(), writer)
+			} else {
+				writer(vscode.RunEvent{Event: "errored", Message: runErr.Error()})
+			}
 		}
 		writer(vscode.RunEvent{Event: "run_finished", ExitCode: &exitCode})
 		if runErr != nil {
@@ -1105,6 +1112,82 @@ func bridgeLockExempt(bridge Bridge, ids []string) bool {
 	}
 	locker, ok := bridge.(lockExemptRunner)
 	return ok && locker.LockExemptRun(ids)
+}
+
+type runEventSettlementTracker struct {
+	write   vscode.RunEventWriter
+	started map[string]struct{}
+	settled map[string]struct{}
+}
+
+func newRunEventSettlementTracker(write vscode.RunEventWriter) *runEventSettlementTracker {
+	return &runEventSettlementTracker{
+		write:   write,
+		started: map[string]struct{}{},
+		settled: map[string]struct{}{},
+	}
+}
+
+// Write prevents duplicate terminal events for the same test_id from leaving
+// the producer stream. Run-level terminal events without a test_id still pass
+// through because they do not settle a row.
+//
+// DHF-REQ: keel/requirement-71
+func (t *runEventSettlementTracker) Write(event vscode.RunEvent) {
+	if event.TestID != "" {
+		if event.Event == "test_started" {
+			t.started[event.TestID] = struct{}{}
+		}
+		if vscode.IsTerminalRunEvent(event.Event) {
+			if _, ok := t.settled[event.TestID]; ok {
+				return
+			}
+			t.settled[event.TestID] = struct{}{}
+		}
+	}
+	t.write(event)
+}
+
+func (t *runEventSettlementTracker) StartedUnsettledRunResolutionIDs(requests []runResolution) []string {
+	ids := make([]string, 0, len(requests))
+	seen := map[string]struct{}{}
+	for _, request := range requests {
+		id := request.Request.ID
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		if _, ok := t.started[id]; !ok {
+			continue
+		}
+		if _, ok := t.settled[id]; ok {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func (t *runEventSettlementTracker) UnsettledIDs(ids []string) []string {
+	unsettled := make([]string, 0, len(ids))
+	seen := map[string]struct{}{}
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		if _, ok := t.settled[id]; ok {
+			continue
+		}
+		unsettled = append(unsettled, id)
+	}
+	return unsettled
 }
 
 // DHF-REQ: keel/requirement-75, keel/requirement-88, keel/requirement-98
