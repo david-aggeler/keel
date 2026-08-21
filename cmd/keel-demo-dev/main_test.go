@@ -320,7 +320,7 @@ func TestKeelDemoDevDesiredStateRowsAreRunnable(t *testing.T) {
 	// Running the whole Test Preconditions group is asserted by
 	// TestDemoPreconditionsGroupRunHoldsExactlyOneRowInFlight instead. The group
 	// holds the demo's slow row, and the gate never runs that row at its shipped
-	// ten seconds (keel/ac-580), so the group run is exercised in process where
+	// five seconds (keel/ac-580), so the group run is exercised in process where
 	// the fake work time can be shortened.
 
 	if err := os.Remove(demoReadyPath(root, "docker-env")); err != nil {

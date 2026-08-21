@@ -173,15 +173,18 @@ func demoSettleGaps(t *testing.T, events []vscode.RunEvent) map[string]time.Dura
 	return gaps
 }
 
-// The shipped slow demo row and slow demo lane take at least the ten seconds
+// The shipped slow demo row and slow demo lane take at least the five seconds
 // keel/ac-580 and keel/ac-581 ask for. The delay itself is authored content, so
 // the number is asserted here; that the run path applies it is asserted by the
 // run tests below, which shorten it so the gate never waits for it.
 //
 // DHF-TEST: keel/requirement-62
-func TestDemoSlowRunDelayIsAtLeastTenSeconds(t *testing.T) {
-	if demoSlowRunDelayDefault < 10*time.Second {
-		t.Fatalf("demo slow run delay = %s, want at least 10s", demoSlowRunDelayDefault)
+func TestDemoSlowRunDelayIsExactlyFiveSeconds(t *testing.T) {
+	if demoSlowRunDelayDefault != 5*time.Second {
+		t.Fatalf("demo slow run delay default = %s, want exactly 5s", demoSlowRunDelayDefault)
+	}
+	if demoSlowRunDelayDefault < 5*time.Second {
+		t.Fatalf("demo slow run delay = %s, want at least 5s", demoSlowRunDelayDefault)
 	}
 	if demoSlowRunDelay != demoSlowRunDelayDefault {
 		t.Fatalf("demo slow run delay in force = %s, want the shipped default %s", demoSlowRunDelay, demoSlowRunDelayDefault)
