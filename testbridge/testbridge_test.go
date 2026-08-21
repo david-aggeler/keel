@@ -1989,6 +1989,52 @@ func TestRunNonDesiredStateGroupSelectionDoesNotDuplicateExplicitLeaves(t *testi
 	}
 }
 
+// DHF-TEST: keel/requirement-71
+func TestRunNonDesiredStateGroupSettlesEveryRequestedChildAfterFailure(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = failingGroupItems()
+	fake.runExitCodes = map[string]int{"demo::lane::fail": 1}
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return "run-failing-group" }})
+
+	err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "run", "--id", "demo::lanes"})
+	if err == nil {
+		t.Fatal("failing group run returned nil error, want non-zero exit")
+	}
+	if !equalStrings(fake.runIDs, []string{"demo::lane::fast", "demo::lane::fail", "demo::lane::slow"}) {
+		t.Fatalf("consumer runner ids = %v, want every expanded child despite middle failure", fake.runIDs)
+	}
+	events := decodeEvents(t, protocol.String())
+	if len(events) == 0 {
+		t.Fatal("group run emitted no events")
+	}
+	for _, request := range events[0].Requested {
+		if got := terminalEventCount(events, request.ID); got != 1 {
+			t.Fatalf("terminal count for requested id %q = %d in events %+v, want exactly one", request.ID, got, events)
+		}
+	}
+	if events[len(events)-1].ExitCode == nil || *events[len(events)-1].ExitCode == 0 {
+		t.Fatalf("run_finished = %+v, want non-zero exit code", events[len(events)-1])
+	}
+}
+
+// DHF-TEST: keel/requirement-86
+func TestRunNonDesiredStateGroupFailureMatchesExplicitMultiSelectCoverage(t *testing.T) {
+	groupIDs, groupTerminals, groupExit := runFailingGroupGesture(t, []string{"demo::lanes"})
+	explicitIDs, explicitTerminals, explicitExit := runFailingGroupGesture(t, []string{"demo::lane::fast", "demo::lane::fail", "demo::lane::slow"})
+
+	if !equalStrings(groupIDs, explicitIDs) {
+		t.Fatalf("group runner ids = %v, explicit runner ids = %v; want same executed leaves", groupIDs, explicitIDs)
+	}
+	if !reflect.DeepEqual(groupTerminals, explicitTerminals) {
+		t.Fatalf("group terminal ids = %v, explicit terminal ids = %v; want same settled leaves", groupTerminals, explicitTerminals)
+	}
+	if groupExit == nil || *groupExit == 0 || explicitExit == nil || *explicitExit == 0 {
+		t.Fatalf("exit codes group=%v explicit=%v, want both non-zero", groupExit, explicitExit)
+	}
+}
+
 func runTestBridgeID(t *testing.T, items []vscode.TestItem, id string) ([]string, []vscode.RunRequest) {
 	t.Helper()
 	root := t.TempDir()
@@ -2005,6 +2051,64 @@ func runTestBridgeID(t *testing.T, items []vscode.TestItem, id string) ([]string
 		t.Fatalf("run %q emitted no events", id)
 	}
 	return fake.runIDs, events[0].Requested
+}
+
+func runFailingGroupGesture(t *testing.T, ids []string) ([]string, []string, *int) {
+	t.Helper()
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = failingGroupItems()
+	fake.runExitCodes = map[string]int{"demo::lane::fail": 1}
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return "run-failing-group" }})
+	args := []string{"test-bridge", "run"}
+	for _, id := range ids {
+		args = append(args, "--id", id)
+	}
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, args); err == nil {
+		t.Fatalf("run %v returned nil error, want non-zero exit", ids)
+	}
+	events := decodeEvents(t, protocol.String())
+	if len(events) == 0 {
+		t.Fatalf("run %v emitted no events", ids)
+	}
+	return fake.runIDs, terminalEventIDs(events), events[len(events)-1].ExitCode
+}
+
+func failingGroupItems() []vscode.TestItem {
+	return []vscode.TestItem{
+		{
+			ID:       "demo::lanes",
+			Label:    "C - Lanes",
+			Kind:     "group",
+			Runnable: false,
+			Profiles: []string{},
+		},
+		{
+			ID:       "demo::lane::fast",
+			ParentID: "demo::lanes",
+			Label:    "Fast",
+			Kind:     "lane",
+			Runnable: true,
+			Profiles: []string{"run"},
+		},
+		{
+			ID:       "demo::lane::fail",
+			ParentID: "demo::lanes",
+			Label:    "Fail",
+			Kind:     "lane",
+			Runnable: true,
+			Profiles: []string{"run"},
+		},
+		{
+			ID:       "demo::lane::slow",
+			ParentID: "demo::lanes",
+			Label:    "Slow",
+			Kind:     "lane",
+			Runnable: true,
+			Profiles: []string{"run"},
+		},
+	}
 }
 
 // DHF-TEST: keel/requirement-86
@@ -2051,8 +2155,12 @@ func TestRunNonDesiredStateGroupCancellationStopsRemainingChildren(t *testing.T)
 	if !equalStrings(fake.runIDs, []string{"demo::lane::fast"}) {
 		t.Fatalf("consumer runner ids = %v, want only first child before cancellation", fake.runIDs)
 	}
-	if events := decodeEvents(t, protocol.String()); !eventsContain(events, "passed", "demo::lane::fast", "") || eventsContain(events, "passed", "demo::lane::slow", "") {
-		t.Fatalf("events = %+v, want first child only before cancellation", events)
+	events := decodeEvents(t, protocol.String())
+	if !eventsContain(events, "passed", "demo::lane::fast", "") ||
+		eventsContain(events, "passed", "demo::lane::slow", "") ||
+		terminalEventCount(events, "demo::lane::slow") != 1 ||
+		!eventsContain(events, "skipped", "demo::lane::slow", context.Canceled.Error()) {
+		t.Fatalf("events = %+v, want first child passed and cancelled remainder skipped", events)
 	}
 }
 
@@ -2759,6 +2867,7 @@ type fakeBridge struct {
 	removeRunLockDuringRun          bool
 	clearStatePath                  string
 	clearStateCalls                 int
+	runExitCodes                    map[string]int
 	runErr                          error
 	discoverErr                     error
 	desiredErr                      error
@@ -2995,13 +3104,19 @@ func (f *fakeBridge) Run(_ context.Context, req testbridge.RunRequest, emit vsco
 			return 1, err
 		}
 	}
+	exitCode := 0
 	for _, id := range req.IDs {
+		if code := f.runExitCodes[id]; code != 0 {
+			emit(vscode.RunEvent{Event: "failed", TestID: id})
+			exitCode = code
+			continue
+		}
 		emit(vscode.RunEvent{Event: "passed", TestID: id})
 	}
 	if f.runErr != nil {
 		return 1, f.runErr
 	}
-	return 0, nil
+	return exitCode, nil
 }
 
 func (f *fakeBridge) Lanes(context.Context) ([]vscode.TestItem, error) {
@@ -3037,6 +3152,35 @@ func eventsContain(events []vscode.RunEvent, event, testID, message string) bool
 		}
 	}
 	return false
+}
+
+func terminalEventCount(events []vscode.RunEvent, testID string) int {
+	count := 0
+	for _, event := range events {
+		if event.TestID == testID && event.Event != "test_started" && isTerminalTestEvent(event.Event) {
+			count++
+		}
+	}
+	return count
+}
+
+func terminalEventIDs(events []vscode.RunEvent) []string {
+	var ids []string
+	for _, event := range events {
+		if event.TestID != "" && isTerminalTestEvent(event.Event) {
+			ids = append(ids, event.TestID)
+		}
+	}
+	return ids
+}
+
+func isTerminalTestEvent(event string) bool {
+	switch event {
+	case "passed", "failed", "errored", "skipped", "cancelled":
+		return true
+	default:
+		return false
+	}
 }
 
 func eventMessageContainsAll(events []vscode.RunEvent, event, testID string, substrings ...string) bool {
