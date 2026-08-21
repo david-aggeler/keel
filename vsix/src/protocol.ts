@@ -14,12 +14,14 @@ export interface DiscoveryCapabilities {
   clear_results_test_ids?: string[];
   clear_state_test_ids?: string[];
   /**
-   * Bridge-computed rendered truth for exclusive desired-state rows: one
-   * stamp per row with a run id (active row passed, every other row
-   * skipped). The VSIX replays the entries verbatim through one
-   * non-persisted TestRun per refresh, overwriting stale results —
-   * including results restored from persistence after a window reload.
-   * DHF-REQ: keel/requirement-97
+   * Bridge-computed rendered truth for desired-state rows. Exclusive groups
+   * serve one stamp per row with a run id (active row passed, every other row
+   * skipped). Non-exclusive groups serve passed for each run-id-bearing row
+   * whose bridge-derived status is satisfied and no entry for every other row.
+   * The VSIX replays entries verbatim through one non-persisted TestRun per
+   * refresh, overwriting stale results — including results restored from
+   * persistence after a window reload.
+   * DHF-REQ: keel/requirement-97, keel/requirement-145
    */
   reconcile_results?: ReconcileResult[];
 }

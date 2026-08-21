@@ -618,10 +618,12 @@ func desiredStateDiagnosticItem(parentID string, err error) vscode.TestItem {
 // and, alongside them, the bridge-computed reconcile_results capability
 // content: one rendered-state stamp per mutually-exclusive row with a run
 // id — the derived-active row passed, every other row (including the
-// synthetic Unknown State peer) skipped. Consumers replay exactly those
-// stamps on every refresh, overwriting stale rendered results.
+// synthetic Unknown State peer) skipped. Non-exclusive groups emit passed for
+// satisfied rows with run ids and no entry for every other row. Consumers
+// replay exactly those stamps on every refresh, overwriting stale rendered
+// results.
 //
-// DHF-REQ: keel/requirement-75, keel/requirement-83, keel/requirement-88, keel/requirement-97
+// DHF-REQ: keel/requirement-75, keel/requirement-83, keel/requirement-88, keel/requirement-97, keel/requirement-145
 func desiredStateDeclarationDiscoveryItems(ctx context.Context, root, parentID string, groups []DesiredStateGroup) ([]vscode.TestItem, []vscode.ReconcileResult, error) {
 	groups = append([]DesiredStateGroup(nil), groups...)
 	sort.SliceStable(groups, func(i, j int) bool { return groups[i].Order < groups[j].Order })
@@ -670,6 +672,8 @@ func desiredStateDeclarationDiscoveryItems(ctx context.Context, root, parentID s
 		}
 		if group.MutuallyExclusive {
 			reconcile = append(reconcile, exclusiveGroupReconcileResults(derivedRows)...)
+		} else {
+			reconcile = append(reconcile, nonExclusiveGroupReconcileResults(derivedRows)...)
 		}
 	}
 	return items, reconcile, nil
@@ -709,6 +713,26 @@ func exclusiveGroupReconcileResults(derivedRows []derivedDesiredStateRow) []vsco
 			TestID:  row.State.RunID,
 			State:   "skipped",
 			Message: message,
+		})
+	}
+	return results
+}
+
+// nonExclusiveGroupReconcileResults renders only the rows whose current
+// bridge-derived state is satisfied. Non-satisfied rows are omitted so
+// discovery never asserts failed or skipped for a row that did not run.
+//
+// DHF-REQ: keel/requirement-145
+func nonExclusiveGroupReconcileResults(derivedRows []derivedDesiredStateRow) []vscode.ReconcileResult {
+	results := make([]vscode.ReconcileResult, 0, len(derivedRows))
+	for _, row := range derivedRows {
+		if row.State.RunID == "" || row.State.Status != "satisfied" {
+			continue
+		}
+		results = append(results, vscode.ReconcileResult{
+			TestID:  row.State.RunID,
+			State:   "passed",
+			Message: row.State.Resource + " is satisfied (current=" + row.State.Current + ")",
 		})
 	}
 	return results
