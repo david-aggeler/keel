@@ -1731,6 +1731,96 @@ func TestRunMixedDesiredStateRowsDoesNotRestampSettledRowsErrored(t *testing.T) 
 	}
 }
 
+// DHF-TEST: keel/requirement-71
+func TestRunDesiredStateErrorFansOutToNotYetStartedRequestedID(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	calls := map[string]int{}
+	const missingID = "demo::desired-state::cache"
+	const laneID = "demo::lane::fast"
+	fake.desiredGroups = []testbridge.DesiredStateGroup{{
+		Label: "Provisioning",
+		Order: 10,
+		Rows: []testbridge.DesiredStateRow{
+			probedCountingRow(calls, missingID, "cache", "warm", false, "warm cache"),
+		},
+	}}
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return "run-desired-state-error-fanout" }})
+
+	err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{
+		"test-bridge", "run",
+		"--id", missingID,
+		"--id", laneID,
+	})
+	if err == nil {
+		t.Fatal("mixed desired-state plus lane run returned nil error, want non-zero from failed desired-state row")
+	}
+	if len(fake.runIDs) != 0 {
+		t.Fatalf("consumer runner ids = %v, want remaining selection abandoned on desired-state failure", fake.runIDs)
+	}
+	events := decodeEvents(t, protocol.String())
+	for _, id := range []string{missingID, laneID} {
+		if got := terminalEventCount(events, id); got != 1 {
+			t.Fatalf("terminal count for requested id %q = %d in events %+v, want exactly one", id, got, events)
+		}
+	}
+	if got := terminalEventFor(events, missingID); got != "failed" {
+		t.Fatalf("desired-state row terminal = %q, want failed\nevents: %+v", got, events)
+	}
+	if got := terminalEventFor(events, laneID); got != "errored" {
+		t.Fatalf("abandoned lane terminal = %q, want errored\nevents: %+v", got, events)
+	}
+	if !eventsContain(events, "errored", laneID, "desired-state row failed") {
+		t.Fatalf("events = %+v, want errored fan-out for abandoned lane", events)
+	}
+}
+
+// DHF-TEST: keel/requirement-71
+func TestRunDesiredStateReconcileErrorFansOutToNotYetStartedRequestedID(t *testing.T) {
+	root := t.TempDir()
+	fake := &reconcileErrorBridge{
+		fakeBridge:   newFakeBridge(root),
+		reconcileErr: errors.New("reconcile exploded"),
+	}
+	const firstID = "demo::desired-state::db"
+	const secondID = "demo::desired-state::cache"
+	fake.desiredGroups = []testbridge.DesiredStateGroup{{
+		Label: "Provisioning",
+		Order: 10,
+		Rows: []testbridge.DesiredStateRow{
+			probedRow(firstID, "db", "fixture-data", "seeded", "empty", false, "seed db", false),
+			probedRow(secondID, "cache", "fixture-data", "warm", "cold", false, "warm cache", false),
+		},
+	}}
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol, RunID: func() string { return "run-reconcile-error-fanout" }})
+
+	err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{
+		"test-bridge", "run",
+		"--id", firstID,
+		"--id", secondID,
+	})
+	if err == nil {
+		t.Fatal("reconcile error run returned nil error, want non-zero")
+	}
+	events := decodeEvents(t, protocol.String())
+	for _, id := range []string{firstID, secondID} {
+		if got := terminalEventCount(events, id); got != 1 {
+			t.Fatalf("terminal count for requested id %q = %d in events %+v, want exactly one", id, got, events)
+		}
+	}
+	if got := terminalEventFor(events, firstID); got != "failed" {
+		t.Fatalf("reconciled row terminal = %q, want failed\nevents: %+v", got, events)
+	}
+	if got := terminalEventFor(events, secondID); got != "errored" {
+		t.Fatalf("not-yet-started row terminal = %q, want errored\nevents: %+v", got, events)
+	}
+	if !eventsContain(events, "errored", secondID, "reconcile exploded") {
+		t.Fatalf("events = %+v, want errored fan-out for not-yet-started requested row", events)
+	}
+}
+
 // DHF-TEST: keel/requirement-84
 func TestRunExpandsRunnableDesiredStateGroupToRows(t *testing.T) {
 	root := t.TempDir()
@@ -3446,6 +3536,15 @@ type resetterBridge struct {
 	resetRequests []testbridge.ExclusiveResetRequest
 	resetExit     int
 	resetErr      error
+}
+
+type reconcileErrorBridge struct {
+	*fakeBridge
+	reconcileErr error
+}
+
+func (r *reconcileErrorBridge) ReconcileDesiredStateRow(context.Context, testbridge.DesiredStateRowRunRequest, vscode.RunEventWriter) (bool, int, error) {
+	return true, 1, r.reconcileErr
 }
 
 func (r *resetterBridge) ResetExclusiveGroup(_ context.Context, req testbridge.ExclusiveResetRequest, emit vscode.RunEventWriter) (int, error) {
