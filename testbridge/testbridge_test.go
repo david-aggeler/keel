@@ -652,6 +652,61 @@ func TestDiscoveryServesReconcileResultsForExclusiveGroups(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-145
+func TestDiscoveryServesPassedReconcileResultsForSatisfiedNonExclusiveRows(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeBridge(root)
+	fake.extraItems = []vscode.TestItem{desiredStateGroupItem()}
+	calls := map[string]int{}
+	readyID := "demo::desired-state::preconditions::docker"
+	missingID := "demo::desired-state::preconditions::postgres"
+	exclusiveSmallID := "demo::desired-state::dataset::small"
+	exclusiveFullID := "demo::desired-state::dataset::full"
+	exclusiveUnknownID := "demo::desired-state::group::data-set::unknown"
+	fake.desiredGroups = []testbridge.DesiredStateGroup{{
+		Label:             "Test Preconditions",
+		Order:             10,
+		MutuallyExclusive: false,
+		Rows: []testbridge.DesiredStateRow{
+			probedCountingRow(calls, readyID, "docker-env", "ready", true, "docker-env ready"),
+			probedCountingRow(calls, missingID, "postgres", "ready", false, "postgres missing"),
+			probedCountingRow(calls, "", "sdk", "ready", true, "sdk ready"),
+		},
+	}, {
+		Label:             "Data Set",
+		Order:             20,
+		MutuallyExclusive: true,
+		Rows: []testbridge.DesiredStateRow{
+			probedCountingRow(calls, exclusiveSmallID, "app-db-small", "small", false, "small not active"),
+			probedCountingRow(calls, exclusiveFullID, "app-db-full", "full", true, "full active"),
+		},
+	}}
+	var protocol bytes.Buffer
+	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{Root: root, Protocol: &protocol})
+
+	if err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{"test-bridge", "discover", "--format", "json"}); err != nil {
+		t.Fatalf("discover dispatch: %v", err)
+	}
+	var doc vscode.DiscoveryDocument
+	decodeJSON(t, &protocol, &doc)
+	want := []vscode.ReconcileResult{
+		{TestID: readyID, State: "passed", Message: "docker-env is satisfied (current=ready)"},
+		{TestID: exclusiveSmallID, State: "skipped", Message: "not active (app-db-full is active)"},
+		{TestID: exclusiveFullID, State: "passed", Message: "app-db-full is active"},
+		{TestID: exclusiveUnknownID, State: "skipped", Message: "not active (app-db-full is active)"},
+	}
+	if got := doc.Capabilities.ReconcileResults; !equalReconcileResults(got, want) {
+		t.Fatalf("reconcile_results = %+v, want %+v (non-exclusive satisfied row passed, non-satisfied and empty-run rows omitted, exclusive group unchanged)", got, want)
+	}
+	for _, absent := range []string{missingID, ""} {
+		for _, entry := range doc.Capabilities.ReconcileResults {
+			if entry.TestID == absent {
+				t.Fatalf("reconcile_results contains entry for %q: %+v", absent, doc.Capabilities.ReconcileResults)
+			}
+		}
+	}
+}
+
 func equalReconcileResults(got, want []vscode.ReconcileResult) bool {
 	if len(got) != len(want) {
 		return false

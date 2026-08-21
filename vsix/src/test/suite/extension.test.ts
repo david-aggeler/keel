@@ -1329,6 +1329,18 @@ process.exit(2);
     assert.match(doc, /clear/i);
   });
 
+  // DHF-TEST: keel/requirement-145
+  test('wire schema states non-exclusive reconcile result scope', () => {
+    const doc = fs.readFileSync(path.resolve(__dirname, '../../../../docs/wire-schema.md'), 'utf8');
+    const line = doc.split('\n').find((entry) => entry.startsWith('- `capabilities.reconcile_results`'));
+    assert.ok(line, 'wire schema should document capabilities.reconcile_results');
+    assert.match(line, /bridge-computed rendered truth for desired-state rows/);
+    assert.match(line, /Non-exclusive groups serve `state: passed`/);
+    assert.match(line, /bridge-derived status is `satisfied`/);
+    assert.match(line, /serve no entry for every other non-exclusive row/);
+    assert.doesNotMatch(line, /bridge-computed rendered truth for exclusive desired-state rows/);
+  });
+
   // DHF-TEST: keel/requirement-61
   test('extension manifest exposes no demo-toggle command', async function () {
     this.timeout(10_000);
@@ -3353,7 +3365,7 @@ process.exit(2);
 
       const rendered = renderedStateById(timeline);
       const evented = timeline.flatMap((entry) => entry.kind === 'spawn' ? [] : [entry.id])
-        .filter((id) => id.startsWith('keel-demo-dev::desired-state::') && !id.includes('::group::'));
+        .filter((id) => demoPreconditionRowIds.includes(id));
       assert.ok(evented.length >= 9, `every row of the nine-row group is reached; timeline=${JSON.stringify(timeline)}`);
       for (const id of new Set(evented)) {
         assert.notEqual(
@@ -3365,17 +3377,69 @@ process.exit(2);
       // Not one row of the group is left carrying a state inferred from a
       // sibling: every stamp on a precondition row is its own reported result.
       assert.deepEqual(
-        timeline.flatMap((entry) => entry.kind === 'skipped' && entry.id.startsWith(demoPreconditionRowPrefix) ? [entry.id] : []),
+        timeline.flatMap((entry) => entry.kind === 'skipped' && demoPreconditionRowIds.includes(entry.id) ? [entry.id] : []),
         [],
         `no precondition row is stamped skipped on a sibling's behalf; timeline=${JSON.stringify(timeline)}`
       );
 
       // The exclusive group is out of this unit's scope and must stay so: the
-      // run touches no row of it at all.
+      // devtool run touches no row of it. A later discovery reconcile may
+      // restamp the exclusive rows to the same current states.
       assert.deepEqual(
-        timeline.flatMap((entry) => entry.kind !== 'spawn' && entry.id.includes('::dataset::') ? [entry.id] : []),
+        timeline.flatMap((entry) => entry.kind !== 'spawn' && entry.run !== 'desired-state reconcile' && entry.id.includes('::dataset::') ? [entry.id] : []),
         [],
-        `the exclusive data-set group is untouched by a precondition-group run; timeline=${JSON.stringify(timeline)}`
+        `the exclusive data-set group is not executed by a precondition-group run; timeline=${JSON.stringify(timeline)}`
+      );
+    } finally {
+      workspace.dispose();
+    }
+  });
+
+  // DHF-TEST: keel/requirement-145
+  //
+  // AC-595: the row already carries a failed result, as it would after VS Code
+  // restores a persisted fossil. A fresh discovery session replays the
+  // bridge-served non-exclusive satisfied stamp and overwrites that result.
+  test('a real keel-demo-dev satisfied precondition row overwrites a stale failed result on discovery refresh', async function () {
+    this.timeout(120_000);
+    const workspace = createRealDemoWorkspace('keel-demo-precondition-reconcile-');
+    try {
+      cp.execFileSync(realKeelDemoDevBinary(), ['test-bridge', 'run', '--id', 'keel-demo-dev::desired-state::docker-env'], { cwd: workspace.root, stdio: 'ignore' });
+      const controller = await activateExclusiveGroupWorkspace();
+      let tree = currentTree();
+      assert.ok(tree, 'initial refresh should publish the real demo tree');
+      const parentIsNonExclusive = (id: string): boolean => {
+        const parentId = tree?.discoveryItemsById.get(id)?.parent_id;
+        if (!parentId) {
+          return false;
+        }
+        return tree?.discoveryItemsById.get(parentId)?.desired_state_group?.mutually_exclusive === false;
+      };
+      const targetID = tree.capabilities.reconcile_results
+        ?.find((entry) => entry.state === 'passed' && parentIsNonExclusive(entry.test_id))
+        ?.test_id;
+      assert.ok(targetID, `real demo discovery should serve at least one passed non-exclusive reconcile result; results=${JSON.stringify(tree.capabilities.reconcile_results ?? [])}`);
+      const target = tree.itemsById.get(targetID);
+      assert.ok(target, `published tree should contain reconciled row ${targetID}`);
+
+      const timeline: RunTimelineEntry[] = [];
+      const restore = recordRunTimeline(controller, timeline);
+      try {
+        const stale = controller.createTestRun(new vscode.TestRunRequest([target]), 'seed stale failed result');
+        stale.failed(target, new vscode.TestMessage('persisted stale failure'));
+        stale.end();
+        resetReconcileSignatureForTest();
+        await vscode.commands.executeCommand('keel.tests.refresh');
+      } finally {
+        restore();
+      }
+
+      tree = currentTree();
+      assert.ok(tree, 'second refresh should keep the real demo tree published');
+      assert.equal(
+        renderedStateById(timeline).get(targetID),
+        'passed',
+        `non-exclusive reconcile replay should overwrite the stale failed result; target=${targetID}; timeline=${JSON.stringify(timeline)}`
       );
     } finally {
       workspace.dispose();
@@ -3384,7 +3448,17 @@ process.exit(2);
 });
 
 const demoPreconditionGroupId = 'keel-demo-dev::desired-state::group::test-preconditions';
-const demoPreconditionRowPrefix = 'keel-demo-dev::desired-state::';
+const demoPreconditionRowIds = [
+  'keel-demo-dev::desired-state::docker-env',
+  'keel-demo-dev::desired-state::postgres',
+  'keel-demo-dev::desired-state::service-a',
+  'keel-demo-dev::desired-state::service-b',
+  'keel-demo-dev::desired-state::service-c',
+  'keel-demo-dev::desired-state::sdk',
+  'keel-demo-dev::desired-state::dns',
+  'keel-demo-dev::desired-state::ping',
+  'keel-demo-dev::desired-state::seed-cache'
+];
 
 // createRealDemoWorkspace stands up a temp workspace served by the REAL
 // keel-demo-dev binary, seeded through detect-lanes so the bridge serves its
@@ -3429,9 +3503,8 @@ const preconditionGroupRowIds = [
 // createPreconditionGroupWorkspace stands up a workspace whose adapter serves
 // one non-exclusive desired-state group of three runnable rows. Running the
 // group emits a test_started and a passed for EVERY row, which is exactly what
-// both real devtools do (keel/issue-191 records both CLI streams). No
-// reconcile_results are served: the bridge computes them for mutually-exclusive
-// groups only, so nothing outside the run may restamp these rows.
+// both real devtools do (keel/issue-191 records both CLI streams). This fixture
+// serves no reconcile_results, so nothing outside the run may restamp these rows.
 function createPreconditionGroupWorkspace(prefix: string): ExclusiveGroupWorkspace {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
@@ -3684,7 +3757,7 @@ if (args.slice(0, 2).join(' ') === 'test-bridge run') {
 // makes keel/ac-512 falsifiable: a stamp that lands after the bridge has
 // already reconciled proves nothing about the interval the requirement covers.
 type RunTimelineEntry =
-  | { kind: 'passed' | 'skipped'; id: string; run: string }
+  | { kind: 'passed' | 'skipped' | 'failed'; id: string; run: string }
   | { kind: 'spawn'; ids: string[] };
 
 // activateExclusiveGroupWorkspace activates the extension against the current
@@ -3757,7 +3830,7 @@ function stampedIds(timeline: readonly RunTimelineEntry[], kind: 'passed' | 'ski
 // So a row stamped `skipped` (priority 1) IGNORES its own later `passed`
 // (priority 0). Across runs the guard does not apply — the newer run carries
 // its own result object — so the last run to stamp an item wins.
-const terminalStatePriority: Readonly<Record<string, number>> = { passed: 0, skipped: 1 };
+const terminalStatePriority: Readonly<Record<string, number>> = { passed: 0, skipped: 1, failed: 2 };
 
 function renderedStateById(timeline: readonly RunTimelineEntry[]): Map<string, string> {
   const perRun = new Map<string, Map<string, string>>();
@@ -3797,6 +3870,7 @@ function recordRunTimeline(controller: vscode.TestController, timeline: RunTimel
     const run = originalCreateTestRun(request, name, persist);
     const originalPassed = run.passed.bind(run);
     const originalSkipped = run.skipped.bind(run);
+    const originalFailed = run.failed.bind(run);
     run.passed = (item: vscode.TestItem, duration?: number) => {
       timeline.push({ kind: 'passed', id: item.id, run: name ?? '' });
       originalPassed(item, duration);
@@ -3804,6 +3878,10 @@ function recordRunTimeline(controller: vscode.TestController, timeline: RunTimel
     run.skipped = (item: vscode.TestItem) => {
       timeline.push({ kind: 'skipped', id: item.id, run: name ?? '' });
       originalSkipped(item);
+    };
+    run.failed = (item: vscode.TestItem, message: vscode.TestMessage | readonly vscode.TestMessage[], duration?: number) => {
+      timeline.push({ kind: 'failed', id: item.id, run: name ?? '' });
+      originalFailed(item, message, duration);
     };
     return run;
   }) as typeof controller.createTestRun;
