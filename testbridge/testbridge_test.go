@@ -953,6 +953,76 @@ func TestExclusiveDesiredStateReconcileSelectionClearsSiblingResults(t *testing.
 	}
 }
 
+// DHF-TEST: keel/requirement-88
+func TestExclusiveDesiredStateRedBatchDefersSiblingClears(t *testing.T) {
+	const (
+		fullID    = "demo::desired-state::dataset::full"
+		fastID    = "demo::lane::fast"
+		smallID   = "demo::desired-state::dataset::small"
+		unknownID = "demo::desired-state::group::data-set::unknown"
+	)
+	runBatch := func(t *testing.T, failing bool) (*fakeBridge, []vscode.RunEvent, error) {
+		t.Helper()
+		root := t.TempDir()
+		fake := newFakeBridge(root)
+		fake.extraItems = []vscode.TestItem{desiredStateGroupItem()}
+		fake.desiredStateEmptyForSelectedIDs = true
+		fake.desiredGroups = exclusiveDataSetDesiredStateGroups()
+		if failing {
+			fake.runExitCodes = map[string]int{fullID: 1}
+		}
+		var protocol bytes.Buffer
+		ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{
+			Root:     root,
+			Protocol: &protocol,
+			RunID:    func() string { return "run-exclusive-batch" },
+		})
+
+		err := testbridge.CommandSpec(fake).Dispatch(ctx, []string{
+			"test-bridge", "run",
+			"--id", fullID,
+			"--id", fastID,
+		})
+		return fake, decodeEvents(t, protocol.String()), err
+	}
+
+	redFake, redEvents, err := runBatch(t, true)
+	if err == nil {
+		t.Fatal("red exclusive batch returned nil error, want non-zero exit")
+	}
+	if got, want := redFake.runIDs, []string{fullID, fastID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("red batch consumer Run ids = %v, want selected member batched with %v", got, fastID)
+	}
+	if eventMessageContainsAll(redEvents, "cleared", smallID, smallID, fullID) ||
+		eventMessageContainsAll(redEvents, "cleared", unknownID, unknownID, fullID) {
+		t.Fatalf("red exclusive batch events = %+v, want no sibling clears after non-zero exit", redEvents)
+	}
+
+	greenFake, greenEvents, err := runBatch(t, false)
+	if err != nil {
+		t.Fatalf("green exclusive batch dispatch: %v", err)
+	}
+	if got, want := greenFake.runIDs, []string{fullID, fastID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("green batch consumer Run ids = %v, want selected member batched with %v", got, fastID)
+	}
+	if !eventMessageContainsAll(greenEvents, "cleared", smallID, smallID, fullID) ||
+		!eventMessageContainsAll(greenEvents, "cleared", unknownID, unknownID, fullID) {
+		t.Fatalf("green exclusive batch events = %+v, want sibling clears proving ExclusiveSiblingIDs is non-empty", greenEvents)
+	}
+}
+
+func exclusiveDataSetDesiredStateGroups() []testbridge.DesiredStateGroup {
+	return []testbridge.DesiredStateGroup{{
+		Label:             "Data Set",
+		Order:             20,
+		MutuallyExclusive: true,
+		Rows: []testbridge.DesiredStateRow{
+			probedRow("demo::desired-state::dataset::small", "app-db-small", "fixture-data", "small", "small", true, "small active", false),
+			probedRow("demo::desired-state::dataset::full", "app-db-full", "fixture-data", "full", "full", true, "full active", false),
+		},
+	}}
+}
+
 // DHF-TEST: keel/requirement-87
 func TestDiscoverInjectsBridgeOwnedMaintenanceVocabulary(t *testing.T) {
 	root := t.TempDir()
