@@ -1329,6 +1329,18 @@ process.exit(2);
     assert.match(doc, /clear/i);
   });
 
+  // DHF-TEST: keel/requirement-145
+  test('wire schema states non-exclusive reconcile result scope', () => {
+    const doc = fs.readFileSync(path.resolve(__dirname, '../../../../docs/wire-schema.md'), 'utf8');
+    const line = doc.split('\n').find((entry) => entry.startsWith('- `capabilities.reconcile_results`'));
+    assert.ok(line, 'wire schema should document capabilities.reconcile_results');
+    assert.match(line, /bridge-computed rendered truth for desired-state rows/);
+    assert.match(line, /Non-exclusive groups serve `state: passed`/);
+    assert.match(line, /bridge-derived status is `satisfied`/);
+    assert.match(line, /serve no entry for every other non-exclusive row/);
+    assert.doesNotMatch(line, /bridge-computed rendered truth for exclusive desired-state rows/);
+  });
+
   // DHF-TEST: keel/requirement-61
   test('extension manifest exposes no demo-toggle command', async function () {
     this.timeout(10_000);
