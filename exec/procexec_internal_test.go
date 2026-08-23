@@ -2,6 +2,7 @@ package exec
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -96,5 +97,72 @@ func mustWrite(t *testing.T, w *captureWriter, s string) {
 	t.Helper()
 	if _, err := w.Write([]byte(s)); err != nil {
 		t.Fatalf("Write(%q) returned error: %v", s, err)
+	}
+}
+
+// failingTee is a caller tee writer that reports consuming consumed bytes and
+// then fails, covering both the "consumed nothing" and the partial-write shapes
+// io.Writer permits.
+type failingTee struct {
+	consumed int
+	err      error
+}
+
+func (t *failingTee) Write(p []byte) (int, error) {
+	n := t.consumed
+	if n > len(p) {
+		n = len(p)
+	}
+	return n, t.err
+}
+
+// remainingBudget reports the bytes the shared output ceiling will still admit.
+func remainingBudget(l *outputLimit) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.max - l.used
+}
+
+// DHF-TEST: keel/requirement-151
+func TestCaptureWriterReportsBytesKeptWhenTeeFails(t *testing.T) {
+	teeErr := errors.New("tee writer refused the chunk")
+	chunk := []byte("child output chunk\n")
+
+	cases := []struct {
+		name        string
+		max         int
+		teeConsumed int
+		wantKept    int
+	}{
+		{name: "tee consumed nothing", max: 1024, teeConsumed: 0, wantKept: len(chunk)},
+		{name: "tee consumed a prefix", max: 1024, teeConsumed: 4, wantKept: len(chunk)},
+		{name: "chunk truncated by the ceiling", max: 6, teeConsumed: 0, wantKept: 6},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			limit := newOutputLimit(tc.max, nil)
+			w := &captureWriter{
+				stream:     &failingTee{consumed: tc.teeConsumed, err: teeErr},
+				streamName: "stdout",
+				limit:      limit,
+			}
+			before := remainingBudget(limit)
+
+			n, err := w.Write(chunk)
+
+			if !errors.Is(err, teeErr) {
+				t.Fatalf("Write error = %v, want the tee error %v", err, teeErr)
+			}
+			if n != tc.wantKept {
+				t.Fatalf("Write n = %d, want the %d bytes retained", n, tc.wantKept)
+			}
+			if got := len(w.String()); got != n {
+				t.Fatalf("capture gained %d bytes, want %d (the reported count)", got, n)
+			}
+			if spent := before - remainingBudget(limit); spent != n {
+				t.Fatalf("output-limit budget dropped by %d, want %d (the reported count)", spent, n)
+			}
+		})
 	}
 }
