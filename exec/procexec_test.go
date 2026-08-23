@@ -6,11 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"go/ast"
-	"go/doc"
 	"go/parser"
 	"go/token"
 	"log/slog"
-	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -548,42 +547,39 @@ func TestProcessWaitStderrPairObeysTheSameOnePathRule(t *testing.T) {
 
 // DHF-TEST: keel/requirement-150
 func TestExecOutputFieldDocsNameCounterpartAndSelector(t *testing.T) {
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, parser.ParseComments)
+	sources, err := filepath.Glob("*.go")
 	if err != nil {
-		t.Fatalf("ParseDir: %v", err)
+		t.Fatalf("Glob: %v", err)
 	}
-	pkg, ok := pkgs["exec"]
-	if !ok {
-		t.Fatalf("package exec not found in parsed dirs %v", pkgs)
-	}
-	docPkg := doc.New(pkg, "github.com/david-aggeler/keel/exec", doc.AllDecls)
-
+	fset := token.NewFileSet()
 	docs := map[string]string{}
-	for _, typ := range docPkg.Types {
-		if typ.Name != "Request" && typ.Name != "Result" {
+	for _, src := range sources {
+		if strings.HasSuffix(src, "_test.go") {
 			continue
 		}
-		for _, spec := range typ.Decl.Specs {
-			ts, ok := spec.(*ast.TypeSpec)
-			if !ok {
-				continue
+		file, err := parser.ParseFile(fset, src, nil, parser.ParseComments)
+		if err != nil {
+			t.Fatalf("ParseFile %s: %v", src, err)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			ts, ok := n.(*ast.TypeSpec)
+			if !ok || (ts.Name.Name != "Request" && ts.Name.Name != "Result") {
+				return true
 			}
 			st, ok := ts.Type.(*ast.StructType)
 			if !ok {
-				continue
+				return true
 			}
 			for _, field := range st.Fields.List {
 				if field.Doc == nil {
 					continue
 				}
 				for _, name := range field.Names {
-					docs[typ.Name+"."+name.Name] = field.Doc.Text()
+					docs[ts.Name.Name+"."+name.Name] = field.Doc.Text()
 				}
 			}
-		}
+			return true
+		})
 	}
 
 	for _, tc := range []struct{ field, counterpart string }{
