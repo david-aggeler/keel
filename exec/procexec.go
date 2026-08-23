@@ -253,7 +253,7 @@ type captureWriter struct {
 	suppressCapture bool
 }
 
-// DHF-REQ: openbrain/requirement-602, keel/requirement-24, keel/requirement-81
+// DHF-REQ: openbrain/requirement-602, keel/requirement-24, keel/requirement-81, keel/requirement-151
 func (w *captureWriter) Write(p []byte) (int, error) {
 	allowed, limitErr := w.limit.Reserve(len(p))
 	if allowed == 0 {
@@ -283,7 +283,13 @@ func (w *captureWriter) Write(p []byte) (int, error) {
 	}
 	if w.stream != nil {
 		if _, err := w.stream.Write(p); err != nil {
-			return 0, err
+			// The capture buffer and the output-limit budget have both already
+			// committed this chunk, and neither is reversible, so the honest
+			// count is what was kept — not what the tee accepted. Reporting
+			// zero here told os/exec's copy loop the bytes never landed while
+			// Result and the remaining ceiling said they had.
+			// DHF-REQ: keel/requirement-151
+			return len(p), err
 		}
 	}
 	return len(p), limitErr
