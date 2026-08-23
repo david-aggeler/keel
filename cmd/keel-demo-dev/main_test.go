@@ -76,7 +76,7 @@ func TestKeelDemoDevUsesSharedCLICommandTreeValidationAndBindings(t *testing.T) 
 	// Validate the tree run() validates — the decorated one. testbridge.CommandSpec
 	// returns a Config-less fragment by design; the consumer supplies Config, and
 	// keel/requirement-152 makes the root Config.Program part of what ValidateTree
-	// checks, so the fragment alone is not a validatable root.
+	// checks, so the fragment alone is not a root ValidateTree can accept.
 	if err := demoDevCommandTree(demoBridge{}).ValidateTree(); err != nil {
 		t.Fatalf("keel-demo-dev command tree failed ValidateTree: %v", err)
 	}
