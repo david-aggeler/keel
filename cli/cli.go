@@ -1144,16 +1144,23 @@ func SimpleSpecs(prefix string, descriptions map[string]string) []*CommandSpec {
 	return specs
 }
 
-// InheritConfig fills missing child Config values from the root configuration so
-// child usage and help render with the same program name and root shell.
+// InheritConfig propagates the root program name to every descendant and fills
+// missing child Config values from the root configuration, so child usage and
+// help render with the same program name and root shell.
+//
+// Program is not one of the "missing" values: it is copied unconditionally, so
+// one tree names one program at every depth and no node below the root can
+// carry a different one.
+//
+// DHF-REQ: keel/requirement-152
 func (c *CommandSpec) InheritConfig() {
 	c.inheritConfig(c.Config)
 }
 
 func (c *CommandSpec) inheritConfig(cfg Config) {
-	if c.Config.Program == "" {
-		c.Config.Program = cfg.Program
-	}
+	// Unconditional, not empty-only: a descendant's own Program is overwritten
+	// by the root's. ValidateTree guarantees the root's value is non-empty.
+	c.Config.Program = cfg.Program
 	// Version travels the same path as Program so every command topic can
 	// render the identity line requirement-111 puts on every help page.
 	if c.Config.Version == "" {
