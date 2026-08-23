@@ -127,7 +127,7 @@ func TestCommandModelDispatchHelpAndUsageErrors(t *testing.T) {
 	help.Reset()
 	root.RenderTopicHelp(&help, []string{"release"})
 	for _, want := range []string{
-		"release commands:",
+		"release:",
 		"keel-dev release vX.Y.Z",
 		"Cut a release.",
 	} {
@@ -256,18 +256,18 @@ func TestRenderAllHelpEmitsRootAndEveryCommandOnceInTreeOrder(t *testing.T) {
 	for _, want := range []string{
 		"Usage:\n  tool <command>",
 		"parent commands:",
-		"parent beta commands:",
-		"parent alpha commands:",
-		"status commands:",
+		"parent beta:",
+		"parent alpha:",
+		"status:",
 	} {
 		if strings.Count(got, want) != 1 {
 			t.Fatalf("RenderAllHelp count(%q) = %d, want 1\n%s", want, strings.Count(got, want), got)
 		}
 	}
 	assertBefore(t, got, "Usage:\n  tool <command>", "parent commands:")
-	assertBefore(t, got, "parent commands:", "parent beta commands:")
-	assertBefore(t, got, "parent beta commands:", "parent alpha commands:")
-	assertBefore(t, got, "parent alpha commands:", "status commands:")
+	assertBefore(t, got, "parent commands:", "parent beta:")
+	assertBefore(t, got, "parent beta:", "parent alpha:")
+	assertBefore(t, got, "parent alpha:", "status:")
 }
 
 func assertBefore(t *testing.T, text, earlier, later string) {

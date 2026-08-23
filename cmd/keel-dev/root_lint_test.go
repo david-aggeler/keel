@@ -611,8 +611,16 @@ func TestKeelDevUsesGeneratedCommandTreeHelp(t *testing.T) {
 		var help bytes.Buffer
 		tree.RenderTopicHelp(&help, path)
 		got := help.String()
-		if !strings.Contains(got, strings.Join(path, " ")+" commands:") {
-			t.Fatalf("topic %v missing generated heading:\n%s", path, got)
+		node, _, ok := tree.Find(path)
+		if !ok {
+			t.Fatalf("topic %v not found in the command tree", path)
+		}
+		heading := strings.Join(path, " ") + ":"
+		if len(node.Subcommands) > 0 {
+			heading = strings.Join(path, " ") + " commands:"
+		}
+		if !strings.Contains(got, heading) {
+			t.Fatalf("topic %v missing generated heading %q:\n%s", path, heading, got)
 		}
 		if !strings.Contains(got, "keel-dev "+strings.Join(path, " ")) {
 			t.Fatalf("topic %v missing generated usage:\n%s", path, got)
@@ -653,11 +661,10 @@ func TestKeelDevHelpAllRendersFullCommandTreeAndExitsZero(t *testing.T) {
 	for _, want := range []string{
 		"keel-dev is keel's development CLI.",
 		"--help-all",
-		"ci commands:",
-		"release commands:",
+		"ci:",
+		"release:",
 		"test-bridge commands:",
-		"test-bridge commands:",
-		"vsix commands:",
+		"vsix:",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("keel-dev --help-all missing %q\noutput:\n%s", want, got)

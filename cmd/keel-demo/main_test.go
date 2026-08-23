@@ -118,8 +118,8 @@ func TestKeelDemoHelpAllRendersFullCommandTreeAndExitsZero(t *testing.T) {
 		"keel-demo runs the log and exec showcase.",
 		"--help-all",
 		"workflow commands:",
-		"workflow inspect commands:",
-		"workflow replay commands:",
+		"workflow inspect:",
+		"workflow replay:",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("keel-demo --help-all missing %q\noutput:\n%s", want, out)
@@ -257,7 +257,7 @@ func TestRunDirectHelpBranchesAndUsageError(t *testing.T) {
 	}{
 		{name: "root help flag", args: []string{"--help"}, code: 0, want: []string{"keel-demo runs the log and exec showcase.", "workflow"}},
 		{name: "help command nested", args: []string{"help", "workflow"}, code: 0, want: []string{"workflow commands:", "inspect", "replay"}},
-		{name: "help all", args: []string{"--help-all"}, code: 0, want: []string{"workflow inspect commands:", "workflow replay commands:"}},
+		{name: "help all", args: []string{"--help-all"}, code: 0, want: []string{"workflow inspect:", "workflow replay:"}},
 		{name: "usage error", args: []string{"--bad-flag"}, code: 2, want: []string{"keel-demo failed", `unknown command "--bad-flag"`, "usage: keel-demo"}},
 	}
 	for _, tc := range tests {
@@ -325,7 +325,7 @@ func TestRunDirectDefaultShowcaseAndHelpAllMachineMode(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("renderAllHelp(%s) exit = %d, want 0\n%s", mode, code, out)
 		}
-		if !strings.Contains(out, "keel-demo help-all") || !strings.Contains(out, "workflow replay commands:") {
+		if !strings.Contains(out, "keel-demo help-all") || !strings.Contains(out, "workflow replay:") {
 			t.Fatalf("renderAllHelp(%s) missing full help event\n%s", mode, out)
 		}
 	}
