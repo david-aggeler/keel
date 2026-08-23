@@ -50,12 +50,26 @@ type Request struct {
 	Env []string
 	// Stdin, when non-nil, is connected to the child's standard input.
 	Stdin io.Reader
-	// Stdout, when non-nil, receives a verbatim copy of the child's stdout in
-	// addition to the captured [Result.Stdout] and the line-wise debug log.
+	// Stdout, when non-nil, is the tee that receives a verbatim copy of the
+	// child's stdout, and it then becomes the caller's only copy: [Result.Stdout]
+	// is left empty so the same bytes cannot be read twice. Set CaptureWithTee to
+	// have both carry the stream. Nil selects the capture instead, and the
+	// line-wise debug log is emitted either way.
 	Stdout io.Writer
-	// Stderr, when non-nil, receives a verbatim copy of the child's stderr in
-	// addition to the captured [Result.Stderr] and the line-wise error log.
+	// Stderr, when non-nil, is the tee that receives a verbatim copy of the
+	// child's stderr, and it then becomes the caller's only copy: [Result.Stderr]
+	// is left empty so the same bytes cannot be read twice. Set CaptureWithTee to
+	// have both carry the stream. Nil selects the capture instead, and the
+	// line-wise error log is emitted either way.
 	Stderr io.Writer
+	// CaptureWithTee delivers a stream through both paths at once — the tee
+	// writer and the Result capture — for every stream whose tee writer is
+	// non-nil. It is the only way to get both, and it exists for the caller who
+	// wants one path live and the other quotable (streaming progress plus a tail
+	// in an error message). The zero value keeps delivery to exactly one path.
+	//
+	// DHF-REQ: keel/requirement-150
+	CaptureWithTee bool
 	// MaxOutputBytes is the hard ceiling on combined captured stdout and
 	// stderr bytes for this run. A non-positive value uses
 	// [DefaultMaxOutputBytes]; no value disables the ceiling.
@@ -81,9 +95,13 @@ type Result struct {
 	ExitCode int
 	// Duration is the wall-clock time from start to reap.
 	Duration time.Duration
-	// Stdout is the full captured standard output.
+	// Stdout is the full captured standard output, and it is empty when the run's
+	// [Request.Stdout] tee writer was non-nil — that tee then holds the bytes
+	// instead. Set [Request.CaptureWithTee] to have both carry the stream.
 	Stdout string
-	// Stderr is the full captured standard error.
+	// Stderr is the full captured standard error, and it is empty when the run's
+	// [Request.Stderr] tee writer was non-nil — that tee then holds the bytes
+	// instead. Set [Request.CaptureWithTee] to have both carry the stream.
 	Stderr string
 }
 
@@ -152,8 +170,15 @@ func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 			_ = cmd.Process.Kill()
 		}
 	})
-	stdout := &captureWriter{stream: req.Stdout, logger: logger, streamName: "stdout", limit: outputLimit}
-	stderr := &captureWriter{stream: req.Stderr, logger: logger, streamName: "stderr", limit: outputLimit}
+	// A stream with a tee writer delivers through that tee alone unless the caller
+	// asked for both paths, so the capture cannot silently hand back a second copy
+	// of the same bytes. The buffer still fills either way: MaxOutputBytes
+	// accounting and the line-wise logging read it and must stay unaffected.
+	// DHF-REQ: keel/requirement-150
+	stdout := &captureWriter{stream: req.Stdout, logger: logger, streamName: "stdout", limit: outputLimit,
+		suppressCapture: req.Stdout != nil && !req.CaptureWithTee}
+	stderr := &captureWriter{stream: req.Stderr, logger: logger, streamName: "stderr", limit: outputLimit,
+		suppressCapture: req.Stderr != nil && !req.CaptureWithTee}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 
@@ -199,8 +224,8 @@ func (p *Process) Wait() (Result, error) {
 		p.result = Result{
 			ExitCode: exitCode,
 			Duration: time.Since(p.started),
-			Stdout:   p.stdout.String(),
-			Stderr:   p.stderr.String(),
+			Stdout:   p.stdout.capture(),
+			Stderr:   p.stderr.capture(),
 		}
 		if limitErr := p.stdout.limit.Err(); limitErr != nil {
 			p.waitErr = limitErr
@@ -223,6 +248,9 @@ type captureWriter struct {
 	logger     processLogger
 	streamName string
 	limit      *outputLimit
+	// suppressCapture withholds the buffered bytes from [Result], leaving the
+	// caller's tee writer as the single delivery path for this stream.
+	suppressCapture bool
 }
 
 // DHF-REQ: openbrain/requirement-602, keel/requirement-24, keel/requirement-81
@@ -291,6 +319,17 @@ func (w *captureWriter) logLine(line string) {
 		"stream", w.streamName,
 		"data", redactedString(line),
 	)
+}
+
+// capture returns the bytes this stream contributes to [Result], which is
+// nothing when the caller's tee writer is the selected delivery path.
+//
+// DHF-REQ: keel/requirement-150
+func (w *captureWriter) capture() string {
+	if w.suppressCapture {
+		return ""
+	}
+	return w.String()
 }
 
 func (w *captureWriter) String() string {
