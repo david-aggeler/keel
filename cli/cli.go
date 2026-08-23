@@ -784,9 +784,18 @@ func (c *CommandSpec) renderHelpHeader(w io.Writer, title, summary string, usage
 	}
 }
 
-// helpTitle names the command topic a help page was opened for.
+// helpTitle names the command topic a help page was opened for. The word
+// "commands" is claimed only by a node that declares at least one subcommand;
+// the check sits here, above the title, rather than below the blocks the title
+// introduces, so a leaf verb is never titled as if it carried commands.
+//
+// DHF-REQ: keel/requirement-149
 func (c *CommandSpec) helpTitle(path []string) string {
-	return strings.Join(path, " ") + " commands:"
+	title := strings.Join(path, " ")
+	if len(c.Subcommands) > 0 {
+		return title + " commands:"
+	}
+	return title + ":"
 }
 
 // RenderRootHelp writes generated root help from Config, global flags,
