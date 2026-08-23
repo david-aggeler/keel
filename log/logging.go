@@ -699,7 +699,7 @@ func (h *consoleHandler) Enabled(_ context.Context, level slog.Level) bool {
 	return level >= min
 }
 
-// DHF-REQ: openbrain/requirement-151, openbrain/requirement-152, keel/requirement-20, keel/requirement-103
+// DHF-REQ: openbrain/requirement-151, openbrain/requirement-152, keel/requirement-20, keel/requirement-103, keel/requirement-148
 func (h *consoleHandler) Handle(_ context.Context, r slog.Record) error {
 	boundAttrs := slicesClone(h.attrs)
 	recordAttrs := make([]slog.Attr, 0, r.NumAttrs())
@@ -720,14 +720,25 @@ func (h *consoleHandler) Handle(_ context.Context, r slog.Record) error {
 	writeConsoleLevel(&b, r.Level, h.color)
 	b.WriteString("  ")
 	message, skipKeys := h.consoleMessage(r.Message, boundAttrs, recordAttrs)
-	b.WriteString(redactString(message))
+	rendered := redactString(message)
+	b.WriteString(rendered)
+	// The two-space run above is the whole level-to-body separator. Each
+	// attribute normally supplies its own leading space to separate it from
+	// what precedes it, but on an attrs-only record nothing precedes the
+	// first attribute, so that space would widen the separator to three.
+	// keel/requirement-148: the first body element writes no leading space
+	// when the message rendered empty.
+	needSpace := rendered != ""
 	for _, attr := range boundAttrs {
 		attr = replaceForOpenBrain(h.groups, attr)
 		key := attr.Key
 		if attr.Equal(slog.Attr{}) || attr.Key == "" || isContextKey(key) || h.omits(key) || skipKeys[key] {
 			continue
 		}
-		b.WriteByte(' ')
+		if needSpace {
+			b.WriteByte(' ')
+		}
+		needSpace = true
 		writeConsoleAttrKey(&b, key, h.color)
 		b.WriteByte('=')
 		b.WriteString(formatConsoleValueColor(attr.Value, h.color))
@@ -738,7 +749,10 @@ func (h *consoleHandler) Handle(_ context.Context, r slog.Record) error {
 		if attr.Equal(slog.Attr{}) || attr.Key == "" || isContextKey(attr.Key) || h.omits(key) || skipKeys[key] {
 			continue
 		}
-		b.WriteByte(' ')
+		if needSpace {
+			b.WriteByte(' ')
+		}
+		needSpace = true
 		writeConsoleAttrKey(&b, key, h.color)
 		b.WriteByte('=')
 		b.WriteString(formatConsoleValueColor(attr.Value, h.color))
@@ -1131,7 +1145,7 @@ func (h *humanFileHandler) Enabled(_ context.Context, level slog.Level) bool {
 	return level >= min
 }
 
-// DHF-REQ: openbrain/requirement-152, keel/requirement-20
+// DHF-REQ: openbrain/requirement-152, keel/requirement-20, keel/requirement-148
 func (h *humanFileHandler) Handle(_ context.Context, r slog.Record) error {
 	boundAttrs := slicesClone(h.attrs)
 	recordAttrs := make([]slog.Attr, 0, r.NumAttrs())
@@ -1160,14 +1174,21 @@ func (h *humanFileHandler) Handle(_ context.Context, r slog.Record) error {
 	b.WriteByte('\t')
 	b.WriteString(fmt.Sprintf("%-26s", source))
 	b.WriteByte('\t')
-	b.WriteString(redactString(r.Message))
+	rendered := redactString(r.Message)
+	b.WriteString(rendered)
+	// The tab above is the whole source-to-body separator; see the matching
+	// comment in consoleHandler.Handle. keel/requirement-148.
+	needSpace := rendered != ""
 	for _, attr := range boundAttrs {
 		attr = replaceForOpenBrain(nil, attr)
 		key := attr.Key
 		if attr.Equal(slog.Attr{}) || attr.Key == "" || attr.Key == "service" {
 			continue
 		}
-		b.WriteByte(' ')
+		if needSpace {
+			b.WriteByte(' ')
+		}
+		needSpace = true
 		b.WriteString(key)
 		b.WriteByte('=')
 		b.WriteString(formatConsoleValue(attr.Value))
@@ -1178,7 +1199,10 @@ func (h *humanFileHandler) Handle(_ context.Context, r slog.Record) error {
 		if attr.Equal(slog.Attr{}) || attr.Key == "" || attr.Key == "service" {
 			continue
 		}
-		b.WriteByte(' ')
+		if needSpace {
+			b.WriteByte(' ')
+		}
+		needSpace = true
 		b.WriteString(key)
 		b.WriteByte('=')
 		b.WriteString(formatConsoleValue(attr.Value))
