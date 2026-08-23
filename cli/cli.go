@@ -75,7 +75,11 @@ type RuntimeConfig struct {
 // guidance in one data structure so root help and command-topic help stay in
 // sync with dispatch.
 type Config struct {
-	// Program is the executable name shown in generated usage.
+	// Program is the executable name shown in generated usage. It is required on
+	// the root node: ValidateTree rejects a tree whose root leaves it empty, and
+	// there is no fallback to a node's own Name. The root's value wins tree-wide
+	// — InheritConfig copies it over any value a descendant declares — so one
+	// tree names one program on every help page and every usage line.
 	Program string
 	// Version is the optional program version rendered as the first root-help
 	// line. Empty preserves the pre-version help shape.
@@ -599,17 +603,28 @@ func (c *CommandSpec) match(path []string) (*CommandSpec, []string, []string) {
 	return node, matched, path
 }
 
-// ValidateTree checks keel's first-party command-tree invariants: command paths
-// are at most two tokens below the program, non-root namespace nodes have at
-// least two children, nodes do not mix a handler with children, and command
-// flags do not collide with keel-owned global flag names or aliases.
+// ValidateTree checks keel's first-party command-tree invariants: the root
+// declares a non-empty Config.Program, command paths are at most two tokens
+// below the program, non-root namespace nodes have at least two children, nodes
+// do not mix a handler with children, and command flags do not collide with
+// keel-owned global flag names or aliases.
 //
-// DHF-REQ: keel/requirement-106, keel/requirement-104
+// The root Config.Program check is a Config identity invariant rather than a
+// tree-shape one: it is the enforcement point that makes the one-program-per-
+// tree contract checkable where the mistake is made, since consumers already
+// call ValidateTree at startup and keel-dev ci calls it as a gate step.
+// Descendants cannot violate it independently — inheritance overwrites their
+// value with the root's — so the check is root-only.
+//
+// DHF-REQ: keel/requirement-106, keel/requirement-104, keel/requirement-152
 func (c *CommandSpec) ValidateTree() error {
 	return c.validateTree(nil, true)
 }
 
 func (c *CommandSpec) validateTree(path []string, root bool) error {
+	if root && c.Config.Program == "" {
+		return fmt.Errorf("root command tree declares an empty Config.Program: set Config.Program to the executable name")
+	}
 	if !root && len(path) > 2 {
 		return fmt.Errorf("command path %q exceeds maximum depth 2", strings.Join(path, " "))
 	}
@@ -1133,16 +1148,23 @@ func SimpleSpecs(prefix string, descriptions map[string]string) []*CommandSpec {
 	return specs
 }
 
-// InheritConfig fills missing child Config values from the root configuration so
-// child usage and help render with the same program name and root shell.
+// InheritConfig propagates the root program name to every descendant and fills
+// missing child Config values from the root configuration, so child usage and
+// help render with the same program name and root shell.
+//
+// Program is not one of the "missing" values: it is copied unconditionally, so
+// one tree names one program at every depth and no node below the root can
+// carry a different one.
+//
+// DHF-REQ: keel/requirement-152
 func (c *CommandSpec) InheritConfig() {
 	c.inheritConfig(c.Config)
 }
 
 func (c *CommandSpec) inheritConfig(cfg Config) {
-	if c.Config.Program == "" {
-		c.Config.Program = cfg.Program
-	}
+	// Unconditional, not empty-only: a descendant's own Program is overwritten
+	// by the root's. ValidateTree guarantees the root's value is non-empty.
+	c.Config.Program = cfg.Program
 	// Version travels the same path as Program so every command topic can
 	// render the identity line requirement-111 puts on every help page.
 	if c.Config.Version == "" {
@@ -1153,16 +1175,13 @@ func (c *CommandSpec) inheritConfig(cfg Config) {
 	}
 }
 
+// program returns the one program token for this tree. It is a pure read of the
+// inherited Config.Program and has no fallback: ValidateTree rejects an empty
+// root value and InheritConfig copies the root's value to every descendant, so
+// every call site — the help identity line, the generated usage line, and the
+// subcommand-listing prefix strip — resolves the same token at every depth.
+//
+// DHF-REQ: keel/requirement-152
 func (c *CommandSpec) program() string {
-	if c.Config.Program != "" {
-		return c.Config.Program
-	}
-	return rootProgram(c)
-}
-
-func rootProgram(c *CommandSpec) string {
-	if c.Name != "" {
-		return c.Name
-	}
-	return "command"
+	return c.Config.Program
 }
