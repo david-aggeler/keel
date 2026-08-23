@@ -740,6 +740,64 @@ func mergeModeHelp(extra []string) []string {
 	return merged
 }
 
+// renderHelpHeader writes the header every help page shares: the
+// "<program> v<version>" identity line from Config.Version, then what was asked
+// for — a title line with its indented summary on a command topic, or the root
+// summary paragraph at root — then the Usage: block. Both renderers call it, so
+// the identity line and the header ordering have one source and root help reads
+// the same way as every topic below it. The identity line is omitted whenever
+// Config.Version is empty.
+//
+// DHF-REQ: keel/requirement-111, keel/requirement-149
+func (c *CommandSpec) renderHelpHeader(w io.Writer, title, summary string, usage []string) {
+	wrote := false
+	if c.Config.Version != "" {
+		fmt.Fprintf(w, "%s v%s\n", c.program(), c.Config.Version)
+		wrote = true
+	}
+	if title != "" {
+		if wrote {
+			fmt.Fprintln(w)
+		}
+		fmt.Fprintln(w, title)
+		wrote = true
+	}
+	if summary != "" {
+		if title != "" {
+			fmt.Fprintf(w, "  %s\n", summary)
+		} else {
+			if wrote {
+				fmt.Fprintln(w)
+			}
+			fmt.Fprintln(w, summary)
+		}
+		wrote = true
+	}
+	if wrote {
+		fmt.Fprintln(w)
+	}
+	fmt.Fprintln(w, "Usage:")
+	for _, line := range usage {
+		if line != "" {
+			fmt.Fprintf(w, "  %s\n", line)
+		}
+	}
+}
+
+// helpTitle names the command topic a help page was opened for. The word
+// "commands" is claimed only by a node that declares at least one subcommand;
+// the check sits here, above the title, rather than below the blocks the title
+// introduces, so a leaf verb is never titled as if it carried commands.
+//
+// DHF-REQ: keel/requirement-149
+func (c *CommandSpec) helpTitle(path []string) string {
+	title := strings.Join(path, " ")
+	if len(c.Subcommands) > 0 {
+		return title + " commands:"
+	}
+	return title + ":"
+}
+
 // RenderRootHelp writes generated root help from Config, global flags,
 // first-level command summaries, output-mode prose, and trailing guidance. The
 // global flag rows and the --mode ai|json output-mode description are keel-owned
@@ -750,22 +808,7 @@ func mergeModeHelp(extra []string) []string {
 // DHF-REQ: keel/requirement-101, keel/requirement-111
 func (c *CommandSpec) RenderRootHelp(w io.Writer) {
 	c.InheritConfig()
-	if c.Config.Version != "" {
-		fmt.Fprintf(w, "%s v%s\n", c.program(), c.Config.Version)
-		if c.Config.RootSummary != "" {
-			fmt.Fprintln(w)
-		}
-	}
-	if c.Config.RootSummary != "" {
-		fmt.Fprintln(w, c.Config.RootSummary)
-		fmt.Fprintln(w)
-	}
-	fmt.Fprintln(w, "Usage:")
-	for _, line := range []string{c.Config.Usage, c.Config.HelpUsage, c.Config.CommandUsage} {
-		if line != "" {
-			fmt.Fprintf(w, "  %s\n", line)
-		}
-	}
+	c.renderHelpHeader(w, "", c.Config.RootSummary, []string{c.Config.Usage, c.Config.HelpUsage, c.Config.CommandUsage})
 	if globals := mergeGlobalFlags(c.Config.GlobalFlags); len(globals) > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Global flags:")
@@ -898,16 +941,11 @@ func (c *CommandSpec) appendHelpJSON(out *[]helpJSONCommand, path []string) {
 // RenderCommandHelp writes command help for one command node, including its
 // summary, usage, declared flags, and nested subcommands.
 func (c *CommandSpec) RenderCommandHelp(w io.Writer, path []string) {
-	title := strings.Join(path, " ")
-	fmt.Fprintf(w, "%s commands:\n", title)
-	if c.Long != "" {
-		fmt.Fprintf(w, "  %s\n", c.Long)
-	} else if c.Short != "" {
-		fmt.Fprintf(w, "  %s\n", c.Short)
+	summary := c.Long
+	if summary == "" {
+		summary = c.Short
 	}
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Usage:")
-	fmt.Fprintf(w, "  %s\n", strings.TrimPrefix(c.Usage(path), "usage: "))
+	c.renderHelpHeader(w, c.helpTitle(path), summary, []string{strings.TrimPrefix(c.Usage(path), "usage: ")})
 	if len(c.Flags) > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Flags:")
@@ -1084,6 +1122,11 @@ func (c *CommandSpec) InheritConfig() {
 func (c *CommandSpec) inheritConfig(cfg Config) {
 	if c.Config.Program == "" {
 		c.Config.Program = cfg.Program
+	}
+	// Version travels the same path as Program so every command topic can
+	// render the identity line requirement-111 puts on every help page.
+	if c.Config.Version == "" {
+		c.Config.Version = cfg.Version
 	}
 	for _, child := range c.Subcommands {
 		child.inheritConfig(c.Config)
