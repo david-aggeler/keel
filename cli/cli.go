@@ -999,11 +999,18 @@ func PrintCommandRows(w io.Writer, commands []*CommandSpec) {
 
 // PrintGroupedCommandRows writes command summary rows under group headings.
 // Group order and command order within each group follow declaration order.
+// A list in which no command declares a group resolves to the single
+// synthesized default group and is written with no heading, because a heading
+// there would name a partition the command tree never declared.
 //
 // DHF-REQ: keel/requirement-105
 func PrintGroupedCommandRows(w io.Writer, commands []*CommandSpec) {
 	groups := groupCommands(commands)
 	width := commandNameWidth(commands)
+	if len(groups) == 1 && groups[0].defaulted {
+		printIndentedCommandRows(w, groups[0].commands, 2, width)
+		return
+	}
 	for _, group := range groups {
 		fmt.Fprintf(w, "%s:\n", group.name)
 		printIndentedCommandRows(w, group.commands, 2, width)
@@ -1030,9 +1037,19 @@ func commandNameWidth(commands []*CommandSpec) int {
 	return width
 }
 
+// defaultCommandGroup is the group name synthesized for a command that
+// declares none. It is stated once so the default and the heading-suppression
+// rule in PrintGroupedCommandRows cannot drift apart.
+const defaultCommandGroup = "Other"
+
+// commandGroupRows is one heading's worth of command rows. defaulted records
+// whether the name was synthesized rather than declared: it stays true only
+// while every command in the group left Group empty, so a group a consumer
+// deliberately names "Other" keeps its heading regardless of declaration order.
 type commandGroupRows struct {
-	name     string
-	commands []*CommandSpec
+	name      string
+	defaulted bool
+	commands  []*CommandSpec
 }
 
 func groupCommands(commands []*CommandSpec) []commandGroupRows {
@@ -1043,8 +1060,11 @@ func groupCommands(commands []*CommandSpec) []commandGroupRows {
 		at, ok := index[name]
 		if !ok {
 			index[name] = len(groups)
-			groups = append(groups, commandGroupRows{name: name})
+			groups = append(groups, commandGroupRows{name: name, defaulted: true})
 			at = len(groups) - 1
+		}
+		if cmd.Group != "" {
+			groups[at].defaulted = false
 		}
 		groups[at].commands = append(groups[at].commands, cmd)
 	}
@@ -1055,7 +1075,7 @@ func commandGroup(cmd *CommandSpec) string {
 	if cmd.Group != "" {
 		return cmd.Group
 	}
-	return "Other"
+	return defaultCommandGroup
 }
 
 // PrintFlagRows writes flag help rows using the package's shared two-line flag
