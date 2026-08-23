@@ -5,7 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"go/ast"
+	"go/doc"
+	"go/parser"
+	"go/token"
 	"log/slog"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -34,8 +39,10 @@ func TestProcessStartPlainCommandStreamsCapturesAndReturnsExitCode(t *testing.T)
 			"-c",
 			"printf 'first stdout\n'; printf 'first stderr\n' >&2; exit 7",
 		},
-		Stdout: &streamedOut,
-		Stderr: &streamedErr,
+		// Both paths are asserted below, which is the CaptureWithTee shape.
+		Stdout:         &streamedOut,
+		Stderr:         &streamedErr,
+		CaptureWithTee: true,
 	})
 	if err != nil {
 		t.Fatalf("ProcessStart returned error: %v", err)
@@ -96,6 +103,8 @@ func TestProcessStartOutputUnderCapCompletesNormally(t *testing.T) {
 		MaxOutputBytes: 6,
 		Stdout:         &streamedOut,
 		Stderr:         &streamedErr,
+		// The cap accounting is asserted against Result, so keep both paths live.
+		CaptureWithTee: true,
 	})
 	if err != nil {
 		t.Fatalf("ProcessStart returned error: %v", err)
@@ -387,4 +396,213 @@ func findLogRecordWithFields(t *testing.T, records []map[string]any, fields map[
 	}
 	t.Fatalf("missing log record with fields %#v in %#v", fields, records)
 	return nil
+}
+
+// DHF-TEST: keel/requirement-150
+func TestProcessWaitTeeWithoutOptInLeavesResultStdoutEmpty(t *testing.T) {
+	var streamedOut bytes.Buffer
+
+	proc, err := procexec.ProcessStart(context.Background(), procexec.Request{
+		Program: "sh",
+		Args:    []string{"-c", "printf 'one-path-stdout\n'"},
+		Stdout:  &streamedOut,
+	})
+	if err != nil {
+		t.Fatalf("ProcessStart returned error: %v", err)
+	}
+
+	result, err := proc.Wait()
+	if err != nil {
+		t.Fatalf("Wait returned error: %v", err)
+	}
+	if result.Stdout != "" {
+		t.Fatalf("Result.Stdout = %q, want empty when a tee writer is supplied without CaptureWithTee", result.Stdout)
+	}
+	if got := streamedOut.String(); got != "one-path-stdout\n" {
+		t.Fatalf("tee stdout = %q, want the child's stdout exactly once", got)
+	}
+}
+
+// DHF-TEST: keel/requirement-150
+func TestProcessWaitCaptureWithTeeIsTheOnlyBothPathsShape(t *testing.T) {
+	var streamedOut bytes.Buffer
+
+	proc, err := procexec.ProcessStart(context.Background(), procexec.Request{
+		Program:        "sh",
+		Args:           []string{"-c", "printf 'both-paths-stdout\n'"},
+		Stdout:         &streamedOut,
+		CaptureWithTee: true,
+	})
+	if err != nil {
+		t.Fatalf("ProcessStart returned error: %v", err)
+	}
+	result, err := proc.Wait()
+	if err != nil {
+		t.Fatalf("Wait returned error: %v", err)
+	}
+	if result.Stdout != "both-paths-stdout\n" {
+		t.Fatalf("Result.Stdout = %q, want the child's stdout with CaptureWithTee set", result.Stdout)
+	}
+	if got := streamedOut.String(); got != "both-paths-stdout\n" {
+		t.Fatalf("tee stdout = %q, want the child's stdout", got)
+	}
+
+	// No other Request shape puts the stream on both paths at once.
+	for _, tc := range []struct {
+		name     string
+		tee      bool
+		optIn    bool
+		wantBoth bool
+	}{
+		{name: "tee only", tee: true},
+		{name: "capture only", optIn: false},
+		{name: "opt-in without a tee", optIn: true},
+		{name: "tee plus opt-in", tee: true, optIn: true, wantBoth: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var tee bytes.Buffer
+			req := procexec.Request{
+				Program:        "sh",
+				Args:           []string{"-c", "printf 'matrix-stdout\n'"},
+				CaptureWithTee: tc.optIn,
+			}
+			if tc.tee {
+				req.Stdout = &tee
+			}
+			proc, err := procexec.ProcessStart(context.Background(), req)
+			if err != nil {
+				t.Fatalf("ProcessStart returned error: %v", err)
+			}
+			result, err := proc.Wait()
+			if err != nil {
+				t.Fatalf("Wait returned error: %v", err)
+			}
+			gotBoth := result.Stdout != "" && tee.String() != ""
+			if gotBoth != tc.wantBoth {
+				t.Fatalf("both paths populated = %v, want %v (Result.Stdout=%q tee=%q)",
+					gotBoth, tc.wantBoth, result.Stdout, tee.String())
+			}
+		})
+	}
+}
+
+// DHF-TEST: keel/requirement-150
+func TestProcessWaitWithoutTeeStillReturnsTheFullCapture(t *testing.T) {
+	proc, err := procexec.ProcessStart(context.Background(), procexec.Request{
+		Program: "sh",
+		Args:    []string{"-c", "printf 'capture-only-stdout\n'"},
+	})
+	if err != nil {
+		t.Fatalf("ProcessStart returned error: %v", err)
+	}
+	result, err := proc.Wait()
+	if err != nil {
+		t.Fatalf("Wait returned error: %v", err)
+	}
+	if result.Stdout != "capture-only-stdout\n" {
+		t.Fatalf("Result.Stdout = %q, want the child's full stdout for a nil tee writer", result.Stdout)
+	}
+}
+
+// DHF-TEST: keel/requirement-150
+func TestProcessWaitStderrPairObeysTheSameOnePathRule(t *testing.T) {
+	var streamedErr bytes.Buffer
+
+	proc, err := procexec.ProcessStart(context.Background(), procexec.Request{
+		Program: "sh",
+		Args:    []string{"-c", "printf 'one-path-stderr\n' >&2"},
+		Stderr:  &streamedErr,
+	})
+	if err != nil {
+		t.Fatalf("ProcessStart returned error: %v", err)
+	}
+	result, err := proc.Wait()
+	if err != nil {
+		t.Fatalf("Wait returned error: %v", err)
+	}
+	if result.Stderr != "" {
+		t.Fatalf("Result.Stderr = %q, want empty when a tee writer is supplied without CaptureWithTee", result.Stderr)
+	}
+	if got := streamedErr.String(); got != "one-path-stderr\n" {
+		t.Fatalf("tee stderr = %q, want the child's stderr exactly once", got)
+	}
+
+	var optedIn bytes.Buffer
+	proc, err = procexec.ProcessStart(context.Background(), procexec.Request{
+		Program:        "sh",
+		Args:           []string{"-c", "printf 'both-paths-stderr\n' >&2"},
+		Stderr:         &optedIn,
+		CaptureWithTee: true,
+	})
+	if err != nil {
+		t.Fatalf("ProcessStart returned error: %v", err)
+	}
+	result, err = proc.Wait()
+	if err != nil {
+		t.Fatalf("Wait returned error: %v", err)
+	}
+	if result.Stderr != "both-paths-stderr\n" || optedIn.String() != "both-paths-stderr\n" {
+		t.Fatalf("Result.Stderr/tee = %q/%q, want both to carry the child's stderr", result.Stderr, optedIn.String())
+	}
+}
+
+// DHF-TEST: keel/requirement-150
+func TestExecOutputFieldDocsNameCounterpartAndSelector(t *testing.T) {
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
+		return !strings.HasSuffix(fi.Name(), "_test.go")
+	}, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("ParseDir: %v", err)
+	}
+	pkg, ok := pkgs["exec"]
+	if !ok {
+		t.Fatalf("package exec not found in parsed dirs %v", pkgs)
+	}
+	docPkg := doc.New(pkg, "github.com/david-aggeler/keel/exec", doc.AllDecls)
+
+	docs := map[string]string{}
+	for _, typ := range docPkg.Types {
+		if typ.Name != "Request" && typ.Name != "Result" {
+			continue
+		}
+		for _, spec := range typ.Decl.Specs {
+			ts, ok := spec.(*ast.TypeSpec)
+			if !ok {
+				continue
+			}
+			st, ok := ts.Type.(*ast.StructType)
+			if !ok {
+				continue
+			}
+			for _, field := range st.Fields.List {
+				if field.Doc == nil {
+					continue
+				}
+				for _, name := range field.Names {
+					docs[typ.Name+"."+name.Name] = field.Doc.Text()
+				}
+			}
+		}
+	}
+
+	for _, tc := range []struct{ field, counterpart string }{
+		{field: "Request.Stdout", counterpart: "Result.Stdout"},
+		{field: "Request.Stderr", counterpart: "Result.Stderr"},
+		{field: "Result.Stdout", counterpart: "Request.Stdout"},
+		{field: "Result.Stderr", counterpart: "Request.Stderr"},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			comment, ok := docs[tc.field]
+			if !ok || strings.TrimSpace(comment) == "" {
+				t.Fatalf("%s carries no doc comment", tc.field)
+			}
+			if !strings.Contains(comment, tc.counterpart) {
+				t.Fatalf("%s doc comment does not name its counterpart %s: %q", tc.field, tc.counterpart, comment)
+			}
+			if !strings.Contains(comment, "CaptureWithTee") {
+				t.Fatalf("%s doc comment does not name the selecting field CaptureWithTee: %q", tc.field, comment)
+			}
+		})
+	}
 }
