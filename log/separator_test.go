@@ -53,9 +53,9 @@ func TestConsolePlainSeparatorIsOneGutterWithAndWithoutAMessage(t *testing.T) {
 	}
 
 	var attrsOnly bytes.Buffer
-	newConsole(&attrsOnly).Info("", "activity", "ci-extra-goconst", "target", "dtovalidate", "work", "started")
+	newConsole(&attrsOnly).Info("", "activity", "ci-extra-lint", "target", "schema", "work", "started")
 	got := consoleBody(t, strings.TrimSuffix(attrsOnly.String(), "\n"))
-	const wantAttrsOnly = "INFO  service=cli activity=ci-extra-goconst target=dtovalidate work=started"
+	const wantAttrsOnly = "INFO  service=cli activity=ci-extra-lint target=schema work=started"
 	if got != wantAttrsOnly {
 		t.Fatalf("attrs-only ConsolePlain line:\n got %q\nwant %q", got, wantAttrsOnly)
 	}
@@ -99,8 +99,8 @@ func TestHumanTextFileSeparatorIsOneTabWithAndWithoutAMessage(t *testing.T) {
 		return lines[len(lines)-1]
 	}
 
-	got := textFileBody(t, write("", "activity", "ci-extra-goconst", "work", "started"))
-	wantAttrsOnly := "INFO\t" + padSource("cli") + "\tactivity=ci-extra-goconst work=started"
+	got := textFileBody(t, write("", "activity", "ci-extra-lint", "work", "started"))
+	wantAttrsOnly := "INFO\t" + padSource("cli") + "\tactivity=ci-extra-lint work=started"
 	if got != wantAttrsOnly {
 		t.Fatalf("attrs-only text-file line:\n got %q\nwant %q", got, wantAttrsOnly)
 	}
@@ -136,13 +136,13 @@ func TestMachineSinksAreUnaffectedByTheSeparatorRule(t *testing.T) {
 		Writer:           &sparse,
 		JSONLDir:         dir,
 	})
-	logger.Info("", "activity", "ci-extra-goconst", "work", "started")
+	logger.Info("", "activity", "ci-extra-lint", "work", "started")
 	if err := logger.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
 	sparseLine := strings.TrimSuffix(sparse.String(), "\n")
-	const wantSparse = `{"level":"INFO","event":"log","message":"","fields":{"activity":"ci-extra-goconst","service":"cli","work":"started"}}`
+	const wantSparse = `{"level":"INFO","event":"log","message":"","fields":{"activity":"ci-extra-lint","service":"cli","work":"started"}}`
 	if sparseLine != wantSparse {
 		t.Fatalf("sparse-AI console line:\n got %q\nwant %q", sparseLine, wantSparse)
 	}
@@ -152,7 +152,7 @@ func TestMachineSinksAreUnaffectedByTheSeparatorRule(t *testing.T) {
 		t.Fatalf("read jsonl log: %v", err)
 	}
 	jsonlLine := normalizeJSONTime(strings.TrimSuffix(string(jsonlBytes), "\n"))
-	const wantJSONL = `{"ts":"<t>","level":"INFO","msg":"","service":"cli","activity":"ci-extra-goconst","work":"started"}`
+	const wantJSONL = `{"ts":"<t>","level":"INFO","msg":"","service":"cli","activity":"ci-extra-lint","work":"started"}`
 	if jsonlLine != wantJSONL {
 		t.Fatalf("JSONL file-sink line:\n got %q\nwant %q", jsonlLine, wantJSONL)
 	}
