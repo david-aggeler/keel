@@ -204,10 +204,14 @@ func installGoToolIntoCache(ctx context.Context, logger *slog.Logger, pin toolPi
 		Args:    []string{"install", spec},
 		// Installed from a neutral directory with the workspace disabled, so the
 		// caller's module or go.work cannot change what lands in the cache.
-		Dir:    os.TempDir(),
-		Env:    goInstallEnv(staging),
-		Stdout: lines,
-		Logger: logger,
+		Dir: os.TempDir(),
+		Env: goInstallEnv(staging),
+		// The tee routes the install output through keel/log line by line; the
+		// capture is also needed because the failure message below quotes it, so
+		// this call site states the both-paths intent (keel/requirement-150).
+		Stdout:         lines,
+		Logger:         logger,
+		CaptureWithTee: true,
 	})
 	if startErr != nil {
 		return fmt.Errorf("keel-dev: installing gate tool %q at version %s failed to start (%s): %w", pin.name, pin.install.version, command, startErr)

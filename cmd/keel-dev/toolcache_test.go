@@ -50,6 +50,41 @@ func failingGoStub(t *testing.T, dir string) {
 	}
 }
 
+// noisyFailingGoStub writes a `go` that fails after emitting on stdout, so the
+// install-failure message can be checked for the child's *stdout* — the stream
+// this call site tees into keel/log and therefore only captures because it sets
+// Request.CaptureWithTee (keel/requirement-150).
+func noisyFailingGoStub(t *testing.T, dir string) {
+	t.Helper()
+	script := "#!/bin/sh\necho 'stub go: module lookup disabled'\necho 'stub go: install refused' >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(dir, "go"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestToolInstallFailureQuotesChildStdout: the install-failure message quotes
+// what the child said on stdout as well as stderr. The stdout tee that feeds the
+// line-wise keel/log records would otherwise suppress the Result capture, so this
+// pins the CaptureWithTee opt-in at the call site — without it the operator loses
+// the half of the diagnosis that arrives on stdout.
+//
+// DHF-TEST: keel/requirement-150
+func TestToolInstallFailureQuotesChildStdout(t *testing.T) {
+	t.Setenv(toolCacheEnv, t.TempDir())
+	bin := scrubPATH(t)
+	noisyFailingGoStub(t, bin)
+
+	_, err := resolveOne(t, goToolPin("faketool", "v2.0.0", "v2.0.0"))
+	if err == nil {
+		t.Fatal("resolveOne returned nil error for a failing install")
+	}
+	for _, want := range []string{"stub go: module lookup disabled", "stub go: install refused"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("install-failure error must quote the child output %q, got %v", want, err)
+		}
+	}
+}
+
 func goToolPin(name, want, version string) toolPin {
 	return toolPin{
 		name:        name,

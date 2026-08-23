@@ -361,8 +361,9 @@ func captureWithMaxOutput(ctx context.Context, logger *slog.Logger, dir string, 
 // as the bytes arrive and promotes the ceiling error over the exit code, and a
 // caller that had already delivered events off the stream must still fail the
 // run (keel/requirement-81, keel/ac-509 — the keel/issue-160 shape). stderr is
-// still captured in full because keel/exec buffers both streams regardless of
-// this seam, so the caller's existing error message is unchanged.
+// still captured in full because only stdout has a tee writer here, and
+// keel/exec suppresses the capture for a teed stream alone
+// (keel/requirement-150), so the caller's existing error message is unchanged.
 //
 // DHF-REQ: keel/requirement-131
 func streamWithMaxOutput(ctx context.Context, logger *slog.Logger, dir string, maxOutputBytes int, stdout io.Writer, program string, args ...string) (string, error) {
