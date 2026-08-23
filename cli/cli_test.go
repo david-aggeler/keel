@@ -525,7 +525,7 @@ func TestLegacyCommandRowHelpersAndDefaultUsage(t *testing.T) {
 	// here pinned the literal "command" that rootProgram returned for a nameless
 	// node; keel/requirement-152 deleted that function rather than relocating
 	// the literal.
-	root := &CommandSpec{Name: "toolbinary", Config: Config{Program: "tool"}}
+	root := &CommandSpec{Name: "binary", Config: Config{Program: "tool"}}
 	if got := root.Usage(nil); got != "usage: tool <command> [args]" {
 		t.Fatalf("default Usage = %q, want %q", got, "usage: tool <command> [args]")
 	}

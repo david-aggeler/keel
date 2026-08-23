@@ -13,7 +13,7 @@ import (
 // fallback in place.
 func programTokenTree() *CommandSpec {
 	return &CommandSpec{
-		Name: "toolbinary",
+		Name: "binary",
 		Config: Config{
 			Program:     "tool",
 			Version:     "1.2.3",
