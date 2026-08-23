@@ -9,7 +9,8 @@ import (
 // DHF-TEST: keel/requirement-106
 func TestValidateTreeRejectsDepthBeyondTwoCommandTokens(t *testing.T) {
 	root := &CommandSpec{
-		Name: "tool",
+		Name:   "tool",
+		Config: Config{Program: "tool"},
 		Subcommands: []*CommandSpec{
 			{
 				Name: "admin",
@@ -37,7 +38,8 @@ func TestValidateTreeRejectsDepthBeyondTwoCommandTokens(t *testing.T) {
 	}
 
 	valid := &CommandSpec{
-		Name: "tool",
+		Name:   "tool",
+		Config: Config{Program: "tool"},
 		Subcommands: []*CommandSpec{
 			{
 				Name: "admin",
@@ -57,7 +59,8 @@ func TestValidateTreeRejectsDepthBeyondTwoCommandTokens(t *testing.T) {
 // DHF-TEST: keel/requirement-106 (keel/ac-382)
 func TestValidateTreeRejectsSingleChildNamespace(t *testing.T) {
 	root := &CommandSpec{
-		Name: "tool",
+		Name:   "tool",
+		Config: Config{Program: "tool"},
 		Subcommands: []*CommandSpec{
 			{
 				Name: "admin",
@@ -99,7 +102,8 @@ func TestValidateTreeRejectsSingleChildNamespace(t *testing.T) {
 // DHF-TEST: keel/requirement-106 (keel/ac-382)
 func TestValidateTreeExemptsTheRootFromTheTwoChildRule(t *testing.T) {
 	carrier := &CommandSpec{
-		Name: "tool",
+		Name:   "tool",
+		Config: Config{Program: "tool"},
 		Subcommands: []*CommandSpec{
 			{
 				Name: "admin",
@@ -119,7 +123,8 @@ func TestValidateTreeExemptsTheRootFromTheTwoChildRule(t *testing.T) {
 // DHF-TEST: keel/requirement-106
 func TestValidateTreeRejectsMixedHandlerAndChildren(t *testing.T) {
 	root := &CommandSpec{
-		Name: "tool",
+		Name:   "tool",
+		Config: Config{Program: "tool"},
 		Subcommands: []*CommandSpec{
 			{
 				Name:    "admin",
@@ -150,7 +155,8 @@ func TestValidateTreeRejectsMixedHandlerAndChildren(t *testing.T) {
 // DHF-TEST: keel/requirement-106
 func TestValidateTreeRejectsNilChildWithoutPanicking(t *testing.T) {
 	root := &CommandSpec{
-		Name: "tool",
+		Name:   "tool",
+		Config: Config{Program: "tool"},
 		Subcommands: []*CommandSpec{
 			{
 				Name: "admin",

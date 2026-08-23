@@ -599,17 +599,28 @@ func (c *CommandSpec) match(path []string) (*CommandSpec, []string, []string) {
 	return node, matched, path
 }
 
-// ValidateTree checks keel's first-party command-tree invariants: command paths
-// are at most two tokens below the program, non-root namespace nodes have at
-// least two children, nodes do not mix a handler with children, and command
-// flags do not collide with keel-owned global flag names or aliases.
+// ValidateTree checks keel's first-party command-tree invariants: the root
+// declares a non-empty Config.Program, command paths are at most two tokens
+// below the program, non-root namespace nodes have at least two children, nodes
+// do not mix a handler with children, and command flags do not collide with
+// keel-owned global flag names or aliases.
 //
-// DHF-REQ: keel/requirement-106, keel/requirement-104
+// The root Config.Program check is a Config identity invariant rather than a
+// tree-shape one: it is the enforcement point that makes the one-program-per-
+// tree contract checkable where the mistake is made, since consumers already
+// call ValidateTree at startup and keel-dev ci calls it as a gate step.
+// Descendants cannot violate it independently — inheritance overwrites their
+// value with the root's — so the check is root-only.
+//
+// DHF-REQ: keel/requirement-106, keel/requirement-104, keel/requirement-152
 func (c *CommandSpec) ValidateTree() error {
 	return c.validateTree(nil, true)
 }
 
 func (c *CommandSpec) validateTree(path []string, root bool) error {
+	if root && c.Config.Program == "" {
+		return fmt.Errorf("root command tree declares an empty Config.Program: set Config.Program to the executable name")
+	}
 	if !root && len(path) > 2 {
 		return fmt.Errorf("command path %q exceeds maximum depth 2", strings.Join(path, " "))
 	}
