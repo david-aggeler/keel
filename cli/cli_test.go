@@ -517,10 +517,17 @@ func TestUsageErrorAndGlobalParseErrors(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-21
-func TestLegacyCommandRowHelpersAndFallbackUsage(t *testing.T) {
-	if got := (&CommandSpec{}).Usage(nil); got != "usage: command <command> [args]" {
-		t.Fatalf("fallback Usage = %q", got)
+// DHF-TEST: keel/requirement-21, keel/requirement-152
+func TestLegacyCommandRowHelpersAndDefaultUsage(t *testing.T) {
+	// A root with no Use and no Config.Usage falls back to the generic
+	// "<command> [args]" suffix, but the program token itself has no fallback:
+	// it is the root's Config.Program and nothing else. The former assertion
+	// here pinned the literal "command" that rootProgram returned for a nameless
+	// node; keel/requirement-152 deleted that function rather than relocating
+	// the literal.
+	root := &CommandSpec{Name: "toolbinary", Config: Config{Program: "tool"}}
+	if got := root.Usage(nil); got != "usage: tool <command> [args]" {
+		t.Fatalf("default Usage = %q, want %q", got, "usage: tool <command> [args]")
 	}
 
 	commands := []*CommandSpec{

@@ -75,7 +75,11 @@ type RuntimeConfig struct {
 // guidance in one data structure so root help and command-topic help stay in
 // sync with dispatch.
 type Config struct {
-	// Program is the executable name shown in generated usage.
+	// Program is the executable name shown in generated usage. It is required on
+	// the root node: ValidateTree rejects a tree whose root leaves it empty, and
+	// there is no fallback to a node's own Name. The root's value wins tree-wide
+	// — InheritConfig copies it over any value a descendant declares — so one
+	// tree names one program on every help page and every usage line.
 	Program string
 	// Version is the optional program version rendered as the first root-help
 	// line. Empty preserves the pre-version help shape.
@@ -1171,16 +1175,13 @@ func (c *CommandSpec) inheritConfig(cfg Config) {
 	}
 }
 
+// program returns the one program token for this tree. It is a pure read of the
+// inherited Config.Program and has no fallback: ValidateTree rejects an empty
+// root value and InheritConfig copies the root's value to every descendant, so
+// every call site — the help identity line, the generated usage line, and the
+// subcommand-listing prefix strip — resolves the same token at every depth.
+//
+// DHF-REQ: keel/requirement-152
 func (c *CommandSpec) program() string {
-	if c.Config.Program != "" {
-		return c.Config.Program
-	}
-	return rootProgram(c)
-}
-
-func rootProgram(c *CommandSpec) string {
-	if c.Name != "" {
-		return c.Name
-	}
-	return "command"
+	return c.Config.Program
 }
