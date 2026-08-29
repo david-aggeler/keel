@@ -1,11 +1,79 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
 	"testing"
 )
+
+// DHF-TEST: keel/requirement-153 (keel/ac-633)
+func TestDispatchRendersHelpForDeepestNamedNode(t *testing.T) {
+	var help bytes.Buffer
+	handlerCalled := false
+	root := &CommandSpec{
+		Name: "tool",
+		Config: Config{
+			Program:      "tool",
+			Usage:        "tool <command>",
+			HelpUsage:    "tool help [command]",
+			CommandUsage: "tool <command> --help",
+			HelpWriter:   &help,
+		},
+		Subcommands: []*CommandSpec{{
+			Name:  "group",
+			Short: "Grouped commands.",
+			Subcommands: []*CommandSpec{{
+				Name:  "leaf",
+				Short: "Leaf command.",
+				Handler: func(context.Context, []string) error {
+					handlerCalled = true
+					return nil
+				},
+			}},
+		}},
+	}
+
+	tests := []struct {
+		name string
+		args []string
+		path []string
+	}{
+		{name: "root long", args: []string{"--help"}},
+		{name: "root short", args: []string{"-h"}},
+		{name: "group long", args: []string{"group", "--help"}, path: []string{"group"}},
+		{name: "group short", args: []string{"group", "-h"}, path: []string{"group"}},
+		{name: "leaf long", args: []string{"group", "leaf", "--help"}, path: []string{"group", "leaf"}},
+		{name: "leaf short", args: []string{"group", "leaf", "-h"}, path: []string{"group", "leaf"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			help.Reset()
+			handlerCalled = false
+			var want bytes.Buffer
+			if len(tt.path) == 0 {
+				root.RenderRootHelp(&want)
+			} else {
+				node, _, ok := root.Find(tt.path)
+				if !ok {
+					t.Fatalf("fixture path %q did not resolve", strings.Join(tt.path, " "))
+				}
+				node.RenderCommandHelp(&want, tt.path)
+			}
+
+			if err := root.Dispatch(context.Background(), tt.args); err != nil {
+				t.Fatalf("Dispatch(%q): %v", strings.Join(tt.args, " "), err)
+			}
+			if handlerCalled {
+				t.Fatalf("Dispatch(%q) invoked the handler", strings.Join(tt.args, " "))
+			}
+			if help.String() != want.String() {
+				t.Fatalf("Dispatch(%q) help:\n%s\nwant:\n%s", strings.Join(tt.args, " "), help.String(), want.String())
+			}
+		})
+	}
+}
 
 // DHF-TEST: keel/requirement-104
 func TestDispatchParsesTypedFlagsWithDefaultsBeforeHandler(t *testing.T) {
