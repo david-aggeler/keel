@@ -39,3 +39,10 @@ discover.json
 docs/usage/
 
 scratchpad/
+
+# CodeGraph index (per-machine code intelligence store; not part of the module)
+.codegraph/
+# openbrain-client init transcript
+init.log
+# ad-hoc tool report output
+report.json
