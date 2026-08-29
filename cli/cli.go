@@ -98,6 +98,10 @@ type Config struct {
 	ModeHelp []string
 	// Trailing is optional final root-help guidance.
 	Trailing string
+	// HelpWriter receives help rendered directly by Dispatch for -h/--help.
+	// Nil discards dispatcher-owned help; binaries that route help through their
+	// own presentation layer may keep doing so while migrating to Dispatch.
+	HelpWriter io.Writer
 }
 
 // Handler executes a matched command with the arguments left after command-tree
@@ -328,13 +332,25 @@ func (c *CommandSpec) Child(name string) (*CommandSpec, bool) {
 // UsageError, parses command-declared typed flags, validates positional arity,
 // and passes the remaining positional arguments to the resolved Handler.
 //
-// DHF-REQ: keel/requirement-104
+// DHF-REQ: keel/requirement-104, keel/requirement-153
 func (c *CommandSpec) Dispatch(ctx context.Context, args []string) error {
 	c.InheritConfig()
+	node, matched, remaining := c.match(args)
+	if helpRequestedByDispatcher(node, remaining) {
+		w := c.Config.HelpWriter
+		if w == nil {
+			w = io.Discard
+		}
+		if node == c {
+			c.RenderRootHelp(w)
+		} else {
+			node.RenderCommandHelp(w, matched)
+		}
+		return nil
+	}
 	if len(args) == 0 {
 		return UsageError{Err: fmt.Errorf("%s", c.Usage(nil))}
 	}
-	node, matched, remaining := c.match(args)
 	if len(matched) == 0 {
 		return UsageError{Err: fmt.Errorf("unknown command %q\n%s", args[0], c.Usage(nil))}
 	}
@@ -346,6 +362,22 @@ func (c *CommandSpec) Dispatch(ctx context.Context, args []string) error {
 		return err
 	}
 	return node.Handler(ctx, handlerArgs)
+}
+
+func helpRequestedByDispatcher(node *CommandSpec, remaining []string) bool {
+	for _, arg := range remaining {
+		switch arg {
+		case "--help":
+			if _, declared := node.flagByName("help"); !declared {
+				return true
+			}
+		case "-h":
+			if _, declared := node.flagByAlias("h"); !declared {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (c *CommandSpec) parseCommandArgs(matched, remaining []string) ([]string, error) {
