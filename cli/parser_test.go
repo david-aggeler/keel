@@ -323,32 +323,60 @@ func TestDispatchValidatesMinimumAndRangePositionals(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-104
-func TestValidateTreeRejectsCommandGlobalFlagCollisions(t *testing.T) {
-	root := parserTestRoot(&CommandSpec{
-		Name: "run",
-		Use:  "run",
-		Flags: []FlagSpec{
-			{Name: "mode", StringTarget: new(string)},
-		},
-		Handler: func(context.Context, []string) error { return nil },
-	})
+// DHF-TEST: keel/requirement-153 (keel/ac-632)
+func TestDeclaredGlobalFlagNamesReachCommandHandler(t *testing.T) {
+	tests := []struct {
+		name  string
+		flag  FlagSpec
+		forms [][]string
+	}{
+		{name: "mode", flag: FlagSpec{Name: "mode"}, forms: [][]string{{"--mode", "13"}, {"--mode=13"}}},
+		{name: "verbose", flag: FlagSpec{Name: "verbose"}, forms: [][]string{{"--verbose", "13"}, {"--verbose=13"}}},
+		{name: "verbose alias", flag: FlagSpec{Name: "verbose", Alias: "v"}, forms: [][]string{{"-v", "13"}}},
+		{name: "no-header", flag: FlagSpec{Name: "no-header"}, forms: [][]string{{"--no-header", "13"}, {"--no-header=13"}}},
+		{name: "help", flag: FlagSpec{Name: "help"}, forms: [][]string{{"--help", "13"}, {"--help=13"}}},
+		{name: "help alias", flag: FlagSpec{Name: "help", Alias: "h"}, forms: [][]string{{"-h", "13"}}},
+		{name: "help-all", flag: FlagSpec{Name: "help-all"}, forms: [][]string{{"--help-all", "13"}, {"--help-all=13"}}},
+		{name: "help-json", flag: FlagSpec{Name: "help-json"}, forms: [][]string{{"--help-json", "13"}, {"--help-json=13"}}},
+		{name: "version", flag: FlagSpec{Name: "version"}, forms: [][]string{{"--version", "13"}, {"--version=13"}}},
+	}
+	for _, tt := range tests {
+		for _, form := range tt.forms {
+			t.Run(tt.name+" "+strings.Join(form, " "), func(t *testing.T) {
+				var parsed string
+				var handled string
+				flag := tt.flag
+				flag.Value = "value"
+				flag.StringTarget = &parsed
+				root := parserTestRoot(&CommandSpec{
+					Name:  "run",
+					Use:   "run",
+					Flags: []FlagSpec{flag},
+					Handler: func(context.Context, []string) error {
+						handled = parsed
+						return nil
+					},
+				})
+				if err := root.ValidateTree(); err != nil {
+					t.Fatalf("ValidateTree rejected declared global name: %v", err)
+				}
 
-	err := root.ValidateTree()
-	if err == nil {
-		t.Fatal("ValidateTree accepted command flag colliding with global --mode")
-	}
-	if !strings.Contains(err.Error(), "run") || !strings.Contains(err.Error(), "mode") {
-		t.Fatalf("collision error = %q, want command and flag named", err.Error())
-	}
-
-	root.Subcommands[0].Flags = []FlagSpec{{Name: "custom", Alias: "h", BoolTarget: new(bool)}}
-	err = root.ValidateTree()
-	if err == nil {
-		t.Fatal("ValidateTree accepted command alias colliding with global -h")
-	}
-	if !strings.Contains(err.Error(), "run") || !strings.Contains(err.Error(), "h") {
-		t.Fatalf("alias collision error = %q, want command and alias named", err.Error())
+				argv := append([]string{"run"}, form...)
+				cfg, words, err := root.ParseGlobalConfig(argv)
+				if err != nil {
+					t.Fatalf("ParseGlobalConfig(%q): %v", strings.Join(argv, " "), err)
+				}
+				if cfg != (RuntimeConfig{Mode: ModeHuman}) {
+					t.Fatalf("ParseGlobalConfig(%q) cfg = %+v, want globals unset", strings.Join(argv, " "), cfg)
+				}
+				if err := root.Dispatch(context.Background(), words); err != nil {
+					t.Fatalf("Dispatch(%q): %v", strings.Join(words, " "), err)
+				}
+				if handled != "13" {
+					t.Fatalf("handler parsed %q, want 13", handled)
+				}
+			})
+		}
 	}
 }
 

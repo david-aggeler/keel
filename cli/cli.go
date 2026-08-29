@@ -221,17 +221,34 @@ func (e UsageError) Unwrap() error { return e.Err }
 // ExitCode returns the process exit code for usage errors.
 func (e UsageError) ExitCode() int { return 2 }
 
-// ParseGlobalConfig parses shared position-independent global flags and returns
-// the non-global command words. It accepts --mode, -v/--verbose, --no-header,
-// -h/--help, --help-all, --help-json, and --version wherever they appear in
-// argv, leaving command and positional words in their original relative order.
+// ParseGlobalConfig parses shared position-independent global flags without a
+// command tree and returns the non-global command words. Consumers with a tree
+// should call CommandSpec.ParseGlobalConfig so command declarations take
+// precedence over globally owned names.
 //
 // DHF-REQ: keel/requirement-57
 func ParseGlobalConfig(argv []string) (RuntimeConfig, []string, error) {
+	return parseGlobalConfig(argv, nil)
+}
+
+// ParseGlobalConfig resolves the command node before parsing shared globals.
+// A name or alias declared by that node remains in the command words; every
+// undeclared global keeps the package function's position-independent meaning.
+//
+// DHF-REQ: keel/requirement-153
+func (c *CommandSpec) ParseGlobalConfig(argv []string) (RuntimeConfig, []string, error) {
+	return parseGlobalConfig(argv, c.commandNode(argv))
+}
+
+func parseGlobalConfig(argv []string, node *CommandSpec) (RuntimeConfig, []string, error) {
 	cfg := RuntimeConfig{Mode: ModeHuman}
 	var words []string
 	for i := 0; i < len(argv); i++ {
 		arg := argv[i]
+		if node != nil && node.declaresArg(arg) {
+			words = append(words, arg)
+			continue
+		}
 		switch arg {
 		case "--mode":
 			if i+1 >= len(argv) {
@@ -261,6 +278,34 @@ func ParseGlobalConfig(argv []string) (RuntimeConfig, []string, error) {
 		}
 	}
 	return cfg, words, nil
+}
+
+func (c *CommandSpec) commandNode(argv []string) *CommandSpec {
+	node := c
+	for _, arg := range argv {
+		child, ok := node.Child(arg)
+		if !ok {
+			continue
+		}
+		node = child
+	}
+	return node
+}
+
+func (c *CommandSpec) declaresArg(arg string) bool {
+	if strings.HasPrefix(arg, "--") {
+		name := strings.TrimPrefix(arg, "--")
+		if eq := strings.IndexByte(name, '='); eq >= 0 {
+			name = name[:eq]
+		}
+		_, ok := c.flagByName(name)
+		return ok
+	}
+	if len(arg) == 2 && strings.HasPrefix(arg, "-") {
+		_, ok := c.flagByAlias(strings.TrimPrefix(arg, "-"))
+		return ok
+	}
+	return false
 }
 
 // ParseMode parses a shared console mode string case-insensitively and rejects
@@ -637,9 +682,8 @@ func (c *CommandSpec) match(path []string) (*CommandSpec, []string, []string) {
 
 // ValidateTree checks keel's first-party command-tree invariants: the root
 // declares a non-empty Config.Program, command paths are at most two tokens
-// below the program, non-root namespace nodes have at least two children, nodes
-// do not mix a handler with children, and command flags do not collide with
-// keel-owned global flag names or aliases.
+// below the program, non-root namespace nodes have at least two children, and
+// nodes do not mix a handler with children.
 //
 // The root Config.Program check is a Config identity invariant rather than a
 // tree-shape one: it is the enforcement point that makes the one-program-per-
@@ -669,9 +713,6 @@ func (c *CommandSpec) validateTree(path []string, root bool) error {
 	if !root && c.Handler == nil && len(c.Subcommands) == 0 {
 		return fmt.Errorf("command %q is neither a namespace nor a leaf with a handler", strings.Join(path, " "))
 	}
-	if err := c.validateFlagCollisions(path); err != nil {
-		return err
-	}
 	for _, child := range c.Subcommands {
 		if child == nil {
 			return fmt.Errorf("command %q declares a nil child command", commandPath(path, c.Name))
@@ -682,27 +723,6 @@ func (c *CommandSpec) validateTree(path []string, root bool) error {
 		}
 	}
 	return nil
-}
-
-func (c *CommandSpec) validateFlagCollisions(path []string) error {
-	long, short := globalFlagNames()
-	for _, flag := range c.Flags {
-		if long[flag.Name] || short[flag.Name] {
-			return fmt.Errorf("command %q declares global flag collision %q", strings.Join(path, " "), flag.Name)
-		}
-		if flag.Alias != "" && (long[flag.Alias] || short[flag.Alias]) {
-			return fmt.Errorf("command %q declares global flag alias collision %q", strings.Join(path, " "), flag.Alias)
-		}
-	}
-	return nil
-}
-
-func globalFlagNames() (map[string]bool, map[string]bool) {
-	long := map[string]bool{}
-	for _, flag := range GlobalFlagSpecs() {
-		long[flag.Name] = true
-	}
-	return long, map[string]bool{"v": true, "h": true}
 }
 
 func commandPath(path []string, fallback string) string {
