@@ -380,6 +380,45 @@ func TestDeclaredGlobalFlagNamesReachCommandHandler(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-153 (keel/ac-634)
+func TestUndeclaredGlobalFlagsRemainPositionIndependent(t *testing.T) {
+	root := parserTestRoot(&CommandSpec{
+		Name:    "run",
+		Use:     "run",
+		Handler: func(context.Context, []string) error { return nil },
+	})
+	tests := []struct {
+		name string
+		argv []string
+		want RuntimeConfig
+	}{
+		{name: "mode leading", argv: []string{"--mode", "ai", "run"}, want: RuntimeConfig{Mode: ModeAI}},
+		{name: "mode trailing", argv: []string{"run", "--mode", "ai"}, want: RuntimeConfig{Mode: ModeAI}},
+		{name: "verbose short leading", argv: []string{"-v", "run"}, want: RuntimeConfig{Mode: ModeHuman, Verbose: true}},
+		{name: "verbose long trailing", argv: []string{"run", "--verbose"}, want: RuntimeConfig{Mode: ModeHuman, Verbose: true}},
+		{name: "no header trailing", argv: []string{"run", "--no-header"}, want: RuntimeConfig{Mode: ModeHuman, NoHeader: true}},
+		{name: "help short trailing", argv: []string{"run", "-h"}, want: RuntimeConfig{Mode: ModeHuman, Help: true}},
+		{name: "help long leading", argv: []string{"--help", "run"}, want: RuntimeConfig{Mode: ModeHuman, Help: true}},
+		{name: "help all trailing", argv: []string{"run", "--help-all"}, want: RuntimeConfig{Mode: ModeHuman, HelpAll: true}},
+		{name: "help json trailing", argv: []string{"run", "--help-json"}, want: RuntimeConfig{Mode: ModeHuman, HelpJSON: true}},
+		{name: "version trailing", argv: []string{"run", "--version"}, want: RuntimeConfig{Mode: ModeHuman, Version: true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, words, err := root.ParseGlobalConfig(tt.argv)
+			if err != nil {
+				t.Fatalf("ParseGlobalConfig(%q): %v", strings.Join(tt.argv, " "), err)
+			}
+			if cfg != tt.want {
+				t.Fatalf("ParseGlobalConfig(%q) cfg = %+v, want %+v", strings.Join(tt.argv, " "), cfg, tt.want)
+			}
+			if got := strings.Join(words, " "); got != "run" {
+				t.Fatalf("ParseGlobalConfig(%q) words = %q, want run", strings.Join(tt.argv, " "), got)
+			}
+		})
+	}
+}
+
 // DHF-TEST: keel/requirement-104
 // A second Dispatch on the same tree must not inherit typed flag values bound by
 // an earlier Dispatch: defaults are re-applied and repeatable slices are reset
