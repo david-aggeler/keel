@@ -119,7 +119,9 @@ func TestUngroupedCommandListRendersWithoutGroupHeading(t *testing.T) {
 	}
 
 	var topicHelp bytes.Buffer
-	root.RenderTopicHelp(&topicHelp, []string{"workflow"})
+	if err := root.RenderTopicHelp(&topicHelp, []string{"workflow"}); err != nil {
+		t.Fatalf("RenderTopicHelp: %v", err)
+	}
 	if got := topicHelp.String(); !strings.Contains(got, "Subcommands:\n  inspect  Inspect.\n") {
 		t.Fatalf("topic help does not list subcommands directly under Subcommands:\n%s", got)
 	}

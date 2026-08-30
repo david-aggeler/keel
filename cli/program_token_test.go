@@ -61,7 +61,9 @@ func TestDescendantConfigProgramDoesNotOverrideTheRoot(t *testing.T) {
 	root.Subcommands[0].Config.Program = "usurper"
 
 	var help bytes.Buffer
-	root.RenderTopicHelp(&help, []string{"grp"})
+	if err := root.RenderTopicHelp(&help, []string{"grp"}); err != nil {
+		t.Fatalf("RenderTopicHelp: %v", err)
+	}
 	got := help.String()
 
 	if strings.Contains(got, "usurper") {
@@ -90,7 +92,9 @@ func TestIdentityLineNamesTheRootProgramOnEveryPage(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var help bytes.Buffer
-			root.RenderTopicHelp(&help, tc.path)
+			if err := root.RenderTopicHelp(&help, tc.path); err != nil {
+				t.Fatalf("RenderTopicHelp(%q): %v", strings.Join(tc.path, " "), err)
+			}
 			got := help.String()
 			first, _, _ := strings.Cut(got, "\n")
 			if first != "tool v1.2.3" {
@@ -105,7 +109,9 @@ func TestLeafUsageLineOpensWithTheRootProgram(t *testing.T) {
 	root := programTokenTree()
 
 	var help bytes.Buffer
-	root.RenderTopicHelp(&help, []string{"grp", "leaf"})
+	if err := root.RenderTopicHelp(&help, []string{"grp", "leaf"}); err != nil {
+		t.Fatalf("RenderTopicHelp: %v", err)
+	}
 	got := help.String()
 
 	_, after, found := strings.Cut(got, "Usage:\n")

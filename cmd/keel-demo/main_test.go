@@ -275,6 +275,46 @@ func TestRunDirectHelpBranchesAndUsageError(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-155 (keel/ac-639)
+func TestKeelDemoHelpWordMatchesHelpFlagForEveryCommandNode(t *testing.T) {
+	assertKeelDemoHelpParity(t, "root", []string{"help"}, []string{"--help"})
+	for _, path := range demoCommandInventoryPaths(t, commandTree()) {
+		parts := strings.Fields(path)
+		assertKeelDemoHelpParity(t, path, append([]string{"help"}, parts...), append(append([]string{}, parts...), "--help"))
+	}
+}
+
+func assertKeelDemoHelpParity(t *testing.T, name string, helpArgs, flagArgs []string) {
+	t.Helper()
+	helpOut, helpCode := captureRunOutput(t, func() int { return run(helpArgs) })
+	flagOut, flagCode := captureRunOutput(t, func() int { return run(flagArgs) })
+	if helpCode != 0 || flagCode != 0 {
+		t.Fatalf("%s exit codes: help=%d flag=%d\nhelp output:\n%s\nflag output:\n%s", name, helpCode, flagCode, helpOut, flagOut)
+	}
+	if helpOut != flagOut {
+		t.Fatalf("%s help mismatch\nhelp output:\n%s\nflag output:\n%s", name, helpOut, flagOut)
+	}
+}
+
+func demoCommandInventoryPaths(t *testing.T, tree *cli.CommandSpec) []string {
+	t.Helper()
+	var encoded bytes.Buffer
+	if err := tree.RenderHelpJSON(&encoded); err != nil {
+		t.Fatalf("RenderHelpJSON: %v", err)
+	}
+	var inventory []struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(encoded.Bytes(), &inventory); err != nil {
+		t.Fatalf("parse command inventory: %v\n%s", err, encoded.String())
+	}
+	paths := make([]string, 0, len(inventory))
+	for _, command := range inventory {
+		paths = append(paths, command.Path)
+	}
+	return paths
+}
+
 // DHF-TEST: keel/requirement-11, keel/requirement-28
 func TestRenderHelpDirectMachineModesEmitHelpEvent(t *testing.T) {
 	tree := commandTree()

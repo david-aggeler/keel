@@ -235,9 +235,17 @@ func ParseGlobalConfig(argv []string) (RuntimeConfig, []string, error) {
 // A name or alias declared by that node remains in the command words; every
 // undeclared global keeps the package function's position-independent meaning.
 //
-// DHF-REQ: keel/requirement-153
+// DHF-REQ: keel/requirement-153, keel/requirement-155
 func (c *CommandSpec) ParseGlobalConfig(argv []string) (RuntimeConfig, []string, error) {
-	return parseGlobalConfig(argv, c.commandNode(argv))
+	cfg, words, err := parseGlobalConfig(argv, c.commandNode(argv))
+	if err != nil {
+		return cfg, words, err
+	}
+	if len(words) > 0 && words[0] == "help" {
+		cfg.Help = true
+		words = words[1:]
+	}
+	return cfg, words, nil
 }
 
 func parseGlobalConfig(argv []string, node *CommandSpec) (RuntimeConfig, []string, error) {
@@ -377,9 +385,16 @@ func (c *CommandSpec) Child(name string) (*CommandSpec, bool) {
 // UsageError, parses command-declared typed flags, validates positional arity,
 // and passes the remaining positional arguments to the resolved Handler.
 //
-// DHF-REQ: keel/requirement-104, keel/requirement-153
+// DHF-REQ: keel/requirement-104, keel/requirement-153, keel/requirement-155
 func (c *CommandSpec) Dispatch(ctx context.Context, args []string) error {
 	c.InheritConfig()
+	if len(args) > 0 && args[0] == "help" {
+		w := c.Config.HelpWriter
+		if w == nil {
+			w = io.Discard
+		}
+		return c.RenderTopicHelp(w, args[1:])
+	}
 	node, matched, remaining := c.match(args)
 	if helpRequestedByDispatcher(node, remaining) {
 		w := c.Config.HelpWriter
@@ -962,21 +977,51 @@ func (c *CommandSpec) RenderRootHelp(w io.Writer) {
 	}
 }
 
+// RenderHelp writes help for the command path or root help when path is empty.
+// Unknown topics render a diagnostic followed by nearest resolvable help and
+// return UsageError so callers can exit 2.
+//
+// DHF-REQ: keel/requirement-155
+func (c *CommandSpec) RenderHelp(w io.Writer, path []string) error {
+	return c.RenderTopicHelp(w, path)
+}
+
 // RenderTopicHelp writes help for the command path or root help when path is
-// empty. Unknown topics render a diagnostic followed by root help.
-func (c *CommandSpec) RenderTopicHelp(w io.Writer, path []string) {
+// empty. Unknown topics render a diagnostic followed by nearest resolvable help
+// and return UsageError.
+//
+// DHF-REQ: keel/requirement-155
+func (c *CommandSpec) RenderTopicHelp(w io.Writer, path []string) error {
 	c.InheritConfig()
-	node, remaining, ok := c.Find(path)
+	node, matched, remaining, ok := c.findTopic(path)
 	if !ok || len(remaining) > 0 {
 		fmt.Fprintf(w, "unknown help topic %q\n", strings.Join(path, " "))
-		c.RenderRootHelp(w)
-		return
+		if node == c {
+			c.RenderRootHelp(w)
+		} else {
+			node.RenderCommandHelp(w, matched)
+		}
+		return NewUsageError("unknown help topic %q", strings.Join(path, " "))
 	}
 	if node == c {
 		c.RenderRootHelp(w)
-		return
+		return nil
 	}
 	node.RenderCommandHelp(w, path)
+	return nil
+}
+
+func (c *CommandSpec) findTopic(path []string) (*CommandSpec, []string, []string, bool) {
+	if len(path) == 0 {
+		return c, nil, nil, true
+	}
+	for _, child := range c.Subcommands {
+		if child.Name == path[0] {
+			node, matched, remaining, ok := child.findTopic(path[1:])
+			return node, append([]string{path[0]}, matched...), remaining, ok
+		}
+	}
+	return c, nil, path, false
 }
 
 // RenderAllHelp writes generated root help followed by command-topic help for

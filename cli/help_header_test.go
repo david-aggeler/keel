@@ -33,7 +33,9 @@ func helpHeaderTree(version string) *CommandSpec {
 func renderHelpPage(t *testing.T, root *CommandSpec, path ...string) string {
 	t.Helper()
 	var help bytes.Buffer
-	root.RenderTopicHelp(&help, path)
+	if err := root.RenderTopicHelp(&help, path); err != nil {
+		t.Fatalf("RenderTopicHelp(%q): %v", strings.Join(path, " "), err)
+	}
 	return help.String()
 }
 
