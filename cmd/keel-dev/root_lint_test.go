@@ -149,6 +149,115 @@ func TestVSIXCommandHelpTopicAndInventoryPath(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-155 (keel/ac-639)
+func TestKeelDevHelpWordMatchesHelpFlagForEveryCommandNode(t *testing.T) {
+	for _, pair := range []struct {
+		name string
+		help []string
+		flag []string
+	}{
+		{name: "root", help: []string{"help"}, flag: []string{"--help"}},
+	} {
+		assertKeelDevHelpParity(t, pair.name, pair.help, pair.flag)
+	}
+
+	for _, path := range commandInventoryPaths(t, commandTree()) {
+		parts := strings.Fields(path)
+		assertKeelDevHelpParity(t, path, append([]string{"help"}, parts...), append(append([]string{}, parts...), "--help"))
+	}
+}
+
+// DHF-TEST: keel/requirement-155 (keel/ac-640)
+func TestKeelDevUnknownHelpTopicFallsBackToNearestNodeAndExitsUsage(t *testing.T) {
+	tests := []struct {
+		name      string
+		args      []string
+		want      []string
+		forbidden []string
+	}{
+		{
+			name: "unknown suffix",
+			args: []string{"help", "vsix", "bogus"},
+			want: []string{
+				`unknown help topic "vsix bogus"`,
+				"vsix commands:",
+				"keel-dev vsix ci",
+			},
+			forbidden: []string{
+				"keel-dev is keel's development CLI.",
+			},
+		},
+		{
+			name: "unknown first token",
+			args: []string{"help", "bogus"},
+			want: []string{
+				`unknown help topic "bogus"`,
+				"keel-dev is keel's development CLI.",
+				"Commands:",
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stdout, stderr := captureProcessStreams(t, func() {
+				if code := run(tc.args); code != 2 {
+					t.Fatalf("run(%v) exit = %d, want 2", tc.args, code)
+				}
+			})
+			if stdout != "" {
+				t.Fatalf("run(%v) stdout = %q, want empty", tc.args, stdout)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(stderr, want) {
+					t.Fatalf("run(%v) stderr missing %q:\n%s", tc.args, want, stderr)
+				}
+			}
+			for _, forbidden := range tc.forbidden {
+				if strings.Contains(stderr, forbidden) {
+					t.Fatalf("run(%v) stderr included %q:\n%s", tc.args, forbidden, stderr)
+				}
+			}
+		})
+	}
+}
+
+func assertKeelDevHelpParity(t *testing.T, name string, helpArgs, flagArgs []string) {
+	t.Helper()
+	helpStdout, helpStderr := captureProcessStreams(t, func() {
+		if code := run(helpArgs); code != 0 {
+			t.Fatalf("%s: run(%v) exit = %d, want 0", name, helpArgs, code)
+		}
+	})
+	flagStdout, flagStderr := captureProcessStreams(t, func() {
+		if code := run(flagArgs); code != 0 {
+			t.Fatalf("%s: run(%v) exit = %d, want 0", name, flagArgs, code)
+		}
+	})
+	if helpStdout != flagStdout || helpStderr != flagStderr {
+		t.Fatalf("%s help mismatch\nhelp stdout:\n%s\nhelp stderr:\n%s\nflag stdout:\n%s\nflag stderr:\n%s",
+			name, helpStdout, helpStderr, flagStdout, flagStderr)
+	}
+}
+
+func commandInventoryPaths(t *testing.T, tree *cli.CommandSpec) []string {
+	t.Helper()
+	var encoded bytes.Buffer
+	if err := tree.RenderHelpJSON(&encoded); err != nil {
+		t.Fatalf("RenderHelpJSON: %v", err)
+	}
+	var inventory []struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(encoded.Bytes(), &inventory); err != nil {
+		t.Fatalf("parse command inventory: %v\n%s", err, encoded.String())
+	}
+	paths := make([]string, 0, len(inventory))
+	for _, command := range inventory {
+		paths = append(paths, command.Path)
+	}
+	return paths
+}
+
 // DHF-TEST: keel/requirement-154 (keel/ac-637)
 func TestVSIXUnknownVerbIsRejectedByCommandTree(t *testing.T) {
 	root := moduleFixture(t)
@@ -684,7 +793,9 @@ func TestKeelDevUsesGeneratedCommandTreeHelp(t *testing.T) {
 		{"verify"},
 	} {
 		var help bytes.Buffer
-		tree.RenderTopicHelp(&help, path)
+		if err := tree.RenderTopicHelp(&help, path); err != nil {
+			t.Fatalf("RenderTopicHelp(%q): %v", strings.Join(path, " "), err)
+		}
 		got := help.String()
 		node, _, ok := tree.Find(path)
 		if !ok {
@@ -710,6 +821,30 @@ func TestKeelDevUsesGeneratedCommandTreeHelp(t *testing.T) {
 		if strings.Contains(string(src), forbidden) {
 			t.Fatalf("keel-dev migrated help/dispatch must not contain %q", forbidden)
 		}
+	}
+}
+
+// DHF-TEST: keel/requirement-155 (keel/ac-639)
+func TestFirstPartyMainsDoNotRouteHelpTopicsByHand(t *testing.T) {
+	for _, path := range []string{
+		"main.go",
+		filepath.Join("..", "keel-demo", "main.go"),
+		filepath.Join("..", "keel-demo-dev", "main.go"),
+	} {
+		t.Run(path, func(t *testing.T) {
+			src, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read %s: %v", path, err)
+			}
+			for _, forbidden := range []string{
+				`words[0] == "help"`,
+				`RenderTopicHelp(os.Stderr`,
+			} {
+				if strings.Contains(string(src), forbidden) {
+					t.Fatalf("%s still contains consumer-side help routing %q", path, forbidden)
+				}
+			}
+		})
 	}
 }
 
