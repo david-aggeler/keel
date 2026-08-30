@@ -8,10 +8,12 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	procexec "github.com/david-aggeler/keel/exec"
+	"github.com/david-aggeler/keel/exec/codex"
 	logging "github.com/david-aggeler/keel/log"
 )
 
@@ -48,6 +50,22 @@ func writeArgvStub(t *testing.T, stdout string, exitCode int, argvFile string) s
 	return path
 }
 
+func writeEnvStub(t *testing.T, stdout string, exitCode int, envFile string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "claude-stub")
+	script := "#!/bin/sh\n"
+	script += "printf '%s\\n' \"$KEEL_CLAUDE_TEST_OVERRIDE\" \"$KEEL_CLAUDE_TEST_FRESH\" > " + shellQuote(envFile) + "\n"
+	if stdout != "" {
+		script += "cat <<'STUBEOF'\n" + stdout + "\nSTUBEOF\n"
+	}
+	script += "exit " + itoa(exitCode) + "\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
@@ -65,6 +83,137 @@ func itoa(n int) string {
 }
 
 const fixtureResult = `{"type":"result","is_error":false,"result":"HELLO-WORLD-SKILL-ACTIVATED v2","num_turns":4,"duration_ms":12345,"total_cost_usd":0.0123,"usage":{"input_tokens":42,"output_tokens":17,"cache_creation_input_tokens":1000,"cache_read_input_tokens":9000}}`
+
+// TestRun_EnvExportsAssignmentsToChild proves Request.Env assignments reach
+// the claude child's environment and override inherited values.
+//
+// DHF-TEST: keel/requirement-156
+func TestRun_EnvExportsAssignmentsToChild(t *testing.T) {
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "env.txt")
+	stub := writeEnvStub(t, fixtureResult, 0, envFile)
+
+	t.Setenv("KEEL_CLAUDE_TEST_OVERRIDE", "inherited")
+
+	_, err := Run(context.Background(), Request{
+		Prompt: "x",
+		Dir:    dir,
+		Bin:    stub,
+		Env: []string{
+			"KEEL_CLAUDE_TEST_OVERRIDE=request-before",
+			"KEEL_CLAUDE_TEST_OVERRIDE=request",
+			"KEEL_CLAUDE_TEST_FRESH=fresh",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	envBytes, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatalf("read child env: %v", err)
+	}
+	got := strings.Split(strings.TrimSuffix(string(envBytes), "\n"), "\n")
+	want := []string{"request", "fresh"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("child env = %q, want %q", got, want)
+	}
+}
+
+// TestRun_NilEnvLeavesParentEnvironmentIntact proves a Request with no Env
+// leaves the child with the inherited process environment.
+//
+// DHF-TEST: keel/requirement-156
+func TestRun_NilEnvLeavesParentEnvironmentIntact(t *testing.T) {
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "env.txt")
+	stub := writeEnvStub(t, fixtureResult, 0, envFile)
+
+	t.Setenv("KEEL_CLAUDE_TEST_OVERRIDE", "inherited")
+
+	_, err := Run(context.Background(), Request{
+		Prompt: "x",
+		Dir:    dir,
+		Bin:    stub,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	envBytes, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatalf("read child env: %v", err)
+	}
+	got := strings.Split(strings.TrimSuffix(string(envBytes), "\n"), "\n")
+	want := []string{"inherited", ""}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("child env = %q, want %q", got, want)
+	}
+}
+
+// TestRun_EnvDoesNotMutateCallerEnvironment proves Env is passed only to the
+// child process and does not mutate os.Environ in the caller.
+//
+// DHF-TEST: keel/requirement-156
+func TestRun_EnvDoesNotMutateCallerEnvironment(t *testing.T) {
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "env.txt")
+	stub := writeEnvStub(t, fixtureResult, 0, envFile)
+
+	t.Setenv("KEEL_CLAUDE_TEST_OVERRIDE", "inherited")
+	before := os.Environ()
+	if containsEnvKey(before, "KEEL_CLAUDE_TEST_FRESH") {
+		t.Fatal("test precondition failed: KEEL_CLAUDE_TEST_FRESH is already set in the caller")
+	}
+
+	_, err := Run(context.Background(), Request{
+		Prompt: "x",
+		Dir:    dir,
+		Bin:    stub,
+		Env: []string{
+			"KEEL_CLAUDE_TEST_OVERRIDE=request",
+			"KEEL_CLAUDE_TEST_FRESH=fresh",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	after := os.Environ()
+	if strings.Join(after, "\n") != strings.Join(before, "\n") {
+		t.Fatalf("caller environment changed\nbefore: %q\nafter:  %q", before, after)
+	}
+}
+
+// TestRequestEnvFieldShapeMatchesCodex proves both CLI adapters expose the
+// same per-run environment field shape.
+//
+// DHF-TEST: keel/requirement-156
+func TestRequestEnvFieldShapeMatchesCodex(t *testing.T) {
+	envType := reflect.TypeOf([]string{})
+	for name, typ := range map[string]reflect.Type{
+		"claude.Request": reflect.TypeOf(Request{}),
+		"codex.Request":  reflect.TypeOf(codex.Request{}),
+	} {
+		field, ok := typ.FieldByName("Env")
+		if !ok {
+			t.Fatalf("%s has no Env field", name)
+		}
+		if field.Type != envType {
+			t.Fatalf("%s.Env type = %s, want %s", name, field.Type, envType)
+		}
+	}
+}
+
+func containsEnvKey(env []string, key string) bool {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return true
+		}
+	}
+	return false
+}
 
 // TestRun_ParsesResultEvent proves the wrapper parses the result event into
 // typed fields: text, turns, duration, cost, and all four usage counters.
