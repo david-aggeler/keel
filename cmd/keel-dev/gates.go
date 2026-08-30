@@ -174,8 +174,8 @@ func ciStepsFrom(in gateInputs) []step {
 	}
 
 	steps := []step{
-		{name: "command-tree", fn: func(context.Context, *slog.Logger, string) error {
-			return commandTree().ValidateTree()
+		{name: "command-tree", fn: func(ctx context.Context, logger *slog.Logger, dir string) error {
+			return runCommandTreeGate(ctx, logger, dir)
 		}},
 		// Placed ahead of every stage that compiles, spawns a pinned tool or runs
 		// the suite: the skew it catches reds every rung on every branch at once,
@@ -287,6 +287,154 @@ func gateStageNames() []string {
 		names = append(names, s.name)
 	}
 	return names
+}
+
+type commandInventoryItem struct {
+	Path  string `json:"path"`
+	Usage string `json:"usage"`
+}
+
+// runCommandTreeGate validates the in-process keel-dev tree and the public
+// command inventories for every first-party command surface. The inventory pass
+// is intentionally surface-based for the demo binaries: they are package main
+// commands, so their command trees are not importable by keel-dev's gate.
+//
+// DHF-REQ: keel/requirement-154
+func runCommandTreeGate(ctx context.Context, logger *slog.Logger, dir string) error {
+	if err := commandTree().ValidateTree(); err != nil {
+		return err
+	}
+	inventory, err := commandInventoryFromTree(commandTree())
+	if err != nil {
+		return fmt.Errorf("keel-dev command inventory: %w", err)
+	}
+	if err := validateCommandInventoryUse("keel-dev", inventory); err != nil {
+		return err
+	}
+	for _, firstParty := range []struct {
+		program string
+		pkg     string
+	}{
+		{program: "keel-demo", pkg: "./cmd/keel-demo"},
+		{program: "keel-demo-dev", pkg: "./cmd/keel-demo-dev"},
+	} {
+		if _, err := os.Stat(filepath.Join(dir, firstParty.pkg, "main.go")); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("%s command inventory: %w", firstParty.program, err)
+		}
+		inventory, err := commandInventoryFromGoRun(ctx, logger, dir, firstParty.pkg)
+		if err != nil {
+			return fmt.Errorf("%s command inventory: %w", firstParty.program, err)
+		}
+		if err := validateCommandInventoryUse(firstParty.program, inventory); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func commandInventoryFromTree(tree *cli.CommandSpec) ([]commandInventoryItem, error) {
+	var out strings.Builder
+	if err := tree.RenderHelpJSON(&out); err != nil {
+		return nil, err
+	}
+	var inventory []commandInventoryItem
+	if err := json.Unmarshal([]byte(out.String()), &inventory); err != nil {
+		return nil, err
+	}
+	return inventory, nil
+}
+
+func commandInventoryFromGoRun(ctx context.Context, logger *slog.Logger, dir, pkg string) ([]commandInventoryItem, error) {
+	proc, err := procexec.ProcessStart(ctx, procexec.Request{
+		Program:        "go",
+		Args:           []string{"run", pkg, "--help-json"},
+		Dir:            dir,
+		Logger:         logger,
+		MaxOutputBytes: 1024 * 1024,
+	})
+	if err != nil {
+		return nil, err
+	}
+	res, waitErr := proc.Wait()
+	if waitErr != nil {
+		return nil, waitErr
+	}
+	if res.ExitCode != 0 {
+		return nil, fmt.Errorf("go run %s --help-json exited %d", pkg, res.ExitCode)
+	}
+	var inventory []commandInventoryItem
+	if err := json.Unmarshal([]byte(res.Stdout), &inventory); err != nil {
+		return nil, fmt.Errorf("parse --help-json: %w", err)
+	}
+	return inventory, nil
+}
+
+func validateCommandInventoryUse(program string, inventory []commandInventoryItem) error {
+	paths := make(map[string]bool, len(inventory))
+	for _, item := range inventory {
+		if item.Path != "" {
+			paths[item.Path] = true
+		}
+	}
+	for _, item := range inventory {
+		fields := strings.Fields(item.Usage)
+		prefix := append([]string{program}, strings.Fields(item.Path)...)
+		if len(fields) <= len(prefix) {
+			continue
+		}
+		matches := true
+		for i, want := range prefix {
+			if fields[i] != want {
+				matches = false
+				break
+			}
+		}
+		if !matches {
+			continue
+		}
+		candidate := fields[len(prefix)]
+		if !isBareCommandVerbAlternation(candidate) {
+			continue
+		}
+		for _, verb := range strings.Split(candidate, "|") {
+			childPath := strings.TrimSpace(item.Path + " " + verb)
+			if !paths[childPath] {
+				return fmt.Errorf("command %q Use enumerates verb %q that is not a command inventory path", strings.TrimSpace(program+" "+item.Path), verb)
+			}
+		}
+	}
+	return nil
+}
+
+func isBareCommandVerbAlternation(token string) bool {
+	if token == "" {
+		return false
+	}
+	for _, part := range strings.Split(token, "|") {
+		if !isBareCommandVerb(part) {
+			return false
+		}
+	}
+	return true
+}
+
+func isBareCommandVerb(token string) bool {
+	if token == "" {
+		return false
+	}
+	for i, r := range token {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case i > 0 && r >= '0' && r <= '9':
+		case i > 0 && r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // selectGateStage returns the named stage out of an already-built battery, so a

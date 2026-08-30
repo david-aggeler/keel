@@ -708,9 +708,6 @@ func (c *CommandSpec) validateTree(path []string, root bool) error {
 	if c.Handler != nil && len(c.Subcommands) > 0 {
 		return fmt.Errorf("command %q mixes a handler with child commands", commandPath(path, c.Name))
 	}
-	if err := c.validateUseEnumeratedVerbNodes(path); err != nil {
-		return err
-	}
 	if !root && c.Handler == nil && len(c.Subcommands) == 0 {
 		return fmt.Errorf("command %q is neither a namespace nor a leaf with a handler", strings.Join(path, " "))
 	}
@@ -718,6 +715,11 @@ func (c *CommandSpec) validateTree(path []string, root bool) error {
 		if child == nil {
 			return fmt.Errorf("command %q declares a nil child command", commandPath(path, c.Name))
 		}
+	}
+	if err := c.validateUseEnumeratedVerbNodes(path); err != nil {
+		return err
+	}
+	for _, child := range c.Subcommands {
 		childPath := append(append([]string{}, path...), child.Name)
 		if err := child.validateTree(childPath, false); err != nil {
 			return err
@@ -744,7 +746,14 @@ func (c *CommandSpec) validateUseEnumeratedVerbNodes(path []string) error {
 		return nil
 	}
 	for _, verb := range strings.Split(candidate, "|") {
-		if _, ok := c.Child(verb); !ok {
+		ok := false
+		for _, child := range c.Subcommands {
+			if child != nil && child.Name == verb {
+				ok = true
+				break
+			}
+		}
+		if !ok {
 			return fmt.Errorf("command %q Use enumerates verb %q that is not a child command", strings.Join(path, " "), verb)
 		}
 	}
