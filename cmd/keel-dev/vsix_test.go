@@ -11,15 +11,11 @@ import (
 	logging "github.com/david-aggeler/keel/log"
 )
 
-// DHF-TEST: keel/requirement-11, keel/requirement-40
-func TestHandleVSIXGateRejectsArgsAndReportsMissingToolchain(t *testing.T) {
-	if err := handleVSIXGate(context.Background(), []string{"extra"}); err == nil || !strings.Contains(err.Error(), "unknown vsix command") {
-		t.Fatalf("handleVSIXGate extra args err = %v, want usage error", err)
-	}
-
+// DHF-TEST: keel/requirement-11, keel/requirement-40, keel/requirement-154 (keel/ac-637)
+func TestHandleVSIXGateReportsMissingToolchain(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	ctx := withRunStateProtocol(context.Background(), logging.Discard(), nil, t.TempDir(), io.Discard)
-	err := handleVSIXGate(ctx, []string{"ci"})
+	err := handleVSIXGate(ctx, nil)
 	if err == nil || !strings.Contains(err.Error(), `required tool "node" not found`) {
 		t.Fatalf("handleVSIXGate missing toolchain err = %v, want node missing", err)
 	}
