@@ -75,6 +75,143 @@ func TestDispatchRendersHelpForDeepestNamedNode(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-155 (keel/ac-639)
+func TestDispatchResolvesLeadingHelpWordLikeHelpFlag(t *testing.T) {
+	var help bytes.Buffer
+	handlerCalled := false
+	root := &CommandSpec{
+		Name: "tool",
+		Config: Config{
+			Program:      "tool",
+			Usage:        "tool <command>",
+			HelpUsage:    "tool help [command]",
+			CommandUsage: "tool <command> --help",
+			HelpWriter:   &help,
+		},
+		Subcommands: []*CommandSpec{{
+			Name:  "group",
+			Short: "Grouped commands.",
+			Subcommands: []*CommandSpec{{
+				Name:  "leaf",
+				Short: "Leaf command.",
+				Handler: func(context.Context, []string) error {
+					handlerCalled = true
+					return nil
+				},
+			}},
+		}},
+	}
+
+	tests := []struct {
+		name string
+		help []string
+		flag []string
+	}{
+		{name: "root", help: []string{"help"}, flag: []string{"--help"}},
+		{name: "group", help: []string{"help", "group"}, flag: []string{"group", "--help"}},
+		{name: "leaf", help: []string{"help", "group", "leaf"}, flag: []string{"group", "leaf", "--help"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			help.Reset()
+			handlerCalled = false
+			if err := root.Dispatch(context.Background(), tt.flag); err != nil {
+				t.Fatalf("Dispatch(%q): %v", strings.Join(tt.flag, " "), err)
+			}
+			want := help.String()
+
+			help.Reset()
+			if err := root.Dispatch(context.Background(), tt.help); err != nil {
+				t.Fatalf("Dispatch(%q): %v", strings.Join(tt.help, " "), err)
+			}
+			if handlerCalled {
+				t.Fatalf("Dispatch(%q) invoked the handler", strings.Join(tt.help, " "))
+			}
+			if help.String() != want {
+				t.Fatalf("Dispatch(%q) help:\n%s\nwant:\n%s", strings.Join(tt.help, " "), help.String(), want)
+			}
+		})
+	}
+}
+
+// DHF-TEST: keel/requirement-155 (keel/ac-640)
+func TestDispatchHelpWordUnknownTopicFallsBackToNearestNode(t *testing.T) {
+	var help bytes.Buffer
+	root := &CommandSpec{
+		Name: "tool",
+		Config: Config{
+			Program:      "tool",
+			Usage:        "tool <command>",
+			HelpUsage:    "tool help [command]",
+			CommandUsage: "tool <command> --help",
+			HelpWriter:   &help,
+		},
+		Subcommands: []*CommandSpec{{
+			Name:  "group",
+			Short: "Grouped commands.",
+			Subcommands: []*CommandSpec{{
+				Name:    "leaf",
+				Short:   "Leaf command.",
+				Handler: func(context.Context, []string) error { return nil },
+			}},
+		}},
+	}
+
+	tests := []struct {
+		name           string
+		args           []string
+		diagnostic     string
+		wantRendered   []string
+		forbidRendered []string
+	}{
+		{
+			name:       "unknown suffix",
+			args:       []string{"help", "group", "bogus"},
+			diagnostic: `unknown help topic "group bogus"`,
+			wantRendered: []string{
+				"group commands:",
+				"tool group",
+			},
+			forbidRendered: []string{
+				"tool <command>",
+			},
+		},
+		{
+			name:       "unknown first token",
+			args:       []string{"help", "bogus"},
+			diagnostic: `unknown help topic "bogus"`,
+			wantRendered: []string{
+				"tool <command>",
+				"Commands:",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			help.Reset()
+			err := root.Dispatch(context.Background(), tt.args)
+			var usage UsageError
+			if !errors.As(err, &usage) || usage.ExitCode() != 2 {
+				t.Fatalf("Dispatch(%q) = %v (%T), want UsageError exit 2", strings.Join(tt.args, " "), err, err)
+			}
+			got := help.String()
+			if !strings.HasPrefix(got, tt.diagnostic+"\n") {
+				t.Fatalf("help output diagnostic = %q, want prefix %q\n%s", firstLine(got), tt.diagnostic, got)
+			}
+			for _, want := range tt.wantRendered {
+				if !strings.Contains(got, want) {
+					t.Fatalf("help output missing %q:\n%s", want, got)
+				}
+			}
+			for _, forbidden := range tt.forbidRendered {
+				if strings.Contains(got, forbidden) {
+					t.Fatalf("help output included forbidden root help fragment %q:\n%s", forbidden, got)
+				}
+			}
+		})
+	}
+}
+
 // DHF-TEST: keel/requirement-104
 func TestDispatchParsesTypedFlagsWithDefaultsBeforeHandler(t *testing.T) {
 	var name string
@@ -484,4 +621,11 @@ func boolText(v bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }

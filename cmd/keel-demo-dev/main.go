@@ -176,13 +176,8 @@ func run(argv []string) int {
 		}
 		return 0
 	}
-	if len(words) > 0 && words[0] == "help" {
-		tree.RenderTopicHelp(os.Stderr, words[1:])
-		return 0
-	}
 	if cfg.Help {
-		tree.RenderTopicHelp(os.Stderr, words)
-		return 0
+		return helpExitCode(tree.RenderHelp(os.Stderr, words))
 	}
 
 	root, err := os.Getwd()
@@ -208,6 +203,17 @@ func run(argv []string) int {
 		return 1
 	}
 	return 0
+}
+
+func helpExitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var usage cli.UsageError
+	if errors.As(err, &usage) {
+		return usage.ExitCode()
+	}
+	return 1
 }
 
 // DHF-REQ: keel/requirement-108, keel/requirement-111
