@@ -1,11 +1,79 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
 	"testing"
 )
+
+// DHF-TEST: keel/requirement-153 (keel/ac-633)
+func TestDispatchRendersHelpForDeepestNamedNode(t *testing.T) {
+	var help bytes.Buffer
+	handlerCalled := false
+	root := &CommandSpec{
+		Name: "tool",
+		Config: Config{
+			Program:      "tool",
+			Usage:        "tool <command>",
+			HelpUsage:    "tool help [command]",
+			CommandUsage: "tool <command> --help",
+			HelpWriter:   &help,
+		},
+		Subcommands: []*CommandSpec{{
+			Name:  "group",
+			Short: "Grouped commands.",
+			Subcommands: []*CommandSpec{{
+				Name:  "leaf",
+				Short: "Leaf command.",
+				Handler: func(context.Context, []string) error {
+					handlerCalled = true
+					return nil
+				},
+			}},
+		}},
+	}
+
+	tests := []struct {
+		name string
+		args []string
+		path []string
+	}{
+		{name: "root long", args: []string{"--help"}},
+		{name: "root short", args: []string{"-h"}},
+		{name: "group long", args: []string{"group", "--help"}, path: []string{"group"}},
+		{name: "group short", args: []string{"group", "-h"}, path: []string{"group"}},
+		{name: "leaf long", args: []string{"group", "leaf", "--help"}, path: []string{"group", "leaf"}},
+		{name: "leaf short", args: []string{"group", "leaf", "-h"}, path: []string{"group", "leaf"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			help.Reset()
+			handlerCalled = false
+			var want bytes.Buffer
+			if len(tt.path) == 0 {
+				root.RenderRootHelp(&want)
+			} else {
+				node, _, ok := root.Find(tt.path)
+				if !ok {
+					t.Fatalf("fixture path %q did not resolve", strings.Join(tt.path, " "))
+				}
+				node.RenderCommandHelp(&want, tt.path)
+			}
+
+			if err := root.Dispatch(context.Background(), tt.args); err != nil {
+				t.Fatalf("Dispatch(%q): %v", strings.Join(tt.args, " "), err)
+			}
+			if handlerCalled {
+				t.Fatalf("Dispatch(%q) invoked the handler", strings.Join(tt.args, " "))
+			}
+			if help.String() != want.String() {
+				t.Fatalf("Dispatch(%q) help:\n%s\nwant:\n%s", strings.Join(tt.args, " "), help.String(), want.String())
+			}
+		})
+	}
+}
 
 // DHF-TEST: keel/requirement-104
 func TestDispatchParsesTypedFlagsWithDefaultsBeforeHandler(t *testing.T) {
@@ -255,32 +323,99 @@ func TestDispatchValidatesMinimumAndRangePositionals(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-104
-func TestValidateTreeRejectsCommandGlobalFlagCollisions(t *testing.T) {
+// DHF-TEST: keel/requirement-153 (keel/ac-632)
+func TestDeclaredGlobalFlagNamesReachCommandHandler(t *testing.T) {
+	tests := []struct {
+		name  string
+		flag  FlagSpec
+		forms [][]string
+	}{
+		{name: "mode", flag: FlagSpec{Name: "mode"}, forms: [][]string{{"--mode", "13"}, {"--mode=13"}}},
+		{name: "verbose", flag: FlagSpec{Name: "verbose"}, forms: [][]string{{"--verbose", "13"}, {"--verbose=13"}}},
+		{name: "verbose alias", flag: FlagSpec{Name: "verbose", Alias: "v"}, forms: [][]string{{"-v", "13"}}},
+		{name: "no-header", flag: FlagSpec{Name: "no-header"}, forms: [][]string{{"--no-header", "13"}, {"--no-header=13"}}},
+		{name: "help", flag: FlagSpec{Name: "help"}, forms: [][]string{{"--help", "13"}, {"--help=13"}}},
+		{name: "help alias", flag: FlagSpec{Name: "help", Alias: "h"}, forms: [][]string{{"-h", "13"}}},
+		{name: "help-all", flag: FlagSpec{Name: "help-all"}, forms: [][]string{{"--help-all", "13"}, {"--help-all=13"}}},
+		{name: "help-json", flag: FlagSpec{Name: "help-json"}, forms: [][]string{{"--help-json", "13"}, {"--help-json=13"}}},
+		{name: "version", flag: FlagSpec{Name: "version"}, forms: [][]string{{"--version", "13"}, {"--version=13"}}},
+	}
+	for _, tt := range tests {
+		for _, form := range tt.forms {
+			t.Run(tt.name+" "+strings.Join(form, " "), func(t *testing.T) {
+				var parsed string
+				var handled string
+				flag := tt.flag
+				flag.Value = "value"
+				flag.StringTarget = &parsed
+				root := parserTestRoot(&CommandSpec{
+					Name:  "run",
+					Use:   "run",
+					Flags: []FlagSpec{flag},
+					Handler: func(context.Context, []string) error {
+						handled = parsed
+						return nil
+					},
+				})
+				if err := root.ValidateTree(); err != nil {
+					t.Fatalf("ValidateTree rejected declared global name: %v", err)
+				}
+
+				argv := append([]string{"run"}, form...)
+				cfg, words, err := root.ParseGlobalConfig(argv)
+				if err != nil {
+					t.Fatalf("ParseGlobalConfig(%q): %v", strings.Join(argv, " "), err)
+				}
+				if cfg != (RuntimeConfig{Mode: ModeHuman}) {
+					t.Fatalf("ParseGlobalConfig(%q) cfg = %+v, want globals unset", strings.Join(argv, " "), cfg)
+				}
+				if err := root.Dispatch(context.Background(), words); err != nil {
+					t.Fatalf("Dispatch(%q): %v", strings.Join(words, " "), err)
+				}
+				if handled != "13" {
+					t.Fatalf("handler parsed %q, want 13", handled)
+				}
+			})
+		}
+	}
+}
+
+// DHF-TEST: keel/requirement-153 (keel/ac-634)
+func TestUndeclaredGlobalFlagsRemainPositionIndependent(t *testing.T) {
 	root := parserTestRoot(&CommandSpec{
-		Name: "run",
-		Use:  "run",
-		Flags: []FlagSpec{
-			{Name: "mode", StringTarget: new(string)},
-		},
+		Name:    "run",
+		Use:     "run",
 		Handler: func(context.Context, []string) error { return nil },
 	})
-
-	err := root.ValidateTree()
-	if err == nil {
-		t.Fatal("ValidateTree accepted command flag colliding with global --mode")
+	tests := []struct {
+		name string
+		argv []string
+		want RuntimeConfig
+	}{
+		{name: "mode leading", argv: []string{"--mode", "ai", "run"}, want: RuntimeConfig{Mode: ModeAI}},
+		{name: "mode trailing", argv: []string{"run", "--mode", "ai"}, want: RuntimeConfig{Mode: ModeAI}},
+		{name: "verbose short leading", argv: []string{"-v", "run"}, want: RuntimeConfig{Mode: ModeHuman, Verbose: true}},
+		{name: "verbose long trailing", argv: []string{"run", "--verbose"}, want: RuntimeConfig{Mode: ModeHuman, Verbose: true}},
+		{name: "no header trailing", argv: []string{"run", "--no-header"}, want: RuntimeConfig{Mode: ModeHuman, NoHeader: true}},
+		{name: "help short trailing", argv: []string{"run", "-h"}, want: RuntimeConfig{Mode: ModeHuman, Help: true}},
+		{name: "help long leading", argv: []string{"--help", "run"}, want: RuntimeConfig{Mode: ModeHuman, Help: true}},
+		{name: "help all trailing", argv: []string{"run", "--help-all"}, want: RuntimeConfig{Mode: ModeHuman, HelpAll: true}},
+		{name: "help json trailing", argv: []string{"run", "--help-json"}, want: RuntimeConfig{Mode: ModeHuman, HelpJSON: true}},
+		{name: "version trailing", argv: []string{"run", "--version"}, want: RuntimeConfig{Mode: ModeHuman, Version: true}},
 	}
-	if !strings.Contains(err.Error(), "run") || !strings.Contains(err.Error(), "mode") {
-		t.Fatalf("collision error = %q, want command and flag named", err.Error())
-	}
-
-	root.Subcommands[0].Flags = []FlagSpec{{Name: "custom", Alias: "h", BoolTarget: new(bool)}}
-	err = root.ValidateTree()
-	if err == nil {
-		t.Fatal("ValidateTree accepted command alias colliding with global -h")
-	}
-	if !strings.Contains(err.Error(), "run") || !strings.Contains(err.Error(), "h") {
-		t.Fatalf("alias collision error = %q, want command and alias named", err.Error())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, words, err := root.ParseGlobalConfig(tt.argv)
+			if err != nil {
+				t.Fatalf("ParseGlobalConfig(%q): %v", strings.Join(tt.argv, " "), err)
+			}
+			if cfg != tt.want {
+				t.Fatalf("ParseGlobalConfig(%q) cfg = %+v, want %+v", strings.Join(tt.argv, " "), cfg, tt.want)
+			}
+			if got := strings.Join(words, " "); got != "run" {
+				t.Fatalf("ParseGlobalConfig(%q) words = %q, want run", strings.Join(tt.argv, " "), got)
+			}
+		})
 	}
 }
 

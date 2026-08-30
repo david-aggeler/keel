@@ -29,7 +29,7 @@ func run(argv []string) int {
 		fmt.Fprintln(os.Stderr, "keel-demo: "+err.Error())
 		return 1
 	}
-	cfg, words, err := cli.ParseGlobalConfig(argv)
+	cfg, words, err := tree.ParseGlobalConfig(argv)
 	mode := cfg.Mode
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "keel-demo: "+err.Error())

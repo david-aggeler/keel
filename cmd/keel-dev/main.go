@@ -34,7 +34,7 @@ func main() {
 // main so tests can drive the whole CLI surface.
 func run(argv []string) int {
 	tree := commandTree()
-	cfg, words, err := cli.ParseGlobalConfig(argv)
+	cfg, words, err := tree.ParseGlobalConfig(argv)
 	mode := string(cfg.Mode)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "keel-dev: "+err.Error())
