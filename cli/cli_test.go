@@ -125,7 +125,9 @@ func TestCommandModelDispatchHelpAndUsageErrors(t *testing.T) {
 	}
 
 	help.Reset()
-	root.RenderTopicHelp(&help, []string{"release"})
+	if err := root.RenderTopicHelp(&help, []string{"release"}); err != nil {
+		t.Fatalf("RenderTopicHelp(release): %v", err)
+	}
 	for _, want := range []string{
 		"release:",
 		"keel-dev release vX.Y.Z",
@@ -435,7 +437,9 @@ func TestCommandHelpersCoverNestedAndErrorPaths(t *testing.T) {
 	}
 
 	var help bytes.Buffer
-	root.RenderTopicHelp(&help, []string{"parent"})
+	if err := root.RenderTopicHelp(&help, []string{"parent"}); err != nil {
+		t.Fatalf("RenderTopicHelp(parent): %v", err)
+	}
 	for _, want := range []string{
 		"parent commands:",
 		"alpha",
@@ -447,7 +451,10 @@ func TestCommandHelpersCoverNestedAndErrorPaths(t *testing.T) {
 	}
 
 	help.Reset()
-	root.RenderTopicHelp(&help, []string{"missing"})
+	var missing UsageError
+	if err := root.RenderTopicHelp(&help, []string{"missing"}); !errors.As(err, &missing) {
+		t.Fatalf("RenderTopicHelp(missing) = %v (%T), want UsageError", err, err)
+	}
 	if !strings.Contains(help.String(), `unknown help topic "missing"`) {
 		t.Fatalf("unknown help did not render diagnostic:\n%s", help.String())
 	}

@@ -63,6 +63,46 @@ func TestRunDirectVersionHelpConfigAndUsageBranches(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-155 (keel/ac-639)
+func TestKeelDemoDevHelpWordMatchesHelpFlagForEveryCommandNode(t *testing.T) {
+	assertDemoDevHelpParity(t, "root", []string{"help"}, []string{"--help"})
+	for _, path := range demoDevCommandInventoryPaths(t) {
+		parts := strings.Fields(path)
+		assertDemoDevHelpParity(t, path, append([]string{"help"}, parts...), append(append([]string{}, parts...), "--help"))
+	}
+}
+
+func assertDemoDevHelpParity(t *testing.T, name string, helpArgs, flagArgs []string) {
+	t.Helper()
+	helpOut, helpCode := captureDemoDevOutput(t, func() int { return run(helpArgs) })
+	flagOut, flagCode := captureDemoDevOutput(t, func() int { return run(flagArgs) })
+	if helpCode != 0 || flagCode != 0 {
+		t.Fatalf("%s exit codes: help=%d flag=%d\nhelp output:\n%s\nflag output:\n%s", name, helpCode, flagCode, helpOut, flagOut)
+	}
+	if helpOut != flagOut {
+		t.Fatalf("%s help mismatch\nhelp output:\n%s\nflag output:\n%s", name, helpOut, flagOut)
+	}
+}
+
+func demoDevCommandInventoryPaths(t *testing.T) []string {
+	t.Helper()
+	out, code := captureDemoDevOutput(t, func() int { return run([]string{"--help-json"}) })
+	if code != 0 {
+		t.Fatalf("run --help-json exit = %d\n%s", code, out)
+	}
+	var inventory []struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(out), &inventory); err != nil {
+		t.Fatalf("parse --help-json inventory: %v\n%s", err, out)
+	}
+	paths := make([]string, 0, len(inventory))
+	for _, command := range inventory {
+		paths = append(paths, command.Path)
+	}
+	return paths
+}
+
 // DHF-TEST: keel/requirement-108
 func TestKeelDemoDevUsesSharedCLICommandTreeValidationAndBindings(t *testing.T) {
 	source, err := os.ReadFile("main.go")

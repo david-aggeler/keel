@@ -28,7 +28,9 @@ func TestWorktreeHelpSurfacesExitCodeTaxonomy(t *testing.T) {
 	tree := commandTree()
 
 	var topic strings.Builder
-	tree.RenderTopicHelp(&topic, []string{"worktree"})
+	if err := tree.RenderTopicHelp(&topic, []string{"worktree"}); err != nil {
+		t.Fatalf("RenderTopicHelp(worktree): %v", err)
+	}
 	assertHelpContainsExitCodes(t, "topic help", topic.String(), wantRows)
 	if !strings.Contains(topic.String(), "Exit codes:") {
 		t.Fatalf("topic help does not render an exit-code section:\n%s", topic.String())
@@ -86,7 +88,9 @@ func TestWorktreeHelpSurfacesExitCodeTaxonomy(t *testing.T) {
 func TestWorktreeResumeHelpDoesNotAdvertiseBase(t *testing.T) {
 	tree := commandTree()
 	var help strings.Builder
-	tree.RenderTopicHelp(&help, []string{"worktree", "resume"})
+	if err := tree.RenderTopicHelp(&help, []string{"worktree", "resume"}); err != nil {
+		t.Fatalf("RenderTopicHelp(worktree resume): %v", err)
+	}
 	got := help.String()
 	if strings.Contains(got, "--base") {
 		t.Fatalf("resume help advertises a no-op base flag:\n%s", got)

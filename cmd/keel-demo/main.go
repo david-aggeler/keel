@@ -55,9 +55,6 @@ func run(argv []string) int {
 		}
 		return 0
 	}
-	if len(words) > 0 && words[0] == "help" {
-		return renderHelp(tree, mode, words[1:])
-	}
 	if cfg.Help {
 		return renderHelp(tree, mode, words)
 	}
@@ -143,10 +140,10 @@ func handleWorkflowReplay(speed *string) cli.Handler {
 // DHF-REQ: keel/requirement-28
 func renderHelp(tree *cli.CommandSpec, mode cli.Mode, path []string) int {
 	var help bytes.Buffer
-	tree.RenderTopicHelp(&help, path)
+	helpErr := tree.RenderHelp(&help, path)
 	if mode == cli.ModeHuman {
 		fmt.Fprint(os.Stdout, help.String())
-		return 0
+		return helpErrorExitCode(helpErr)
 	}
 	logger, closeLogger, err := buildLogger(mode)
 	if err != nil {
@@ -159,7 +156,18 @@ func renderHelp(tree *cli.CommandSpec, mode cli.Mode, path []string) int {
 		command += " " + strings.Join(path, " ")
 	}
 	logger.Event("help", "keel-demo help", "command", command, "help", help.String(), "mode", string(mode))
-	return 0
+	return helpErrorExitCode(helpErr)
+}
+
+func helpErrorExitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var usage cli.UsageError
+	if errors.As(err, &usage) {
+		return usage.ExitCode()
+	}
+	return 1
 }
 
 // DHF-REQ: keel/requirement-57
