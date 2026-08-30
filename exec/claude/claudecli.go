@@ -52,6 +52,13 @@ type Request struct {
 	//
 	// DHF-REQ: keel/requirement-81
 	MaxOutputBytes int
+	// Env are additional "KEY=VALUE" environment assignments layered on top of
+	// the parent process environment for the claude child. Later entries win
+	// over earlier ones and over the inherited value for the same key. Nil
+	// leaves the child with the unmodified parent environment.
+	//
+	// DHF-REQ: keel/requirement-156
+	Env []string
 	// Logger receives the shared process lifecycle and curated claude progress
 	// records. Nil produces no output at all: a library handed no sink stays
 	// silent rather than emitting outside the caller's formatter, file sinks,
@@ -138,6 +145,7 @@ type resultEvent struct {
 // reported.
 //
 // DHF-REQ: keel/requirement-135, keel/requirement-134, keel/requirement-2, openbrain/requirement-615, keel/requirement-81
+// DHF-REQ: keel/requirement-156
 func Run(ctx context.Context, req Request) (*Result, error) {
 	if req.Prompt == "" {
 		return nil, fmt.Errorf("keel/exec/claude: empty prompt")
@@ -183,7 +191,7 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 		Program:        bin,
 		Args:           args,
 		Dir:            req.Dir,
-		Env:            os.Environ(),
+		Env:            append(os.Environ(), req.Env...),
 		Stdout:         stdout,
 		Stderr:         &stderr,
 		MaxOutputBytes: req.MaxOutputBytes,
