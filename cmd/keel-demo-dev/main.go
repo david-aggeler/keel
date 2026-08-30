@@ -154,7 +154,7 @@ func run(argv []string) int {
 		return 1
 	}
 
-	cfg, words, err := cli.ParseGlobalConfig(argv)
+	cfg, words, err := tree.ParseGlobalConfig(argv)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "keel-demo-dev: "+err.Error())
 		return 2
