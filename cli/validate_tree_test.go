@@ -168,6 +168,35 @@ func TestValidateTreeRejectsNilChildWithoutPanicking(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-154 (keel/ac-635)
+func TestValidateTreeRejectsNilChildBeforeUseStringVerbResolution(t *testing.T) {
+	root := &CommandSpec{
+		Name:   "tool",
+		Config: Config{Program: "tool"},
+		Subcommands: []*CommandSpec{
+			{
+				Name: "admin",
+				Use:  "admin missing",
+				Subcommands: []*CommandSpec{
+					{Name: "status", Handler: noopHandler},
+					nil,
+				},
+			},
+		},
+	}
+
+	err := root.ValidateTree()
+	if err == nil {
+		t.Fatal("ValidateTree accepted a tree with a nil child command")
+	}
+	if !strings.Contains(err.Error(), "nil child") {
+		t.Fatalf("nil-child error = %q, want the retained nil-child diagnostic", err.Error())
+	}
+	if !strings.Contains(err.Error(), "admin") {
+		t.Fatalf("nil-child error = %q, want the offending parent named", err.Error())
+	}
+}
+
 // DHF-TEST: keel/requirement-154 (keel/ac-638)
 func TestValidateTreeRejectsUseStringEnumeratedVerbWithoutChildNode(t *testing.T) {
 	root := &CommandSpec{
