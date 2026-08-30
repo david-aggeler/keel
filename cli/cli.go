@@ -682,8 +682,9 @@ func (c *CommandSpec) match(path []string) (*CommandSpec, []string, []string) {
 
 // ValidateTree checks keel's first-party command-tree invariants: the root
 // declares a non-empty Config.Program, command paths are at most two tokens
-// below the program, non-root namespace nodes have at least two children, and
-// nodes do not mix a handler with children.
+// below the program, nodes do not mix a handler with children, and any bare
+// verb a Use string enumerates directly after a namespace path resolves to a
+// child node.
 //
 // The root Config.Program check is a Config identity invariant rather than a
 // tree-shape one: it is the enforcement point that makes the one-program-per-
@@ -692,7 +693,7 @@ func (c *CommandSpec) match(path []string) (*CommandSpec, []string, []string) {
 // Descendants cannot violate it independently — inheritance overwrites their
 // value with the root's — so the check is root-only.
 //
-// DHF-REQ: keel/requirement-106, keel/requirement-104, keel/requirement-152
+// DHF-REQ: keel/requirement-106, keel/requirement-104, keel/requirement-152, keel/requirement-154
 func (c *CommandSpec) ValidateTree() error {
 	return c.validateTree(nil, true)
 }
@@ -707,8 +708,8 @@ func (c *CommandSpec) validateTree(path []string, root bool) error {
 	if c.Handler != nil && len(c.Subcommands) > 0 {
 		return fmt.Errorf("command %q mixes a handler with child commands", commandPath(path, c.Name))
 	}
-	if !root && len(c.Subcommands) == 1 {
-		return fmt.Errorf("namespace %q has fewer than two children", strings.Join(path, " "))
+	if err := c.validateUseEnumeratedVerbNodes(path); err != nil {
+		return err
 	}
 	if !root && c.Handler == nil && len(c.Subcommands) == 0 {
 		return fmt.Errorf("command %q is neither a namespace nor a leaf with a handler", strings.Join(path, " "))
@@ -723,6 +724,59 @@ func (c *CommandSpec) validateTree(path []string, root bool) error {
 		}
 	}
 	return nil
+}
+
+func (c *CommandSpec) validateUseEnumeratedVerbNodes(path []string) error {
+	if c.Use == "" || len(path) == 0 {
+		return nil
+	}
+	fields := strings.Fields(c.Use)
+	if len(fields) <= len(path) {
+		return nil
+	}
+	for i, part := range path {
+		if fields[i] != part {
+			return nil
+		}
+	}
+	candidate := fields[len(path)]
+	if !isBareVerbAlternation(candidate) {
+		return nil
+	}
+	for _, verb := range strings.Split(candidate, "|") {
+		if _, ok := c.Child(verb); !ok {
+			return fmt.Errorf("command %q Use enumerates verb %q that is not a child command", strings.Join(path, " "), verb)
+		}
+	}
+	return nil
+}
+
+func isBareVerbAlternation(token string) bool {
+	if token == "" {
+		return false
+	}
+	for _, part := range strings.Split(token, "|") {
+		if !isBareVerb(part) {
+			return false
+		}
+	}
+	return true
+}
+
+func isBareVerb(token string) bool {
+	if token == "" {
+		return false
+	}
+	for i, r := range token {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case i > 0 && r >= '0' && r <= '9':
+		case i > 0 && r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func commandPath(path []string, fallback string) string {

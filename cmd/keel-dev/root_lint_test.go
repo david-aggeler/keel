@@ -104,6 +104,81 @@ func TestRunHelpJSONEmitsFullInventoryToStdoutPathAndModeIndependent(t *testing.
 	}
 }
 
+// DHF-TEST: keel/requirement-154 (keel/ac-636)
+func TestVSIXCommandHelpTopicAndInventoryPath(t *testing.T) {
+	stdout, stderr := captureProcessStreams(t, func() {
+		if code := run([]string{"--help-json"}); code != 0 {
+			t.Fatalf("run --help-json exit = %d, want 0", code)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("run --help-json wrote to stderr: %q", stderr)
+	}
+	var inventory []struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &inventory); err != nil {
+		t.Fatalf("parse --help-json: %v\n%s", err, stdout)
+	}
+	if !inventoryHasPath(inventory, "vsix ci") {
+		t.Fatalf("--help-json inventory has no path %q: %+v", "vsix ci", inventory)
+	}
+
+	for _, argv := range [][]string{
+		{"vsix", "ci", "--help"},
+		{"help", "vsix", "ci"},
+	} {
+		stdout, stderr := captureProcessStreams(t, func() {
+			if code := run(argv); code != 0 {
+				t.Fatalf("run %v exit = %d, want 0", argv, code)
+			}
+		})
+		if stdout != "" {
+			t.Fatalf("run %v stdout = %q, want empty", argv, stdout)
+		}
+		for _, want := range []string{"vsix ci:", "Run Keel Test Bridge VSIX checks.", "Usage:", "keel-dev vsix ci"} {
+			if !strings.Contains(stderr, want) {
+				t.Fatalf("run %v help missing %q:\n%s", argv, want, stderr)
+			}
+		}
+		for _, forbidden := range []string{"unknown help topic", "keel-dev is keel's development CLI."} {
+			if strings.Contains(stderr, forbidden) {
+				t.Fatalf("run %v help included %q:\n%s", argv, forbidden, stderr)
+			}
+		}
+	}
+}
+
+// DHF-TEST: keel/requirement-154 (keel/ac-637)
+func TestVSIXUnknownVerbIsRejectedByCommandTree(t *testing.T) {
+	root := moduleFixture(t)
+	t.Chdir(root)
+
+	stdout, stderr := captureProcessStreams(t, func() {
+		if code := run([]string{"vsix", "bogus"}); code != 2 {
+			t.Fatalf("run vsix bogus exit = %d, want 2", code)
+		}
+	})
+	combined := stdout + stderr
+	if strings.Contains(combined, "unknown vsix command") {
+		t.Fatalf("vsix bogus was rejected by handler-level verb parsing:\n%s", combined)
+	}
+	if !strings.Contains(combined, "usage: keel-dev vsix ci") {
+		t.Fatalf("vsix bogus output missing namespace usage:\n%s", combined)
+	}
+}
+
+func inventoryHasPath(inventory []struct {
+	Path string `json:"path"`
+}, path string) bool {
+	for _, cmd := range inventory {
+		if cmd.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
 // DHF-TEST: keel/requirement-100
 func TestRunHelpJSONReportsWriteFailure(t *testing.T) {
 	// A closed stdout makes the JSON encode write fail; run must surface it as
@@ -664,7 +739,7 @@ func TestKeelDevHelpAllRendersFullCommandTreeAndExitsZero(t *testing.T) {
 		"ci:",
 		"release:",
 		"test-bridge commands:",
-		"vsix:",
+		"vsix commands:",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("keel-dev --help-all missing %q\noutput:\n%s", want, got)

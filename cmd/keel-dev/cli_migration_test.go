@@ -108,6 +108,17 @@ func TestKeelDevMigrationRemovesHandRolledArgParsing(t *testing.T) {
 			t.Fatalf("%s still scans flag-shaped args manually", fn)
 		}
 	}
+	if comparesArgsIndexToString(t, "vsix.go", "handleVSIXGate", "ci") {
+		t.Fatal("handleVSIXGate still performs handler-level vsix verb routing")
+	}
+	vsixCI := commandSpecByPath(commandTree(), "vsix", "ci")
+	if vsixCI == nil {
+		t.Fatal("missing vsix ci leaf")
+	}
+	want := cli.PositionalSpec{Name: "args", Min: 0, Max: 0}
+	if len(vsixCI.Positionals) != 1 || vsixCI.Positionals[0] != want {
+		t.Fatalf("vsix ci positionals = %+v, want %+v", vsixCI.Positionals, want)
+	}
 }
 
 func assertStringFlagTarget(t *testing.T, spec *cli.CommandSpec, name string, enum []string, required bool) {
@@ -211,6 +222,45 @@ func scansFlagShapedArgs(t *testing.T, path, fnName string) bool {
 		return true
 	})
 	return found
+}
+
+func comparesArgsIndexToString(t *testing.T, path, fnName, value string) bool {
+	t.Helper()
+	fn := parseFuncDecl(t, path, fnName)
+	found := false
+	ast.Inspect(fn, func(node ast.Node) bool {
+		expr, ok := node.(*ast.BinaryExpr)
+		if !ok {
+			return true
+		}
+		if basicLitString(expr.X) == value && argsIndexExpr(expr.Y) {
+			found = true
+			return false
+		}
+		if basicLitString(expr.Y) == value && argsIndexExpr(expr.X) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+func argsIndexExpr(expr ast.Expr) bool {
+	index, ok := expr.(*ast.IndexExpr)
+	if !ok {
+		return false
+	}
+	ident, ok := index.X.(*ast.Ident)
+	return ok && ident.Name == "args"
+}
+
+func basicLitString(expr ast.Expr) string {
+	lit, ok := expr.(*ast.BasicLit)
+	if !ok {
+		return ""
+	}
+	return strings.Trim(lit.Value, `"`)
 }
 
 func parseFuncDecl(t *testing.T, path, fnName string) *ast.FuncDecl {
