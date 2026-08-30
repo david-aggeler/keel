@@ -84,6 +84,8 @@ type Request struct {
 	// the unmodified parent environment. openbrain-client uses this to export a
 	// provisioned TMPDIR/GOTMPDIR so the CGO link does not OOM on a small /tmp
 	// (openbrain/requirement-181).
+	//
+	// DHF-REQ: keel/requirement-156
 	Env []string
 	// OnEvent, if non-nil, is called once per decoded event in arrival order,
 	// before Run returns.
