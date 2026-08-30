@@ -40,19 +40,22 @@ var vsixHeldDependencyBaselines = []struct {
 
 func vsixCommandSpec() *cli.CommandSpec {
 	return &cli.CommandSpec{
-		Name:        "vsix",
-		Use:         "vsix ci",
-		Short:       "Run Keel Test Bridge VSIX checks.",
-		Positionals: []cli.PositionalSpec{{Name: "verb", Min: 1, Max: 1}},
-		Handler:     handleVSIXGate,
+		Name:  "vsix",
+		Short: "Run Keel Test Bridge VSIX checks.",
+		Subcommands: []*cli.CommandSpec{
+			{
+				Name:        "ci",
+				Use:         "vsix ci",
+				Short:       "Run Keel Test Bridge VSIX checks.",
+				Positionals: []cli.PositionalSpec{{Name: "args", Min: 0, Max: 0}},
+				Handler:     handleVSIXGate,
+			},
+		},
 	}
 }
 
-// DHF-REQ: keel/requirement-40
-func handleVSIXGate(ctx context.Context, args []string) error {
-	if args[0] != "ci" {
-		return cli.NewUsageError("unknown vsix command %q\nusage: keel-dev vsix ci", args[0])
-	}
+// DHF-REQ: keel/requirement-40, keel/requirement-154 (keel/ac-636, keel/ac-637)
+func handleVSIXGate(ctx context.Context, _ []string) error {
 	state := stateFrom(ctx)
 	return runVSIXGate(ctx, state.logger, state.root)
 }

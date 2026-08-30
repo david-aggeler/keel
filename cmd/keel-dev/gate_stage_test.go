@@ -42,6 +42,41 @@ func TestGateStageRunsOnlyTheNamedStage(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-154 (keel/ac-638)
+func TestFirstPartyCommandInventoryRejectsEnumeratedVerbWithoutNode(t *testing.T) {
+	inventory := []commandInventoryItem{
+		{Path: "workflow", Usage: "keel-demo workflow inspect|missing"},
+		{Path: "workflow inspect", Usage: "keel-demo workflow inspect <run-id>"},
+	}
+
+	err := validateCommandInventoryUse("keel-demo", inventory)
+	if err == nil {
+		t.Fatal("inventory validator accepted a usage verb that is not a command node")
+	}
+	if !strings.Contains(err.Error(), "keel-demo workflow") || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("inventory validation error = %q, want offending path and verb", err.Error())
+	}
+}
+
+// DHF-TEST: keel/requirement-154 (keel/ac-638)
+func TestFirstPartyCommandInventoryAllowsResolvedVerbsAndPlaceholders(t *testing.T) {
+	inventory := []commandInventoryItem{
+		{Path: "workflow", Usage: "keel-demo workflow inspect|replay"},
+		{Path: "workflow inspect", Usage: "keel-demo workflow inspect [--format text|json] <run-id>"},
+		{Path: "workflow replay", Usage: "keel-demo workflow replay [--speed normal|fast] <transcript>"},
+		{Path: "test-bridge", Usage: "keel-demo-dev test-bridge discover|run"},
+		{Path: "test-bridge discover", Usage: "keel-demo-dev test-bridge discover [--format json]"},
+		{Path: "test-bridge run", Usage: "keel-demo-dev test-bridge run [--dry-run] [--source surface] --id test-id"},
+	}
+
+	if err := validateCommandInventoryUse("keel-demo", inventory[:3]); err != nil {
+		t.Fatalf("inventory validator rejected resolved workflow inventory: %v", err)
+	}
+	if err := validateCommandInventoryUse("keel-demo-dev", inventory[3:]); err != nil {
+		t.Fatalf("inventory validator rejected resolved test-bridge inventory: %v", err)
+	}
+}
+
 // DHF-TEST: keel/requirement-136 (keel/ac-541)
 func TestGateStageRefusesAnUnknownStageNamingIt(t *testing.T) {
 	root, err := findModuleRoot(".")
