@@ -56,8 +56,8 @@ func TestValidateTreeRejectsDepthBeyondTwoCommandTokens(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-106 (keel/ac-382)
-func TestValidateTreeRejectsSingleChildNamespace(t *testing.T) {
+// DHF-TEST: keel/requirement-154 (keel/ac-635)
+func TestValidateTreeAcceptsSingleChildNamespace(t *testing.T) {
 	root := &CommandSpec{
 		Name:   "tool",
 		Config: Config{Program: "tool"},
@@ -72,12 +72,8 @@ func TestValidateTreeRejectsSingleChildNamespace(t *testing.T) {
 		},
 	}
 
-	err := root.ValidateTree()
-	if err == nil {
-		t.Fatal("ValidateTree accepted a namespace with one child")
-	}
-	if !strings.Contains(err.Error(), "admin") {
-		t.Fatalf("single-child namespace error = %q, want namespace named", err.Error())
+	if err := root.ValidateTree(); err != nil {
+		t.Fatalf("ValidateTree rejected a namespace with one child: %v", err)
 	}
 
 	root.Subcommands[0].Subcommands = append(root.Subcommands[0].Subcommands, &CommandSpec{Name: "repair", Handler: noopHandler})
@@ -86,21 +82,12 @@ func TestValidateTreeRejectsSingleChildNamespace(t *testing.T) {
 	}
 }
 
-// TestValidateTreeExemptsTheRootFromTheTwoChildRule pins the root carve-out of
-// the two-child rule: the carrier-tree shape a library package exports — a root
-// holding exactly one namespace subcommand, which a consumer grafts into its own
-// root — passes ValidateTree. The opposite direction, a namespace *below* the
-// root holding exactly one child, is pinned by
-// TestValidateTreeRejectsSingleChildNamespace; the two together are the both-way
-// pin the exemption needs, so deleting or widening the !root guard reddens one
-// of them.
+// TestValidateTreeAcceptsRootWithSingleChildNamespace pins that a root may hold
+// exactly one namespace subcommand, the carrier-tree shape a library package
+// exports before a consumer grafts it into its own root.
 //
-// The single subcommand is itself a well-formed two-child namespace so that the
-// two-child rule is the only rule in play: a bare childless, handler-less child
-// would trip the neither-namespace-nor-leaf rule instead and prove nothing.
-//
-// DHF-TEST: keel/requirement-106 (keel/ac-382)
-func TestValidateTreeExemptsTheRootFromTheTwoChildRule(t *testing.T) {
+// DHF-TEST: keel/requirement-154 (keel/ac-635)
+func TestValidateTreeAcceptsRootWithSingleChildNamespace(t *testing.T) {
 	carrier := &CommandSpec{
 		Name:   "tool",
 		Config: Config{Program: "tool"},
@@ -178,6 +165,64 @@ func TestValidateTreeRejectsNilChildWithoutPanicking(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "admin") {
 		t.Fatalf("nil-child error = %q, want the offending parent named", err.Error())
+	}
+}
+
+// DHF-TEST: keel/requirement-154 (keel/ac-638)
+func TestValidateTreeRejectsUseStringEnumeratedVerbWithoutChildNode(t *testing.T) {
+	root := &CommandSpec{
+		Name:   "tool",
+		Config: Config{Program: "tool"},
+		Subcommands: []*CommandSpec{
+			{
+				Name:  "admin",
+				Use:   "admin missing",
+				Short: "Administrative commands.",
+				Subcommands: []*CommandSpec{
+					{Name: "status", Handler: noopHandler},
+					{Name: "repair", Handler: noopHandler},
+				},
+			},
+			{Name: "run", Handler: noopHandler},
+		},
+	}
+
+	err := root.ValidateTree()
+	if err == nil {
+		t.Fatal("ValidateTree accepted a Use string that enumerates a non-node verb")
+	}
+	if !strings.Contains(err.Error(), "admin") || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("enumerated verb error = %q, want offending path and verb", err.Error())
+	}
+}
+
+// DHF-TEST: keel/requirement-154 (keel/ac-638)
+func TestValidateTreeAllowsResolvedAlternatesAndPlaceholderUseText(t *testing.T) {
+	root := &CommandSpec{
+		Name:   "tool",
+		Config: Config{Program: "tool"},
+		Subcommands: []*CommandSpec{
+			{
+				Name:  "workflow",
+				Use:   "workflow inspect|replay",
+				Short: "Workflow commands.",
+				Subcommands: []*CommandSpec{
+					{Name: "inspect", Handler: noopHandler},
+					{Name: "replay", Handler: noopHandler},
+				},
+			},
+			{
+				Name: "worktree",
+				Subcommands: []*CommandSpec{
+					{Name: "status", Use: "worktree status <name> | worktree status --glob <pattern>", Handler: noopHandler},
+					{Name: "resume", Use: "worktree resume <name>", Handler: noopHandler},
+				},
+			},
+		},
+	}
+
+	if err := root.ValidateTree(); err != nil {
+		t.Fatalf("ValidateTree rejected resolved alternates or placeholder use text: %v", err)
 	}
 }
 
