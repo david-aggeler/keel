@@ -550,8 +550,8 @@ func vsixRuntimeLibraryResourceNames() []string {
 	return names
 }
 
-func requireVSIXRuntimeSharedLibraries() error {
-	blocked := blockedVSIXRuntimeSharedLibraries()
+func requireVSIXRuntimeSharedLibraries(ctx context.Context, logger *slog.Logger) error {
+	blocked := blockedVSIXRuntimeSharedLibraries(ctx, logger)
 	if len(blocked) == 0 {
 		return nil
 	}
@@ -562,10 +562,10 @@ func requireVSIXRuntimeSharedLibraries() error {
 	return fmt.Errorf("keel-dev vsix ci: required VS Code runtime shared libraries not found: %s", strings.Join(missing, "; "))
 }
 
-func blockedVSIXRuntimeSharedLibraries() []vscode.BlockedPrereq {
+func blockedVSIXRuntimeSharedLibraries(ctx context.Context, logger *slog.Logger) []vscode.BlockedPrereq {
 	var blocked []vscode.BlockedPrereq
 	for _, resource := range vsixCIRuntimeLibraryResources {
-		if vsixRuntimeLibraryResolved(resource.soname) {
+		if vsixRuntimeLibraryResolved(ctx, logger, resource.soname) {
 			continue
 		}
 		blocked = append(blocked, vscode.BlockedPrereq{
@@ -576,8 +576,8 @@ func blockedVSIXRuntimeSharedLibraries() []vscode.BlockedPrereq {
 	return blocked
 }
 
-func defaultVSIXRuntimeLibraryResolved(soname string) bool {
-	out, ok := ldconfigSharedLibraryCache()
+func defaultVSIXRuntimeLibraryResolved(ctx context.Context, logger *slog.Logger, soname string) bool {
+	out, ok := ldconfigSharedLibraryCache(ctx, logger)
 	if !ok {
 		return false
 	}
@@ -590,7 +590,7 @@ func defaultVSIXRuntimeLibraryResolved(soname string) bool {
 	return false
 }
 
-func ldconfigSharedLibraryCache() (string, bool) {
+func ldconfigSharedLibraryCache(ctx context.Context, logger *slog.Logger) (string, bool) {
 	candidates := []string{}
 	if path, err := exec.LookPath("ldconfig"); err == nil {
 		candidates = append(candidates, path)
@@ -602,9 +602,9 @@ func ldconfigSharedLibraryCache() (string, bool) {
 			continue
 		}
 		seen[candidate] = true
-		out, err := exec.Command(candidate, "-p").Output()
+		out, _, err := capture(ctx, logger, "", candidate, "-p")
 		if err == nil {
-			return string(out), true
+			return out, true
 		}
 	}
 	return "", false
@@ -2419,7 +2419,7 @@ func (p keelWorkspaceProfile) Node() string       { return workspaceNode(p.root)
 
 // DHF-REQ: keel/requirement-90
 // DHF-REQ: keel/requirement-159
-func (p keelWorkspaceProfile) PrepareLane(_ context.Context, laneID string) vscode.LaneReadiness {
+func (p keelWorkspaceProfile) PrepareLane(ctx context.Context, laneID string) vscode.LaneReadiness {
 	if _, err := exec.LookPath("go"); err != nil {
 		return vscode.LaneReadiness{Blocked: []vscode.BlockedPrereq{{Resource: "go-toolchain", Detail: err.Error()}}}
 	}
@@ -2429,7 +2429,7 @@ func (p keelWorkspaceProfile) PrepareLane(_ context.Context, laneID string) vsco
 				return vscode.LaneReadiness{Blocked: []vscode.BlockedPrereq{{Resource: resource, Detail: err.Error()}}}
 			}
 		}
-		if blocked := blockedVSIXRuntimeSharedLibraries(); len(blocked) > 0 {
+		if blocked := blockedVSIXRuntimeSharedLibraries(ctx, vscodeLoggerFromContext(ctx)); len(blocked) > 0 {
 			return vscode.LaneReadiness{Blocked: blocked}
 		}
 	}
@@ -2437,6 +2437,16 @@ func (p keelWorkspaceProfile) PrepareLane(_ context.Context, laneID string) vsco
 		return vscode.LaneReadiness{Blocked: []vscode.BlockedPrereq{{Resource: "keel-module-root", Detail: err.Error()}}}
 	}
 	return vscode.LaneReadiness{}
+}
+
+func vscodeLoggerFromContext(ctx context.Context) *slog.Logger {
+	if state := stateFrom(ctx); state.logger != nil {
+		return state.logger
+	}
+	if rt, ok := testbridge.RuntimeFrom(ctx); ok && rt.Log != nil {
+		return rt.Log
+	}
+	return vscodeDiscardLogger()
 }
 
 func knownVSCodeLaneID(laneID string) bool {

@@ -68,7 +68,7 @@ func runVSIXGate(ctx context.Context, logger *slog.Logger, dir string) error {
 			return fmt.Errorf("keel-dev vsix ci: required tool %q not found on PATH", tool)
 		}
 	}
-	if err := requireVSIXRuntimeSharedLibraries(); err != nil {
+	if err := requireVSIXRuntimeSharedLibraries(ctx, logger); err != nil {
 		return err
 	}
 	if err := validateVSIXProtocolDrift(dir); err != nil {
