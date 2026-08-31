@@ -34,6 +34,8 @@ Keel's vision, change_request, issue, issue_fix, exploration, test_strategy, epi
 
 **Scratchpad:** put working files (drafts, one-off scripts, intermediate outputs the user may want to read) in `/projects/keel/scratchpad/` — it is gitignored and survives the session. Session-private tmp dirs are fine only for files the user never needs to open.
 
+- **Link records, don't cite refs.** Render every gold record named in chat output as `https://openbrain.local.aggeler.com/app/records/<product>/<type>/<seq>` — e.g. `[change_request-111](https://openbrain.local.aggeler.com/app/records/keel/change_request/111)`. 
+
 ## Change control
 
 EVERY code change goes through a CR. No silent fixes.
