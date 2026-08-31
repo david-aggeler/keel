@@ -10,6 +10,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -3551,6 +3552,35 @@ func TestVSCodeVSIXGateReadinessRequiresCompleteToolchain(t *testing.T) {
 		stub(t, bin, callsFile, tool, "exit 0")
 	}
 	t.Setenv("PATH", bin)
+
+	// DHF-TEST: keel/requirement-159 (keel/ac-667)
+	withVSIXRuntimeLibraryResolver(t, func(_ context.Context, _ *slog.Logger, soname string) bool {
+		return soname != "libgtk-3.so.0"
+	})
+	profile := newKeelWorkspaceProfile(root)
+	readiness := profile.PrepareLane(context.Background(), vscodeLaneVSIXGate)
+	if readiness.Ready() || len(readiness.Blocked) != 1 ||
+		readiness.Blocked[0].Resource != "libgtk-3.so.0" ||
+		!strings.Contains(readiness.Blocked[0].Detail, "libgtk-3-0t64") {
+		t.Fatalf("PrepareLane runtime library block = %+v, want libgtk soname and package", readiness.Blocked)
+	}
+	var protocol bytes.Buffer
+	err := dispatchTestBridgeRun(contextWithVSCodeTestState(root, &protocol), vscodeLaneVSIXGate)
+	if err == nil {
+		t.Fatal("vsix-ci with missing runtime library returned nil error; want structured block")
+	}
+	events := decodeRunEvents(t, protocol.String())
+	if !runEventsContain(events, "failed", vscodeLaneVSIXGate) ||
+		!strings.Contains(protocol.String(), "libgtk-3.so.0") ||
+		!strings.Contains(protocol.String(), "libgtk-3-0t64") {
+		t.Fatalf("runtime library blocked events = %+v, protocol=%s; want failed event naming library and package", events, protocol.String())
+	}
+	if strings.Contains(calls(t, callsFile), "pnpm ") {
+		t.Fatalf("vsix-ci should not start gate work when runtime libraries are absent; calls:\n%s", calls(t, callsFile))
+	}
+
+	// DHF-TEST: keel/requirement-159 (keel/ac-669)
+	withVSIXRuntimeLibraryResolver(t, func(context.Context, *slog.Logger, string) bool { return true })
 	if readiness := newKeelWorkspaceProfile(root).PrepareLane(context.Background(), vscodeLaneVSIXGate); !readiness.Ready() {
 		t.Fatalf("PrepareLane with full vsix-ci toolchain = %+v, want ready", readiness)
 	}
@@ -3573,6 +3603,9 @@ func TestVSCodeVSIXGateReadinessRequiresCompleteToolchain(t *testing.T) {
 		t.Fatalf("discovery missing %q", vscodeLaneVSIXGate)
 	}
 	wantResources := []string{"go-toolchain", "keel-module-root", "pnpm", "node", "xvfb-run"}
+	wantLibraryResources := vsixRuntimeLibraryResourceNames()
+	sort.Strings(wantLibraryResources)
+	wantResources = append(wantResources, wantLibraryResources...)
 	if !stringSlicesEqual(item.RequiredResources, wantResources) {
 		t.Fatalf("vsix-ci required resources = %+v, want %+v", item.RequiredResources, wantResources)
 	}

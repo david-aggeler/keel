@@ -3,11 +3,21 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func withVSIXRuntimeLibraryResolver(t *testing.T, resolver func(context.Context, *slog.Logger, string) bool) {
+	t.Helper()
+	original := vsixRuntimeLibraryResolved
+	vsixRuntimeLibraryResolved = resolver
+	t.Cleanup(func() {
+		vsixRuntimeLibraryResolved = original
+	})
+}
 
 // stubTools builds a bin directory of fake git/gh/go/gofmt executables and
 // prepends it to PATH for the test. Each stub appends its argv to calls.log and
@@ -91,6 +101,7 @@ exit 0`)
 
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	seedStubToolCache(t, bin)
+	withVSIXRuntimeLibraryResolver(t, func(context.Context, *slog.Logger, string) bool { return true })
 	return callsFile
 }
 
@@ -360,6 +371,113 @@ func TestRunVSIXGateRequiresNodeAndXVFBRunBeforePNPM(t *testing.T) {
 				t.Fatalf("vsix gate should not start pnpm when %s is absent; calls:\n%s", tc.wantMissing, calls(t, callsFile))
 			}
 		})
+	}
+}
+
+// DHF-TEST: keel/requirement-159 (keel/ac-667, keel/ac-668)
+func TestRunVSIXGateRequiresRuntimeSharedLibrariesBeforePNPM(t *testing.T) {
+	callsFile := stubTools(t, false, false)
+	bin := filepath.Dir(callsFile)
+	stub(t, bin, callsFile, "pnpm", "printf 'pnpm must not run before runtime library preflight passes\\n' >&2\nexit 7")
+	withVSIXRuntimeLibraryResolver(t, func(_ context.Context, _ *slog.Logger, soname string) bool {
+		return soname != "libgtk-3.so.0"
+	})
+	dir := moduleFixture(t)
+
+	err := runVSIXGate(context.Background(), discardLogger(), dir)
+	if err == nil {
+		t.Fatal("vsix gate succeeded with missing runtime shared library; want prerequisite failure")
+	}
+	for _, want := range []string{"libgtk-3.so.0", "libgtk-3-0t64"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("runtime library error = %v, want %q", err, want)
+		}
+	}
+	if strings.Contains(calls(t, callsFile), "pnpm ") {
+		t.Fatalf("vsix gate should not start pnpm when runtime libraries are absent; calls:\n%s", calls(t, callsFile))
+	}
+	if entries, err := filepath.Glob(filepath.Join(dir, "vsix", ".vscode-test", "vscode-linux-*")); err != nil {
+		t.Fatal(err)
+	} else if len(entries) != 0 {
+		t.Fatalf("runtime library block should happen before VS Code runtime download, found %+v", entries)
+	}
+}
+
+// DHF-TEST: keel/requirement-159 (keel/ac-667, keel/ac-669)
+func TestVSIXRuntimeLibraryResourcesDeclarePinnedRuntimeHostClosure(t *testing.T) {
+	want := []vsixRuntimeLibraryResource{
+		{soname: "libdl.so.2", packageName: "libc6"},
+		{soname: "libpthread.so.0", packageName: "libc6"},
+		{soname: "libglib-2.0.so.0", packageName: "libglib2.0-0t64"},
+		{soname: "libgobject-2.0.so.0", packageName: "libglib2.0-0t64"},
+		{soname: "libgio-2.0.so.0", packageName: "libglib2.0-0t64"},
+		{soname: "libnspr4.so", packageName: "libnspr4"},
+		{soname: "libnss3.so", packageName: "libnss3"},
+		{soname: "libnssutil3.so", packageName: "libnss3"},
+		{soname: "libsmime3.so", packageName: "libnss3"},
+		{soname: "libatk-1.0.so.0", packageName: "libatk1.0-0t64"},
+		{soname: "libatk-bridge-2.0.so.0", packageName: "libatk-bridge2.0-0t64"},
+		{soname: "libcups.so.2", packageName: "libcups2t64"},
+		{soname: "libdbus-1.so.3", packageName: "libdbus-1-3"},
+		{soname: "libcairo.so.2", packageName: "libcairo2"},
+		{soname: "libgtk-3.so.0", packageName: "libgtk-3-0t64"},
+		{soname: "libpango-1.0.so.0", packageName: "libpango-1.0-0"},
+		{soname: "libX11.so.6", packageName: "libx11-6"},
+		{soname: "libXcomposite.so.1", packageName: "libxcomposite1"},
+		{soname: "libXdamage.so.1", packageName: "libxdamage1"},
+		{soname: "libXext.so.6", packageName: "libxext6"},
+		{soname: "libXfixes.so.3", packageName: "libxfixes3"},
+		{soname: "libXrandr.so.2", packageName: "libxrandr2"},
+		{soname: "libgbm.so.1", packageName: "libgbm1"},
+		{soname: "libexpat.so.1", packageName: "libexpat1"},
+		{soname: "libxcb.so.1", packageName: "libxcb1"},
+		{soname: "libxkbcommon.so.0", packageName: "libxkbcommon0"},
+		{soname: "libudev.so.1", packageName: "libudev1"},
+		{soname: "libasound.so.2", packageName: "libasound2t64"},
+		{soname: "libatspi.so.0", packageName: "libatspi2.0-0t64"},
+		{soname: "libm.so.6", packageName: "libc6"},
+		{soname: "libgcc_s.so.1", packageName: "libgcc-s1"},
+		{soname: "libc.so.6", packageName: "libc6"},
+		{soname: "ld-linux-x86-64.so.2", packageName: "libc6"},
+	}
+
+	if len(vsixCIRuntimeLibraryResources) != len(want) {
+		t.Fatalf("declared runtime library resources = %d, want %d: %+v", len(vsixCIRuntimeLibraryResources), len(want), vsixCIRuntimeLibraryResources)
+	}
+	for i, wantResource := range want {
+		if vsixCIRuntimeLibraryResources[i] != wantResource {
+			t.Fatalf("runtime library resource[%d] = %+v, want %+v", i, vsixCIRuntimeLibraryResources[i], wantResource)
+		}
+	}
+}
+
+// DHF-TEST: keel/requirement-159 (keel/ac-667)
+func TestVSIXRuntimeLibraryResolverRunsLdconfigThroughKeelExec(t *testing.T) {
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "ldconfig", `printf '%s\n' '	libgtk-3.so.0 (libc6,x86-64) => /lib/libgtk-3.so.0'`)
+	t.Setenv("PATH", bin)
+
+	logger, cap := testLogger("keel-dev")
+	if !defaultVSIXRuntimeLibraryResolved(context.Background(), logger, "libgtk-3.so.0") {
+		t.Fatal("runtime library resolver returned false; want fake ldconfig cache hit")
+	}
+	if got := strings.TrimSpace(calls(t, callsFile)); got != "ldconfig -p" {
+		t.Fatalf("ldconfig calls = %q, want %q", got, "ldconfig -p")
+	}
+
+	var sawStart, sawEnd bool
+	for _, rec := range cap.AllJSON() {
+		commandLine, _ := rec["command_line"].(string)
+		if rec["event_type"] == "process_start" && strings.Contains(commandLine, "ldconfig -p") {
+			sawStart = true
+		}
+		if rec["event_type"] == "process_end" {
+			sawEnd = true
+		}
+	}
+	if !sawStart || !sawEnd {
+		t.Fatalf("ldconfig probe lifecycle logs: start=%v end=%v records=%+v", sawStart, sawEnd, cap.AllJSON())
 	}
 }
 
