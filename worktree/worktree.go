@@ -61,6 +61,82 @@ type Config struct {
 	ExcludePaths []string
 }
 
+// ReplicateMode names how a declared source is materialized in the worktree.
+type ReplicateMode string
+
+const (
+	// ReplicateCopy copies bytes from the primary checkout into the worktree.
+	ReplicateCopy ReplicateMode = "copy"
+	// ReplicateLink creates a symbolic link in the worktree to the primary
+	// checkout path.
+	ReplicateLink ReplicateMode = "link"
+)
+
+// ReplicatePolicy names what bring-up does when a declared destination already
+// exists in an idempotent worktree.
+type ReplicatePolicy string
+
+const (
+	// ReplicateMissingOnly fills absent destinations without overwriting local
+	// edits. It is the default policy.
+	ReplicateMissingOnly ReplicatePolicy = "missing_only"
+	// ReplicateRefresh replaces an existing destination with the source content.
+	ReplicateRefresh ReplicatePolicy = "refresh"
+	// ReplicateOff disables replication for this bring-up call.
+	ReplicateOff ReplicatePolicy = "off"
+)
+
+// ReplicateOutcome reports how one declared item was handled.
+type ReplicateOutcome string
+
+const (
+	// ReplicateOutcomeCopied means the declared item was copied into the worktree.
+	ReplicateOutcomeCopied ReplicateOutcome = "copied"
+	// ReplicateOutcomeLinked means the declared item was linked into the worktree.
+	ReplicateOutcomeLinked ReplicateOutcome = "linked"
+	// ReplicateOutcomeSkippedTracked means git already tracks the matched path.
+	ReplicateOutcomeSkippedTracked ReplicateOutcome = "skipped_tracked"
+	// ReplicateOutcomeSkippedNotIgnored means the matched path is untracked but
+	// not gitignored.
+	ReplicateOutcomeSkippedNotIgnored ReplicateOutcome = "skipped_not_ignored"
+	// ReplicateOutcomeSkippedAbsent means no source exists for the declaration.
+	ReplicateOutcomeSkippedAbsent ReplicateOutcome = "skipped_absent"
+	// ReplicateOutcomeRefusedHazard means the declaration was rejected before
+	// materialization because it escaped the safe repository scope.
+	ReplicateOutcomeRefusedHazard ReplicateOutcome = "refused_hazard"
+)
+
+// ReplicateItem declares one repo-root-relative source to materialize in a
+// worktree. Empty Mode defaults to [ReplicateCopy].
+type ReplicateItem struct {
+	// Pattern is a git pathspec-like, repo-root-relative source declaration.
+	Pattern string
+	// Mode selects copy or link materialization; empty defaults to copy.
+	Mode ReplicateMode
+}
+
+// ReplicateResult reports the outcome for one declared replication item.
+type ReplicateResult struct {
+	// Pattern is the declaration that produced this result.
+	Pattern string
+	// Path is the repo-root-relative source path that was classified.
+	Path string
+	// Mode is the effective materialization mode for this result.
+	Mode ReplicateMode
+	// Outcome is the copied, linked, skipped, or refused result.
+	Outcome ReplicateOutcome
+}
+
+// UpOptions carries bring-up replication options. The zero value preserves the
+// historical behavior exactly.
+type UpOptions struct {
+	// Replicate lists repo-root-relative items to materialize after bring-up.
+	Replicate []ReplicateItem
+	// Policy selects idempotent materialization behavior; empty defaults to
+	// missing-only.
+	Policy ReplicatePolicy
+}
+
 // Manager runs the worktree lifecycle against one repository. Construct it with
 // [New]. It holds no state across calls and starts no goroutines, so a single
 // Manager may drive many concurrent worktrees; two calls for the SAME work item
@@ -92,6 +168,8 @@ type Worktree struct {
 	BaseSHA string
 	// Outcome records which idempotent path bring-up took.
 	Outcome Outcome
+	// Replication reports how declared gitignored items were handled.
+	Replication []ReplicateResult
 }
 
 // New resolves and validates a [Manager] from cfg. It runs a git command only
@@ -167,9 +245,20 @@ func (m *Manager) Resolve(name string) (path, branch string, err error) {
 // root for the same branch. Every refusal is [CodeConflict].
 //
 // DHF-REQ: keel/requirement-113 (keel/ac-400, keel/ac-406, keel/ac-416, keel/ac-417)
-func (m *Manager) Up(ctx context.Context, name string) (*Worktree, error) {
+// DHF-REQ: keel/requirement-157
+func (m *Manager) Up(ctx context.Context, name string, opts ...UpOptions) (*Worktree, error) {
 	const op = "up"
 	path, branch, err := m.Resolve(name)
+	if err != nil {
+		return nil, err
+	}
+	upOpts, err := normalizeUpOptions(opts)
+	if err != nil {
+		return nil, err
+	}
+	if upOpts.Policy != ReplicateOff {
+		err = m.validateReplicateItems(upOpts.Replicate)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +284,8 @@ func (m *Manager) Up(ctx context.Context, name string) (*Worktree, error) {
 		if reg.branch != branch {
 			return nil, newError(op, CodeConflict, path, "%s is registered on branch %q, want %q — refusing to reuse the wrong checkout", path, reg.branch, branch)
 		}
-		return &Worktree{Name: name, Path: path, Branch: branch, Outcome: OutcomeReused}, nil
+		wt := &Worktree{Name: name, Path: path, Branch: branch, Outcome: OutcomeReused}
+		return wt, m.replicate(ctx, op, wt, upOpts)
 	} else if !os.IsNotExist(statErr) {
 		return nil, wrapError(op, CodeGit, path, statErr, "inspect %s", path)
 	}
@@ -211,7 +301,8 @@ func (m *Manager) Up(ctx context.Context, name string) (*Worktree, error) {
 		if _, err := m.run(ctx, op, m.repoRoot, "worktree", "add", path, branch); err != nil {
 			return nil, err
 		}
-		return &Worktree{Name: name, Path: path, Branch: branch, Outcome: OutcomeAttached}, nil
+		wt := &Worktree{Name: name, Path: path, Branch: branch, Outcome: OutcomeAttached}
+		return wt, m.replicate(ctx, op, wt, upOpts)
 	}
 
 	base, err := m.resolveBase(ctx, op)
@@ -228,7 +319,8 @@ func (m *Manager) Up(ctx context.Context, name string) (*Worktree, error) {
 	if err := m.storeBranchBase(ctx, op, branch, base); err != nil {
 		return nil, err
 	}
-	return &Worktree{Name: name, Path: path, Branch: branch, Base: base, BaseSHA: baseHead, Outcome: OutcomeCreated}, nil
+	wt := &Worktree{Name: name, Path: path, Branch: branch, Base: base, BaseSHA: baseHead, Outcome: OutcomeCreated}
+	return wt, m.replicate(ctx, op, wt, upOpts)
 }
 
 // ResetFresh returns an already-registered worktree to its base ref for a fresh
