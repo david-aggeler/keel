@@ -32,6 +32,9 @@ const (
 	// CodeBranchMissing is an operation that needs an existing branch and did
 	// not find one.
 	CodeBranchMissing ErrorCode = 67
+	// CodeReplicateFailed is an eligible declared item that could not be
+	// materialized in the worktree.
+	CodeReplicateFailed ErrorCode = 68
 )
 
 // String renders the code as its lower-case taxonomy name.
@@ -49,6 +52,8 @@ func (c ErrorCode) String() string {
 		return "blocked"
 	case CodeBranchMissing:
 		return "branch_missing"
+	case CodeReplicateFailed:
+		return "replicate_failed"
 	default:
 		return "unknown"
 	}
@@ -74,6 +79,7 @@ func ExitCodeTaxonomy() []ExitCodeDoc {
 		{Code: CodeConflict, Meaning: "path, registration, or branch/worktree conflict"},
 		{Code: CodeBlocked, Meaning: "checkout cannot be removed because work or stale state blocks removal"},
 		{Code: CodeBranchMissing, Meaning: "requested branch is required but does not exist"},
+		{Code: CodeReplicateFailed, Meaning: "declared gitignored item could not be replicated into the checkout"},
 	}
 }
 
