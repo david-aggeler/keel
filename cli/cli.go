@@ -9,7 +9,7 @@
 // render diagnostics consistently and exit with exit code 2.
 //
 // The same tree is also the source for generated help. Config defines the root
-// usage shell, global flag rows, output-mode prose, and trailing guidance;
+// usage shell, global flag rows, mode-topic additions, and trailing guidance;
 // command nodes provide their own usage suffixes, summaries, long descriptions,
 // flags, and nested subcommands. RenderRootHelp and RenderTopicHelp format that
 // model for human help output without requiring each CLI to maintain a second
@@ -71,9 +71,9 @@ type RuntimeConfig struct {
 }
 
 // Config describes the generated root-help shell around a consumer command
-// tree. It keeps program-level usage, global flags, mode descriptions, and final
-// guidance in one data structure so root help and command-topic help stay in
-// sync with dispatch.
+// tree. It keeps program-level usage, global flags, mode-topic additions, and
+// final guidance in one data structure so root help and command-topic help stay
+// in sync with dispatch.
 type Config struct {
 	// Program is the executable name shown in generated usage. It is required on
 	// the root node: ValidateTree rejects a tree whose root leaves it empty, and
@@ -94,7 +94,8 @@ type Config struct {
 	CommandUsage string
 	// GlobalFlags are rendered in the root help global flag table.
 	GlobalFlags []FlagSpec
-	// ModeHelp contains optional output-mode prose rendered in root help.
+	// ModeHelp contains optional output-mode prose appended to the keel-owned
+	// help-only mode topic.
 	ModeHelp []string
 	// Trailing is optional final root-help guidance.
 	Trailing string
@@ -731,6 +732,11 @@ func (c *CommandSpec) validateTree(path []string, root bool) error {
 			return fmt.Errorf("command %q declares a nil child command", commandPath(path, c.Name))
 		}
 	}
+	if root {
+		if err := c.validateHelpOnlyTopicCollisions(); err != nil {
+			return err
+		}
+	}
 	if err := c.validateUseEnumeratedVerbNodes(path); err != nil {
 		return err
 	}
@@ -770,6 +776,15 @@ func (c *CommandSpec) validateUseEnumeratedVerbNodes(path []string) error {
 		}
 		if !ok {
 			return fmt.Errorf("command %q Use enumerates verb %q that is not a child command", strings.Join(path, " "), verb)
+		}
+	}
+	return nil
+}
+
+func (c *CommandSpec) validateHelpOnlyTopicCollisions() error {
+	for _, topic := range helpOnlyTopics() {
+		if _, ok := c.Child(topic.Name); ok {
+			return fmt.Errorf("command %q shadows help-only topic %q", topic.Name, topic.Name)
 		}
 	}
 	return nil
@@ -829,9 +844,10 @@ func GlobalFlagSpecs() []FlagSpec {
 }
 
 // ModeHelpLines returns the canonical --mode ai|json output-mode description keel
-// owns. RenderRootHelp emits these lines so the mode protocol is documented once
-// from keel; a consumer's Config.ModeHelp contributes only additional
-// binary-specific lines (for example, where it writes structured logs).
+// owns. The help-only mode topic emits these lines so the mode protocol is
+// documented once from keel; a consumer's Config.ModeHelp contributes only
+// additional binary-specific lines (for example, where it writes structured
+// logs).
 //
 // DHF-REQ: keel/requirement-101
 func ModeHelpLines() []string {
@@ -883,6 +899,28 @@ func mergeModeHelp(extra []string) []string {
 		merged = append(merged, line)
 	}
 	return merged
+}
+
+type helpOnlyTopic struct {
+	Name    string
+	Summary string
+	Lines   func(Config) []string
+}
+
+// helpOnlyTopics returns keel-owned generated help pages that are findable by
+// RenderTopicHelp and inventory renderers without becoming runnable commands.
+//
+// DHF-REQ: keel/requirement-101
+func helpOnlyTopics() []helpOnlyTopic {
+	return []helpOnlyTopic{
+		{
+			Name:    "mode",
+			Summary: "Describe --mode output protocols.",
+			Lines: func(cfg Config) []string {
+				return mergeModeHelp(cfg.ModeHelp)
+			},
+		},
+	}
 }
 
 // renderHelpHeader writes the header every help page shares: the
@@ -944,11 +982,11 @@ func (c *CommandSpec) helpTitle(path []string) string {
 }
 
 // RenderRootHelp writes generated root help from Config, global flags,
-// first-level command summaries, output-mode prose, and trailing guidance. The
-// global flag rows and the --mode ai|json output-mode description are keel-owned
-// (GlobalFlagSpecs, ModeHelpLines); Config.GlobalFlags and Config.ModeHelp are
-// additive — consumer-only extras rendered after keel's canonical entries, with
-// any keel-owned re-declarations de-duped.
+// first-level command summaries, trailing guidance, and help-only topic summaries.
+// The global flag rows and the --mode ai|json output-mode description are
+// keel-owned (GlobalFlagSpecs, ModeHelpLines); Config.GlobalFlags and
+// Config.ModeHelp are additive — consumer-only extras rendered after keel's
+// canonical entries, with any keel-owned re-declarations de-duped.
 //
 // DHF-REQ: keel/requirement-101, keel/requirement-111
 func (c *CommandSpec) RenderRootHelp(w io.Writer) {
@@ -964,16 +1002,14 @@ func (c *CommandSpec) RenderRootHelp(w io.Writer) {
 		fmt.Fprintln(w, "Commands:")
 		PrintGroupedCommandRows(w, c.Subcommands)
 	}
-	if modeHelp := mergeModeHelp(c.Config.ModeHelp); len(modeHelp) > 0 {
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "Output mode:")
-		for _, line := range modeHelp {
-			fmt.Fprintf(w, "  %s\n", line)
-		}
-	}
 	if c.Config.Trailing != "" {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, c.Config.Trailing)
+	}
+	if topics := helpOnlyTopics(); len(topics) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Topics:")
+		printHelpOnlyTopicRows(w, topics)
 	}
 }
 
@@ -993,10 +1029,12 @@ func (c *CommandSpec) RenderHelp(w io.Writer, path []string) error {
 // DHF-REQ: keel/requirement-155
 func (c *CommandSpec) RenderTopicHelp(w io.Writer, path []string) error {
 	c.InheritConfig()
-	node, matched, remaining, ok := c.findTopic(path)
+	node, topic, matched, remaining, ok := c.findTopic(path, true)
 	if !ok || len(remaining) > 0 {
 		fmt.Fprintf(w, "unknown help topic %q\n", strings.Join(path, " "))
-		if node == c {
+		if topic != nil {
+			c.renderHelpOnlyTopic(w, *topic)
+		} else if node == c {
 			c.RenderRootHelp(w)
 		} else {
 			node.RenderCommandHelp(w, matched)
@@ -1004,6 +1042,10 @@ func (c *CommandSpec) RenderTopicHelp(w io.Writer, path []string) error {
 		return NewUsageError("unknown help topic %q", strings.Join(path, " "))
 	}
 	if node == c {
+		if topic != nil {
+			c.renderHelpOnlyTopic(w, *topic)
+			return nil
+		}
 		c.RenderRootHelp(w)
 		return nil
 	}
@@ -1011,21 +1053,63 @@ func (c *CommandSpec) RenderTopicHelp(w io.Writer, path []string) error {
 	return nil
 }
 
-func (c *CommandSpec) findTopic(path []string) (*CommandSpec, []string, []string, bool) {
+func (c *CommandSpec) findTopic(path []string, root bool) (*CommandSpec, *helpOnlyTopic, []string, []string, bool) {
 	if len(path) == 0 {
-		return c, nil, nil, true
+		return c, nil, nil, nil, true
 	}
 	for _, child := range c.Subcommands {
 		if child.Name == path[0] {
-			node, matched, remaining, ok := child.findTopic(path[1:])
-			return node, append([]string{path[0]}, matched...), remaining, ok
+			node, topic, matched, remaining, ok := child.findTopic(path[1:], false)
+			return node, topic, append([]string{path[0]}, matched...), remaining, ok
 		}
 	}
-	return c, nil, path, false
+	if root {
+		if topic, ok := findHelpOnlyTopic(path[0]); ok {
+			if len(path) == 1 {
+				return c, topic, []string{path[0]}, nil, true
+			}
+			return c, topic, []string{path[0]}, path[1:], true
+		}
+	}
+	return c, nil, nil, path, false
+}
+
+func printHelpOnlyTopicRows(w io.Writer, topics []helpOnlyTopic) {
+	width := 0
+	for _, topic := range topics {
+		if len(topic.Name) > width {
+			width = len(topic.Name)
+		}
+	}
+	for _, topic := range topics {
+		fmt.Fprintf(w, "  %-*s  %s\n", width, topic.Name, topic.Summary)
+	}
+}
+
+func findHelpOnlyTopic(name string) (*helpOnlyTopic, bool) {
+	topics := helpOnlyTopics()
+	for i := range topics {
+		if topics[i].Name == name {
+			return &topics[i], true
+		}
+	}
+	return nil, false
+}
+
+func (c *CommandSpec) renderHelpOnlyTopic(w io.Writer, topic helpOnlyTopic) {
+	c.renderHelpHeader(w, topic.Name+":", topic.Summary, []string{c.program() + " help " + topic.Name})
+	if lines := topic.Lines(c.Config); len(lines) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Output mode:")
+		for _, line := range lines {
+			fmt.Fprintf(w, "  %s\n", line)
+		}
+	}
 }
 
 // RenderAllHelp writes generated root help followed by command-topic help for
-// every command in the tree exactly once, depth-first in declaration order.
+// every command in the tree exactly once, depth-first in declaration order, then
+// every keel-owned help-only topic.
 //
 // DHF-REQ: keel/requirement-57
 func (c *CommandSpec) RenderAllHelp(w io.Writer) {
@@ -1037,6 +1121,11 @@ func (c *CommandSpec) RenderAllHelp(w io.Writer) {
 			fmt.Fprintln(w)
 		}
 		child.renderAllCommandHelp(w, []string{child.Name})
+	}
+	for _, topic := range helpOnlyTopics() {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w)
+		c.renderHelpOnlyTopic(w, topic)
 	}
 }
 
@@ -1063,26 +1152,38 @@ type helpJSONFlag struct {
 // help inventory. Flags is always a (possibly empty) array, never null.
 type helpJSONCommand struct {
 	Path      string         `json:"path"`
+	Kind      string         `json:"kind"`
 	Group     string         `json:"group"`
 	Summary   string         `json:"summary"`
 	Usage     string         `json:"usage"`
+	Lines     []string       `json:"lines,omitempty"`
 	Flags     []helpJSONFlag `json:"flags"`
 	ExitCodes []ExitCodeSpec `json:"exit_codes,omitempty"`
 }
 
-// RenderHelpJSON writes a single JSON array describing every command in the
-// tree exactly once, depth-first in declaration order. The root node is the
-// program shell, not a command, so it is not emitted; each element carries a
-// non-empty space-joined command path plus that command's summary, usage, and
-// flags. The CommandSpec tree is the single source — this is a pure traversal
-// and marshal with no second help model. Output is deterministic across calls.
+// RenderHelpJSON writes a single JSON array describing every command and
+// help-only topic in the tree. The root node is the program shell, not a
+// command, so it is not emitted; each element carries a kind so consumers can
+// distinguish runnable commands from help-only topics. Output is
+// deterministic across calls.
 //
-// DHF-REQ: keel/requirement-100
+// DHF-REQ: keel/requirement-100, keel/requirement-101
 func (c *CommandSpec) RenderHelpJSON(w io.Writer) error {
 	c.InheritConfig()
 	commands := []helpJSONCommand{}
 	for _, child := range c.Subcommands {
 		child.appendHelpJSON(&commands, []string{child.Name})
+	}
+	for _, topic := range helpOnlyTopics() {
+		commands = append(commands, helpJSONCommand{
+			Path:    topic.Name,
+			Kind:    "topic",
+			Group:   "Topics",
+			Summary: topic.Summary,
+			Usage:   c.program() + " help " + topic.Name,
+			Lines:   topic.Lines(c.Config),
+			Flags:   []helpJSONFlag{},
+		})
 	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
@@ -1101,6 +1202,7 @@ func (c *CommandSpec) appendHelpJSON(out *[]helpJSONCommand, path []string) {
 	}
 	*out = append(*out, helpJSONCommand{
 		Path:      strings.Join(path, " "),
+		Kind:      "command",
 		Group:     commandGroup(c),
 		Summary:   c.Short,
 		Usage:     strings.TrimPrefix(c.Usage(path), "usage: "),

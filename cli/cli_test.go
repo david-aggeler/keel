@@ -302,9 +302,11 @@ func TestParseGlobalConfigRecognizesHelpJSONPositionIndependently(t *testing.T) 
 // so tests can decode and assert against it without inspecting the renderer's
 // internals.
 type helpJSONElement struct {
-	Path    string `json:"path"`
-	Summary string `json:"summary"`
-	Usage   string `json:"usage"`
+	Path    string   `json:"path"`
+	Kind    string   `json:"kind"`
+	Summary string   `json:"summary"`
+	Usage   string   `json:"usage"`
+	Lines   []string `json:"lines"`
 	Flags   []struct {
 		Name        string `json:"name"`
 		Value       string `json:"value"`
@@ -313,7 +315,7 @@ type helpJSONElement struct {
 	} `json:"flags"`
 }
 
-// DHF-TEST: keel/requirement-100
+// DHF-TEST: keel/requirement-100, keel/requirement-101
 func TestRenderHelpJSONEmitsFlatArrayOneElementPerCommand(t *testing.T) {
 	root := &CommandSpec{
 		Name: "tool",
@@ -335,9 +337,9 @@ func TestRenderHelpJSONEmitsFlatArrayOneElementPerCommand(t *testing.T) {
 			{Name: "status", Use: "status", Short: "Show status."},
 		},
 	}
-	// Commands across all depths (root is the program, not a command): parent,
-	// parent beta, parent alpha, status => 4.
-	const wantCount = 4
+	// Commands across all depths plus the keel-owned help-only mode topic: parent,
+	// parent beta, parent alpha, status, mode => 5.
+	const wantCount = 5
 
 	var buf bytes.Buffer
 	if err := root.RenderHelpJSON(&buf); err != nil {
@@ -367,13 +369,33 @@ func TestRenderHelpJSONEmitsFlatArrayOneElementPerCommand(t *testing.T) {
 			t.Fatalf("path %q appears more than once", e.Path)
 		}
 		seen[e.Path] = true
-		for _, key := range []string{"path", "summary", "usage", "flags"} {
+		for _, key := range []string{"path", "kind", "summary", "usage", "flags"} {
 			if _, ok := rawElems[i][key]; !ok {
 				t.Fatalf("element %d missing key %q\n%s", i, key, buf.String())
 			}
 		}
 		if !strings.HasPrefix(strings.TrimSpace(string(rawElems[i]["flags"])), "[") {
 			t.Fatalf("element %d flags is not a JSON array: %s", i, rawElems[i]["flags"])
+		}
+		if e.Path == "mode" {
+			if e.Kind != "topic" {
+				t.Fatalf("mode inventory kind = %q, want topic", e.Kind)
+			}
+			if e.Summary == "" || e.Usage != "tool help mode" {
+				t.Fatalf("mode inventory summary/usage = %q/%q, want topic summary and help usage", e.Summary, e.Usage)
+			}
+			for _, want := range ModeHelpLines() {
+				if !stringSliceContains(e.Lines, want) {
+					t.Fatalf("mode inventory lines missing %q: %+v", want, e.Lines)
+				}
+			}
+			continue
+		}
+		if e.Kind != "command" {
+			t.Fatalf("command %q inventory kind = %q, want command", e.Path, e.Kind)
+		}
+		if len(e.Lines) != 0 {
+			t.Fatalf("command %q unexpectedly has topic lines: %+v", e.Path, e.Lines)
 		}
 	}
 
@@ -400,6 +422,15 @@ func TestRenderHelpJSONEmitsFlatArrayOneElementPerCommand(t *testing.T) {
 	if buf.String() != second.String() {
 		t.Fatalf("RenderHelpJSON not deterministic:\nfirst:\n%s\nsecond:\n%s", buf.String(), second.String())
 	}
+}
+
+func stringSliceContains(lines []string, want string) bool {
+	for _, line := range lines {
+		if line == want {
+			return true
+		}
+	}
+	return false
 }
 
 // DHF-TEST: keel/requirement-21
@@ -595,6 +626,15 @@ func outputModeSection(help string) string {
 	return ""
 }
 
+func rootHelpParagraph(help, heading string) string {
+	for _, para := range strings.Split(help, "\n\n") {
+		if strings.HasPrefix(para, heading) {
+			return para
+		}
+	}
+	return ""
+}
+
 // DHF-TEST: keel/requirement-101
 //
 // ac-362: a Config whose GlobalFlags contributes only binary-specific globals
@@ -640,9 +680,10 @@ func TestRenderRootHelpRendersKeelOwnedGlobalFlagsWithoutConsumerRedeclaration(t
 
 // DHF-TEST: keel/requirement-101
 //
-// ac-363: a Config supplying no ModeHelp still documents --mode exactly once and
-// the --mode ai|json output-mode description is the keel-owned canonical text.
+// ac-363: a Config supplying no ModeHelp still documents --mode exactly once in
+// root help, and the mode topic carries the keel-owned canonical text.
 func TestRenderRootHelpDocumentsModeOnceFromKeelText(t *testing.T) {
+	var dispatchHelp bytes.Buffer
 	root := &CommandSpec{
 		Name: "tool",
 		Config: Config{
@@ -650,6 +691,7 @@ func TestRenderRootHelpDocumentsModeOnceFromKeelText(t *testing.T) {
 			Usage:        "tool <command> [args]",
 			HelpUsage:    "tool help [command]",
 			CommandUsage: "tool <command> --help",
+			HelpWriter:   &dispatchHelp,
 			// No ModeHelp, no GlobalFlags: everything mode-related must come
 			// from keel.
 		},
@@ -661,25 +703,32 @@ func TestRenderRootHelpDocumentsModeOnceFromKeelText(t *testing.T) {
 	var help bytes.Buffer
 	root.RenderRootHelp(&help)
 
-	// --mode is documented exactly once as a flag row (no duplicate row).
 	section := globalFlagsSection(t, help.String())
 	if got := strings.Count(section, "  --mode"); got != 1 {
 		t.Fatalf("--mode flag row appears %d times, want exactly 1:\n%s", got, section)
 	}
-
-	// The output-mode description is present and keel-owned, even with no
-	// consumer ModeHelp.
-	mode := outputModeSection(help.String())
-	if mode == "" {
-		t.Fatalf("root help has no keel-owned \"Output mode:\" section:\n%s", help.String())
+	if mode := outputModeSection(help.String()); mode != "" {
+		t.Fatalf("root help still carries per-value output-mode prose:\n%s", mode)
 	}
-	for _, want := range []string{
-		"ai emits sparse AI-readable records.",
-		"json emits full JSON log records.",
-	} {
-		if !strings.Contains(mode, want) {
-			t.Fatalf("keel-owned Output mode text missing %q:\n%s", want, mode)
+	if !strings.Contains(help.String(), "Topics:\n  mode") {
+		t.Fatalf("root help does not list the mode help-only topic:\n%s", help.String())
+	}
+
+	help.Reset()
+	if err := root.RenderTopicHelp(&help, []string{"mode"}); err != nil {
+		t.Fatalf("RenderTopicHelp(mode): %v", err)
+	}
+	for _, want := range ModeHelpLines() {
+		if !strings.Contains(help.String(), want) {
+			t.Fatalf("mode topic missing keel-owned text %q:\n%s", want, help.String())
 		}
+	}
+
+	if err := root.Dispatch(context.Background(), []string{"help", "mode"}); err != nil {
+		t.Fatalf("Dispatch(help mode): %v", err)
+	}
+	if dispatchHelp.String() != help.String() {
+		t.Fatalf("Dispatch(help mode) output:\n%s\nwant:\n%s", dispatchHelp.String(), help.String())
 	}
 }
 
@@ -714,9 +763,9 @@ func TestRenderRootHelpDeDupesConsumerReDeclaredKeelFlagsAndAppendsExtras(t *tes
 		},
 	}
 
-	var help bytes.Buffer
-	root.RenderRootHelp(&help)
-	section := globalFlagsSection(t, help.String())
+	var rootHelp bytes.Buffer
+	root.RenderRootHelp(&rootHelp)
+	section := globalFlagsSection(t, rootHelp.String())
 
 	if got := strings.Count(section, "  --mode"); got != 1 {
 		t.Fatalf("re-declared --mode rendered %d times, want exactly 1:\n%s", got, section)
@@ -725,11 +774,77 @@ func TestRenderRootHelpDeDupesConsumerReDeclaredKeelFlagsAndAppendsExtras(t *tes
 		t.Fatalf("additive consumer global --target missing:\n%s", section)
 	}
 
-	mode := outputModeSection(help.String())
-	if got := strings.Count(mode, "ai emits sparse AI-readable records."); got != 1 {
-		t.Fatalf("duplicate mode line rendered %d times, want exactly 1:\n%s", got, mode)
+	if mode := outputModeSection(rootHelp.String()); mode != "" {
+		t.Fatalf("root help still renders mode lines:\n%s", mode)
 	}
-	if !strings.Contains(mode, "Structured logs are written under .logs/.") {
-		t.Fatalf("additive consumer mode line missing:\n%s", mode)
+
+	var mode bytes.Buffer
+	if err := root.RenderTopicHelp(&mode, []string{"mode"}); err != nil {
+		t.Fatalf("RenderTopicHelp(mode): %v", err)
+	}
+	if got := strings.Count(mode.String(), "ai emits sparse AI-readable records."); got != 1 {
+		t.Fatalf("duplicate mode line rendered %d times, want exactly 1:\n%s", got, mode.String())
+	}
+	if !strings.Contains(mode.String(), "Structured logs are written under .logs/.") {
+		t.Fatalf("additive consumer mode line missing:\n%s", mode.String())
+	}
+}
+
+// DHF-TEST: keel/requirement-101 (keel/ac-363)
+func TestModeHelpTopicDoesNotLeakIntoCommandSurface(t *testing.T) {
+	var renderedHelp bytes.Buffer
+	root := &CommandSpec{
+		Name: "tool",
+		Config: Config{
+			Program:      "tool",
+			Usage:        "tool <command> [args]",
+			HelpUsage:    "tool help [command]",
+			CommandUsage: "tool <command> --help",
+			HelpWriter:   &renderedHelp,
+		},
+		Subcommands: []*CommandSpec{
+			{Name: "ci", Use: "ci", Short: "Run the gate.", Handler: noopHandler},
+		},
+	}
+
+	var rootHelp bytes.Buffer
+	root.RenderRootHelp(&rootHelp)
+	if commands := rootHelpParagraph(rootHelp.String(), "Commands:"); strings.Contains(commands, "\n  mode  ") {
+		t.Fatalf("mode topic rendered under Commands instead of Topics:\n%s", commands)
+	}
+
+	err := root.Dispatch(context.Background(), []string{"mode"})
+	var usage UsageError
+	if !errors.As(err, &usage) {
+		t.Fatalf("Dispatch(mode) = %v (%T), want UsageError", err, err)
+	}
+	if renderedHelp.String() != "" {
+		t.Fatalf("Dispatch(mode) rendered help-only topic as a command:\n%s", renderedHelp.String())
+	}
+}
+
+// DHF-TEST: keel/requirement-101 (keel/ac-363)
+func TestRenderAllHelpIncludesModeTopicAfterCommands(t *testing.T) {
+	root := &CommandSpec{
+		Name: "tool",
+		Config: Config{
+			Program:      "tool",
+			Usage:        "tool <command> [args]",
+			HelpUsage:    "tool help [command]",
+			CommandUsage: "tool <command> --help",
+		},
+		Subcommands: []*CommandSpec{
+			{Name: "ci", Use: "ci", Short: "Run the gate."},
+		},
+	}
+
+	var all bytes.Buffer
+	root.RenderAllHelp(&all)
+	got := all.String()
+	assertBefore(t, got, "ci:", "mode:")
+	for _, want := range ModeHelpLines() {
+		if !strings.Contains(got, want) {
+			t.Fatalf("RenderAllHelp missing mode topic line %q:\n%s", want, got)
+		}
 	}
 }
