@@ -49,9 +49,9 @@ type step struct {
 	// advisory marks a step whose output is surfaced through keel/log but whose
 	// failure (non-zero exit) never fails the gate (keel/ac-41: deadcode).
 	advisory bool
-	// quietStderr reclassifies only known-benign child stderr progress records
-	// for noisy tools whose progress stream is not itself a failure signal.
-	quietStderr bool
+	// stderr, when configured, is the child-stderr reinterpretation policy owned
+	// by this subprocess step's exec class.
+	stderr childStderrPolicy
 	// remedy, when set, is appended to this step's failure: the committed file
 	// that declares the repo-local convention plus the action that satisfies it.
 	// A stage enforcing a rule an author cannot infer from the language or the
@@ -155,8 +155,8 @@ func ciStepsFrom(in gateInputs) []step {
 	}
 	cspellStep := step{
 		name: "cspell", tool: "cspell", program: "cspell",
-		args:        append([]string{"--no-progress"}, cspellFiles...),
-		quietStderr: true,
+		args:   append([]string{"--no-progress"}, cspellFiles...),
+		stderr: reinterpretChildStderr(cspellStderrFilter()),
 		// Only the spelling verdict carries a remedy: the two fallbacks below fail
 		// on file selection, which the dictionary cannot fix.
 		remedy: in.cspellRemedy,
@@ -202,9 +202,9 @@ func ciStepsFrom(in gateInputs) []step {
 		{name: "sbom-convergence", fn: runSBOMConvergence},
 		// --- static-tool battery (keel/requirement-12) ---
 		// DHF-REQ: keel/requirement-12 (keel/ac-38)
-		{name: "golangci-lint", tool: "golangci-lint", program: "golangci-lint", args: []string{"run", "./..."}, quietStderr: true},
+		{name: "golangci-lint", tool: "golangci-lint", program: "golangci-lint", args: []string{"run", "./..."}, stderr: reinterpretChildStderr(golangciLintStderrFilter())},
 		// DHF-REQ: keel/requirement-12 (keel/ac-39)
-		{name: "govulncheck", tool: "govulncheck", program: "govulncheck", args: []string{"./..."}, quietStderr: true},
+		{name: "govulncheck", tool: "govulncheck", program: "govulncheck", args: []string{"./..."}, stderr: reinterpretChildStderr(govulncheckStderrFilter())},
 		// DHF-REQ: keel/requirement-12 (keel/ac-40)
 		cspellStep,
 		// gitleaks scans the git history + working tree for committed secrets and
@@ -216,16 +216,16 @@ func ciStepsFrom(in gateInputs) []step {
 		// (presence-only here — see keel-dev.yaml), so this only fails loud if the
 		// tool is missing (keel/ac-45).
 		// DHF-REQ: keel/requirement-13 (keel/ac-45), keel/requirement-8
-		{name: "gitleaks", tool: "gitleaks", program: "gitleaks", args: []string{"detect", "--no-banner", "--redact"}, quietStderr: true},
+		{name: "gitleaks", tool: "gitleaks", program: "gitleaks", args: []string{"detect", "--no-banner", "--redact"}, stderr: reinterpretChildStderr(gitleaksStderrFilter())},
 	}
 
 	// DHF-REQ: keel/requirement-12 (keel/ac-43)
-	shellcheckStep := step{name: "shellcheck", tool: "shellcheck", program: "shellcheck", args: scripts, quietStderr: true}
+	shellcheckStep := step{name: "shellcheck", tool: "shellcheck", program: "shellcheck", args: scripts, stderr: reinterpretChildStderr(emptyChildStderrFilter())}
 	// DHF-REQ: keel/requirement-12 (keel/ac-44)
 	shfmtStep := step{
 		name: "shfmt", tool: "shfmt", program: "shfmt",
-		args:        append([]string{"-d"}, scripts...),
-		quietStderr: true,
+		args:   append([]string{"-d"}, scripts...),
+		stderr: reinterpretChildStderr(emptyChildStderrFilter()),
 		stdoutFails: func(out string) string {
 			diff := strings.TrimSpace(out)
 			if diff == "" {
@@ -250,7 +250,7 @@ func ciStepsFrom(in gateInputs) []step {
 	// that keel-dev's main never calls — but the packages' own tests and external
 	// consumers (vela, openbrain) do — is not genuinely dead. A function is reported
 	// only when unused by main AND untested.
-	steps = append(steps, step{name: "deadcode", tool: "deadcode", program: "deadcode", args: []string{"-test", "./..."}, advisory: true, quietStderr: true})
+	steps = append(steps, step{name: "deadcode", tool: "deadcode", program: "deadcode", args: []string{"-test", "./..."}, advisory: true, stderr: reinterpretChildStderr(emptyChildStderrFilter())})
 
 	// The coverage-floored test suite runs last: it is the most expensive step
 	// and the fast static checks should fail before it does.
@@ -806,8 +806,11 @@ func runStep(ctx context.Context, logger *slog.Logger, dir string, s step) error
 		Logger:         logger,
 		MaxOutputBytes: s.maxOutputBytes,
 	}
-	if s.quietStderr {
-		req.Logger = quietStderrLogger{Logger: logger, step: s.name}
+	if s.stderr.reinterpret {
+		if err := s.stderr.validate(s.name); err != nil {
+			return err
+		}
+		req.Logger = childStderrFilterLogger{Logger: logger, filter: s.stderr.filter}
 	}
 	// Child output travels through keel/log, never as a raw terminal stream
 	// (keel/ac-35, keel/issue-2): line-wise records for live progress, except
@@ -858,22 +861,209 @@ func runStep(ctx context.Context, logger *slog.Logger, dir string, s step) error
 	return nil
 }
 
-type quietStderrLogger struct {
-	*slog.Logger
-	step string
+// DHF-REQ: keel/requirement-158
+type childStderrPolicy struct {
+	reinterpret bool
+	filter      *childStderrFilter
 }
 
-// DHF-REQ: keel/requirement-17, keel/requirement-24, keel/requirement-25
-func (l quietStderrLogger) Error(msg string, args ...any) {
-	fields := stderrProcessOutputFields(args)
-	if fields.step == "" {
-		fields.step = l.step
+func reinterpretChildStderr(filter *childStderrFilter) childStderrPolicy {
+	return childStderrPolicy{reinterpret: true, filter: filter}
+}
+
+func (p childStderrPolicy) validate(stepName string) error {
+	if !p.reinterpret {
+		return nil
 	}
-	if fields.processOutput && fields.stderr && isKnownBenignStderr(fields.step, fields.data) {
-		l.Debug(msg, args...)
+	if p.filter == nil {
+		return fmt.Errorf("keel-dev: step %q declares child stderr reinterpretation without a stderr filter", stepName)
+	}
+	return p.filter.validate(stepName)
+}
+
+type childStderrFilter struct {
+	patterns   []acceptedStderrPattern
+	severities []acceptedStderrSeverity
+	parser     stderrSeverityParser
+}
+
+type acceptedStderrPattern struct {
+	blessedVersion string
+	prefix         string
+	contains       string
+}
+
+type acceptedStderrSeverity struct {
+	blessedVersion string
+	token          string
+	level          slog.Level
+}
+
+type stderrSeverityParser struct {
+	key          string
+	fieldIndexes []int
+}
+
+func emptyChildStderrFilter() *childStderrFilter {
+	return &childStderrFilter{}
+}
+
+func cspellStderrFilter() *childStderrFilter {
+	return &childStderrFilter{patterns: []acceptedStderrPattern{
+		{
+			blessedVersion: "10.0.1",
+			prefix:         "CSpell: Files checked:",
+			contains:       "Issues found: 0 in 0 files.",
+		},
+	}}
+}
+
+func golangciLintStderrFilter() *childStderrFilter {
+	return &childStderrFilter{
+		parser: stderrSeverityParser{key: "level"},
+		severities: []acceptedStderrSeverity{
+			{blessedVersion: "2.12.2", token: "warning", level: slog.LevelWarn},
+			{blessedVersion: "2.12.2", token: "error", level: slog.LevelError},
+		},
+	}
+}
+
+func govulncheckStderrFilter() *childStderrFilter {
+	// Re-derived on 2026-08-31 against govulncheck v1.7.0: a green scan wrote
+	// no stderr, so the previous Scanning/Fetching/No-vulnerabilities prefixes
+	// are intentionally not ported.
+	return emptyChildStderrFilter()
+}
+
+func gitleaksStderrFilter() *childStderrFilter {
+	return &childStderrFilter{
+		parser: stderrSeverityParser{fieldIndexes: []int{1, 0}},
+		severities: []acceptedStderrSeverity{
+			{blessedVersion: "v8.30.1", token: "INF", level: slog.LevelDebug},
+			{blessedVersion: "v8.30.1", token: "WRN", level: slog.LevelWarn},
+			{blessedVersion: "v8.30.1", token: "ERR", level: slog.LevelError},
+		},
+	}
+}
+
+func (f *childStderrFilter) validate(stepName string) error {
+	for _, entry := range f.patterns {
+		if strings.TrimSpace(entry.blessedVersion) == "" {
+			return fmt.Errorf("keel-dev: step %q has an accepted stderr pattern without a blessed version", stepName)
+		}
+		if entry.prefix == "" && entry.contains == "" {
+			return fmt.Errorf("keel-dev: step %q has an empty accepted stderr pattern", stepName)
+		}
+	}
+	for _, sev := range f.severities {
+		if strings.TrimSpace(sev.blessedVersion) == "" {
+			return fmt.Errorf("keel-dev: step %q has an accepted stderr severity without a blessed version", stepName)
+		}
+		if strings.TrimSpace(sev.token) == "" {
+			return fmt.Errorf("keel-dev: step %q has an accepted stderr severity without a token", stepName)
+		}
+	}
+	return nil
+}
+
+func (f *childStderrFilter) acceptedEntryVersions() []string {
+	versions := make([]string, 0, len(f.patterns)+len(f.severities))
+	for _, entry := range f.patterns {
+		versions = append(versions, entry.blessedVersion)
+	}
+	for _, sev := range f.severities {
+		versions = append(versions, sev.blessedVersion)
+	}
+	return versions
+}
+
+func (f *childStderrFilter) level(line string) slog.Level {
+	line = strings.TrimSpace(stripANSI(line))
+	for _, entry := range f.patterns {
+		if entry.matches(line) {
+			return slog.LevelDebug
+		}
+	}
+	if token, ok := f.parser.parse(line); ok {
+		for _, sev := range f.severities {
+			if token == sev.token {
+				return sev.level
+			}
+		}
+	}
+	return slog.LevelError
+}
+
+func (p acceptedStderrPattern) matches(line string) bool {
+	if p.prefix != "" && !strings.HasPrefix(line, p.prefix) {
+		return false
+	}
+	if p.contains != "" && !strings.Contains(line, p.contains) {
+		return false
+	}
+	return true
+}
+
+func (p stderrSeverityParser) parse(line string) (string, bool) {
+	if p.key != "" {
+		prefix := p.key + "="
+		for _, field := range strings.Fields(line) {
+			if strings.HasPrefix(field, prefix) {
+				return strings.Trim(strings.TrimPrefix(field, prefix), `"'`), true
+			}
+		}
+		return "", false
+	}
+	fields := strings.Fields(line)
+	for _, idx := range p.fieldIndexes {
+		if idx >= 0 && idx < len(fields) {
+			return fields[idx], true
+		}
+	}
+	return "", false
+}
+
+type childStderrFilterLogger struct {
+	*slog.Logger
+	filter *childStderrFilter
+}
+
+func (l childStderrFilterLogger) Error(msg string, args ...any) {
+	if l.logFiltered(context.Background(), slog.LevelError, msg, args...) {
 		return
 	}
 	l.Logger.Error(msg, args...)
+}
+
+func (l childStderrFilterLogger) Debug(msg string, args ...any) {
+	l.Logger.Debug(msg, args...)
+}
+
+func (l childStderrFilterLogger) Info(msg string, args ...any) {
+	if l.logFiltered(context.Background(), slog.LevelInfo, msg, args...) {
+		return
+	}
+	l.Logger.Info(msg, args...)
+}
+
+func (l childStderrFilterLogger) InfoContext(ctx context.Context, msg string, args ...any) {
+	if l.logFiltered(ctx, slog.LevelInfo, msg, args...) {
+		return
+	}
+	l.Logger.InfoContext(ctx, msg, args...)
+}
+
+func (l childStderrFilterLogger) logFiltered(ctx context.Context, fallback slog.Level, msg string, args ...any) bool {
+	fields := stderrProcessOutputFields(args)
+	if !fields.processOutput || !fields.stderr || l.filter == nil {
+		return false
+	}
+	level := l.filter.level(fields.data)
+	if level == fallback {
+		return false
+	}
+	l.Log(ctx, level, msg, args...)
+	return true
 }
 
 type processOutputFields struct {
@@ -902,26 +1092,6 @@ func stderrProcessOutputFields(args []any) processOutputFields {
 		}
 	}
 	return fields
-}
-
-// isKnownBenignStderr is deliberately caller-level and narrow: keel/exec keeps
-// stderr at Error, while keel-dev can reinterpret tool progress it understands.
-func isKnownBenignStderr(step, line string) bool {
-	line = strings.TrimSpace(stripANSI(line))
-	switch step {
-	case "cspell":
-		return strings.HasPrefix(line, "CSpell: Files checked:") &&
-			strings.Contains(line, "Issues found: 0 in 0 files.")
-	case "gitleaks":
-		return strings.HasPrefix(line, "INF ") ||
-			strings.Contains(line, " INF ")
-	case "govulncheck":
-		return strings.HasPrefix(line, "Scanning ") ||
-			strings.HasPrefix(line, "Fetching ") ||
-			strings.HasPrefix(line, "No vulnerabilities found")
-	default:
-		return false
-	}
 }
 
 func stripANSI(line string) string {

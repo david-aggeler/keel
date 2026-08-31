@@ -250,16 +250,16 @@ func TestRunStepLogsThroughKeelLog(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-17, keel/requirement-24
-func TestQuietStderrLoggerPromotesRealStderrAndFiltersKnownBenignLines(t *testing.T) {
+// DHF-TEST: keel/requirement-158 (keel/ac-659, keel/ac-660, keel/ac-664)
+func TestChildStderrFilterLoggerMapsRealStderrAndAcceptedLines(t *testing.T) {
 	logger, cap := testLogger("keel-dev")
-	wrapped := quietStderrLogger{Logger: logger}
+	wrapped := childStderrFilterLogger{Logger: logger, filter: gitleaksStderrFilter()}
 
 	wrapped.Error("process output",
 		"event_type", "process_output",
 		"stream", "stderr",
 		"step", "gitleaks",
-		"data", "real leak detected",
+		"data", `3:33AM ERR real leak detected while quoting " INF "`,
 	)
 	wrapped.Error("process output",
 		"event_type", "process_output",
@@ -272,7 +272,7 @@ func TestQuietStderrLoggerPromotesRealStderrAndFiltersKnownBenignLines(t *testin
 	if len(records) != 2 {
 		t.Fatalf("records = %#v, want real stderr plus reclassified benign stderr", records)
 	}
-	if records[0]["level"] != "ERROR" || records[0]["data"] != "real leak detected" {
+	if records[0]["level"] != "ERROR" || records[0]["data"] != `3:33AM ERR real leak detected while quoting " INF "` {
 		t.Fatalf("real stderr record = %#v, want ERROR", records[0])
 	}
 	if records[1]["level"] != "DEBUG" || records[1]["data"] != "\x1b[90m3:33AM\x1b[0m \x1b[32mINF\x1b[0m scan completed in 42ms" {
