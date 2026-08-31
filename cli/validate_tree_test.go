@@ -139,6 +139,35 @@ func TestValidateTreeRejectsMixedHandlerAndChildren(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-154 (keel/ac-635)
+func TestValidateTreeRejectsChildlessNodeMissingHandler(t *testing.T) {
+	root := &CommandSpec{
+		Name:   "tool",
+		Config: Config{Program: "tool"},
+		Subcommands: []*CommandSpec{
+			{
+				Name: "admin",
+				Subcommands: []*CommandSpec{
+					{Name: "orphan"},
+					{Name: "status", Handler: noopHandler},
+				},
+			},
+			{Name: "run", Handler: noopHandler},
+		},
+	}
+
+	err := root.ValidateTree()
+	if err == nil {
+		t.Fatal("ValidateTree accepted a childless command without a handler")
+	}
+	if !strings.Contains(err.Error(), "neither a namespace nor a leaf with a handler") {
+		t.Fatalf("missing-handler error = %q, want retained diagnostic", err.Error())
+	}
+	if !strings.Contains(err.Error(), "admin orphan") {
+		t.Fatalf("missing-handler error = %q, want offending path named", err.Error())
+	}
+}
+
 // DHF-TEST: keel/requirement-106
 func TestValidateTreeRejectsNilChildWithoutPanicking(t *testing.T) {
 	root := &CommandSpec{
