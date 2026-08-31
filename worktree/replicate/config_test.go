@@ -113,7 +113,7 @@ func TestResolveRejectsLinkModeForPresetCoveredPattern(t *testing.T) {
 
 // DHF-TEST: keel/requirement-157 (keel/ac-665)
 func TestResolveRejectsLinkModeForPatternCoveringPresetExpansion(t *testing.T) {
-	for _, pattern := range []string{"**", "*", "."} {
+	for _, pattern := range []string{"**", "*", ".", "*.json", ".mcp.*", ".[m]cp.json"} {
 		t.Run(pattern, func(t *testing.T) {
 			items, err := (replicate.Config{
 				Presets: []replicate.Preset{replicate.PresetClaude, replicate.PresetCodex},
