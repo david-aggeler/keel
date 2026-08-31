@@ -67,6 +67,53 @@ var vscodeGateLaneDefs = []testFileLane{
 
 var vsixCIToolResources = []string{"pnpm", "node", "xvfb-run"}
 
+type vsixRuntimeLibraryResource struct {
+	soname      string
+	packageName string
+}
+
+// DHF-REQ: keel/requirement-159
+var vsixCIRuntimeLibraryResources = []vsixRuntimeLibraryResource{
+	// Direct host-side DT_NEEDED entries for the pinned VS Code 1.135.0
+	// Linux x64 runtime. libffmpeg.so is bundled in the downloaded runtime
+	// directory, so it is not a host prerequisite.
+	{soname: "libdl.so.2", packageName: "libc6"},
+	{soname: "libpthread.so.0", packageName: "libc6"},
+	{soname: "libglib-2.0.so.0", packageName: "libglib2.0-0t64"},
+	{soname: "libgobject-2.0.so.0", packageName: "libglib2.0-0t64"},
+	{soname: "libgio-2.0.so.0", packageName: "libglib2.0-0t64"},
+	{soname: "libnspr4.so", packageName: "libnspr4"},
+	{soname: "libnss3.so", packageName: "libnss3"},
+	{soname: "libnssutil3.so", packageName: "libnss3"},
+	{soname: "libsmime3.so", packageName: "libnss3"},
+	{soname: "libatk-1.0.so.0", packageName: "libatk1.0-0t64"},
+	{soname: "libatk-bridge-2.0.so.0", packageName: "libatk-bridge2.0-0t64"},
+	{soname: "libcups.so.2", packageName: "libcups2t64"},
+	{soname: "libdbus-1.so.3", packageName: "libdbus-1-3"},
+	{soname: "libcairo.so.2", packageName: "libcairo2"},
+	{soname: "libgtk-3.so.0", packageName: "libgtk-3-0t64"},
+	{soname: "libpango-1.0.so.0", packageName: "libpango-1.0-0"},
+	{soname: "libX11.so.6", packageName: "libx11-6"},
+	{soname: "libXcomposite.so.1", packageName: "libxcomposite1"},
+	{soname: "libXdamage.so.1", packageName: "libxdamage1"},
+	{soname: "libXext.so.6", packageName: "libxext6"},
+	{soname: "libXfixes.so.3", packageName: "libxfixes3"},
+	{soname: "libXrandr.so.2", packageName: "libxrandr2"},
+	{soname: "libgbm.so.1", packageName: "libgbm1"},
+	{soname: "libexpat.so.1", packageName: "libexpat1"},
+	{soname: "libxcb.so.1", packageName: "libxcb1"},
+	{soname: "libxkbcommon.so.0", packageName: "libxkbcommon0"},
+	{soname: "libudev.so.1", packageName: "libudev1"},
+	{soname: "libasound.so.2", packageName: "libasound2t64"},
+	{soname: "libatspi.so.0", packageName: "libatspi2.0-0t64"},
+	{soname: "libm.so.6", packageName: "libc6"},
+	{soname: "libgcc_s.so.1", packageName: "libgcc-s1"},
+	{soname: "libc.so.6", packageName: "libc6"},
+	{soname: "ld-linux-x86-64.so.2", packageName: "libc6"},
+}
+
+var vsixRuntimeLibraryResolved = defaultVSIXRuntimeLibraryResolved
+
 type testLanesFile struct {
 	Version int            `json:"version"`
 	Lanes   []testFileLane `json:"lanes"`
@@ -526,8 +573,77 @@ func laneRequiredResources(id string) []string {
 	if id == vscodeLaneVSIXGate {
 		resources = []string{"go-toolchain", "keel-module-root"}
 		resources = append(resources, vsixCIToolResources...)
+		resources = append(resources, vsixRuntimeLibraryResourceNames()...)
 	}
 	return resources
+}
+
+func vsixRuntimeLibraryResourceNames() []string {
+	names := make([]string, 0, len(vsixCIRuntimeLibraryResources))
+	for _, resource := range vsixCIRuntimeLibraryResources {
+		names = append(names, resource.soname)
+	}
+	return names
+}
+
+func requireVSIXRuntimeSharedLibraries(ctx context.Context, logger *slog.Logger) error {
+	blocked := blockedVSIXRuntimeSharedLibraries(ctx, logger)
+	if len(blocked) == 0 {
+		return nil
+	}
+	missing := make([]string, 0, len(blocked))
+	for _, prereq := range blocked {
+		missing = append(missing, fmt.Sprintf("%s (%s)", prereq.Resource, prereq.Detail))
+	}
+	return fmt.Errorf("keel-dev vsix ci: required VS Code runtime shared libraries not found: %s", strings.Join(missing, "; "))
+}
+
+func blockedVSIXRuntimeSharedLibraries(ctx context.Context, logger *slog.Logger) []vscode.BlockedPrereq {
+	var blocked []vscode.BlockedPrereq
+	for _, resource := range vsixCIRuntimeLibraryResources {
+		if vsixRuntimeLibraryResolved(ctx, logger, resource.soname) {
+			continue
+		}
+		blocked = append(blocked, vscode.BlockedPrereq{
+			Resource: resource.soname,
+			Detail:   fmt.Sprintf("install package %s", resource.packageName),
+		})
+	}
+	return blocked
+}
+
+func defaultVSIXRuntimeLibraryResolved(ctx context.Context, logger *slog.Logger, soname string) bool {
+	out, ok := ldconfigSharedLibraryCache(ctx, logger)
+	if !ok {
+		return false
+	}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 && fields[0] == soname {
+			return true
+		}
+	}
+	return false
+}
+
+func ldconfigSharedLibraryCache(ctx context.Context, logger *slog.Logger) (string, bool) {
+	candidates := []string{}
+	if path, err := exec.LookPath("ldconfig"); err == nil {
+		candidates = append(candidates, path)
+	}
+	candidates = append(candidates, "/sbin/ldconfig", "/usr/sbin/ldconfig")
+	seen := map[string]bool{}
+	for _, candidate := range candidates {
+		if seen[candidate] {
+			continue
+		}
+		seen[candidate] = true
+		out, _, err := capture(ctx, logger, "", candidate, "-p")
+		if err == nil {
+			return out, true
+		}
+	}
+	return "", false
 }
 
 // DHF-REQ: keel/requirement-51, keel/requirement-54, keel/requirement-65
@@ -687,9 +803,7 @@ func (s *lanesState) expand(id string, stack []string, depth int) (effectiveLane
 				prereq["keel-module-root"] = true
 			case "vsix":
 				rootSet["vsix::root"] = true
-				prereq["go-toolchain"] = true
-				prereq["keel-module-root"] = true
-				for _, resource := range vsixCIToolResources {
+				for _, resource := range laneRequiredResources(vscodeLaneVSIXGate) {
 					prereq[resource] = true
 				}
 			default:
@@ -2340,7 +2454,8 @@ func (p keelWorkspaceProfile) ConsumerID() string { return "keel-dev" }
 func (p keelWorkspaceProfile) Node() string       { return workspaceNode(p.root) }
 
 // DHF-REQ: keel/requirement-90
-func (p keelWorkspaceProfile) PrepareLane(_ context.Context, laneID string) vscode.LaneReadiness {
+// DHF-REQ: keel/requirement-159
+func (p keelWorkspaceProfile) PrepareLane(ctx context.Context, laneID string) vscode.LaneReadiness {
 	if _, err := exec.LookPath("go"); err != nil {
 		return vscode.LaneReadiness{Blocked: []vscode.BlockedPrereq{{Resource: "go-toolchain", Detail: err.Error()}}}
 	}
@@ -2350,11 +2465,24 @@ func (p keelWorkspaceProfile) PrepareLane(_ context.Context, laneID string) vsco
 				return vscode.LaneReadiness{Blocked: []vscode.BlockedPrereq{{Resource: resource, Detail: err.Error()}}}
 			}
 		}
+		if blocked := blockedVSIXRuntimeSharedLibraries(ctx, vscodeLoggerFromContext(ctx)); len(blocked) > 0 {
+			return vscode.LaneReadiness{Blocked: blocked}
+		}
 	}
 	if _, err := os.Stat(filepath.Join(p.root, "go.mod")); err != nil {
 		return vscode.LaneReadiness{Blocked: []vscode.BlockedPrereq{{Resource: "keel-module-root", Detail: err.Error()}}}
 	}
 	return vscode.LaneReadiness{}
+}
+
+func vscodeLoggerFromContext(ctx context.Context) *slog.Logger {
+	if state := stateFrom(ctx); state.logger != nil {
+		return state.logger
+	}
+	if rt, ok := testbridge.RuntimeFrom(ctx); ok && rt.Log != nil {
+		return rt.Log
+	}
+	return vscodeDiscardLogger()
 }
 
 func knownVSCodeLaneID(laneID string) bool {

@@ -61,11 +61,15 @@ func handleVSIXGate(ctx context.Context, _ []string) error {
 }
 
 // DHF-REQ: keel/requirement-40, keel/requirement-76, keel/requirement-90
+// DHF-REQ: keel/requirement-159
 func runVSIXGate(ctx context.Context, logger *slog.Logger, dir string) error {
 	for _, tool := range []string{"node", "pnpm", "xvfb-run"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			return fmt.Errorf("keel-dev vsix ci: required tool %q not found on PATH", tool)
 		}
+	}
+	if err := requireVSIXRuntimeSharedLibraries(ctx, logger); err != nil {
+		return err
 	}
 	if err := validateVSIXProtocolDrift(dir); err != nil {
 		return err
