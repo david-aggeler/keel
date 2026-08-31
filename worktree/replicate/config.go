@@ -2,6 +2,7 @@ package replicate
 
 import (
 	"fmt"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -104,8 +105,28 @@ func copyItems(patterns ...string) []worktree.ReplicateItem {
 func coveredByPreset(pattern string, presetItems []worktree.ReplicateItem) bool {
 	pattern = cleanPattern(pattern)
 	for _, item := range presetItems {
-		if patternCoveredBy(pattern, cleanPattern(item.Pattern)) {
+		preset := cleanPattern(item.Pattern)
+		if patternsIntersect(pattern, preset) {
 			return true
+		}
+	}
+	return false
+}
+
+// DHF-REQ: keel/requirement-157
+func patternsIntersect(pattern, preset string) bool {
+	if patternCoveredBy(pattern, preset) || patternCoveredBy(preset, pattern) {
+		return true
+	}
+	if globMatches(pattern, preset) {
+		return true
+	}
+	if root, ok := recursivePatternRoot(preset); ok {
+		if globMatches(pattern, root) || globMatches(pattern, root+"/_") {
+			return true
+		}
+		if patternRoot, patternRecursive := recursivePatternRoot(pattern); patternRecursive {
+			return globMatches(patternRoot, root) || globMatches(root, patternRoot)
 		}
 	}
 	return false
@@ -115,11 +136,26 @@ func patternCoveredBy(pattern, preset string) bool {
 	if pattern == preset {
 		return true
 	}
+	if preset == "." || preset == "*" || preset == "**" {
+		return true
+	}
 	if strings.HasSuffix(preset, "/**") {
 		root := strings.TrimSuffix(preset, "/**")
 		return pattern == root || strings.HasPrefix(pattern, root+"/")
 	}
 	return false
+}
+
+func globMatches(pattern, name string) bool {
+	matched, err := path.Match(pattern, name)
+	return err == nil && matched
+}
+
+func recursivePatternRoot(pattern string) (string, bool) {
+	if strings.HasSuffix(pattern, "/**") {
+		return strings.TrimSuffix(pattern, "/**"), true
+	}
+	return "", false
 }
 
 func cleanPattern(pattern string) string {
