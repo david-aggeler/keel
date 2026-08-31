@@ -67,6 +67,17 @@ var vscodeGateLaneDefs = []testFileLane{
 
 var vsixCIToolResources = []string{"pnpm", "node", "xvfb-run"}
 
+type vsixRuntimeLibraryResource struct {
+	soname      string
+	packageName string
+}
+
+var vsixCIRuntimeLibraryResources = []vsixRuntimeLibraryResource{
+	{soname: "libgtk-3.so.0", packageName: "libgtk-3-0t64"},
+}
+
+var vsixRuntimeLibraryResolved = defaultVSIXRuntimeLibraryResolved
+
 type testLanesFile struct {
 	Version int            `json:"version"`
 	Lanes   []testFileLane `json:"lanes"`
@@ -526,8 +537,77 @@ func laneRequiredResources(id string) []string {
 	if id == vscodeLaneVSIXGate {
 		resources = []string{"go-toolchain", "keel-module-root"}
 		resources = append(resources, vsixCIToolResources...)
+		resources = append(resources, vsixRuntimeLibraryResourceNames()...)
 	}
 	return resources
+}
+
+func vsixRuntimeLibraryResourceNames() []string {
+	names := make([]string, 0, len(vsixCIRuntimeLibraryResources))
+	for _, resource := range vsixCIRuntimeLibraryResources {
+		names = append(names, resource.soname)
+	}
+	return names
+}
+
+func requireVSIXRuntimeSharedLibraries() error {
+	blocked := blockedVSIXRuntimeSharedLibraries()
+	if len(blocked) == 0 {
+		return nil
+	}
+	missing := make([]string, 0, len(blocked))
+	for _, prereq := range blocked {
+		missing = append(missing, fmt.Sprintf("%s (%s)", prereq.Resource, prereq.Detail))
+	}
+	return fmt.Errorf("keel-dev vsix ci: required VS Code runtime shared libraries not found: %s", strings.Join(missing, "; "))
+}
+
+func blockedVSIXRuntimeSharedLibraries() []vscode.BlockedPrereq {
+	var blocked []vscode.BlockedPrereq
+	for _, resource := range vsixCIRuntimeLibraryResources {
+		if vsixRuntimeLibraryResolved(resource.soname) {
+			continue
+		}
+		blocked = append(blocked, vscode.BlockedPrereq{
+			Resource: resource.soname,
+			Detail:   fmt.Sprintf("install package %s", resource.packageName),
+		})
+	}
+	return blocked
+}
+
+func defaultVSIXRuntimeLibraryResolved(soname string) bool {
+	out, ok := ldconfigSharedLibraryCache()
+	if !ok {
+		return false
+	}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 && fields[0] == soname {
+			return true
+		}
+	}
+	return false
+}
+
+func ldconfigSharedLibraryCache() (string, bool) {
+	candidates := []string{}
+	if path, err := exec.LookPath("ldconfig"); err == nil {
+		candidates = append(candidates, path)
+	}
+	candidates = append(candidates, "/sbin/ldconfig", "/usr/sbin/ldconfig")
+	seen := map[string]bool{}
+	for _, candidate := range candidates {
+		if seen[candidate] {
+			continue
+		}
+		seen[candidate] = true
+		out, err := exec.Command(candidate, "-p").Output()
+		if err == nil {
+			return string(out), true
+		}
+	}
+	return "", false
 }
 
 // DHF-REQ: keel/requirement-51, keel/requirement-54, keel/requirement-65
@@ -687,9 +767,7 @@ func (s *lanesState) expand(id string, stack []string, depth int) (effectiveLane
 				prereq["keel-module-root"] = true
 			case "vsix":
 				rootSet["vsix::root"] = true
-				prereq["go-toolchain"] = true
-				prereq["keel-module-root"] = true
-				for _, resource := range vsixCIToolResources {
+				for _, resource := range laneRequiredResources(vscodeLaneVSIXGate) {
 					prereq[resource] = true
 				}
 			default:
@@ -2340,6 +2418,7 @@ func (p keelWorkspaceProfile) ConsumerID() string { return "keel-dev" }
 func (p keelWorkspaceProfile) Node() string       { return workspaceNode(p.root) }
 
 // DHF-REQ: keel/requirement-90
+// DHF-REQ: keel/requirement-159
 func (p keelWorkspaceProfile) PrepareLane(_ context.Context, laneID string) vscode.LaneReadiness {
 	if _, err := exec.LookPath("go"); err != nil {
 		return vscode.LaneReadiness{Blocked: []vscode.BlockedPrereq{{Resource: "go-toolchain", Detail: err.Error()}}}
@@ -2349,6 +2428,9 @@ func (p keelWorkspaceProfile) PrepareLane(_ context.Context, laneID string) vsco
 			if _, err := exec.LookPath(resource); err != nil {
 				return vscode.LaneReadiness{Blocked: []vscode.BlockedPrereq{{Resource: resource, Detail: err.Error()}}}
 			}
+		}
+		if blocked := blockedVSIXRuntimeSharedLibraries(); len(blocked) > 0 {
+			return vscode.LaneReadiness{Blocked: blocked}
 		}
 	}
 	if _, err := os.Stat(filepath.Join(p.root, "go.mod")); err != nil {

@@ -9,6 +9,15 @@ import (
 	"testing"
 )
 
+func withVSIXRuntimeLibraryResolver(t *testing.T, resolver func(string) bool) {
+	t.Helper()
+	original := vsixRuntimeLibraryResolved
+	vsixRuntimeLibraryResolved = resolver
+	t.Cleanup(func() {
+		vsixRuntimeLibraryResolved = original
+	})
+}
+
 // stubTools builds a bin directory of fake git/gh/go/gofmt executables and
 // prepends it to PATH for the test. Each stub appends its argv to calls.log and
 // obeys per-command behavior baked into the script, so the whole release loop
@@ -91,6 +100,7 @@ exit 0`)
 
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	seedStubToolCache(t, bin)
+	withVSIXRuntimeLibraryResolver(t, func(string) bool { return true })
 	return callsFile
 }
 
@@ -360,6 +370,35 @@ func TestRunVSIXGateRequiresNodeAndXVFBRunBeforePNPM(t *testing.T) {
 				t.Fatalf("vsix gate should not start pnpm when %s is absent; calls:\n%s", tc.wantMissing, calls(t, callsFile))
 			}
 		})
+	}
+}
+
+// DHF-TEST: keel/requirement-159 (keel/ac-667, keel/ac-668)
+func TestRunVSIXGateRequiresRuntimeSharedLibrariesBeforePNPM(t *testing.T) {
+	callsFile := stubTools(t, false, false)
+	bin := filepath.Dir(callsFile)
+	stub(t, bin, callsFile, "pnpm", "printf 'pnpm must not run before runtime library preflight passes\\n' >&2\nexit 7")
+	withVSIXRuntimeLibraryResolver(t, func(soname string) bool {
+		return soname != "libgtk-3.so.0"
+	})
+	dir := moduleFixture(t)
+
+	err := runVSIXGate(context.Background(), discardLogger(), dir)
+	if err == nil {
+		t.Fatal("vsix gate succeeded with missing runtime shared library; want prerequisite failure")
+	}
+	for _, want := range []string{"libgtk-3.so.0", "libgtk-3-0t64"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("runtime library error = %v, want %q", err, want)
+		}
+	}
+	if strings.Contains(calls(t, callsFile), "pnpm ") {
+		t.Fatalf("vsix gate should not start pnpm when runtime libraries are absent; calls:\n%s", calls(t, callsFile))
+	}
+	if entries, err := filepath.Glob(filepath.Join(dir, "vsix", ".vscode-test", "vscode-linux-*")); err != nil {
+		t.Fatal(err)
+	} else if len(entries) != 0 {
+		t.Fatalf("runtime library block should happen before VS Code runtime download, found %+v", entries)
 	}
 }
 
