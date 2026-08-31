@@ -27,6 +27,20 @@ func writeExecStub(t *testing.T, dir, name, stdout string, exitCode int) {
 	}
 }
 
+func writeStderrExecStub(t *testing.T, dir, name, stderr string, exitCode int) string {
+	t.Helper()
+	script := "#!/bin/sh\n"
+	if stderr != "" {
+		script += "printf '%s\\n' " + shellSingleQuote(stderr) + " >&2\n"
+	}
+	script += "exit " + itoaStub(exitCode) + "\n"
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func shellSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
@@ -177,36 +191,94 @@ func TestRunStepNonAdvisory_FailsOnNonZero(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-17, keel/requirement-24, keel/requirement-25
-func TestRunStepQuietStderrReclassifiesKnownBenignToolProgress(t *testing.T) {
+// DHF-TEST: keel/requirement-158 (keel/ac-659, keel/ac-660, keel/ac-661, keel/ac-664)
+func TestRunStepChildStderrFilterMapsAcceptedAndUnacceptedLevels(t *testing.T) {
+	tests := []struct {
+		name   string
+		filter *childStderrFilter
+		line   string
+		want   string
+	}{
+		{
+			name:   "cspell accepted summary",
+			filter: cspellStderrFilter(),
+			line:   "CSpell: Files checked: 55, Issues found: 0 in 0 files.",
+			want:   "DEBUG",
+		},
+		{
+			name:   "cspell unknown line defaults to error",
+			filter: cspellStderrFilter(),
+			line:   "CSpell: dictionary read failed",
+			want:   "ERROR",
+		},
+		{
+			name:   "golangci warning token maps to warn",
+			filter: golangciLintStderrFilter(),
+			line:   `level=warning msg="cache entry referenced a removed worktree"`,
+			want:   "WARN",
+		},
+		{
+			name:   "gitleaks info token maps to debug",
+			filter: gitleaksStderrFilter(),
+			line:   "\x1b[90m3:33AM\x1b[0m \x1b[32mINF\x1b[0m scan completed in 42ms",
+			want:   "DEBUG",
+		},
+		{
+			name:   "gitleaks severe token quoting info stays error",
+			filter: gitleaksStderrFilter(),
+			line:   `3:33AM ERR scanner failed while quoting " INF " in the message`,
+			want:   "ERROR",
+		},
+		{
+			name:   "empty shellcheck policy defaults to error",
+			filter: emptyChildStderrFilter(),
+			line:   "shell parser warning",
+			want:   "ERROR",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			tool := writeStderrExecStub(t, dir, "stderr-tool", tc.line, 0)
+			logger, cap := testLogger("keel-dev")
+			if err := runStep(context.Background(), logger, ".", step{
+				name: "stderr-probe", program: tool, stderr: reinterpretChildStderr(tc.filter),
+			}); err != nil {
+				t.Fatalf("stderr probe should pass, got %v", err)
+			}
+			rec := childStderrRecord(t, cap.AllJSON(), tc.line)
+			if rec["level"] != tc.want {
+				t.Fatalf("stderr record level = %#v, want %s; record=%#v", rec["level"], tc.want, rec)
+			}
+		})
+	}
+}
+
+// DHF-TEST: keel/requirement-158 (keel/ac-658)
+func TestRunStepRefusesDeclaredStderrReinterpretationWithoutFilter(t *testing.T) {
 	dir := t.TempDir()
-	script := "#!/bin/sh\nprintf '%s\\n' 'CSpell: Files checked: 55, Issues found: 0 in 0 files.' >&2\n"
-	tool := filepath.Join(dir, "quiet-tool")
-	if err := os.WriteFile(tool, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	tool := writeStderrExecStub(t, dir, "stderr-tool", "progress", 0)
 
-	logger, cap := testLogger("keel-dev")
-	if err := runStep(context.Background(), logger, ".", step{
-		name: "cspell", program: tool, quietStderr: true,
-	}); err != nil {
-		t.Fatalf("quiet stderr step should pass, got %v", err)
+	err := runStep(context.Background(), discardLogger(), ".", step{
+		name: "unfiltered-tool", program: tool, stderr: reinterpretChildStderr(nil),
+	})
+	if err == nil {
+		t.Fatal("declared stderr reinterpretation without a filter should fail construction")
 	}
+	if !strings.Contains(err.Error(), "unfiltered-tool") || !strings.Contains(err.Error(), "stderr filter") {
+		t.Fatalf("construction error should name the step and missing filter, got %v", err)
+	}
+}
 
-	var sawReclassified bool
-	for _, rec := range cap.AllJSON() {
-		if rec["event_type"] == "process_output" && rec["stream"] == "stderr" && rec["data"] == "CSpell: Files checked: 55, Issues found: 0 in 0 files." {
-			if rec["level"] == "ERROR" {
-				t.Fatalf("quiet stderr progress surfaced at ERROR: %#v", rec)
-			}
-			if rec["level"] == "DEBUG" {
-				sawReclassified = true
-			}
+func childStderrRecord(t *testing.T, records []map[string]any, line string) map[string]any {
+	t.Helper()
+	for _, rec := range records {
+		if rec["event_type"] == "process_output" && rec["stream"] == "stderr" && rec["data"] == line {
+			return rec
 		}
 	}
-	if !sawReclassified {
-		t.Fatalf("did not find reclassified stderr progress record; records=%#v", cap.AllJSON())
-	}
+	t.Fatalf("did not find stderr process-output record for %q; records=%#v", line, records)
+	return nil
 }
 
 // DHF-TEST: keel/requirement-12, keel/requirement-8
@@ -574,6 +646,8 @@ func TestModuleZipStepFailsOnTrackedMalformedPath(t *testing.T) {
 // TestCiStepsHasStaticBattery asserts the gate wiring includes every pinned
 // static tool and marks deadcode advisory, so a refactor cannot silently drop a
 // step.
+//
+// DHF-TEST: keel/requirement-158 (keel/ac-661, keel/ac-662, keel/ac-663, keel/ac-664)
 func TestCiStepsHasStaticBattery(t *testing.T) {
 	root, err := findModuleRoot(".")
 	if err != nil {
@@ -592,8 +666,14 @@ func TestCiStepsHasStaticBattery(t *testing.T) {
 		if s.tool == "" {
 			t.Errorf("step %q must be version-pinned (tool unset)", want)
 		}
-		if !s.quietStderr {
-			t.Errorf("step %q must quiet benign stderr progress", want)
+		if !s.stderr.reinterpret || s.stderr.filter == nil {
+			t.Errorf("step %q must carry an explicit child-stderr filter", want)
+			continue
+		}
+		for _, version := range s.stderr.filter.acceptedEntryVersions() {
+			if strings.TrimSpace(version) == "" {
+				t.Errorf("step %q has an accepted-stderr entry without a blessed version", want)
+			}
 		}
 	}
 	if !byName["deadcode"].advisory {
@@ -601,6 +681,19 @@ func TestCiStepsHasStaticBattery(t *testing.T) {
 	}
 	if byName["golangci-lint"].advisory {
 		t.Error("golangci-lint must be blocking, not advisory")
+	}
+
+	src, err := os.ReadFile(filepath.Join(root, "cmd", "keel-dev", "gates.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, retired := range []string{
+		strings.Join([]string{"quiet", "Stderr"}, ""),
+		strings.Join([]string{"isKnown", "Benign", "Stderr"}, ""),
+	} {
+		if strings.Contains(string(src), retired) {
+			t.Fatalf("stderr filtering must be owned by step filters, but gates.go still contains %q", retired)
+		}
 	}
 }
 
