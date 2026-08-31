@@ -225,6 +225,25 @@ func TestValidateTreeRejectsUseStringEnumeratedVerbWithoutChildNode(t *testing.T
 	}
 }
 
+// DHF-TEST: keel/requirement-101 (keel/ac-363)
+func TestValidateTreeRejectsCommandThatShadowsHelpOnlyTopic(t *testing.T) {
+	root := &CommandSpec{
+		Name:   "tool",
+		Config: Config{Program: "tool"},
+		Subcommands: []*CommandSpec{
+			{Name: "mode", Use: "mode", Short: "Shadow the help-only topic.", Handler: noopHandler},
+		},
+	}
+
+	err := root.ValidateTree()
+	if err == nil {
+		t.Fatal("ValidateTree accepted a command that shadows the mode help-only topic")
+	}
+	if !strings.Contains(err.Error(), "mode") || !strings.Contains(err.Error(), "help-only topic") {
+		t.Fatalf("shadowing error = %q, want topic name and collision kind", err.Error())
+	}
+}
+
 // DHF-TEST: keel/requirement-154 (keel/ac-638)
 func TestValidateTreeAllowsResolvedAlternatesAndPlaceholderUseText(t *testing.T) {
 	root := &CommandSpec{
