@@ -3,13 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func withVSIXRuntimeLibraryResolver(t *testing.T, resolver func(string) bool) {
+func withVSIXRuntimeLibraryResolver(t *testing.T, resolver func(context.Context, *slog.Logger, string) bool) {
 	t.Helper()
 	original := vsixRuntimeLibraryResolved
 	vsixRuntimeLibraryResolved = resolver
@@ -100,7 +101,7 @@ exit 0`)
 
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	seedStubToolCache(t, bin)
-	withVSIXRuntimeLibraryResolver(t, func(string) bool { return true })
+	withVSIXRuntimeLibraryResolver(t, func(context.Context, *slog.Logger, string) bool { return true })
 	return callsFile
 }
 
@@ -378,7 +379,7 @@ func TestRunVSIXGateRequiresRuntimeSharedLibrariesBeforePNPM(t *testing.T) {
 	callsFile := stubTools(t, false, false)
 	bin := filepath.Dir(callsFile)
 	stub(t, bin, callsFile, "pnpm", "printf 'pnpm must not run before runtime library preflight passes\\n' >&2\nexit 7")
-	withVSIXRuntimeLibraryResolver(t, func(soname string) bool {
+	withVSIXRuntimeLibraryResolver(t, func(_ context.Context, _ *slog.Logger, soname string) bool {
 		return soname != "libgtk-3.so.0"
 	})
 	dir := moduleFixture(t)
@@ -399,6 +400,36 @@ func TestRunVSIXGateRequiresRuntimeSharedLibrariesBeforePNPM(t *testing.T) {
 		t.Fatal(err)
 	} else if len(entries) != 0 {
 		t.Fatalf("runtime library block should happen before VS Code runtime download, found %+v", entries)
+	}
+}
+
+// DHF-TEST: keel/requirement-159 (keel/ac-667)
+func TestVSIXRuntimeLibraryResolverRunsLdconfigThroughKeelExec(t *testing.T) {
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "ldconfig", `printf '%s\n' '	libgtk-3.so.0 (libc6,x86-64) => /lib/libgtk-3.so.0'`)
+	t.Setenv("PATH", bin)
+
+	logger, cap := testLogger("keel-dev")
+	if !defaultVSIXRuntimeLibraryResolved(context.Background(), logger, "libgtk-3.so.0") {
+		t.Fatal("runtime library resolver returned false; want fake ldconfig cache hit")
+	}
+	if got := strings.TrimSpace(calls(t, callsFile)); got != "ldconfig -p" {
+		t.Fatalf("ldconfig calls = %q, want %q", got, "ldconfig -p")
+	}
+
+	var sawStart, sawEnd bool
+	for _, rec := range cap.AllJSON() {
+		commandLine, _ := rec["command_line"].(string)
+		if rec["event_type"] == "process_start" && strings.Contains(commandLine, "ldconfig -p") {
+			sawStart = true
+		}
+		if rec["event_type"] == "process_end" {
+			sawEnd = true
+		}
+	}
+	if !sawStart || !sawEnd {
+		t.Fatalf("ldconfig probe lifecycle logs: start=%v end=%v records=%+v", sawStart, sawEnd, cap.AllJSON())
 	}
 }
 

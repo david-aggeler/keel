@@ -10,6 +10,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -3553,7 +3554,7 @@ func TestVSCodeVSIXGateReadinessRequiresCompleteToolchain(t *testing.T) {
 	t.Setenv("PATH", bin)
 
 	// DHF-TEST: keel/requirement-159 (keel/ac-667)
-	withVSIXRuntimeLibraryResolver(t, func(soname string) bool {
+	withVSIXRuntimeLibraryResolver(t, func(_ context.Context, _ *slog.Logger, soname string) bool {
 		return soname != "libgtk-3.so.0"
 	})
 	profile := newKeelWorkspaceProfile(root)
@@ -3579,7 +3580,7 @@ func TestVSCodeVSIXGateReadinessRequiresCompleteToolchain(t *testing.T) {
 	}
 
 	// DHF-TEST: keel/requirement-159 (keel/ac-669)
-	withVSIXRuntimeLibraryResolver(t, func(string) bool { return true })
+	withVSIXRuntimeLibraryResolver(t, func(context.Context, *slog.Logger, string) bool { return true })
 	if readiness := newKeelWorkspaceProfile(root).PrepareLane(context.Background(), vscodeLaneVSIXGate); !readiness.Ready() {
 		t.Fatalf("PrepareLane with full vsix-ci toolchain = %+v, want ready", readiness)
 	}
