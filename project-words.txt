@@ -75,6 +75,7 @@ keeldev
 keeldevtest
 keelverify
 ldconfig
+libc
 libpq
 logotel
 logtest
