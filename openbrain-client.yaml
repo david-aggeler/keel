@@ -14,13 +14,9 @@ placeholders:
   build_command: [just, build]
   # Primary implementation language for generated skill context.
   primary_language: "Go"
-keel:
-  worktree:
-    replicate:
-      presets: [claude, codex]
-      custom:
-        - openbrain-client.local.yaml
-        - .vscode/test-lanes.json
+# keel: worktree-replicate policy removed 2026-08-31 (hotfix, keel/issue-228):
+# deployed openbrain-client strict-parses this file and rejects unknown top-level
+# keys. Home for keel-owned policy pending keel/action_item-35.
 # Optional autonomous-tail executor turn budgets by verb; blank uses the compiled default.
 turn_budgets:
   # Optional max turns for post-merge verify sessions.
