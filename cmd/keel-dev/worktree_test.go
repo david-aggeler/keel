@@ -109,6 +109,129 @@ func TestWorktreeResumeHelpDoesNotAdvertiseBase(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-157 (keel/ac-646)
+func TestWorktreeUpVerbReplicatesDeclaredIgnoredItem(t *testing.T) {
+	env := newWorktreeVerbEnv(t)
+	writeFile(t, env.repo, ".gitignore", "local.secret\n")
+	writeFile(t, env.repo, "local.secret", "primary\n")
+	writeFile(t, env.repo, "openbrain-client.yaml", `
+product: keel
+transition_gates:
+  unit:
+    in_session: []
+    runner_owned: []
+keel:
+  worktree:
+    replicate:
+      custom:
+        - local.secret
+`)
+
+	out, logs, code := env.runWithLogs(t, "worktree", "up", "cr-1-alpha")
+	assertVerb(t, "up with declared replication", out, code, "up cr-1-alpha "+env.path("cr-1-alpha")+"\n", 0)
+	got, err := os.ReadFile(filepath.Join(env.path("cr-1-alpha"), "local.secret"))
+	if err != nil {
+		t.Fatalf("replicated file missing: %v", err)
+	}
+	if string(got) != "primary\n" {
+		t.Fatalf("replicated file content = %q, want primary content", got)
+	}
+	assertLogHas(t, "declared replication", logs, "pattern=local.secret")
+	assertLogHas(t, "declared replication", logs, "outcome=copied")
+}
+
+// DHF-TEST: keel/requirement-157 (keel/ac-649)
+func TestWorktreeUpVerbTreatsAbsentReplicateDeclarationAsNoop(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "missing file"},
+		{name: "missing keel section", body: "product: keel\ntransition_gates:\n  unit:\n    in_session: []\n"},
+		{name: "missing replicate section", body: "keel:\n  worktree: {}\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newWorktreeVerbEnv(t)
+			if tc.body != "" {
+				writeFile(t, env.repo, "openbrain-client.yaml", tc.body)
+			}
+
+			out, logs, code := env.runWithLogs(t, "worktree", "up", "cr-1-alpha")
+			assertVerb(t, tc.name, out, code, "up cr-1-alpha "+env.path("cr-1-alpha")+"\n", 0)
+			if strings.Contains(logs, "worktree replicate item") {
+				t.Fatalf("%s logged replication despite absent declaration:\n%s", tc.name, logs)
+			}
+		})
+	}
+}
+
+// DHF-TEST: keel/requirement-157 (keel/ac-653, keel/ac-654)
+func TestWorktreeUpReplicateFlagControlsPolicy(t *testing.T) {
+	env := newWorktreeVerbEnv(t)
+	writeFile(t, env.repo, ".gitignore", "local.secret\n")
+	writeFile(t, env.repo, "local.secret", "primary v1\n")
+	writeFile(t, env.repo, "openbrain-client.yaml", "keel:\n  worktree:\n    replicate:\n      custom: [local.secret]\n")
+
+	out, code := env.run(t, "worktree", "up", "cr-1-alpha")
+	assertVerb(t, "initial up", out, code, "up cr-1-alpha "+env.path("cr-1-alpha")+"\n", 0)
+
+	writeFile(t, env.path("cr-1-alpha"), "local.secret", "local edit\n")
+	writeFile(t, env.repo, "local.secret", "primary v2\n")
+	out, code = env.run(t, "worktree", "up", "cr-1-alpha")
+	assertVerb(t, "missing-only re-up", out, code, "up-noop cr-1-alpha "+env.path("cr-1-alpha")+"\n", 0)
+	if got := mustReadPath(t, filepath.Join(env.path("cr-1-alpha"), "local.secret")); got != "local edit\n" {
+		t.Fatalf("default policy content = %q, want local edit", got)
+	}
+
+	out, code = env.run(t, "worktree", "up", "--replicate", "refresh", "cr-1-alpha")
+	assertVerb(t, "refresh re-up", out, code, "up-noop cr-1-alpha "+env.path("cr-1-alpha")+"\n", 0)
+	if got := mustReadPath(t, filepath.Join(env.path("cr-1-alpha"), "local.secret")); got != "primary v2\n" {
+		t.Fatalf("refresh policy content = %q, want primary v2", got)
+	}
+
+	writeFile(t, env.path("cr-1-alpha"), "local.secret", "local edit 2\n")
+	writeFile(t, env.repo, "local.secret", "primary v3\n")
+	out, code = env.run(t, "worktree", "up", "--replicate=off", "cr-1-alpha")
+	assertVerb(t, "off re-up", out, code, "up-noop cr-1-alpha "+env.path("cr-1-alpha")+"\n", 0)
+	if got := mustReadPath(t, filepath.Join(env.path("cr-1-alpha"), "local.secret")); got != "local edit 2\n" {
+		t.Fatalf("off policy content = %q, want local edit 2", got)
+	}
+}
+
+// DHF-TEST: keel/requirement-157
+func TestWorktreeUpHelpSurfacesReplicateFlag(t *testing.T) {
+	tree := commandTree()
+	var help strings.Builder
+	if err := tree.RenderTopicHelp(&help, []string{"worktree", "up"}); err != nil {
+		t.Fatalf("RenderTopicHelp(worktree up): %v", err)
+	}
+	got := help.String()
+	for _, want := range []string{"--replicate", "missing_only", "refresh", "off"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("worktree up help missing %q:\n%s", want, got)
+		}
+	}
+
+	namespace, ok := tree.Child("worktree")
+	if !ok {
+		t.Fatal("missing worktree namespace")
+	}
+	up, ok := namespace.Child("up")
+	if !ok {
+		t.Fatal("missing worktree up command")
+	}
+	flag, ok := flagByName(up, "replicate")
+	if !ok {
+		t.Fatal("worktree up has no --replicate flag")
+	}
+	if got := strings.Join(flag.Enum, ","); got != "missing_only,refresh,off" {
+		t.Fatalf("--replicate enum = %q, want missing_only,refresh,off", got)
+	}
+	if flag.Default != "missing_only" {
+		t.Fatalf("--replicate default = %q, want missing_only", flag.Default)
+	}
+}
+
 func assertHelpContainsExitCodes(t *testing.T, label, help string, wantRows []worktree.ExitCodeDoc) {
 	t.Helper()
 	for _, row := range wantRows {
@@ -141,6 +264,15 @@ func assertExitCodeJSON(t *testing.T, path string, got []struct {
 			t.Fatalf("--help-json %s exit_codes[%d] = %q, want %q: %+v", path, row.Code, seen[row.Code], row.Meaning, got)
 		}
 	}
+}
+
+func mustReadPath(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }
 
 // ac-413's wrapper-header half is gone with the wrappers themselves
