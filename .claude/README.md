@@ -30,6 +30,11 @@ Nothing in the worktree bring-up path materializes skills, and that path lives i
 ruling, 2026-08-21: track the skills, so a fresh worktree is usable the moment
 `git worktree add` returns.
 
+keel-dev worktree bring-up now reads the committed `keel.worktree.replicate`
+declaration in `openbrain-client.yaml` and copies the declared gitignored items
+into new checkouts. That replication covers per-checkout agent and tool state;
+it does not change the tracked-skills ruling above.
+
 ### What this costs you
 
 **A withdrawal is not automatic.** A skill withdrawn in gold does not leave this

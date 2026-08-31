@@ -14,6 +14,13 @@ placeholders:
   build_command: [just, build]
   # Primary implementation language for generated skill context.
   primary_language: "Go"
+keel:
+  worktree:
+    replicate:
+      presets: [claude, codex]
+      custom:
+        - openbrain-client.local.yaml
+        - .vscode/test-lanes.json
 # Optional autonomous-tail executor turn budgets by verb; blank uses the compiled default.
 turn_budgets:
   # Optional max turns for post-merge verify sessions.
