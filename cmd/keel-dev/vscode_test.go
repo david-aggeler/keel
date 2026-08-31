@@ -3603,7 +3603,9 @@ func TestVSCodeVSIXGateReadinessRequiresCompleteToolchain(t *testing.T) {
 		t.Fatalf("discovery missing %q", vscodeLaneVSIXGate)
 	}
 	wantResources := []string{"go-toolchain", "keel-module-root", "pnpm", "node", "xvfb-run"}
-	wantResources = append(wantResources, "libgtk-3.so.0")
+	wantLibraryResources := vsixRuntimeLibraryResourceNames()
+	sort.Strings(wantLibraryResources)
+	wantResources = append(wantResources, wantLibraryResources...)
 	if !stringSlicesEqual(item.RequiredResources, wantResources) {
 		t.Fatalf("vsix-ci required resources = %+v, want %+v", item.RequiredResources, wantResources)
 	}
