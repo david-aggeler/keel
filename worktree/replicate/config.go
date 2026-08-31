@@ -104,15 +104,20 @@ func copyItems(patterns ...string) []worktree.ReplicateItem {
 func coveredByPreset(pattern string, presetItems []worktree.ReplicateItem) bool {
 	pattern = cleanPattern(pattern)
 	for _, item := range presetItems {
-		if patternCoveredBy(pattern, cleanPattern(item.Pattern)) {
+		preset := cleanPattern(item.Pattern)
+		if patternCoveredBy(pattern, preset) || patternCoveredBy(preset, pattern) {
 			return true
 		}
 	}
 	return false
 }
 
+// DHF-REQ: keel/requirement-157
 func patternCoveredBy(pattern, preset string) bool {
 	if pattern == preset {
+		return true
+	}
+	if preset == "." || preset == "*" || preset == "**" {
 		return true
 	}
 	if strings.HasSuffix(preset, "/**") {

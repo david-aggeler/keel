@@ -111,6 +111,47 @@ func TestResolveRejectsLinkModeForPresetCoveredPattern(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-157 (keel/ac-665)
+func TestResolveRejectsLinkModeForPatternCoveringPresetExpansion(t *testing.T) {
+	for _, pattern := range []string{"**", "*", "."} {
+		t.Run(pattern, func(t *testing.T) {
+			items, err := (replicate.Config{
+				Presets: []replicate.Preset{replicate.PresetClaude, replicate.PresetCodex},
+				Custom:  []replicate.CustomEntry{{Pattern: pattern, Mode: worktree.ReplicateLink}},
+			}).Resolve()
+			if err == nil || !strings.Contains(err.Error(), pattern) {
+				t.Fatalf("preset-covering link err = %v, want error naming %q", err, pattern)
+			}
+			for _, item := range items {
+				if item.Pattern == pattern && item.Mode == worktree.ReplicateLink {
+					t.Fatalf("resolved items include link-mode custom item %#v after validation failure", item)
+				}
+			}
+		})
+	}
+}
+
+// DHF-TEST: keel/requirement-157 (keel/ac-665)
+func TestResolveAllowsLinkModeForPatternOutsidePresetExpansion(t *testing.T) {
+	items, err := (replicate.Config{
+		Presets: []replicate.Preset{replicate.PresetClaude, replicate.PresetCodex},
+		Custom:  []replicate.CustomEntry{{Pattern: "docs/**", Mode: worktree.ReplicateLink}},
+	}).Resolve()
+	if err != nil {
+		t.Fatalf("resolve outside-preset link pattern: %v", err)
+	}
+	want := []worktree.ReplicateItem{
+		{Pattern: ".claude/**", Mode: worktree.ReplicateCopy},
+		{Pattern: ".mcp.json", Mode: worktree.ReplicateCopy},
+		{Pattern: ".codex/**", Mode: worktree.ReplicateCopy},
+		{Pattern: ".agents/**", Mode: worktree.ReplicateCopy},
+		{Pattern: "docs/**", Mode: worktree.ReplicateLink},
+	}
+	if !sameItems(items, want) {
+		t.Fatalf("resolved items = %#v, want %#v", items, want)
+	}
+}
+
 func sameItems(got, want []worktree.ReplicateItem) bool {
 	if len(got) != len(want) {
 		return false
