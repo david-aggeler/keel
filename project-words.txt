@@ -74,6 +74,7 @@ keel
 keeldev
 keeldevtest
 keelverify
+ldconfig
 libpq
 logotel
 logtest
@@ -121,6 +122,7 @@ shellcheck
 shfmt
 Shostack
 shquote
+soname
 sslmode
 sslpassword
 staticcheck
