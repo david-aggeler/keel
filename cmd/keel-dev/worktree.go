@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -15,6 +16,8 @@ import (
 	procexec "github.com/david-aggeler/keel/exec"
 	logging "github.com/david-aggeler/keel/log"
 	"github.com/david-aggeler/keel/worktree"
+	"github.com/david-aggeler/keel/worktree/replicate"
+	"gopkg.in/yaml.v3"
 )
 
 // worktreeCommandSpec is keel-dev's binding over keel/worktree: one namespace
@@ -26,6 +29,7 @@ import (
 // DHF-REQ: keel/requirement-114 (keel/ac-408, keel/ac-415)
 func worktreeCommandSpec() *cli.CommandSpec {
 	var upBase string
+	var upReplicate string
 	var downForce bool
 	var branchDeleteForce bool
 	var statusGlob string
@@ -42,13 +46,23 @@ func worktreeCommandSpec() *cli.CommandSpec {
 				Group:       "Lifecycle",
 				ExitCodes:   exitCodes,
 				Positionals: []cli.PositionalSpec{{Name: "name", Min: 1, Max: 1}},
-				Flags: []cli.FlagSpec{{
-					Name:         "base",
-					Value:        "ref",
-					Short:        "Cut a newly created branch from this ref instead of the local default branch.",
-					StringTarget: &upBase,
-				}},
-				Handler: handleWorktreeUp(&upBase),
+				Flags: []cli.FlagSpec{
+					{
+						Name:         "base",
+						Value:        "ref",
+						Short:        "Cut a newly created branch from this ref instead of the local default branch.",
+						StringTarget: &upBase,
+					},
+					{
+						Name:         "replicate",
+						Value:        "missing_only|refresh|off",
+						Default:      string(worktree.ReplicateMissingOnly),
+						Short:        "Control declared gitignored-item replication during bring-up.",
+						Enum:         []string{string(worktree.ReplicateMissingOnly), string(worktree.ReplicateRefresh), string(worktree.ReplicateOff)},
+						StringTarget: &upReplicate,
+					},
+				},
+				Handler: handleWorktreeUp(&upBase, &upReplicate),
 			},
 			{
 				Name:        "resume",
@@ -124,7 +138,7 @@ func worktreeExitCodeSpecs() []cli.ExitCodeSpec {
 	return specs
 }
 
-func handleWorktreeUp(base *string) cli.Handler {
+func handleWorktreeUp(base, replicatePolicy *string) cli.Handler {
 	return func(ctx context.Context, args []string) error {
 		if err := validateWorkItemName("up", args[0]); err != nil {
 			return err
@@ -133,7 +147,7 @@ func handleWorktreeUp(base *string) cli.Handler {
 		if err != nil {
 			return err
 		}
-		return binding.up(ctx, args[0])
+		return binding.up(ctx, args[0], worktree.ReplicatePolicy(strings.TrimSpace(*replicatePolicy)))
 	}
 }
 
@@ -277,6 +291,10 @@ const worktreeBaseDefault = "worktrees/"
 // row relocates the worktrees parent.
 const worktreeMarkerFile = "openbrain-client.local.yaml"
 
+// openbrainClientConfigFile is the committed product-policy file whose keel:
+// namespace carries worktree replication declarations.
+const openbrainClientConfigFile = "openbrain-client.yaml"
+
 // newWorktreeBinding resolves the primary checkout first, then the marker-based
 // worktrees parent, so every worktree verb in this process addresses one shared
 // path convention.
@@ -390,18 +408,26 @@ func markerWorktreeBase(body string) string {
 	return ""
 }
 
-// up brings the work item's worktree up by delegating the lifecycle decision to
-// keel/worktree, then rendering the outcome it returns.
+// up brings the work item's worktree up by delegating the lifecycle decision and
+// declared replication to keel/worktree, then rendering the outcome it returns.
 //
 // DHF-REQ: keel/requirement-113, keel/requirement-114 (keel/ac-408, keel/ac-409, keel/ac-411, keel/ac-416)
-func (b *worktreeBinding) up(ctx context.Context, name string) error {
+// DHF-REQ: keel/requirement-157
+func (b *worktreeBinding) up(ctx context.Context, name string, policy worktree.ReplicatePolicy) error {
 	if _, _, err := b.manager.Resolve(name); err != nil {
 		return worktreeExit("up", err)
 	}
 	if err := b.ensureWorktreesDir(); err != nil {
 		return err
 	}
-	created, err := b.manager.Up(ctx, name)
+	replicateItems, err := loadWorktreeReplicateItems(b.primary)
+	if err != nil {
+		return worktreeExit("up", err)
+	}
+	created, err := b.manager.Up(ctx, name, worktree.UpOptions{
+		Replicate: replicateItems,
+		Policy:    policy,
+	})
 	if err != nil {
 		return worktreeExit("up", err)
 	}
@@ -419,6 +445,80 @@ func (b *worktreeBinding) up(ctx context.Context, name string) error {
 	default:
 		return worktreeFailure("up", worktree.CodeGit, "worktree up returned unknown outcome %q for %s", created.Outcome, name)
 	}
+}
+
+type openbrainKeelConfig struct {
+	// Worktree carries keel-owned worktree policy nested in openbrain-client's
+	// committed product-policy file.
+	Worktree openbrainWorktreeConfig `yaml:"worktree"`
+}
+
+type openbrainWorktreeConfig struct {
+	// Replicate declares gitignored primary-checkout items to materialize during
+	// worktree bring-up.
+	Replicate *replicate.Config `yaml:"replicate"`
+}
+
+// loadWorktreeReplicateItems reads only openbrain-client.yaml's keel: subtree.
+// The outer envelope belongs to openbrain-client, so unrelated top-level keys
+// are ignored; once inside keel's namespace, KnownFields keeps the contract
+// strict.
+func loadWorktreeReplicateItems(root string) ([]worktree.ReplicateItem, error) {
+	file := filepath.Join(root, openbrainClientConfigFile)
+	data, err := os.ReadFile(file)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, worktreeFailure("up", worktree.CodeGit, "could not read %s: %v", file, err)
+	}
+
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, worktreeFailure("up", worktree.CodeInvalidArgument, "decode %s: %v", file, err)
+	}
+	keelNode := yamlMappingValue(&doc, "keel")
+	if keelNode == nil {
+		return nil, nil
+	}
+
+	keelData, err := yaml.Marshal(keelNode)
+	if err != nil {
+		return nil, worktreeFailure("up", worktree.CodeInvalidArgument, "decode %s keel namespace: %v", file, err)
+	}
+	var cfg openbrainKeelConfig
+	dec := yaml.NewDecoder(bytes.NewReader(keelData))
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil && !errors.Is(err, io.EOF) {
+		return nil, worktreeFailure("up", worktree.CodeInvalidArgument, "decode %s keel namespace: %v", file, err)
+	}
+	if cfg.Worktree.Replicate == nil {
+		return nil, nil
+	}
+	items, err := cfg.Worktree.Replicate.Resolve()
+	if err != nil {
+		return nil, worktreeFailure("up", worktree.CodeInvalidArgument, "resolve %s keel.worktree.replicate: %v", file, err)
+	}
+	return items, nil
+}
+
+func yamlMappingValue(doc *yaml.Node, key string) *yaml.Node {
+	if doc == nil {
+		return nil
+	}
+	node := doc
+	if node.Kind == yaml.DocumentNode && len(node.Content) > 0 {
+		node = node.Content[0]
+	}
+	if node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+	return nil
 }
 
 // resume is the strict-alias compatibility verb for the attach outcome. It
