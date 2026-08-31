@@ -2,23 +2,31 @@ package log_test
 
 import (
 	"log/slog"
+	"os"
 	"os/exec"
+	"path"
+	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
 	logging "github.com/david-aggeler/keel/log"
 )
 
+const foundationExportsModulePath = "github.com/david-aggeler/keel"
+
 // DHF-TEST: keel/requirement-31
 func TestFoundationExportsAreConsumerAgnostic(t *testing.T) {
-	out, err := exec.Command("go", "list", "github.com/david-aggeler/keel/...").Output()
+	importPaths, err := foundationExportImportPaths(t)
 	if err != nil {
-		t.Fatalf("go list packages: %v\n%s", err, out)
+		t.Fatal(err)
 	}
-	for _, importPath := range strings.Fields(string(out)) {
+	var docFailures []string
+	for _, importPath := range importPaths {
 		out, err := exec.Command("go", "doc", importPath).CombinedOutput()
 		if err != nil {
-			t.Fatalf("go doc %s: %v\n%s", importPath, err, out)
+			docFailures = append(docFailures, "go doc "+importPath+": "+err.Error()+"\n"+string(out))
+			continue
 		}
 		for _, line := range strings.Split(string(out), "\n") {
 			if !strings.HasPrefix(line, "const ") &&
@@ -33,6 +41,149 @@ func TestFoundationExportsAreConsumerAgnostic(t *testing.T) {
 			}
 		}
 	}
+	if len(docFailures) != 0 {
+		t.Fatalf("go doc failures:\n%s", strings.Join(docFailures, "\n"))
+	}
+}
+
+// DHF-TEST: keel/requirement-85 (keel/ac-666)
+func TestFoundationExportsIgnoreGitignoredTestOnlyPackages(t *testing.T) {
+	root := moduleRoot(t)
+	scratch := filepath.Join(root, "scratchpad", "foundation-exports-test-only-package")
+	if err := os.MkdirAll(scratch, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(scratch); err != nil {
+			t.Errorf("cleanup scratch package: %v", err)
+		}
+	})
+	if err := os.WriteFile(filepath.Join(scratch, "probe_test.go"), []byte("package probe_test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("go", "test", "./log", "-run", "^TestFoundationExportsAreConsumerAgnostic$", "-count=1")
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("foundation exports test should ignore gitignored test-only package: %v\n%s", err, out)
+	}
+}
+
+func moduleRoot(t *testing.T) string {
+	t.Helper()
+	cmd := exec.Command("go", "env", "GOMOD")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("go env GOMOD: %v\n%s", err, out)
+	}
+	gomod := strings.TrimSpace(string(out))
+	if gomod == "" || gomod == os.DevNull {
+		t.Fatalf("go env GOMOD = %q, want module file", gomod)
+	}
+	return filepath.Dir(gomod)
+}
+
+// DHF-REQ: keel/requirement-85 (keel/ac-666)
+func foundationExportImportPaths(t *testing.T) ([]string, error) {
+	t.Helper()
+	root := moduleRoot(t)
+	excludes := foundationExportGateExcludes(t, root)
+	cmd := exec.Command("git", "ls-files", "-z", "*.go")
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, errWithOutput("git ls-files -z *.go", err, out)
+	}
+
+	seen := map[string]bool{}
+	for _, file := range strings.Split(string(out), "\x00") {
+		if file == "" {
+			continue
+		}
+		if foundationExportPathExcluded(file, excludes) {
+			continue
+		}
+		dir := path.Dir(filepath.ToSlash(file))
+		if dir == "." {
+			seen[foundationExportsModulePath] = true
+			continue
+		}
+		seen[foundationExportsModulePath+"/"+dir] = true
+	}
+	importPaths := make([]string, 0, len(seen))
+	for importPath := range seen {
+		importPaths = append(importPaths, importPath)
+	}
+	sort.Strings(importPaths)
+	return importPaths, nil
+}
+
+func foundationExportGateExcludes(t *testing.T, root string) []string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, "keel-dev.yaml"))
+	if err != nil {
+		t.Fatalf("read keel-dev.yaml: %v", err)
+	}
+	var excludes []string
+	inGate := false
+	inExcludes := false
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		switch {
+		case indent == 0:
+			inGate = trimmed == "gate:"
+			inExcludes = false
+		case inGate && indent == 2:
+			inExcludes = trimmed == "excludes:"
+		case inGate && inExcludes && strings.HasPrefix(trimmed, "- "):
+			pattern := strings.TrimSpace(strings.TrimPrefix(trimmed, "- "))
+			excludes = append(excludes, strings.Trim(pattern, `"'`))
+		}
+	}
+	if len(excludes) == 0 {
+		t.Fatal("keel-dev.yaml gate.excludes is empty or unreadable")
+	}
+	return excludes
+}
+
+func foundationExportPathExcluded(file string, patterns []string) bool {
+	file = filepath.ToSlash(file)
+	for _, pattern := range patterns {
+		pattern = filepath.ToSlash(pattern)
+		if strings.HasSuffix(pattern, "/**") {
+			prefix := strings.TrimSuffix(pattern, "**")
+			if strings.HasPrefix(file, prefix) {
+				return true
+			}
+			continue
+		}
+		if matched, _ := path.Match(pattern, file); matched {
+			return true
+		}
+	}
+	return false
+}
+
+func errWithOutput(command string, err error, out []byte) error {
+	if len(out) == 0 {
+		return err
+	}
+	return &commandError{command: command, err: err, output: string(out)}
+}
+
+type commandError struct {
+	command string
+	err     error
+	output  string
+}
+
+func (e *commandError) Error() string {
+	return e.command + ": " + e.err.Error() + "\n" + e.output
 }
 
 func TestEmit_ProducesInfoLevelWithKindMetric(t *testing.T) {
