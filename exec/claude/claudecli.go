@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -115,6 +116,15 @@ type Result struct {
 	Events []Event
 	// Final points at the terminal `result` event inside Events.
 	Final *Event
+	// Limit is the last usage-limit state claude reported on this run's event
+	// stream, last-wins because the value is a running measurement rather than
+	// an accumulation. It is the same type keel/exec/codex reports, so a caller
+	// reads one shape for either executor. Its zero value means claude reported
+	// none, which [procexec.LimitState.Reported] distinguishes from a reported
+	// empty window.
+	//
+	// DHF-REQ: keel/requirement-161
+	Limit procexec.LimitState
 }
 
 // resultEvent is the wire shape of the final JSON object emitted by
@@ -224,10 +234,16 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 		return nil, fmt.Errorf("keel/exec/claude: read stdout: %w — stderr: %s", err, bytes.TrimSpace(stderr.Bytes()))
 	}
 
+	limit := stdout.Limit()
+
 	out := bytes.TrimSpace(stdout.ResultRaw())
 	if len(out) == 0 {
 		if runErr != nil {
-			return nil, fmt.Errorf("keel/exec/claude: %s: %w — stderr: %s", bin, runErr, bytes.TrimSpace(stderr.Bytes()))
+			// A child that died before emitting its terminal result event is
+			// exactly the shape a quota-exhausted executor takes, so the
+			// attribution has to reach this branch too — not only the outcome
+			// contract below.
+			return nil, attributeQuota(fmt.Errorf("keel/exec/claude: %s: %w — stderr: %s", bin, runErr, bytes.TrimSpace(stderr.Bytes())), limit)
 		}
 		return nil, fmt.Errorf("keel/exec/claude: empty stdout from %s", bin)
 	}
@@ -247,6 +263,7 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 		Raw:        json.RawMessage(append([]byte(nil), out...)),
 		ExitCode:   exitCode,
 		Events:     stdout.Events(),
+		Limit:      limit,
 	}
 	res.Final = terminalEvent(res.Events)
 
@@ -256,8 +273,8 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 	//
 	// DHF-REQ: keel/requirement-134
 	if outcome := procexec.DecideCLIOutcome(exitCode, ev.IsError); outcome.Failed {
-		return res, fmt.Errorf("keel/exec/claude: %s %s — stderr: %s",
-			bin, outcome.Reason, bytes.TrimSpace(stderr.Bytes()))
+		return res, attributeQuota(fmt.Errorf("keel/exec/claude: %s %s — stderr: %s",
+			bin, outcome.Reason, bytes.TrimSpace(stderr.Bytes())), res.Limit)
 	}
 
 	// A wait error the exit code did not express (an I/O failure while reaping,
@@ -268,6 +285,103 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 			bin, runErr, bytes.TrimSpace(stderr.Bytes()))
 	}
 	return res, nil
+}
+
+// attributeQuota wraps err with the shared quota sentinel when — and only when
+// — the last limit state claude reported says the limit was reached. The
+// original message is kept whole, so the child's exit code and stderr stay in
+// the error for forensics; the sentinel is added alongside, never substituted.
+//
+// DHF-REQ: keel/requirement-161
+func attributeQuota(err error, limit procexec.LimitState) error {
+	if err == nil || !limit.Reached() {
+		return err
+	}
+	return fmt.Errorf("%w — %w", err, procexec.ErrQuotaExhausted)
+}
+
+// claudeLimitAllowed is the rate_limit_info status claude reports while it is
+// still serving requests. Any other status is claude saying the request did not
+// clear its limit.
+const claudeLimitAllowed = "allowed"
+
+// claudeLimitWindows maps the window names claude reports under unifiedWindows
+// to the durations they stand for. A name absent here leaves the window length
+// unreported rather than guessed.
+var claudeLimitWindows = map[string]time.Duration{
+	"five_hour": 5 * time.Hour,
+	"seven_day": 7 * 24 * time.Hour,
+}
+
+// claudeRateLimitWindow is one entry of claude's unifiedWindows map. Both
+// fields are pointers so an absent key stays absent instead of decoding to a
+// zero that reads as "no usage".
+type claudeRateLimitWindow struct {
+	Utilization *float64 `json:"utilization"`
+	ResetsAt    *int64   `json:"resetsAt"`
+}
+
+// claudeRateLimitInfo is the subset of claude's rate_limit_info object keel
+// reports, as emitted on `-p --output-format stream-json` rate_limit_event
+// lines (verified against claude 2.1.245). The overage keys it omits are
+// billing detail no caller of this adapter acts on.
+type claudeRateLimitInfo struct {
+	Status         string                           `json:"status"`
+	ResetsAt       *int64                           `json:"resetsAt"`
+	UnifiedWindows map[string]claudeRateLimitWindow `json:"unifiedWindows"`
+}
+
+// decodeLimitState reads claude's rate_limit_info object off one stream-json
+// line and reports whether the line carried one at all.
+//
+// claude reports several windows at once; the one surfaced is the fullest,
+// because that is the constraint that stops the next dispatch. A line that will
+// not decode leaves the state absent: a malformed telemetry field must never
+// fail a run that otherwise succeeded, and must never fabricate a reading a
+// caller would act on.
+//
+// DHF-REQ: keel/requirement-161
+func decodeLimitState(line []byte) (procexec.LimitState, bool) {
+	var hdr struct {
+		Info *claudeRateLimitInfo `json:"rate_limit_info"`
+	}
+	if err := json.Unmarshal(line, &hdr); err != nil || hdr.Info == nil {
+		return procexec.LimitState{}, false
+	}
+	info := hdr.Info
+
+	state := procexec.LimitState{Reported: true}
+	state.ReachedReported = info.Status != "" && info.Status != claudeLimitAllowed
+	if info.ResetsAt != nil {
+		state.ResetsAt = time.Unix(*info.ResetsAt, 0).UTC()
+	}
+
+	// Sorted key order keeps the pick deterministic when two windows report the
+	// same utilization; map iteration order alone would not.
+	names := make([]string, 0, len(info.UnifiedWindows))
+	for name := range info.UnifiedWindows {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	fullest := ""
+	for _, name := range names {
+		window := info.UnifiedWindows[name]
+		if window.Utilization == nil {
+			continue
+		}
+		if fullest == "" || *window.Utilization > *info.UnifiedWindows[fullest].Utilization {
+			fullest = name
+		}
+	}
+	if fullest != "" {
+		window := info.UnifiedWindows[fullest]
+		state.UsedFraction = *window.Utilization
+		state.Window = claudeLimitWindows[fullest]
+		if window.ResetsAt != nil {
+			state.ResetsAt = time.Unix(*window.ResetsAt, 0).UTC()
+		}
+	}
+	return state, true
 }
 
 // terminalEvent returns a pointer to the run's terminal `result` event inside
@@ -323,6 +437,7 @@ type claudeStreamWriter struct {
 	buf       []byte
 	resultRaw []byte
 	events    []Event
+	limit     procexec.LimitState
 	err       error
 }
 
@@ -358,6 +473,14 @@ func (w *claudeStreamWriter) Err() error {
 	return nil
 }
 
+// Limit returns the last usage-limit state the stream reported, or the zero
+// state when it reported none.
+//
+// DHF-REQ: keel/requirement-161
+func (w *claudeStreamWriter) Limit() procexec.LimitState {
+	return w.limit
+}
+
 func (w *claudeStreamWriter) ResultRaw() []byte {
 	return append([]byte(nil), w.resultRaw...)
 }
@@ -380,6 +503,12 @@ func (w *claudeStreamWriter) consumeLine(line []byte) {
 	}
 	eventType := stringValue(ev["type"])
 	w.events = append(w.events, Event{Type: eventType, Raw: append([]byte(nil), line...)})
+	// Last-wins: the limit state is a running measurement, so the newest
+	// reading is the one a caller acts on.
+	// DHF-REQ: keel/requirement-161
+	if state, ok := decodeLimitState(line); ok {
+		w.limit = state
+	}
 	if eventType == "result" {
 		w.resultRaw = append(w.resultRaw[:0], line...)
 		return
