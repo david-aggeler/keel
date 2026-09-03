@@ -50,6 +50,14 @@ type Result struct {
 	// Raw is the verbatim stdout (each line + "\n"). Blank lines are preserved
 	// here but excluded from Events.
 	Raw []byte
+	// Limit is the last usage-limit state codex reported on this run's event
+	// stream, last-wins because the value is a running measurement rather than
+	// an accumulation. Its zero value means codex reported none, which
+	// [procexec.LimitState.Reported] distinguishes from a reported empty
+	// window.
+	//
+	// DHF-REQ: keel/requirement-161
+	Limit procexec.LimitState
 }
 
 // Request describes one headless `codex exec --json` invocation.
@@ -213,8 +221,8 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 	//
 	// DHF-REQ: keel/requirement-134
 	if outcome := procexec.DecideCLIOutcome(res.ExitCode, terminalEventFailed(res.Final)); outcome.Failed {
-		err := fmt.Errorf("keel/exec/codex: %s %s — stderr: %s",
-			bin, outcome.Reason, strings.TrimSpace(processResult.Stderr))
+		err := attributeQuota(fmt.Errorf("keel/exec/codex: %s %s — stderr: %s",
+			bin, outcome.Reason, strings.TrimSpace(processResult.Stderr)), res.Limit)
 		if len(res.Events) == 0 {
 			return nil, err
 		}
@@ -234,6 +242,98 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 	}
 
 	return res, nil
+}
+
+// attributeQuota wraps err with the shared quota sentinel when — and only when
+// — the last limit state codex reported says the limit was reached. The
+// original message is kept whole, so the child's exit code and stderr stay in
+// the error for forensics; the sentinel is added alongside, never substituted.
+//
+// DHF-REQ: keel/requirement-161
+func attributeQuota(err error, limit procexec.LimitState) error {
+	if err == nil || !limit.Reached() {
+		return err
+	}
+	return fmt.Errorf("%w — %w", err, procexec.ErrQuotaExhausted)
+}
+
+// codexRateLimitWindow is one window of codex's rate_limits object. Every field
+// is a pointer so an absent key stays absent instead of decoding to a zero that
+// reads as "no usage".
+type codexRateLimitWindow struct {
+	UsedPercent   *float64 `json:"used_percent"`
+	WindowMinutes *int     `json:"window_minutes"`
+	ResetsAt      *int64   `json:"resets_at"`
+}
+
+// codexRateLimits is the subset of codex's rate_limits object keel reports. The
+// sibling keys it omits (limit_id, credits, plan_type, …) are codex accounting
+// detail no caller of this adapter acts on.
+type codexRateLimits struct {
+	Primary   *codexRateLimitWindow `json:"primary"`
+	Secondary *codexRateLimitWindow `json:"secondary"`
+	// ReachedType is codex's own statement that a limit is reached; it names
+	// which limit, and is null while the executor is still serving requests.
+	ReachedType *string `json:"rate_limit_reached_type"`
+}
+
+// decodeLimitState reads codex's rate_limits object off one JSONL line and
+// reports whether the line carried one at all. codex publishes it on
+// token_count events, but the framing differs between the exec --json stdout
+// stream and the rollout transcript, so the object is looked for at the top
+// level and under each envelope decodeEventType already unwraps.
+//
+// A line that will not decode leaves the state absent: a malformed telemetry
+// field must never fail a run that otherwise succeeded, and must never
+// fabricate a reading a caller would act on.
+//
+// DHF-REQ: keel/requirement-161
+func decodeLimitState(line []byte) (procexec.LimitState, bool) {
+	var hdr struct {
+		RateLimits *codexRateLimits `json:"rate_limits"`
+		Payload    struct {
+			RateLimits *codexRateLimits `json:"rate_limits"`
+		} `json:"payload"`
+		Msg struct {
+			RateLimits *codexRateLimits `json:"rate_limits"`
+		} `json:"msg"`
+		Item struct {
+			RateLimits *codexRateLimits `json:"rate_limits"`
+		} `json:"item"`
+	}
+	if err := json.Unmarshal(line, &hdr); err != nil {
+		return procexec.LimitState{}, false
+	}
+	limits := hdr.RateLimits
+	for _, candidate := range []*codexRateLimits{hdr.Payload.RateLimits, hdr.Msg.RateLimits, hdr.Item.RateLimits} {
+		if limits == nil {
+			limits = candidate
+		}
+	}
+	if limits == nil {
+		return procexec.LimitState{}, false
+	}
+
+	state := procexec.LimitState{Reported: true}
+	state.ReachedReported = limits.ReachedType != nil && *limits.ReachedType != ""
+	// primary is codex's headline window; secondary stands in when codex
+	// reports only the narrower one.
+	window := limits.Primary
+	if window == nil {
+		window = limits.Secondary
+	}
+	if window != nil {
+		if window.UsedPercent != nil {
+			state.UsedFraction = *window.UsedPercent / 100
+		}
+		if window.WindowMinutes != nil {
+			state.Window = time.Duration(*window.WindowMinutes) * time.Minute
+		}
+		if window.ResetsAt != nil {
+			state.ResetsAt = time.Unix(*window.ResetsAt, 0).UTC()
+		}
+	}
+	return state, true
 }
 
 // terminalEventFailed reads codex's own failure verdict off the run's terminal
@@ -315,6 +415,12 @@ func (w *eventStreamWriter) consumeLine(line []byte) {
 	ev := Event{Type: decodeEventType(line), Raw: append([]byte(nil), line...)}
 	if ev.Type == "thread.started" && w.res.ThreadID == "" {
 		w.res.ThreadID = decodeThreadID(line)
+	}
+	// Last-wins: the limit state is a running measurement, so the newest
+	// reading is the one a caller acts on.
+	// DHF-REQ: keel/requirement-161
+	if state, ok := decodeLimitState(line); ok {
+		w.res.Limit = state
 	}
 	if ev.Type != "result" {
 		w.logProgress(ev, line)
