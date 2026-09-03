@@ -106,7 +106,7 @@ func (m *Manager) replicateItem(ctx context.Context, op, worktreePath string, po
 		return result, err
 	}
 	if len(sources) > 0 {
-		result.Path = materializationRoot(item.Pattern, sources[0])
+		result.Path = m.materializationRoot(item.Pattern, sources[0])
 	} else {
 		result.Path = literalPattern(item.Pattern)
 	}
@@ -211,10 +211,22 @@ func (m *Manager) classifyReplicateSource(ctx context.Context, op, pattern strin
 	return nil, false, false, len(trackedLines) > 0, nil
 }
 
-func materializationRoot(pattern, first string) string {
-	pattern = strings.TrimSpace(filepath.ToSlash(pattern))
-	if strings.HasSuffix(pattern, "/") || strings.HasSuffix(pattern, "/**") {
-		return strings.TrimSuffix(strings.TrimSuffix(pattern, "**"), "/")
+// materializationRoot resolves the path an item materializes at from the item's
+// shape on disk, never from how its pattern happens to be spelled. A pattern
+// naming a directory materializes that whole directory whether it is written
+// `d`, `d/`, or `d/**`; only a pattern that names no directory falls back to the
+// matched member. Reading the suffix instead made `d` link one member file and
+// report the same outcome as the complete `d/` materialization.
+//
+// DHF-REQ: keel/requirement-160 (keel/ac-671)
+func (m *Manager) materializationRoot(pattern, first string) string {
+	root := patternRoot(pattern)
+	if root == "" {
+		return first
+	}
+	info, err := os.Lstat(filepath.Join(m.repoRoot, filepath.FromSlash(root)))
+	if err == nil && info.IsDir() {
+		return root
 	}
 	return first
 }
