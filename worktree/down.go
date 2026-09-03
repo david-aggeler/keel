@@ -120,6 +120,16 @@ func (m *Manager) Down(ctx context.Context, name string, opts DownOptions) (Down
 		return result, err
 	}
 
+	// The checkout is cleared for removal, so this package's own replication
+	// links go first. git's removal check counts them as untracked files, and it
+	// is right to: a link standing in for a directory is not what a trailing-slash
+	// ignore rule matches, so the link is visible where the directory it replaces
+	// is not. Unlinking one destroys nothing — the content it points at lives in
+	// the primary checkout and bring-up recreates the link on demand.
+	if err := m.clearReplicationLinks(path); err != nil {
+		return result, err
+	}
+
 	args := []string{"worktree", "remove"}
 	if opts.Force {
 		args = append(args, "--force")
@@ -165,6 +175,62 @@ func (m *Manager) pruneAbsent(ctx context.Context, op string, result DownResult,
 	}
 	result.Outcome = DownPruned
 	return result, nil
+}
+
+// clearReplicationLinks unlinks every replication link in the checkout. It runs
+// only after the checkout has been found reclaimable, so it can never destroy
+// work: what it removes is a pointer into the primary checkout, not content.
+//
+// DHF-REQ: keel/requirement-160 (keel/ac-674)
+func (m *Manager) clearReplicationLinks(path string) error {
+	const op = "down"
+	var links []string
+	// WalkDir never follows a symlink, so the walk stays inside the checkout
+	// however many links into the primary checkout replication left in it.
+	err := filepath.WalkDir(path, func(current string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() || !m.isReplicationLink(current, path) {
+			return nil
+		}
+		links = append(links, current)
+		return nil
+	})
+	if err != nil {
+		return wrapError(op, CodeReplicateFailed, path, err, "walk %s for replicated links", path)
+	}
+	for _, link := range links {
+		if err := os.Remove(link); err != nil && !os.IsNotExist(err) {
+			return wrapError(op, CodeReplicateFailed, link, err, "unlink replicated %s", link)
+		}
+	}
+	return nil
+}
+
+// isReplicationLink reports whether abs is a symlink standing in for content in
+// the primary checkout. A link pointing back inside the worktree is the
+// caller's own and is deliberately excluded — it is content this checkout
+// holds, so tear-down must keep counting it as work.
+func (m *Manager) isReplicationLink(abs, worktreePath string) bool {
+	info, err := os.Lstat(abs)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return false
+	}
+	target, err := os.Readlink(abs)
+	if err != nil {
+		return false
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(abs), target)
+	}
+	target = filepath.Clean(target)
+	return underPath(target, m.repoRoot) && !underPath(target, filepath.Clean(worktreePath))
+}
+
+// underPath reports whether candidate is root or nested under it.
+func underPath(candidate, root string) bool {
+	return candidate == root || strings.HasPrefix(candidate, root+string(filepath.Separator))
 }
 
 // blockingItems filters a report down to what still stands in the way given the
@@ -306,6 +372,13 @@ func (m *Manager) appendStatus(ctx context.Context, op string, report *StaleRepo
 		}
 		entry = strings.Trim(entry, `"`)
 		if code == "??" {
+			// A replication link is this package's own bookkeeping, not work the
+			// checkout holds. It has to be excluded here rather than left to
+			// git's ignore rules, because substituting a symlink for a directory
+			// changes what those rules match.
+			if m.isReplicationLink(filepath.Join(path, filepath.FromSlash(entry)), path) {
+				continue
+			}
 			report.add(Blocker{
 				Kind:        BlockerUntrackedFile,
 				Path:        entry,

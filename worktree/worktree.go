@@ -94,6 +94,11 @@ const (
 	ReplicateOutcomeCopied ReplicateOutcome = "copied"
 	// ReplicateOutcomeLinked means the declared item was linked into the worktree.
 	ReplicateOutcomeLinked ReplicateOutcome = "linked"
+	// ReplicateOutcomePartial means materialization reached the worktree for
+	// some but not all of the item's eligible candidates. It is deliberately
+	// distinct from copied and linked, which assert completeness: a partial
+	// result reported as a success leaves the caller no signal to act on.
+	ReplicateOutcomePartial ReplicateOutcome = "partial"
 	// ReplicateOutcomeSkippedTracked means git already tracks the matched path.
 	ReplicateOutcomeSkippedTracked ReplicateOutcome = "skipped_tracked"
 	// ReplicateOutcomeSkippedNotIgnored means the matched path is untracked but
@@ -123,8 +128,16 @@ type ReplicateResult struct {
 	Path string
 	// Mode is the effective materialization mode for this result.
 	Mode ReplicateMode
-	// Outcome is the copied, linked, skipped, or refused result.
+	// Outcome is the copied, linked, partial, skipped, or refused result.
 	Outcome ReplicateOutcome
+	// Eligible is how many gitignored candidates the declaration matched in the
+	// primary checkout. Zero for every skipped and refused outcome.
+	Eligible int
+	// Materialized is how many of those candidates are reachable in the worktree
+	// after materialization. It is measured from the filesystem, not inferred
+	// from the mode, so Materialized < Eligible is the fact behind
+	// [ReplicateOutcomePartial].
+	Materialized int
 }
 
 // UpOptions carries bring-up replication options. The zero value preserves the

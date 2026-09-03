@@ -106,7 +106,7 @@ func (m *Manager) replicateItem(ctx context.Context, op, worktreePath string, po
 		return result, err
 	}
 	if len(sources) > 0 {
-		result.Path = materializationRoot(item.Pattern, sources[0])
+		result.Path = m.materializationRoot(item.Pattern, sources[0])
 	} else {
 		result.Path = literalPattern(item.Pattern)
 	}
@@ -122,13 +122,14 @@ func (m *Manager) replicateItem(ctx context.Context, op, worktreePath string, po
 		return result, nil
 	}
 
+	result.Eligible = len(sources)
 	if mode == ReplicateLink {
 		src := filepath.Join(m.repoRoot, filepath.FromSlash(result.Path))
 		dst := filepath.Join(worktreePath, filepath.FromSlash(result.Path))
 		if err := materializeLink(op, src, dst, policy); err != nil {
 			return result, err
 		}
-		result.Outcome = ReplicateOutcomeLinked
+		settleOutcome(worktreePath, &result, sources, ReplicateOutcomeLinked)
 		return result, nil
 	}
 	for _, sourceRel := range sources {
@@ -138,8 +139,39 @@ func (m *Manager) replicateItem(ctx context.Context, op, worktreePath string, po
 			return result, err
 		}
 	}
-	result.Outcome = ReplicateOutcomeCopied
+	settleOutcome(worktreePath, &result, sources, ReplicateOutcomeCopied)
 	return result, nil
+}
+
+// settleOutcome reports what actually reached the worktree rather than what the
+// mode intended. `copied` and `linked` assert completeness, so an item covering
+// fewer than its eligible candidates settles on [ReplicateOutcomePartial]
+// instead — a caller that reads a success outcome for a 1-of-24,327
+// materialization has no signal at all, which is worse than a hard failure.
+//
+// DHF-REQ: keel/requirement-160 (keel/ac-673)
+func settleOutcome(worktreePath string, result *ReplicateResult, sources []string, complete ReplicateOutcome) {
+	result.Materialized = materializedCount(worktreePath, sources)
+	if result.Materialized < result.Eligible {
+		result.Outcome = ReplicateOutcomePartial
+		return
+	}
+	result.Outcome = complete
+}
+
+// materializedCount counts the eligible candidates reachable in the worktree.
+// It calls lstat on each candidate, so a candidate that is itself a symlink
+// counts without its target having to resolve, while a candidate reached THROUGH a
+// materialized directory link still counts — the intermediate components of the
+// path are followed either way.
+func materializedCount(worktreePath string, sources []string) int {
+	materialized := 0
+	for _, sourceRel := range sources {
+		if _, err := os.Lstat(filepath.Join(worktreePath, filepath.FromSlash(sourceRel))); err == nil {
+			materialized++
+		}
+	}
+	return materialized
 }
 
 func materializeLink(op, src, dst string, policy ReplicatePolicy) error {
@@ -211,10 +243,22 @@ func (m *Manager) classifyReplicateSource(ctx context.Context, op, pattern strin
 	return nil, false, false, len(trackedLines) > 0, nil
 }
 
-func materializationRoot(pattern, first string) string {
-	pattern = strings.TrimSpace(filepath.ToSlash(pattern))
-	if strings.HasSuffix(pattern, "/") || strings.HasSuffix(pattern, "/**") {
-		return strings.TrimSuffix(strings.TrimSuffix(pattern, "**"), "/")
+// materializationRoot resolves the path an item materializes at from the item's
+// shape on disk, never from how its pattern happens to be spelled. A pattern
+// naming a directory materializes that whole directory whether it is written
+// `d`, `d/`, or `d/**`; only a pattern that names no directory falls back to the
+// matched member. Reading the suffix instead made `d` link one member file and
+// report the same outcome as the complete `d/` materialization.
+//
+// DHF-REQ: keel/requirement-160 (keel/ac-671)
+func (m *Manager) materializationRoot(pattern, first string) string {
+	root := patternRoot(pattern)
+	if root == "" {
+		return first
+	}
+	info, err := os.Lstat(filepath.Join(m.repoRoot, filepath.FromSlash(root)))
+	if err == nil && info.IsDir() {
+		return root
 	}
 	return first
 }
@@ -223,15 +267,38 @@ func literalPattern(pattern string) string {
 	return strings.Trim(strings.TrimPrefix(filepath.ToSlash(strings.TrimSpace(pattern)), "./"), "/")
 }
 
+// copyPath reproduces one candidate. A symlink is reproduced as a symlink
+// carrying the same target string — never dereferenced — the way `cp -a` and
+// `rsync -a` do it: dereferencing turned a directory symlink into a read of a
+// directory file descriptor and aborted bring-up outright.
+//
+// DHF-REQ: keel/requirement-160 (keel/ac-672)
 func copyPath(src, dst string) error {
 	info, err := os.Lstat(src)
 	if err != nil {
 		return err
 	}
-	if info.IsDir() {
+	switch {
+	case info.Mode()&os.ModeSymlink != 0:
+		return copySymlink(src, dst)
+	case info.IsDir():
 		return errors.New("directory copy requires ignored file candidates")
 	}
 	return copyFile(src, dst, info.Mode())
+}
+
+// copySymlink recreates a link rather than its target. The destination is
+// unlinked first because a symlink cannot be truncated into place the way a
+// regular file can.
+func copySymlink(src, dst string) error {
+	target, err := os.Readlink(src)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return os.Symlink(target, dst)
 }
 
 func copyFile(src, dst string, mode os.FileMode) error {
@@ -258,6 +325,8 @@ func (m *Manager) logReplicateResult(result ReplicateResult) {
 		"path", result.Path,
 		"mode", string(result.Mode),
 		"outcome", string(result.Outcome),
+		"eligible", result.Eligible,
+		"materialized", result.Materialized,
 	)
 }
 
