@@ -184,3 +184,43 @@ func TestUpReportsPartialWhenMaterializationCoversFewerThanEveryCandidate(t *tes
 		t.Fatalf("materialized = %d of %d, want fewer than every candidate", result.Materialized, result.Eligible)
 	}
 }
+
+// DHF-TEST: keel/requirement-160 (keel/ac-674)
+func TestDownRemovesWorktreeWhoseOnlyExtraContentIsReplicatedLink(t *testing.T) {
+	root := newRepo(t)
+	// The trailing slash matches directories only, so the ignore rule that hides
+	// the primary directory does not hide the symlink standing in for it.
+	writeFile(t, filepath.Join(root, ".gitignore"), "deps/\n")
+	git(t, root, "add", ".gitignore")
+	git(t, root, "commit", "-m", "ignore deps")
+	writeFile(t, filepath.Join(root, "deps", "one.txt"), "one\n")
+
+	m := newManager(t, worktree.Config{RepoRoot: root, Base: "main"})
+	wt, err := m.Up(context.Background(), "unit-1", worktree.UpOptions{
+		Replicate: []worktree.ReplicateItem{{Pattern: "deps/", Mode: worktree.ReplicateLink}},
+	})
+	if err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	state, err := m.State(context.Background(), "unit-1")
+	if err != nil {
+		t.Fatalf("state: %v", err)
+	}
+	for _, blocker := range state.Stale.OfKind(worktree.BlockerUntrackedFile) {
+		t.Fatalf("replicated link reported as untracked work: %+v", blocker)
+	}
+
+	removed, err := m.Down(context.Background(), "unit-1", worktree.DownOptions{})
+	if err != nil {
+		t.Fatalf("down: %v", err)
+	}
+	if removed.Outcome != worktree.DownRemoved {
+		t.Fatalf("down outcome = %q, want %q", removed.Outcome, worktree.DownRemoved)
+	}
+	if _, err := os.Stat(wt.Path); !os.IsNotExist(err) {
+		t.Fatalf("worktree still exists after down: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "deps", "one.txt")); err != nil {
+		t.Fatalf("tear-down reached through the link into the primary checkout: %v", err)
+	}
+}
