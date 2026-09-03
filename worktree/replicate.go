@@ -160,8 +160,8 @@ func settleOutcome(worktreePath string, result *ReplicateResult, sources []strin
 }
 
 // materializedCount counts the eligible candidates reachable in the worktree.
-// It lstats each candidate, so a candidate that is itself a symlink counts
-// without its target having to resolve, while a candidate reached THROUGH a
+// It calls lstat on each candidate, so a candidate that is itself a symlink
+// counts without its target having to resolve, while a candidate reached THROUGH a
 // materialized directory link still counts — the intermediate components of the
 // path are followed either way.
 func materializedCount(worktreePath string, sources []string) int {
