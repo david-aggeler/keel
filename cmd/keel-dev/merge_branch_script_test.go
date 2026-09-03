@@ -147,3 +147,107 @@ func readOptionalFile(t *testing.T, name string) string {
 	}
 	return string(data)
 }
+
+// DHF-TEST: keel/requirement-162
+func TestMergeBranchScriptMergesTipCommitSHAByBranchName(t *testing.T) {
+	repo, mainBefore := mergeBranchScriptRepo(t)
+	unitTip := gitOutput(t, repo, "rev-parse", "refs/heads/unit")
+	callsFile := installUnexpectedMergeBranchGoStub(t)
+
+	out, err := runMergeBranchScript(t, repo, unitTip)
+	if err != nil {
+		t.Fatalf("merge-branch.sh should accept the tip commit SHA of a branch: %v\n%s", err, out)
+	}
+	mainAfter := gitOutput(t, repo, "rev-parse", "HEAD")
+	if mainAfter == mainBefore {
+		t.Fatalf("main did not advance; output:\n%s", out)
+	}
+	if parents := gitOutput(t, repo, "rev-list", "--parents", "-n", "1", "HEAD"); len(strings.Fields(parents)) != 3 {
+		t.Fatalf("main should advance by a --no-ff merge commit with two parents, got %q\n%s", parents, out)
+	}
+	if subject := gitOutput(t, repo, "log", "-1", "--format=%s", "HEAD"); !strings.Contains(subject, "Merge branch 'unit'") {
+		t.Fatalf("merge commit subject should name the branch, got %q\n%s", subject, out)
+	}
+	if !strings.Contains(out, "MERGE_SHA="+mainAfter) {
+		t.Fatalf("output should report the merge commit SHA %s:\n%s", mainAfter, out)
+	}
+	if calls := readOptionalFile(t, callsFile); calls != "" {
+		t.Fatalf("merge command must not invoke go gate commands; calls:\n%s", calls)
+	}
+}
+
+// DHF-TEST: keel/requirement-162
+func TestMergeBranchScriptRefusesArgumentThatResolvesToNoCommit(t *testing.T) {
+	repo, mainBefore := mergeBranchScriptRepo(t)
+	callsFile := installUnexpectedMergeBranchGoStub(t)
+
+	const bogus = "no-such-commit-ish"
+	out, err := runMergeBranchScript(t, repo, bogus)
+	if err == nil {
+		t.Fatalf("merge-branch.sh should refuse an argument that resolves to no commit; output:\n%s", out)
+	}
+	mainAfter := gitOutput(t, repo, "rev-parse", "HEAD")
+	if mainAfter != mainBefore {
+		t.Fatalf("main changed for an unresolvable argument: before=%s after=%s\n%s", mainBefore, mainAfter, out)
+	}
+	if !strings.Contains(out, bogus) {
+		t.Fatalf("refusal should name the unresolvable argument %q:\n%s", bogus, out)
+	}
+	if calls := readOptionalFile(t, callsFile); calls != "" {
+		t.Fatalf("unresolvable-argument refusal must not invoke go gate commands; calls:\n%s", calls)
+	}
+}
+
+// DHF-TEST: keel/requirement-162
+func TestMergeBranchScriptMergesBranchlessCommitDirectly(t *testing.T) {
+	repo, mainBefore := mergeBranchScriptRepo(t)
+	// Keep the commit reachable by a tag only, so no refs/heads entry points at it.
+	mustRun(t, repo, "git", "tag", "branchless", "refs/heads/unit")
+	mustRun(t, repo, "git", "branch", "-D", "unit")
+	branchless := gitOutput(t, repo, "rev-parse", "refs/tags/branchless")
+	callsFile := installUnexpectedMergeBranchGoStub(t)
+
+	out, err := runMergeBranchScript(t, repo, branchless)
+	if err != nil {
+		t.Fatalf("merge-branch.sh should merge a commit no local branch points at: %v\n%s", err, out)
+	}
+	mainAfter := gitOutput(t, repo, "rev-parse", "HEAD")
+	if mainAfter == mainBefore {
+		t.Fatalf("main did not advance; output:\n%s", out)
+	}
+	parents := strings.Fields(gitOutput(t, repo, "rev-list", "--parents", "-n", "1", "HEAD"))
+	if len(parents) != 3 || parents[2] != branchless {
+		t.Fatalf("main should advance by a --no-ff merge commit of %s, got parents %v\n%s", branchless, parents, out)
+	}
+	if !strings.Contains(out, "MERGE_SHA="+mainAfter) {
+		t.Fatalf("output should report the merge commit SHA %s:\n%s", mainAfter, out)
+	}
+	if calls := readOptionalFile(t, callsFile); calls != "" {
+		t.Fatalf("branchless merge must not invoke go gate commands; calls:\n%s", calls)
+	}
+}
+
+// DHF-TEST: keel/requirement-162
+func TestMergeBranchScriptReportsExistingMergeForAlreadyMergedCommitSHA(t *testing.T) {
+	repo, _ := mergeBranchScriptRepo(t)
+	unitTip := gitOutput(t, repo, "rev-parse", "refs/heads/unit")
+	mustRun(t, repo, "git", "merge", "--no-ff", "--no-edit", "unit")
+	existingMerge := gitOutput(t, repo, "rev-parse", "HEAD")
+	countBefore := gitOutput(t, repo, "rev-list", "--count", "HEAD")
+	callsFile := installUnexpectedMergeBranchGoStub(t)
+
+	out, err := runMergeBranchScript(t, repo, unitTip)
+	if err != nil {
+		t.Fatalf("merge-branch.sh should report the existing merge for an already-merged commit: %v\n%s", err, out)
+	}
+	countAfter := gitOutput(t, repo, "rev-list", "--count", "HEAD")
+	if countAfter != countBefore {
+		t.Fatalf("already-merged commit created another commit: before=%s after=%s\n%s", countBefore, countAfter, out)
+	}
+	if !strings.Contains(out, "MERGE_SHA="+existingMerge) {
+		t.Fatalf("output should report the existing merge commit SHA %s:\n%s", existingMerge, out)
+	}
+	if calls := readOptionalFile(t, callsFile); calls != "" {
+		t.Fatalf("already-merged guard must not invoke go gate commands; calls:\n%s", calls)
+	}
+}
