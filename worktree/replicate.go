@@ -235,15 +235,38 @@ func literalPattern(pattern string) string {
 	return strings.Trim(strings.TrimPrefix(filepath.ToSlash(strings.TrimSpace(pattern)), "./"), "/")
 }
 
+// copyPath reproduces one candidate. A symlink is reproduced as a symlink
+// carrying the same target string — never dereferenced — the way `cp -a` and
+// `rsync -a` do it: dereferencing turned a directory symlink into a read of a
+// directory file descriptor and aborted bring-up outright.
+//
+// DHF-REQ: keel/requirement-160 (keel/ac-672)
 func copyPath(src, dst string) error {
 	info, err := os.Lstat(src)
 	if err != nil {
 		return err
 	}
-	if info.IsDir() {
+	switch {
+	case info.Mode()&os.ModeSymlink != 0:
+		return copySymlink(src, dst)
+	case info.IsDir():
 		return errors.New("directory copy requires ignored file candidates")
 	}
 	return copyFile(src, dst, info.Mode())
+}
+
+// copySymlink recreates a link rather than its target. The destination is
+// unlinked first because a symlink cannot be truncated into place the way a
+// regular file can.
+func copySymlink(src, dst string) error {
+	target, err := os.Readlink(src)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return os.Symlink(target, dst)
 }
 
 func copyFile(src, dst string, mode os.FileMode) error {
