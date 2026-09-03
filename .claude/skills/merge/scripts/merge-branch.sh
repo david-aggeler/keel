@@ -22,7 +22,7 @@
 # commits ahead and no prior merge commit, or a merge conflict.
 set -euo pipefail
 
-BRANCH="${1:?usage: merge-branch.sh <branch>}"
+BRANCH="${1:?usage: merge-branch.sh <commit-ish>}"
 
 existing_merge_for_commit() {
 	local commit_tip="$1"
