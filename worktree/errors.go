@@ -33,7 +33,8 @@ const (
 	// not find one.
 	CodeBranchMissing ErrorCode = 67
 	// CodeReplicateFailed is an eligible declared item that could not be
-	// materialized in the worktree.
+	// materialized in the worktree, or a materialized item tear-down could not
+	// clear back out of it.
 	CodeReplicateFailed ErrorCode = 68
 )
 
