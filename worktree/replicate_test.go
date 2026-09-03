@@ -420,12 +420,13 @@ func TestReplicatePublicSurfaceUsesDocumentedOutcomeValues(t *testing.T) {
 	got := []string{
 		string(worktree.ReplicateOutcomeCopied),
 		string(worktree.ReplicateOutcomeLinked),
+		string(worktree.ReplicateOutcomePartial),
 		string(worktree.ReplicateOutcomeSkippedTracked),
 		string(worktree.ReplicateOutcomeSkippedNotIgnored),
 		string(worktree.ReplicateOutcomeSkippedAbsent),
 		string(worktree.ReplicateOutcomeRefusedHazard),
 	}
-	want := "copied,linked,skipped_tracked,skipped_not_ignored,skipped_absent,refused_hazard"
+	want := "copied,linked,partial,skipped_tracked,skipped_not_ignored,skipped_absent,refused_hazard"
 	if strings.Join(got, ",") != want {
 		t.Fatalf("replicate outcomes = %q, want %q", strings.Join(got, ","), want)
 	}
