@@ -97,3 +97,55 @@ func TestUpReplicatesEverySpellingOfOneDirectoryIdentically(t *testing.T) {
 		})
 	}
 }
+
+// writeSymlink creates a symbolic link at path with the literal target string,
+// creating parent directories as needed.
+func writeSymlink(t *testing.T, path, target string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir for %s: %v", path, err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatalf("symlink %s -> %s: %v", path, target, err)
+	}
+}
+
+// DHF-TEST: keel/requirement-160 (keel/ac-672)
+func TestUpCopyPreservesSymlinkInsideReplicatedTree(t *testing.T) {
+	root := newRepo(t)
+	writeFile(t, filepath.Join(root, ".gitignore"), "deps/\n")
+	git(t, root, "add", ".gitignore")
+	git(t, root, "commit", "-m", "ignore deps")
+	writeFile(t, filepath.Join(root, "deps", "real", "index.js"), "module\n")
+	writeSymlink(t, filepath.Join(root, "deps", "alias"), "real")
+	writeSymlink(t, filepath.Join(root, "deps", "nested", "up"), "../real")
+
+	m := newManager(t, worktree.Config{RepoRoot: root, Base: "main"})
+	wt, err := m.Up(context.Background(), "unit-1", worktree.UpOptions{
+		Replicate: []worktree.ReplicateItem{{Pattern: "deps/", Mode: worktree.ReplicateCopy}},
+	})
+	if err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	for rel, want := range map[string]string{
+		"deps/alias":     "real",
+		"deps/nested/up": "../real",
+	} {
+		replica := filepath.Join(wt.Path, filepath.FromSlash(rel))
+		info, statErr := os.Lstat(replica)
+		if statErr != nil {
+			t.Fatalf("stat %s: %v", rel, statErr)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("%s mode = %v, want symlink", rel, info.Mode())
+		}
+		target, linkErr := os.Readlink(replica)
+		if linkErr != nil {
+			t.Fatalf("readlink %s: %v", rel, linkErr)
+		}
+		if target != want {
+			t.Fatalf("%s target = %q, want %q", rel, target, want)
+		}
+	}
+	assertReplication(t, wt.Replication, "deps/", worktree.ReplicateOutcomeCopied)
+}
