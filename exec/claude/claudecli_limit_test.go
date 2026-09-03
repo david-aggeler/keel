@@ -26,6 +26,10 @@ func claudeRateLimitEvent(status string, fiveHour, sevenDay float64, resetsAt in
 
 const claudeResultLine = `{"type":"result","subtype":"success","is_error":false,"result":"ok","num_turns":1,"duration_ms":10,"total_cost_usd":0.01,"usage":{"input_tokens":1,"output_tokens":1}}`
 
+// sharedLimitType fails to compile unless Result.Limit is keel/exec's shared
+// LimitState — the "same type codex uses" leg of keel/ac-677.
+func sharedLimitType(r Result) procexec.LimitState { return r.Limit }
+
 func runClaudeStub(t *testing.T, lines []string, exitCode int) (*Result, error) {
 	t.Helper()
 	stub := writeStub(t, strings.Join(lines, "\n"), exitCode)
@@ -48,8 +52,8 @@ func TestRun_ResultCarriesLastReportedLimit(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	// The type is keel/exec's, not a claude-local one: a caller reads one shape
-	// for either executor.
-	var _ procexec.LimitState = res.Limit
+	// for either executor. sharedLimitType would not compile otherwise.
+	_ = sharedLimitType(*res)
 	if !res.Limit.Reported {
 		t.Fatalf("Limit.Reported = false; the stream carried two rate_limit_event lines")
 	}

@@ -132,6 +132,7 @@ presencetool
 Println
 probeb
 procexec
+prolite
 pytest
 readback
 recentlog
