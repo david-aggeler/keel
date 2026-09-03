@@ -17,6 +17,9 @@
 // branch keeps, locked or
 // prunable registrations, and content the process cannot unlink each block
 // removal and are reported individually with the offending path or commit id.
+// A link this package's own replication materialized is the one exclusion: it
+// points at the primary checkout, so it holds nothing removal would destroy,
+// and tear-down clears it rather than counting it as work.
 // That makes tear-down callable before, after, or entirely without a merge —
 // an abandoned branch's checkout is reclaimable, and the branch itself always
 // survives the removal.
