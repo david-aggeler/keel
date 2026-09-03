@@ -14,8 +14,8 @@ import (
 
 // replicaSnapshot renders what a replicated item actually materialized to, as a
 // comparable string: one line per entry with its shape and either its bytes or
-// its link target. It lstats every entry, so a symlink is never confused with
-// the tree it points at.
+// its link target. It calls lstat on every entry, so a symlink is never
+// confused with the tree it points at.
 func replicaSnapshot(t *testing.T, worktreePath, rel string) string {
 	t.Helper()
 	base := filepath.Join(worktreePath, filepath.FromSlash(rel))
