@@ -86,45 +86,54 @@ func TestUpCopiesOnlyIgnoredCandidatesFromMixedPattern(t *testing.T) {
 	assertReplication(t, wt.Replication, ".claude/**", worktree.ReplicateOutcomeCopied)
 }
 
-// DHF-TEST: keel/requirement-157 (keel/ac-651)
+// The criterion is about the declared directory, so it holds for every spelling
+// of that directory: keel/requirement-160 makes the pattern suffix carry no
+// meaning, and the bare spelling is the one keel v0.9.0 got wrong.
+//
+// DHF-TEST: keel/requirement-157 (keel/ac-651), keel/requirement-160 (keel/ac-671)
 func TestUpReplicatesDeclaredIgnoredDirectoryAsLink(t *testing.T) {
-	root := newRepo(t)
-	writeFile(t, filepath.Join(root, ".gitignore"), ".devtools/\n")
-	git(t, root, "add", ".gitignore")
-	git(t, root, "commit", "-m", "ignore devtools")
-	writeFile(t, filepath.Join(root, ".devtools", "index.txt"), "reference\n")
+	for _, pattern := range []string{".devtools/", ".devtools", ".devtools/**"} {
+		t.Run(pattern, func(t *testing.T) {
+			root := newRepo(t)
+			writeFile(t, filepath.Join(root, ".gitignore"), ".devtools/\n")
+			git(t, root, "add", ".gitignore")
+			git(t, root, "commit", "-m", "ignore devtools")
+			writeFile(t, filepath.Join(root, ".devtools", "index.txt"), "reference\n")
 
-	m := newManager(t, worktree.Config{RepoRoot: root, Base: "main"})
-	wt, err := m.Up(context.Background(), "unit-1", worktree.UpOptions{
-		Replicate: []worktree.ReplicateItem{{Pattern: ".devtools/", Mode: worktree.ReplicateLink}},
-	})
-	if err != nil {
-		t.Fatalf("up: %v", err)
-	}
-	link := filepath.Join(wt.Path, ".devtools")
-	info, err := os.Lstat(link)
-	if err != nil {
-		t.Fatalf("stat link: %v", err)
-	}
-	if info.Mode()&os.ModeSymlink == 0 {
-		t.Fatalf("%s mode = %v, want symlink", link, info.Mode())
-	}
-	target, err := os.Readlink(link)
-	if err != nil {
-		t.Fatalf("readlink: %v", err)
-	}
-	if target != filepath.Join(root, ".devtools") {
-		t.Fatalf("link target = %q, want primary directory", target)
-	}
-	assertReplication(t, wt.Replication, ".devtools/", worktree.ReplicateOutcomeLinked)
+			m := newManager(t, worktree.Config{RepoRoot: root, Base: "main"})
+			item := worktree.ReplicateItem{Pattern: pattern, Mode: worktree.ReplicateLink}
+			wt, err := m.Up(context.Background(), "unit-1", worktree.UpOptions{
+				Replicate: []worktree.ReplicateItem{item},
+			})
+			if err != nil {
+				t.Fatalf("up: %v", err)
+			}
+			link := filepath.Join(wt.Path, ".devtools")
+			info, err := os.Lstat(link)
+			if err != nil {
+				t.Fatalf("stat link: %v", err)
+			}
+			if info.Mode()&os.ModeSymlink == 0 {
+				t.Fatalf("%s mode = %v, want symlink", link, info.Mode())
+			}
+			target, err := os.Readlink(link)
+			if err != nil {
+				t.Fatalf("readlink: %v", err)
+			}
+			if target != filepath.Join(root, ".devtools") {
+				t.Fatalf("link target = %q, want primary directory", target)
+			}
+			assertReplication(t, wt.Replication, pattern, worktree.ReplicateOutcomeLinked)
 
-	reused, err := m.Up(context.Background(), "unit-1", worktree.UpOptions{
-		Replicate: []worktree.ReplicateItem{{Pattern: ".devtools/", Mode: worktree.ReplicateLink}},
-	})
-	if err != nil {
-		t.Fatalf("reuse linked up: %v", err)
+			reused, err := m.Up(context.Background(), "unit-1", worktree.UpOptions{
+				Replicate: []worktree.ReplicateItem{item},
+			})
+			if err != nil {
+				t.Fatalf("reuse linked up: %v", err)
+			}
+			assertReplication(t, reused.Replication, pattern, worktree.ReplicateOutcomeLinked)
+		})
 	}
-	assertReplication(t, reused.Replication, ".devtools/", worktree.ReplicateOutcomeLinked)
 }
 
 func TestUpReplicatesDeclaredIgnoredDirectoryByCopy(t *testing.T) {
