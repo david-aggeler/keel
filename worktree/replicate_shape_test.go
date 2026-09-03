@@ -149,3 +149,38 @@ func TestUpCopyPreservesSymlinkInsideReplicatedTree(t *testing.T) {
 	}
 	assertReplication(t, wt.Replication, "deps/", worktree.ReplicateOutcomeCopied)
 }
+
+// DHF-TEST: keel/requirement-160 (keel/ac-673)
+func TestUpReportsPartialWhenMaterializationCoversFewerThanEveryCandidate(t *testing.T) {
+	root := newRepo(t)
+	writeFile(t, filepath.Join(root, ".gitignore"), ".claude/generated/\n")
+	writeFile(t, filepath.Join(root, ".claude", "local.md"), "committed\n")
+	git(t, root, "add", ".gitignore", ".claude/local.md")
+	git(t, root, "commit", "-m", "track local config and ignore generated")
+	writeFile(t, filepath.Join(root, ".claude", "generated", "one.md"), "one\n")
+	writeFile(t, filepath.Join(root, ".claude", "generated", "two.md"), "two\n")
+
+	m := newManager(t, worktree.Config{RepoRoot: root, Base: "main"})
+	wt, err := m.Up(context.Background(), "unit-1", worktree.UpOptions{
+		Replicate: []worktree.ReplicateItem{{Pattern: ".claude", Mode: worktree.ReplicateLink}},
+	})
+	if err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	if len(wt.Replication) != 1 {
+		t.Fatalf("replication = %v, want one result", wt.Replication)
+	}
+	result := wt.Replication[0]
+	if result.Pattern != ".claude" {
+		t.Fatalf("result pattern = %q, want the declared item", result.Pattern)
+	}
+	if result.Outcome == worktree.ReplicateOutcomeCopied || result.Outcome == worktree.ReplicateOutcomeLinked {
+		t.Fatalf("partial materialization outcome = %q, want neither copied nor linked", result.Outcome)
+	}
+	if result.Eligible != 2 {
+		t.Fatalf("eligible candidates = %d, want 2", result.Eligible)
+	}
+	if result.Materialized >= result.Eligible {
+		t.Fatalf("materialized = %d of %d, want fewer than every candidate", result.Materialized, result.Eligible)
+	}
+}

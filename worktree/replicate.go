@@ -122,13 +122,14 @@ func (m *Manager) replicateItem(ctx context.Context, op, worktreePath string, po
 		return result, nil
 	}
 
+	result.Eligible = len(sources)
 	if mode == ReplicateLink {
 		src := filepath.Join(m.repoRoot, filepath.FromSlash(result.Path))
 		dst := filepath.Join(worktreePath, filepath.FromSlash(result.Path))
 		if err := materializeLink(op, src, dst, policy); err != nil {
 			return result, err
 		}
-		result.Outcome = ReplicateOutcomeLinked
+		settleOutcome(worktreePath, &result, sources, ReplicateOutcomeLinked)
 		return result, nil
 	}
 	for _, sourceRel := range sources {
@@ -138,8 +139,39 @@ func (m *Manager) replicateItem(ctx context.Context, op, worktreePath string, po
 			return result, err
 		}
 	}
-	result.Outcome = ReplicateOutcomeCopied
+	settleOutcome(worktreePath, &result, sources, ReplicateOutcomeCopied)
 	return result, nil
+}
+
+// settleOutcome reports what actually reached the worktree rather than what the
+// mode intended. `copied` and `linked` assert completeness, so an item covering
+// fewer than its eligible candidates settles on [ReplicateOutcomePartial]
+// instead — a caller that reads a success outcome for a 1-of-24,327
+// materialization has no signal at all, which is worse than a hard failure.
+//
+// DHF-REQ: keel/requirement-160 (keel/ac-673)
+func settleOutcome(worktreePath string, result *ReplicateResult, sources []string, complete ReplicateOutcome) {
+	result.Materialized = materializedCount(worktreePath, sources)
+	if result.Materialized < result.Eligible {
+		result.Outcome = ReplicateOutcomePartial
+		return
+	}
+	result.Outcome = complete
+}
+
+// materializedCount counts the eligible candidates reachable in the worktree.
+// It lstats each candidate, so a candidate that is itself a symlink counts
+// without its target having to resolve, while a candidate reached THROUGH a
+// materialized directory link still counts — the intermediate components of the
+// path are followed either way.
+func materializedCount(worktreePath string, sources []string) int {
+	materialized := 0
+	for _, sourceRel := range sources {
+		if _, err := os.Lstat(filepath.Join(worktreePath, filepath.FromSlash(sourceRel))); err == nil {
+			materialized++
+		}
+	}
+	return materialized
 }
 
 func materializeLink(op, src, dst string, policy ReplicatePolicy) error {
@@ -293,6 +325,8 @@ func (m *Manager) logReplicateResult(result ReplicateResult) {
 		"path", result.Path,
 		"mode", string(result.Mode),
 		"outcome", string(result.Outcome),
+		"eligible", result.Eligible,
+		"materialized", result.Materialized,
 	)
 }
 
