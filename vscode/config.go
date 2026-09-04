@@ -30,6 +30,14 @@ type TestBridgeConfig struct {
 	//
 	// DHF-REQ: keel/requirement-139
 	Display *DisplayConfig `json:"display,omitempty"`
+	// DiscoveryMaxBufferBytes is the workspace's optional override of the
+	// discovery/desired-state stdout size bound the VSIX enforces. Keel's Go
+	// side neither reads nor validates it — the field exists here so the
+	// config writer round-trips a workspace-set override instead of silently
+	// dropping it on upgrade. Absent means the VSIX's built-in default.
+	//
+	// DHF-REQ: keel/requirement-163
+	DiscoveryMaxBufferBytes *int `json:"discoveryMaxBufferBytes,omitempty"`
 }
 
 // DisplayOrDefault resolves the effective display configuration: an absent
