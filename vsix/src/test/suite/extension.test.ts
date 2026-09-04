@@ -47,7 +47,7 @@ import {
   triggerWatcherEventForTest
 } from '../../extension';
 import * as bridgeAdapterModule from '../../bridgeAdapter';
-import { adapterConfig, configRelativePath, currentConfigVersion, defaultConfigTemplate, discoveryOutputMaxBufferBytes, discoverTests, readDesiredState, readAdapterConfig, runTests, upgradeConfig } from '../../bridgeAdapter';
+import { adapterConfig, configRelativePath, configTemplateKeys, currentConfigVersion, defaultConfigTemplate, discoveryOutputMaxBufferBytes, discoverTests, readDesiredState, readAdapterConfig, runTests, upgradeConfig } from '../../bridgeAdapter';
 import { publishDiscovery, replacePublishedTestItem } from '../../tree';
 import { DesiredStateGroup, DiscoveryDocument, DiscoveryItem, RunEvent } from '../../protocol';
 
@@ -369,18 +369,24 @@ suite('Keel Test Bridge config contract', () => {
 
   // DHF-TEST: keel/requirement-115
   test('discovery and desired-state reads use one exported document-size bound', () => {
-    assert.equal(discoveryOutputMaxBufferBytes, 16 * 1024 * 1024);
+    assert.equal(discoveryOutputMaxBufferBytes, 32 * 1024 * 1024);
     const source = fs.readFileSync(path.resolve(__dirname, '../../../src/bridgeAdapter.ts'), 'utf8');
     assert.equal((source.match(/export const discoveryOutputMaxBufferBytes/g) ?? []).length, 1);
-    assert.equal((source.match(/maxBuffer: discoveryOutputMaxBufferBytes/g) ?? []).length, 1);
-    assert.doesNotMatch(source, /maxBuffer:\s*16\s*\*\s*1024\s*\*\s*1024/);
+    // Exactly one derivation of the effective bound, and no enforcement or
+    // reporting site reading the default constant behind its back.
+    assert.equal((source.match(/adapter\.discoveryMaxBufferBytes \?\? discoveryOutputMaxBufferBytes/g) ?? []).length, 1);
+    assert.equal((source.match(/maxBuffer: bound/g) ?? []).length, 1);
+    assert.doesNotMatch(source, /maxBuffer:\s*\d+\s*\*\s*1024\s*\*\s*1024/);
+    assert.doesNotMatch(source, /maxBuffer: discoveryOutputMaxBufferBytes/);
+    // The config writer's key allowlist must carry the override, or a written
+    // config silently drops a workspace's setting.
+    assert.ok(configTemplateKeys.includes('discoveryMaxBufferBytes'));
   });
 
   // DHF-TEST: keel/requirement-115
   test('oversized discovery output is diagnosed with the published byte bound', async function () {
     this.timeout(10_000);
-    const testBound = 64;
-    const restoreBound = setDiscoveryOutputMaxBufferBytesForTest(testBound);
+    const testBound = 1024;
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-discovery-size-bound-'));
     const fake = path.join(root, 'oversized-adapter.cjs');
     fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
@@ -397,7 +403,8 @@ suite('Keel Test Bridge config contract', () => {
       version: currentConfigVersion,
       command: nodeExecutableForTest(),
       args: [fake],
-      displayName: 'Oversized Producer'
+      displayName: 'Oversized Producer',
+      discoveryMaxBufferBytes: testBound
     }, null, 2) + '\n');
 
     try {
@@ -414,8 +421,78 @@ suite('Keel Test Bridge config contract', () => {
         }
       );
     } finally {
-      restoreBound();
       fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // DHF-TEST: keel/requirement-163
+  test('the published discovery size bound default reads 33554432 in code and in the wire schema', () => {
+    assert.equal(discoveryOutputMaxBufferBytes, 33554432);
+    const source = fs.readFileSync(path.resolve(__dirname, '../../../src/bridgeAdapter.ts'), 'utf8');
+    assert.equal((source.match(/export const discoveryOutputMaxBufferBytes/g) ?? []).length, 1);
+    const doc = fs.readFileSync(path.resolve(__dirname, '../../../../docs/wire-schema.md'), 'utf8');
+    assert.match(doc, /33554432/);
+    assert.doesNotMatch(doc, /16777216/);
+  });
+
+  // DHF-TEST: keel/requirement-163
+  test('a workspace override sets the effective discovery bound and the breach names it', async function () {
+    this.timeout(20_000);
+    const override = 4096;
+    const root = paddedDiscoveryWorkspace('keel-discovery-bound-override-', override * 2, override);
+    try {
+      await assert.rejects(
+        discoverTests(root),
+        (err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          assert.match(message, new RegExp(`${override}`));
+          assert.doesNotMatch(message, new RegExp(`${discoveryOutputMaxBufferBytes}`));
+          assert.match(message, /document size/i);
+          return true;
+        }
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // DHF-TEST: keel/requirement-163
+  test('a document within the workspace override is accepted', async function () {
+    this.timeout(20_000);
+    const root = paddedDiscoveryWorkspace('keel-discovery-bound-override-ok-', 8192, 65536);
+    try {
+      const discovery = await discoverTests(root);
+      assert.deepEqual(discovery.items, []);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // DHF-TEST: keel/requirement-163
+  test('with no override a document above the former 16 MiB bound is accepted', async function () {
+    this.timeout(60_000);
+    const root = paddedDiscoveryWorkspace('keel-discovery-bound-default-', 16 * 1024 * 1024 + 4096);
+    try {
+      const discovery = await discoverTests(root);
+      assert.deepEqual(discovery.items, []);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // DHF-TEST: keel/requirement-163
+  test('an out-of-range or non-numeric discovery bound override is rejected at config parse', () => {
+    for (const invalid of ['4096', 0, -1, 1023, 1024.5, 512 * 1024 * 1024 + 1, null]) {
+      const root = paddedDiscoveryWorkspace('keel-discovery-bound-invalid-', 64, invalid as number);
+      try {
+        assert.throws(
+          () => readAdapterConfig(root),
+          /discoveryMaxBufferBytes/,
+          `override ${JSON.stringify(invalid)} must be rejected`
+        );
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
     }
   });
 
@@ -1225,8 +1302,7 @@ process.exit(2);
   // DHF-TEST: keel/requirement-115
   test('failed discovery refresh clears the published tree and reports the bound-specific error', async function () {
     this.timeout(10_000);
-    const testBound = 64;
-    let restoreBound: (() => void) | undefined;
+    const testBound = 1024;
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-refresh-failure-state-'));
     const previousDevWorkspace = process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
     process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE = root;
@@ -1281,9 +1357,6 @@ process.exit(2);
         await vscode.commands.executeCommand('keel.tests.refresh');
         assert.ok(publishedTestItemIds().includes('case::lane'), `${mode} setup must publish the baseline item`);
 
-        if (mode === 'oversized') {
-          restoreBound = setDiscoveryOutputMaxBufferBytesForTest(testBound);
-        }
         fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify({
           version: currentConfigVersion,
           command: mode === 'oversized'
@@ -1293,12 +1366,11 @@ process.exit(2);
               : process.execPath,
           args: mode === 'missing-binary' ? [] : [fake],
           displayName: 'Refresh Producer',
-          env: { KEEL_REFRESH_FAILURE_MODE: mode }
+          env: { KEEL_REFRESH_FAILURE_MODE: mode },
+          ...(mode === 'oversized' ? { discoveryMaxBufferBytes: testBound } : {})
         }, null, 2) + '\n');
         await vscode.commands.executeCommand('keel.tests.refresh');
         assert.deepEqual(publishedTestItemIds(), [], `${mode} discovery failure must clear the tree`);
-        restoreBound?.();
-        restoreBound = undefined;
       }
 
       const oversizedMessage = shownErrors.find((message) => message.includes(`${testBound}`));
@@ -1308,7 +1380,6 @@ process.exit(2);
       assert.doesNotMatch(oversizedMessage, /stdout maxBuffer length exceeded/);
       assert.doesNotMatch(oversizedMessage, /just build-dev/i);
     } finally {
-      restoreBound?.();
       windowWithSpy.showErrorMessage = originalShowErrorMessage;
       if (previousDevWorkspace === undefined) {
         delete process.env.KEEL_VSCODE_BRIDGE_DEV_WORKSPACE;
@@ -3972,14 +4043,41 @@ function nodeExecutableForTest(): string {
   return process.execPath;
 }
 
-function setDiscoveryOutputMaxBufferBytesForTest(bytes: number): () => void {
-  const mutable = bridgeAdapterModule as unknown as { discoveryOutputMaxBufferBytes: number };
-  const previous = mutable.discoveryOutputMaxBufferBytes;
-  mutable.discoveryOutputMaxBufferBytes = bytes;
-  return () => {
-    mutable.discoveryOutputMaxBufferBytes = previous;
+// Writes a workspace whose producer emits one valid, padded discovery document,
+// optionally declaring a discovery size-bound override. The padding is what the
+// bound is exercised against: the emitted document is always larger than
+// paddingBytes and always a parseable version-1 discovery document, so an
+// acceptance assertion proves the bound admitted it rather than that the
+// producer stayed silent.
+function paddedDiscoveryWorkspace(prefix: string, paddingBytes: number, overrideBytes?: number): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+  const fake = path.join(root, 'padded-adapter.cjs');
+  fs.writeFileSync(fake, [
+    "const args = process.argv.slice(2);",
+    "if (args.includes('--version')) { console.log('dev'); process.exit(0); }",
+    "if (args.join(' ') === 'test-bridge discover --format json') {",
+    // The write callback matters: process.exit() discards whatever a
+    // multi-megabyte pipe write has not yet flushed, which would truncate the
+    // document the bound is supposed to admit.
+    `  process.stdout.write(JSON.stringify({ version: 1, workspace: 'padded', generated_at: new Date().toISOString(), items: [], padding: 'x'.repeat(${paddingBytes}) }), () => process.exit(0));`,
+    "  return;",
+    "}",
+    "process.exit(2);"
+  ].join('\n'));
+  const config: Record<string, unknown> = {
+    version: currentConfigVersion,
+    command: nodeExecutableForTest(),
+    args: [fake],
+    displayName: 'Padded Producer'
   };
+  if (overrideBytes !== undefined) {
+    config.discoveryMaxBufferBytes = overrideBytes;
+  }
+  fs.writeFileSync(path.join(root, configRelativePath), JSON.stringify(config, null, 2) + '\n');
+  return root;
 }
+
 
 function keelModuleRootFromTestLocation(): string {
   const root = path.resolve(__dirname, '../../../..');

@@ -29,8 +29,15 @@ flowchart LR
 The 4-group Test Explorer tree as a flat item list linked by `parent_id`.
 
 The VS Code Test Bridge reads the discovery document and desired-state document
-through bounded stdout. The bound is **16777216 bytes**. A producer document that
-exceeds that bound is rejected by the consumer. The failed refresh state is also
+through bounded stdout. The built-in bound is **33554432 bytes**, and a workspace
+may override it with the optional `discoveryMaxBufferBytes` field in
+`.vscode/test-bridge.json` (an integer between 1024 and 536870912 bytes; an
+out-of-range or non-numeric value is rejected when the config is read, never
+coerced). The effective bound — the override when present, otherwise the
+built-in default — is what every enforcement site applies and what the breach
+error names, so a producer deriving its emission budget from the bound resolves
+the same number the consumer enforces. A producer document that exceeds the
+effective bound is rejected by the consumer. The failed refresh state is also
 defined: on any failed discovery refresh, including a size-bound breach, non-zero
 producer exit, malformed discovery JSON, or missing producer binary, the consumer
 clears the published Test Explorer tree instead of leaving the previous item set

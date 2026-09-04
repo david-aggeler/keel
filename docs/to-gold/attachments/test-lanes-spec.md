@@ -301,7 +301,7 @@ the file write (when any) triggers watcher-driven re-discovery.
      exponential blow-up in composed lanes; the referenced lane's own covers
      are one click away).
    Cost note: full expansion multiplies discovery payload; keel's module size
-   keeps this far below the 16 MiB ceiling, and the emitter warns near it.
+   keeps this far below the 32 MiB default ceiling, and the emitter warns near it.
 4. **Capabilities:** discovery advertises `clear_results_test_ids` /
    `clear_state_test_ids` pointing at a.3/a.4 — this is the fix for the
    currently broken `keel.tests.clearLocalState` menu command.
