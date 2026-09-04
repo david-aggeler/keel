@@ -30,6 +30,12 @@
         "type": "string"
       }
     },
+    "discoveryMaxBufferBytes": {
+      "description": "Optional per-workspace override of the discovery/desired-state stdout size bound, in bytes. Absent means the built-in 33554432-byte default. An out-of-range or non-integer value is rejected, never coerced.",
+      "type": "integer",
+      "minimum": 1024,
+      "maximum": 536870912
+    },
     "display": {
       "type": "object",
       "additionalProperties": false,
