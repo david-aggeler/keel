@@ -152,7 +152,7 @@ Existing controls (preventive unless noted):
 | pnpm lockfile pinning (VSIX only) | npm tree drift | `vsix/pnpm-lock.yaml`; `vsix ci` |
 | argv-array subprocess spawning, no shells | argument/shell injection through exec paths | `keel/exec` design; must be preserved by lane expansion (planned) |
 | VS Code workspace trust + activation on `test-bridge.json` | hostile-workspace adapter execution (partial — trust is user-granted) | VSIX activation events |
-| Redaction in `log.OperationalError`; extension-host buffer ceilings (16 MiB discover/plan, 1 MiB demo/config) | information disclosure via logs; parser resource abuse on the VSIX side | keel/log tests; bridgeAdapter execFile buffers |
+| Redaction in `log.OperationalError`; extension-host buffer ceilings (32 MiB default discover/plan, workspace-overridable within 1 KiB–512 MiB; 1 MiB demo/config) | information disclosure via logs; parser resource abuse on the VSIX side | keel/log tests; bridgeAdapter execFile buffers |
 | Release preflight = the same gates + refuses dirty tree/existing tag | shipping unreviewed state | `keel-dev release`; docs/release.md |
 
 Gaps (controls with no implementation yet): **child-process output capture is
