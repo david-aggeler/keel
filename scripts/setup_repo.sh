@@ -22,10 +22,14 @@ fi
 
 echo "Building keel-dev, keel-demo, and keel-demo-dev into ./bin..."
 mkdir -p bin
-# DHF-REQ: keel/requirement-27
-go build -o bin/keel-dev ./cmd/keel-dev
-go build -o bin/keel-demo ./cmd/keel-demo
-go build -o bin/keel-demo-dev ./cmd/keel-demo-dev
+# The build number (commit count since the repository's first commit) is
+# stamped so --version renders MAJOR.MINOR.PATCH.BUILD.
+# DHF-REQ: keel/requirement-27, keel/requirement-110 (keel/ac-690)
+BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || echo "")"
+LDFLAGS="-X github.com/david-aggeler/keel.BuildNumber=${BUILD_NUMBER}"
+go build -ldflags "$LDFLAGS" -o bin/keel-dev ./cmd/keel-dev
+go build -ldflags "$LDFLAGS" -o bin/keel-demo ./cmd/keel-demo
+go build -ldflags "$LDFLAGS" -o bin/keel-demo-dev ./cmd/keel-demo-dev
 
 echo "Running the verification gate (keel-dev ci)..."
 go run ./cmd/keel-dev ci

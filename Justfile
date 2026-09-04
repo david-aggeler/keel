@@ -15,12 +15,15 @@ test:
     go test ./...
 
 # Build admitted cmd/ binaries and the VSIX release artifact into ./bin + vsix/.
+# The build number (commit count since the repository's first commit) is
+# stamped so --version renders MAJOR.MINOR.PATCH.BUILD.
+# DHF-REQ: keel/requirement-110 (keel/ac-690)
 build:
     mkdir -p bin
     # DHF-REQ: keel/requirement-27
-    go build -o bin/keel-dev ./cmd/keel-dev
-    go build -o bin/keel-demo ./cmd/keel-demo
-    go build -o bin/keel-demo-dev ./cmd/keel-demo-dev
+    go build -ldflags "-X github.com/david-aggeler/keel.BuildNumber=$(git rev-list --count HEAD)" -o bin/keel-dev ./cmd/keel-dev
+    go build -ldflags "-X github.com/david-aggeler/keel.BuildNumber=$(git rev-list --count HEAD)" -o bin/keel-demo ./cmd/keel-demo
+    go build -ldflags "-X github.com/david-aggeler/keel.BuildNumber=$(git rev-list --count HEAD)" -o bin/keel-demo-dev ./cmd/keel-demo-dev
     # DHF-REQ: keel/requirement-45
     pnpm --dir vsix run package:vsix
 
