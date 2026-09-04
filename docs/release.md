@@ -57,53 +57,47 @@ keel runs no GitHub Actions CI — the `release` verb's own clean-cache fetch ch
 (step 11) is the proof that the tag is publicly fetchable. To re-check a tag later,
 run `keel-dev verify vX.Y.Z` (see below).
 
-## 2. Sync gold product_version
-
-<!-- DHF-REQ: keel/requirement-112 -->
-
-After the release succeeds, advance gold's `product_version` for product `keel`
-through `openbrain-client` from PATH. The current client does not expose a narrow
-product-version admin subcommand, so use its product-catalog export/import path:
-
-```sh
-sync_dir="/tmp/keel-release-sync-X.Y.Z"
-rm -rf "$sync_dir"
-mkdir -p "$sync_dir"
-openbrain-client --mode ai records export --layer full --products keel --out "$sync_dir"
-```
-
-Edit `$sync_dir/products.json` for product `keel`: ensure the `Versions[]` row for
-`X.Y.Z` exists, set its `Status` to `released`, add release evidence to `Body` and
-`ReleaseNotes`, and ensure exactly one later row remains `in_development`.
-
-```sh
-openbrain-client --mode ai records import --layer full --products keel --in "$sync_dir" --allow-nonempty-target --verify
-```
-
-Then query gold from a fresh export and confirm the current `product_version` for
-product `keel` reflects `X.Y.Z`:
-
-```sh
-confirm_dir="/tmp/keel-release-confirm-X.Y.Z"
-rm -rf "$confirm_dir"
-mkdir -p "$confirm_dir"
-openbrain-client --mode ai records export --layer full --products keel --out "$confirm_dir"
-jq -e --arg v "X.Y.Z" '.[] | select(.Slug=="keel") | .Versions[] | select(.Version==$v and .Status=="released")' "$confirm_dir/products.json"
-```
-
-If the installed `openbrain-client` cannot export/import product catalog data or
-the confirmation query does not return the released row, stop and fix the
-client/tooling path before continuing; do not add SoR client code to `keel-dev`.
-
 ### Prerequisites
 
 - `git`, `go`, `gh` (authenticated: `gh auth status`), Node, pnpm, and xvfb on
   PATH.
 - Push access to `origin` and permission to create GitHub releases.
 
+## 2. Sync gold product_version
+
+<!-- DHF-REQ: keel/requirement-112 -->
+
+After the release succeeds, advance gold's `product_version` for product `keel`
+through the gold MCP admin product-plane tools (a release is driven from a
+session that has the gold MCP; no export/import round-trip, no hand-edited
+JSON bundle):
+
+1. `admin_list_product_versions(product: "keel")` — locate the row for `X.Y.Z`
+   (its status should be `in_development`).
+2. `admin_update_product_version` — write the release evidence onto that row:
+   tag `vX.Y.Z`, stamp commit, VSIX asset name, the anonymous `go get` result,
+   and the `release_notes` ref when one exists (fields `Body` and
+   `ReleaseNotes`).
+3. `admin_advance_product_version_status` — advance the row to `released`.
+4. Ensure exactly one later row is `in_development` for follow-up work —
+   create it with `admin_create_product_version` when opening the next line.
+5. Re-run `admin_list_product_versions(product: "keel")` and confirm the
+   `X.Y.Z` row reads `released` and the invariant of exactly one open
+   development line holds.
+
+The surface writes `Status`, `Body`, `ReleaseNotes`, `GitTag`, and
+`ReleaseDate`; row IDs and timestamps are server-owned. Executing the
+`openbrain-client` binary from keel tooling is permitted, but the
+product_version sync does not use it — and no SoR client code ever enters
+`keel-dev` or keel's compile graph.
+
+If the gold MCP is unavailable in the releasing session, stop and hand back to
+the owner with that blocker; do not add SoR client code to `keel-dev`.
+
 ## 3. Verify an existing tag
 
-To re-check a tag without cutting anything (what the tag CI does):
+To re-check a tag without cutting anything (what `keel-dev verify` proves —
+keel runs no CI service; this is an on-demand check):
 
 ```sh
 go run ./cmd/keel-dev verify vX.Y.Z

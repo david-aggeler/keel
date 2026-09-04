@@ -44,8 +44,8 @@ Show a short summary and ask for an explicit go-ahead:
   preflight, then stamp & build the VSIX, tag, create the GitHub Release with the VSIX
   attached, and verify anonymous `go get`.
 - Gold sync: after a successful release, `/publish` advances gold `product_version` for
-  product `keel` to `X.Y.Z` through `openbrain-client` from PATH. This sync stays outside
-  `keel-dev`; do not add SoR client code to the binary.
+  product `keel` to `X.Y.Z` through the gold MCP admin product-plane tools. This sync
+  stays outside `keel-dev`; do not add SoR client code to the binary.
 - Release notes: after a successful release, `/publish` brings the line's `release_notes`
   record current — coverage range, breaking changes, migration rows — and sets it
   `released`. A shipped version never leaves its note at `draft`.
@@ -74,47 +74,25 @@ Stream the output. `keel-dev release <version>` runs the full pipeline:
 
 <!-- DHF-REQ: keel/requirement-112 -->
 
-After `just publish <version>` succeeds, advance gold through `openbrain-client`
-from PATH. The installed client does not expose a narrow
-`admin_update_product_version` command; use its product-catalog export/import path
-instead:
+After `just publish <version>` succeeds, advance gold's `product_version` for
+product `keel` through the gold MCP admin product-plane tools — no record
+export/import round-trip, no hand-edited JSON bundle:
 
-```sh
-sync_dir="/tmp/keel-release-sync-X.Y.Z"
-rm -rf "$sync_dir"
-mkdir -p "$sync_dir"
-openbrain-client --mode ai records export --layer full --products keel --out "$sync_dir"
-```
+1. `admin_list_product_versions(product: "keel")` — locate the `X.Y.Z` row (it
+   should be `in_development`).
+2. `admin_update_product_version` — write the release evidence onto that row's
+   `Body` and `ReleaseNotes`: tag `vX.Y.Z`, stamp commit, VSIX asset name,
+   anonymous `go get` result, and the release notes ref when one exists.
+3. `admin_advance_product_version_status` — advance the row to `released`.
+4. Ensure exactly one later row remains `in_development` for follow-up work;
+   create it with `admin_create_product_version` when opening the next line.
+5. Re-run `admin_list_product_versions(product: "keel")` and confirm the
+   `X.Y.Z` row reads `released` with exactly one open development line.
 
-Edit `$sync_dir/products.json` for product `keel`:
+The surface writes `Status`, `Body`, `ReleaseNotes`, `GitTag`, and
+`ReleaseDate`; row IDs and timestamps are server-owned.
 
-- Ensure the `Versions[]` row whose `Version` is `X.Y.Z` exists.
-- Set that row's `Status` to `released`.
-- Add release evidence to that row's `Body` and `ReleaseNotes`: tag `vX.Y.Z`, stamp
-  commit, VSIX asset name, anonymous `go get` result, and release notes ref when one
-  exists.
-- Ensure exactly one later `Versions[]` row remains `in_development` for follow-up
-  work; create or retain it per the release plan.
-
-Then import and verify the catalog bundle:
-
-```sh
-openbrain-client --mode ai records import --layer full --products keel --in "$sync_dir" --allow-nonempty-target --verify
-```
-
-Finally query gold from a fresh export and confirm product `keel` reflects `X.Y.Z`
-as released:
-
-```sh
-confirm_dir="/tmp/keel-release-confirm-X.Y.Z"
-rm -rf "$confirm_dir"
-mkdir -p "$confirm_dir"
-openbrain-client --mode ai records export --layer full --products keel --out "$confirm_dir"
-jq -e --arg v "X.Y.Z" '.[] | select(.Slug=="keel") | .Versions[] | select(.Version==$v and .Status=="released")' "$confirm_dir/products.json"
-```
-
-If the installed `openbrain-client` cannot export/import product catalog data or
-the confirmation query does not return the released row, stop and hand back to the
+If the gold MCP is unavailable in this session, stop and hand back to the
 owner with that exact blocker; do not implement a gold client in `keel-dev`.
 
 ## Step 5: Bring the release notes current
@@ -174,7 +152,7 @@ On success:
 - Report the GitHub Release URL and confirm the VSIX asset is attached.
 - Confirm the tag `<version>` was created and the anonymous `go get` check passed.
 - Confirm gold `product_version` for product `keel` now reflects `X.Y.Z` and that the sync was
-  performed through `openbrain-client`.
+  performed through the gold MCP admin product-plane tools.
 - Confirm the line's `release_notes` record covers this version, names every breaking change
   with its migration action, and is `released` rather than `draft`.
 
@@ -188,7 +166,7 @@ On failure, identify which preflight/step failed and suggest remediation:
 | Preflight: red gate | `keel-dev ci` or VSIX gate failing | Run `just ci` (and `just vsix`) to reproduce; fix, then re-run |
 | GitHub Release | `gh` not installed / not authed / network | `gh auth status`; `gh auth login`; re-run |
 | Anonymous fetch | Module proxy lag or a private-path leak | Confirm no GOPRIVATE/token was introduced (never allowed); retry the fetch check |
-| Gold sync | `openbrain-client` missing, unauthenticated, or lacks product-version update | Fix `openbrain-client` access or hand back; never add SoR client code to keel-dev |
+| Gold sync | gold MCP unavailable in the session, or the `X.Y.Z` row is missing | Restore gold MCP access or create the row via `admin_create_product_version`; hand back if blocked; never add SoR client code to keel-dev |
 | Release notes | no note covers the line, or an edit anchor no longer matches | Create the note from its template, or re-read `details` and re-anchor; never full-replace the body |
 
 ## What this skill never does
