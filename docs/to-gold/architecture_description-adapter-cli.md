@@ -304,7 +304,8 @@ command <args> discover --format json          # execFile, cwd=workspace root
 
 **Devtool answer.** Exactly one discovery JSON document on stdout
 (`version: 1`, `items[]` — schema `keel/vscode/schemas/`), exit 0, within a
-**16 MiB** stdout ceiling. Read-only — discovery must never mutate workspace
+**32 MiB** default stdout ceiling, overridable per workspace via
+`discoveryMaxBufferBytes`. Read-only — discovery must never mutate workspace
 state. keel-dev verb: `test-bridge tests discover [--format json]`.
 
 **On failure.** Non-zero exit or unparseable stdout ⇒ the VSIX clears/keeps
@@ -361,7 +362,8 @@ command <args> plan --format json --id <id> [--id <id> …]    # execFile
 ```
 
 **Devtool answer.** Exactly one desired-state JSON document (wire name:
-setup plan; `version: 1`, `items[]`), exit 0, ≤ **16 MiB**. Read-only — this
+setup plan; `version: 1`, `items[]`), exit 0, ≤ the same effective bound
+(**32 MiB** by default). Read-only — this
 call *describes* reconciliation; it must never perform it. keel-dev verb:
 `test-bridge tests desired-state [--format json] [--id test-id]…`.
 

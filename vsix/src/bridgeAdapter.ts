@@ -13,7 +13,34 @@ export const currentConfigVersion = 5;
 // version that ever declared it.
 export const launcherOnlyArgsSinceVersion = 3;
 export const configRelativePath = path.join('.vscode', 'test-bridge.json');
-export const discoveryOutputMaxBufferBytes = 16 * 1024 * 1024;
+// The built-in discovery/desired-state stdout size bound, in bytes. It is the
+// fallback a workspace observes when its bridge config declares no
+// discoveryMaxBufferBytes override, and the number a producer reads to derive
+// its own emission budget (keel/requirement-163).
+export const discoveryOutputMaxBufferBytes = 32 * 1024 * 1024;
+// Sanity range for a workspace override. The floor rejects values too small to
+// carry any real document (and with them 0, negatives, and unit mix-ups); the
+// ceiling stays well inside Node's per-string and per-buffer limits so a
+// configured bound is a bound the runtime can actually honour.
+export const discoveryMaxBufferBytesFloor = 1024;
+export const discoveryMaxBufferBytesCeiling = 512 * 1024 * 1024;
+// The config writer's explicit key allowlist. Serializing through it is what
+// keeps an emitted config from carrying fields the contract does not define;
+// a field missing from this list is silently dropped on write.
+export const configTemplateKeys = [
+  'version',
+  'command',
+  'args',
+  'displayName',
+  'env',
+  'display',
+  'discoveryMaxBufferBytes',
+  'description',
+  'lastRun',
+  'desiredState',
+  'findings',
+  'ordinal'
+];
 
 export interface BridgeAdapterConfig {
   version: number;
@@ -27,6 +54,23 @@ export interface BridgeAdapterConfig {
    * the file means every class is enabled (keel/requirement-139).
    */
   display: DisplayConfig;
+  /**
+   * The workspace's discovery size-bound override, in bytes, as declared in
+   * the bridge config. Absent means the workspace declared none and the
+   * built-in default applies; read it through
+   * effectiveDiscoveryMaxBufferBytes, never directly
+   * (keel/requirement-163).
+   */
+  discoveryMaxBufferBytes?: number;
+}
+
+// The single site that derives the effective bound. Every enforcement and
+// reporting site reads this, so a workspace override and the built-in default
+// can never disagree about which number was enforced.
+//
+// DHF-REQ: keel/requirement-163
+export function effectiveDiscoveryMaxBufferBytes(adapter: BridgeAdapterConfig): number {
+  return adapter.discoveryMaxBufferBytes ?? discoveryOutputMaxBufferBytes;
 }
 
 export function adapterConfig(workspaceRoot: string): BridgeAdapterConfig {
@@ -38,7 +82,8 @@ export function adapterConfig(workspaceRoot: string): BridgeAdapterConfig {
     displayName: config.displayName,
     outputChannel: `${config.displayName} Test Bridge`,
     env: config.env,
-    display: config.display
+    display: config.display,
+    discoveryMaxBufferBytes: config.discoveryMaxBufferBytes
   };
 }
 
@@ -55,7 +100,7 @@ export function defaultAdapterConfig(workspaceRoot: string): BridgeAdapterConfig
 
 // DHF-REQ: keel/requirement-59
 export function defaultConfigTemplate(): string {
-  return `${JSON.stringify(defaultAdapterConfig(''), ['version', 'command', 'args', 'displayName', 'env', 'display', 'description', 'lastRun', 'desiredState', 'findings', 'ordinal'], 2)}\n`;
+  return `${JSON.stringify(defaultAdapterConfig(''), configTemplateKeys, 2)}\n`;
 }
 
 // DHF-REQ: keel/requirement-40
@@ -84,8 +129,28 @@ export function readAdapterConfig(workspaceRoot: string): BridgeAdapterConfig {
     displayName: parsed.displayName,
     outputChannel: `${parsed.displayName} Test Bridge`,
     env: parsed.env,
-    display: parseDisplayConfig((parsed as { display?: unknown }).display)
+    display: parseDisplayConfig((parsed as { display?: unknown }).display),
+    discoveryMaxBufferBytes: parseDiscoveryMaxBufferBytes((parsed as { discoveryMaxBufferBytes?: unknown }).discoveryMaxBufferBytes)
   };
+}
+
+// Rejects rather than coerces: an out-of-range or non-numeric override is a
+// configuration error the workspace must see, because a bound silently
+// replaced by the default reinstates exactly the undiagnosable ceiling
+// keel/issue-124 removed.
+//
+// DHF-REQ: keel/requirement-163
+function parseDiscoveryMaxBufferBytes(raw: unknown): number | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (typeof raw !== 'number' || !Number.isInteger(raw)) {
+    throw new Error('test bridge config discoveryMaxBufferBytes must be an integer number of bytes');
+  }
+  if (raw < discoveryMaxBufferBytesFloor || raw > discoveryMaxBufferBytesCeiling) {
+    throw new Error(`test bridge config discoveryMaxBufferBytes must be between ${discoveryMaxBufferBytesFloor} and ${discoveryMaxBufferBytesCeiling} bytes`);
+  }
+  return raw;
 }
 
 export async function discoverTests(workspaceRoot: string): Promise<DiscoveryDocument> {
@@ -175,15 +240,16 @@ function adapterEnv(adapter: BridgeAdapterConfig): NodeJS.ProcessEnv {
   return adapter.env ? { ...process.env, ...adapter.env } : process.env;
 }
 
-// DHF-REQ: keel/requirement-115
+// DHF-REQ: keel/requirement-115, keel/requirement-163
 async function readBoundedBridgeDocument(adapter: BridgeAdapterConfig, cwd: string, documentKind: 'discover' | 'desired-state', args: string[]): Promise<string> {
+  const bound = effectiveDiscoveryMaxBufferBytes(adapter);
   try {
     const { stdout } = await execFile(adapter.command, args, {
       cwd,
       env: adapterEnv(adapter),
-      maxBuffer: discoveryOutputMaxBufferBytes
+      maxBuffer: bound
     });
-    if (Buffer.byteLength(stdout) > discoveryOutputMaxBufferBytes) {
+    if (Buffer.byteLength(stdout) > bound) {
       throw new Error(formatDocumentSizeBoundError(adapter, documentKind, stdout));
     }
     return stdout;
@@ -202,7 +268,7 @@ function isStdoutMaxBufferError(err: unknown): err is Error & { code?: string; s
 function formatDocumentSizeBoundError(adapter: BridgeAdapterConfig, documentKind: 'discover' | 'desired-state', output: (Error & { stdout?: string | Buffer }) | string | Buffer): string {
   const capturedBytes = output instanceof Error ? capturedStdoutBytes(output.stdout) : capturedStdoutBytes(output);
   const capturedText = capturedBytes === undefined ? 'the output exceeded' : `captured ${capturedBytes} bytes before rejecting`;
-  return `${adapter.displayName} producer ${documentKind} document size exceeded the ${discoveryOutputMaxBufferBytes}-byte Test Bridge stdout bound; ${capturedText} the document. Reduce the producer's document size or split the discovery surface.`;
+  return `${adapter.displayName} producer ${documentKind} document size exceeded the ${effectiveDiscoveryMaxBufferBytes(adapter)}-byte Test Bridge stdout bound; ${capturedText} the document. Reduce the producer's document size or split the discovery surface.`;
 }
 
 function capturedStdoutBytes(stdout: string | Buffer | undefined): number | undefined {
@@ -216,7 +282,7 @@ function parseBoundedBridgeDocument(adapter: BridgeAdapterConfig, documentKind: 
   try {
     return JSON.parse(stdout);
   } catch (err) {
-    if (Buffer.byteLength(stdout) >= discoveryOutputMaxBufferBytes) {
+    if (Buffer.byteLength(stdout) >= effectiveDiscoveryMaxBufferBytes(adapter)) {
       throw new Error(formatDocumentSizeBoundError(adapter, documentKind, stdout));
     }
     throw err;
