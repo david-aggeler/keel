@@ -672,15 +672,18 @@ func TestRunReleaseRefusesVersionArgumentMismatch(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-112
-func TestPublishSkillSyncsGoldProductVersionViaOpenbrainClient(t *testing.T) {
+// DHF-TEST: keel/requirement-112 (keel/ac-395)
+func TestPublishSkillSyncsGoldProductVersionViaGoldAdminTools(t *testing.T) {
 	body, err := os.ReadFile(filepath.Join("..", "..", ".claude", "skills", "publish", "SKILL.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(body)
 	for _, want := range []string{
-		"openbrain-client",
+		"admin_list_product_versions",
+		"admin_update_product_version",
+		"admin_advance_product_version_status",
+		"admin_create_product_version",
 		"product_version",
 		"product `keel`",
 	} {
@@ -688,8 +691,16 @@ func TestPublishSkillSyncsGoldProductVersionViaOpenbrainClient(t *testing.T) {
 			t.Fatalf("publish skill missing %q:\n%s", want, text)
 		}
 	}
-	if strings.Contains(text, "keel-dev product_version") {
-		t.Fatalf("publish skill suggests product_version sync inside keel-dev:\n%s", text)
+	// The export/import round-trip is retired (keel/change_request-268); the
+	// sync must not prescribe it, and never lives inside keel-dev.
+	for _, banned := range []string{
+		"records export",
+		"records import",
+		"keel-dev product_version",
+	} {
+		if strings.Contains(text, banned) {
+			t.Fatalf("publish skill still prescribes %q:\n%s", banned, text)
+		}
 	}
 }
 
