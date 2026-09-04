@@ -3,53 +3,44 @@ package keel
 
 import (
 	_ "embed"
-	"runtime/debug"
 	"strings"
 )
 
 //go:embed VERSION
 var versionFile string
 
-// BuildMetadata can be stamped at build time with
-// -ldflags "-X github.com/david-aggeler/keel.BuildMetadata=<metadata>".
-var BuildMetadata string
+// BuildNumber carries the monotonic build number — the commit count since the
+// repository's first commit — stamped at build time with
+// -ldflags "-X github.com/david-aggeler/keel.BuildNumber=<n>".
+// Package keel never executes git; an unstamped build leaves it empty.
+var BuildNumber string
 
 // DHF-REQ: keel/requirement-110
 func Semver() string {
 	return strings.TrimSpace(versionFile)
 }
 
-// DHF-REQ: keel/requirement-110
+// Version returns the dotted MAJOR.MINOR.PATCH.BUILD form when a build number
+// was stamped, and the bare VERSION semver otherwise. A stamp that is not a
+// plain digit string is ignored so the surface stays 4-part numeric.
+//
+// DHF-REQ: keel/requirement-110 (keel/ac-688, keel/ac-689)
 func Version() string {
 	base := Semver()
-	metadata := buildMetadata()
-	if metadata == "" {
-		return base
+	if isDigits(BuildNumber) {
+		return base + "." + BuildNumber
 	}
-	return base + "+" + metadata
+	return base
 }
 
-func buildMetadata() string {
-	if metadata := cleanBuildMetadata(BuildMetadata); metadata != "" {
-		return metadata
+func isDigits(s string) bool {
+	if s == "" {
+		return false
 	}
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return ""
-	}
-	for _, setting := range info.Settings {
-		if setting.Key == "vcs.revision" {
-			return cleanBuildMetadata(setting.Value)
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
 		}
 	}
-	return ""
-}
-
-func cleanBuildMetadata(metadata string) string {
-	metadata = strings.TrimSpace(metadata)
-	metadata = strings.TrimPrefix(metadata, "v")
-	metadata = strings.ReplaceAll(metadata, "+", ".")
-	metadata = strings.ReplaceAll(metadata, "/", ".")
-	metadata = strings.ReplaceAll(metadata, " ", ".")
-	return strings.Trim(metadata, ".-")
+	return true
 }

@@ -730,12 +730,22 @@ func TestBuildToolingCoversAdmittedBinaries(t *testing.T) {
 		{name: "scripts/setup_repo.sh", body: string(setupRepo)},
 	} {
 		for _, want := range []string{
-			"go build -o bin/keel-dev ./cmd/keel-dev",
-			"go build -o bin/keel-demo ./cmd/keel-demo",
-			"go build -o bin/keel-demo-dev ./cmd/keel-demo-dev",
+			"-o bin/keel-dev ./cmd/keel-dev",
+			"-o bin/keel-demo ./cmd/keel-demo",
+			"-o bin/keel-demo-dev ./cmd/keel-demo-dev",
 		} {
 			if !strings.Contains(src.body, want) {
 				t.Fatalf("%s missing admitted binary build command %q", src.name, want)
+			}
+		}
+		// DHF-REQ: keel/requirement-110 (keel/ac-690) — every artifact build path
+		// stamps the commit-count build number so --version renders 4-part.
+		for _, want := range []string{
+			"-X github.com/david-aggeler/keel.BuildNumber=",
+			"git rev-list --count HEAD",
+		} {
+			if !strings.Contains(src.body, want) {
+				t.Fatalf("%s missing build-number stamp %q", src.name, want)
 			}
 		}
 	}
