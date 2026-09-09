@@ -68,33 +68,36 @@ produces drift that the next `init-skills` overwrites. Fix a materialized skill
 in gold and re-export. Fix a locally-authored one here, under the repo
 change-control rule in `CLAUDE.md`.
 
-## `.claude/agents/` is still tracked
+## `.claude/agents/` is not tracked either
 
-All nine projections carry the `x-openbrain-content-hash` stamp and belong to the
-same class as the materialized skills, so the same reasoning applies to them. They
-were left tracked deliberately: keel/change_request-271 was scoped to skills.
-keel/issue-235 records the follow-on.
+Same reasoning, simpler rule. Every agent projection carries the
+`x-openbrain-content-hash` stamp — there is no locally-authored agent — so
+`.gitignore` ignores the directory outright with no negation list. Do not add
+negation machinery here by analogy with the skills block above; it would imply a
+distinction that does not exist.
 
-### Known drift, as of 2026-08-21
+The seven gold serves are `adversarial-reviewer`, `api-contract`, `architect`,
+`coder`, `dfmea`, `reviewer`, `ux-designer`. `init-skills` fetches them and
+replication carries them into every worktree.
 
-`materialization.json` lists 7 agents gold currently serves:
-`adversarial-reviewer`, `api-contract`, `architect`, `coder`, `dfmea`, `reviewer`,
-`ux-designer`. Two more are tracked deliberately:
+### Deleted projections
 
-| Agent | Its skill in gold | Why it is here |
-|---|---|---|
-| `cse` | live, but gold no longer projects an agent for it | in active use; stale export, kept on purpose |
-| `tester` | live, but gold no longer projects an agent for it | in active use; stale export, kept on purpose |
+`cse.md` and `tester.md` were **deleted** on 2026-09-09 (keel/issue-236). Both
+were stamped, but `materialization.json` had stopped listing them: their skills
+are live in gold, the agent projection is not. They had been carried since
+2026-08-21 as deliberate stale exports. Untracking alone would not have removed
+them — nothing re-materializes what gold does not serve — so they were deleted on
+the owner's ruling. The `cse` and `tester` agent types are no longer available in
+this project; the skills are unaffected.
 
-Both carry a stamp, so do not read their presence as evidence that gold still
-serves them. Re-check this table against `materialization.json` whenever the
-catalog is re-exported.
+`product-manager.md` was **deleted** on 2026-08-21, for the same reason
+(keel/issue-200).
 
-`product-manager.md` was **deleted** on 2026-08-21. Its skill was withdrawn in
-gold and removed by keel/issue-200; the projection had outlived it. Expect
-`openbrain-client init-skills` to try to restore it from `.claude/legacy/`,
-because an unfetchable directory is treated as locally authored. If it reappears,
-`git rm` it again rather than committing it.
+**Expect `init-skills` to try to restore all three from `.claude/legacy/`.** An
+unfetchable directory is treated as locally authored, so the reconcile restores
+rather than removes. They are now untracked, so a reappearance is not a git diff
+and nothing will flag it — check `ls .claude/agents` against the served list
+above after a reconcile, and delete again if one returns.
 
 `.claude/legacy/` and `.claude/materialization.json` stay untracked. They are
 per-checkout reconcile state, not content.
