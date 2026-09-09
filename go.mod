@@ -32,3 +32,5 @@ require (
 	google.golang.org/grpc v1.83.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 )
+
+retract [v0.1.0, v0.9.2] // No longer supported.
