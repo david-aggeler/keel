@@ -8,15 +8,16 @@ Skills, agents, and settings for coding agents working in this repo.
 
 | Class | Count | Tracked? | Source of truth |
 |---|---|---|---|
-| catalog-materialized | 22 | no — gitignored | gold, via `openbrain-client init-skills` |
-| locally authored | 5 | yes | this repo, under the CLAUDE.md change-control rule |
+| catalog-materialized | 23 | no — gitignored | gold, via `openbrain-client init-skills` |
+| locally authored | 4 | yes | this repo, under the CLAUDE.md change-control rule |
 
-The locally-authored set is `asd-ste100`, `build`, `decide`, `merge`, `publish`.
+The locally-authored set is `asd-ste100`, `build`, `merge`, `publish`. `decide` was
+adopted into gold on 2026-09-09 and moved to the materialized side.
 
 **Telling them apart:** the stamp is the test. A materialized skill carries
 `x-openbrain-content-hash` in its front matter; a locally-authored one does not.
 `.gitignore` cannot read that stamp — a gitignore rule matches paths, not
-contents — so the five local skills are re-included by name in a hand-maintained
+contents — so the local skills are re-included by name in a hand-maintained
 negation list. Adding a catalog skill needs no change there; adding a
 locally-authored one needs its own negation line, or git never sees it.
 
@@ -25,7 +26,7 @@ locally-authored one needs its own negation line, or git never sees it.
 A worktree created by `git worktree add` contains exactly what git tracks. That
 is what made untracking unsafe before: keel/issue-200 untracked the materialized
 skills on 2026-08-20, and every run-queue worktree created afterwards carried
-only the five locally-authored ones. The dev verb's skill-currentness gate found
+only the locally-authored ones. The dev verb's skill-currentness gate found
 the rest missing and aborted each unit with `outcome=skill_stale` before any work
 started (keel/issue-201). The tracking was restored the next day as a workaround.
 
@@ -47,7 +48,7 @@ run-queue uses. Measured on 2026-09-09 against client 1.6.7.7560: the client
 reported `.claude/**` as `copied`, 536 of 536 eligible items.
 
 **The matched-AND-ignored rule is what keeps the two classes apart.** A tracked
-file is never copied, so the five locally-authored skills always arrive through
+file is never copied, so the locally-authored skills always arrive through
 git, on the branch's own version, and a replicated copy can never shadow them.
 The 22 materialized trees are ignored, so they arrive by copy. Neither class
 needs the mechanism to know which is which.

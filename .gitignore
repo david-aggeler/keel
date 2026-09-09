@@ -24,7 +24,6 @@ worktrees/
 .claude/skills/*
 !.claude/skills/asd-ste100/
 !.claude/skills/build/
-!.claude/skills/decide/
 !.claude/skills/merge/
 !.claude/skills/publish/
 # Agent projections are NOT tracked either, for the same reason as the skills above:
