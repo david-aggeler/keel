@@ -2,6 +2,16 @@
 product: keel
 # Development process key used when fetching and materializing skills.
 process: HELIX01
+
+# Managed worktrees inherit agent-local configuration through keel's safe
+# replication layer. Keel copies only gitignored, untracked matches; tracked
+# files covered by these presets remain sourced from git and are reported as
+# skipped_tracked.
+keel:
+  worktree:
+    replicate:
+      presets: [claude, codex]
+
 # Repository-stable defaults used by records import/export helpers.
 default_directories:
   catalog: ""
@@ -14,9 +24,7 @@ placeholders:
   build_command: [just, build]
   # Primary implementation language for generated skill context.
   primary_language: "Go"
-# keel: worktree-replicate policy removed 2026-08-31 (hotfix, keel/issue-228):
-# deployed openbrain-client strict-parses this file and rejects unknown top-level
-# keys. Home for keel-owned policy pending keel/action_item-35.
+
 # Optional autonomous-tail executor turn budgets by verb; blank uses the compiled default.
 turn_budgets:
   # Optional max turns for post-merge verify sessions.
@@ -60,5 +68,6 @@ transition_gates:
     runner_owned:
       - [go, run, ./cmd/keel-dev, ci]
       - [go, run, ./cmd/keel-dev, vsix, ci]
+
 # Optional non-gating merge command argv for a future openbrain-client merge verb.
 merge_command: [bash, .claude/skills/merge/scripts/merge-branch.sh]

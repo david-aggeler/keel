@@ -8,22 +8,26 @@ bin/
 # run-queue per-unit worktrees are rooted under <repo>/worktrees/; never track them
 worktrees/
 .claude/legacy/
-# Catalog-materialized skills and agents ARE tracked here, deliberately. See
-# .claude/README.md for the reasoning and the maintenance duty that comes with it.
+# Catalog-materialized skills are NOT tracked: gold owns them, so gold stays the only
+# source and a skill withdrawn there stops reaching this repo by definition. A worktree
+# still gets them -- keel/requirement-157 replication copies the gitignored matches from
+# the primary checkout on bring-up. See .claude/README.md.
 #
-# They are owned by OpenBrain and gold stays the source, so tracking them does make the
-# repo a second copy of a record plane it does not own. That cost is accepted because
-# the alternative cost more: keel/issue-200 untracked them on 2026-08-20 (commit
-# 8a94209), and every run-queue worktree created afterwards carried only the five
-# locally-authored skills, so the dev verb's skill-currentness gate aborted each unit
-# with outcome=skill_stale before any work started (keel/issue-201). Nothing in the
-# worktree bring-up path materializes them, and that path lives in openbrain-client,
-# not here -- so this repo cannot fix it at the source. Owner ruling 2026-08-21: track
-# them, so a worktree is usable the moment it is created.
+# The five negations below are the locally-authored skills. They are repo files under
+# the change-control rule in CLAUDE.md, and a tracked file is never replicated, so they
+# cannot be shadowed by a copy. The list is maintained BY HAND: the real discriminator
+# is the x-openbrain-content-hash stamp in a skill's front matter, and a gitignore rule
+# cannot read file contents.
 #
-# The duty: a skill withdrawn in gold does not disappear from here on its own.
-# `openbrain-client init-skills` restores an unfetchable skill from .claude/legacy/
-# rather than deleting it, so a withdrawal has to be committed by hand.
+# Maintenance: a new catalog skill needs no change here -- it is ignored on arrival. A
+# new locally-authored skill needs its own negation line, or it stays invisible to git.
+.claude/skills/*
+!.claude/skills/asd-ste100/
+!.claude/skills/build/
+!.claude/skills/decide/
+!.claude/skills/merge/
+!.claude/skills/publish/
+# .claude/agents/ stays tracked pending the follow-on named in keel/issue-235.
 .claude/materialization.json
 # gitignored sandbox for `openbrain-client init --dev` (KD10, CR-0249)
 consumer-claude/
