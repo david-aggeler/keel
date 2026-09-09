@@ -27,7 +27,11 @@ worktrees/
 !.claude/skills/decide/
 !.claude/skills/merge/
 !.claude/skills/publish/
-# .claude/agents/ stays tracked pending the follow-on named in keel/issue-235.
+# Agent projections are NOT tracked either, for the same reason as the skills above:
+# gold owns every one of them. Unlike the skills block this rule carries no negations,
+# because there is no locally-authored agent -- all nine carried the
+# x-openbrain-content-hash stamp when they were untracked (keel/issue-236).
+.claude/agents/
 .claude/materialization.json
 # gitignored sandbox for `openbrain-client init --dev` (KD10, CR-0249)
 consumer-claude/
