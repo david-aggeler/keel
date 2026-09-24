@@ -130,7 +130,7 @@ func FromContext(ctx context.Context) *slog.Logger {
 	return slog.Default()
 }
 
-// DHF-REQ: keel/requirement-5, keel/requirement-20
+// DHF-REQ: keel/requirement-5, keel/requirement-20, keel/requirement-170
 // replaceForOpenBrain renames "time" -> "ts" (RFC3339Nano), keeps slog-native
 // uppercase levels, drops "source", and redacts rendered string values before
 // they reach either the JSON or console sink.
@@ -1045,6 +1045,10 @@ func consoleLevel(level slog.Level) string {
 	}
 }
 
+// writeConsoleTimestamp opens every human console line, banners included,
+// with the record's event time. No profile or color setting skips it.
+//
+// DHF-REQ: keel/requirement-170
 func writeConsoleTimestamp(b *strings.Builder, t time.Time, color bool) {
 	if color {
 		b.WriteString("\x1b[90m")
@@ -1055,6 +1059,10 @@ func writeConsoleTimestamp(b *strings.Builder, t time.Time, color bool) {
 	}
 }
 
+// writeConsoleLevel writes the record's level label directly after the event
+// time on every human console line, at every verbosity.
+//
+// DHF-REQ: keel/requirement-171
 func writeConsoleLevel(b *strings.Builder, level slog.Level, color bool) {
 	tag := consoleLevel(level)
 	if color {
