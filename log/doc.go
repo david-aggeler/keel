@@ -4,6 +4,42 @@
 // "github.com/david-aggeler/keel/log") to avoid colliding with the stdlib "log"
 // package.
 //
+// # Start from a profile
+//
+// Two profiles configure the whole console shape in one call:
+//
+//   - [CLIProfile] — human-readable diagnostics on stderr. stdout stays free for
+//     the payload a command's verbs declare.
+//   - [ServiceProfile] — JSON records split by severity: Info and below on
+//     stdout, Warn and above on stderr, the split log aggregators tag by.
+//
+// A profile returns an ordinary [Config]. Read or amend any field, then pass it
+// to [New]; there is no second construction path.
+//
+//	cfg := log.CLIProfile("gateway")
+//	cfg.TextDir = ".logs"
+//	logger, err := log.New(cfg)
+//	if err != nil {
+//		return err
+//	}
+//	defer logger.Close()
+//
+//	logger.BuildIdentity("gateway", version, gitCommit) // ruled startup banner + build identity
+//	logger.Debug("config loaded", "path", cfgPath)
+//	logger.Info("listening", "addr", addr)
+//	logger.Warn("retrying", "attempt", n)
+//	logger.Error("request failed", "err", err)
+//	logger.Section("shutdown")
+//
+// # The fields are the escape hatch
+//
+// Every [Config] field stays public for the consumer a profile does not fit,
+// and the zero value is usable. A nil Config.Writer resolves to os.Stderr —
+// diagnostics never default onto stdout. Config.WarnWriter splits the console
+// by severity; Config.ForceColor and Config.DisableColor are the explicit color
+// policy, which keel/term applies, and beat NO_COLOR; Config.ChildOutputLevel
+// sets the severity keel/exec gives a child process's output lines.
+//
 // # Four sinks
 //
 // A production logger fans one log record out to the sinks selected by [Config]:
@@ -16,24 +52,6 @@
 // owned by the returned [Logger] and released by [Logger.Close]. All sinks share
 // one field schema — ts (RFC3339Nano), level (uppercase), msg, service — so the
 // JSON and human renderings of a record always agree.
-//
-// # Typical use
-//
-// Construct one logger from a [Config], defer its [Logger.Close], then log
-// through the leveled methods and the banner/field helpers:
-//
-//	logger, err := log.New(log.Config{Service: "gateway", Console: log.ConsolePlain, TextDir: ".logs"})
-//	if err != nil {
-//		return err
-//	}
-//	defer logger.Close()
-//
-//	logger.BuildIdentity("gateway", version, gitCommit) // ruled startup banner + build identity
-//	logger.Debug("config loaded", "path", cfgPath)
-//	logger.Info("listening", "addr", addr)
-//	logger.Warn("retrying", "attempt", n)
-//	logger.Error("request failed", "err", err)
-//	logger.Section("shutdown")
 //
 // The leveled methods — [Logger.Debug], [Logger.Info], [Logger.Warn],
 // [Logger.Error] and their *Context variants — take a message and alternating

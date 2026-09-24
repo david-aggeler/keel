@@ -55,6 +55,12 @@ type Config struct {
 	// never default onto the payload stream. Set it to a bytes.Buffer (or any
 	// io.Writer) to capture console output in tests.
 	Writer io.Writer
+	// WarnWriter, when non-nil, splits the console sink by severity: records
+	// at Warn and above go to WarnWriter, records at Info and below go to
+	// Writer. Each record reaches exactly one of the two. Nil → no split;
+	// every console record goes to Writer. [ServiceProfile] sets it to
+	// os.Stderr so log aggregators can tag severity by stream.
+	WarnWriter io.Writer
 	// TextDir, when non-empty, opens a daily human-readable .log file sink.
 	TextDir string
 	// JSONLDir, when non-empty, opens a daily JSON Lines .jsonl file sink.
@@ -81,6 +87,11 @@ type Config struct {
 	// Optional packages such as log/otel use this hook so the core log package
 	// keeps its dependency surface unchanged.
 	Handlers []slog.Handler
+
+	// ChildOutputLevel is the severity at which keel/exec records a child
+	// process's output lines, on both of the child's streams. Nil → keel/exec's
+	// built-in stream mapping. Read it back with [Logger.ChildOutputLevel].
+	ChildOutputLevel slog.Leveler
 }
 
 // Logger is keel/log's public logger. It wraps slog while owning any file sinks
@@ -95,6 +106,7 @@ type Logger struct {
 	runLogPath    string
 	runLog        *lineCountingWriteCloser
 	sourceInFiles bool
+	childLevel    slog.Leveler
 }
 
 // ctxKey is the context key for storing a *slog.Logger.
@@ -218,17 +230,17 @@ func New(cfg Config) (*Logger, error) {
 	if console == "" {
 		console = ConsoleSparseAI
 	}
-	switch console {
-	case ConsoleNone:
-	case ConsoleJSON:
-		handlers = append(handlers, slog.NewJSONHandler(w, &slog.HandlerOptions{
-			Level:       consoleVerbosity,
-			ReplaceAttr: replaceForConsole,
-		}))
-	case ConsoleSparseAI:
-		handlers = append(handlers, newSparseAIHandler(w, consoleVerbosity))
-	default:
-		handlers = append(handlers, newConsoleHandler(w, consoleVerbosity, consoleColor(w, cfg.ForceColor, cfg.DisableColor), cfg.ConsoleOmitKeys))
+	split := false
+	if low := newConsoleSink(console, w, consoleVerbosity, cfg); low != nil {
+		if cfg.WarnWriter != nil {
+			// The split is one console sink with two destinations. It sits in
+			// the handler list, below the single redaction pass the fan-out
+			// applies, so both branches see the same redacted record.
+			// DHF-REQ: keel/requirement-167
+			low = severitySplitHandler{low: low, high: newConsoleSink(console, cfg.WarnWriter, consoleVerbosity, cfg)}
+			split = true
+		}
+		handlers = append(handlers, low)
 	}
 
 	closers := make([]io.Closer, 0, 2)
@@ -278,10 +290,59 @@ func New(cfg Config) (*Logger, error) {
 	}
 
 	h := handlers[0]
-	if len(handlers) > 1 || hasInjectedHandler {
+	if len(handlers) > 1 || hasInjectedHandler || split {
 		h = multiHandler{handlers: handlers}
 	}
-	return &Logger{base: slog.New(h).With("service", cfg.Service), closers: closers, textLogPath: textLogPath, jsonlLogPath: runLogPath, runLogPath: runLogPath, runLog: runLog, sourceInFiles: cfg.SourceInFiles}, nil
+	return &Logger{base: slog.New(h).With("service", cfg.Service), closers: closers, textLogPath: textLogPath, jsonlLogPath: runLogPath, runLogPath: runLogPath, runLog: runLog, sourceInFiles: cfg.SourceInFiles, childLevel: cfg.ChildOutputLevel}, nil
+}
+
+// newConsoleSink builds the console handler for one destination, or nil for
+// [ConsoleNone].
+func newConsoleSink(console Console, w io.Writer, level slog.Leveler, cfg Config) slog.Handler {
+	switch console {
+	case ConsoleNone:
+		return nil
+	case ConsoleJSON:
+		return slog.NewJSONHandler(w, &slog.HandlerOptions{
+			Level:       level,
+			ReplaceAttr: replaceForConsole,
+		})
+	case ConsoleSparseAI:
+		return newSparseAIHandler(w, level)
+	default:
+		return newConsoleHandler(w, level, consoleColor(w, cfg.ForceColor, cfg.DisableColor), cfg.ConsoleOmitKeys)
+	}
+}
+
+// severitySplitHandler routes each record to exactly one of two console
+// handlers: Warn and above to high, everything below to low.
+type severitySplitHandler struct {
+	low  slog.Handler
+	high slog.Handler
+}
+
+func (h severitySplitHandler) pick(level slog.Level) slog.Handler {
+	if level >= slog.LevelWarn {
+		return h.high
+	}
+	return h.low
+}
+
+func (h severitySplitHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return h.pick(level).Enabled(ctx, level)
+}
+
+// DHF-REQ: keel/requirement-167
+func (h severitySplitHandler) Handle(ctx context.Context, r slog.Record) error {
+	return h.pick(r.Level).Handle(ctx, r)
+}
+
+func (h severitySplitHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return severitySplitHandler{low: h.low.WithAttrs(attrs), high: h.high.WithAttrs(attrs)}
+}
+
+func (h severitySplitHandler) WithGroup(name string) slog.Handler {
+	return severitySplitHandler{low: h.low.WithGroup(name), high: h.high.WithGroup(name)}
 }
 
 func closeAll(closers []io.Closer) {
@@ -345,6 +406,23 @@ func (l *Logger) RunLogLine() int {
 	return l.runLog.Line()
 }
 
+// ChildOutputLevel returns Config.ChildOutputLevel as given to [New]: the
+// severity keel/exec uses for a child's output lines. Nil means the field was
+// not set and keel/exec applies its built-in mapping.
+//
+// DHF-REQ: keel/requirement-167
+func (l *Logger) ChildOutputLevel() slog.Leveler {
+	if l == nil {
+		return nil
+	}
+	return l.childLevel
+}
+
+// Log emits a record at level with ctx.
+func (l *Logger) Log(ctx context.Context, level slog.Level, msg string, args ...any) {
+	l.slog().Log(ctx, level, msg, l.argsWithAutoSource(args)...)
+}
+
 // Debug emits a DEBUG record.
 func (l *Logger) Debug(msg string, args ...any) { l.slog().Debug(msg, l.argsWithAutoSource(args)...) }
 
@@ -379,12 +457,12 @@ func (l *Logger) ErrorContext(ctx context.Context, msg string, args ...any) {
 
 // With returns a logger carrying the supplied attrs.
 func (l *Logger) With(args ...any) *Logger {
-	return &Logger{base: l.slog().With(args...), closers: l.closers, textLogPath: l.textLogPath, jsonlLogPath: l.jsonlLogPath, runLogPath: l.runLogPath, runLog: l.runLog, sourceInFiles: l.sourceInFiles}
+	return &Logger{base: l.slog().With(args...), closers: l.closers, textLogPath: l.textLogPath, jsonlLogPath: l.jsonlLogPath, runLogPath: l.runLogPath, runLog: l.runLog, sourceInFiles: l.sourceInFiles, childLevel: l.childLevel}
 }
 
 // WithGroup returns a logger that groups subsequent attrs under name.
 func (l *Logger) WithGroup(name string) *Logger {
-	return &Logger{base: l.slog().WithGroup(name), closers: l.closers, textLogPath: l.textLogPath, jsonlLogPath: l.jsonlLogPath, runLogPath: l.runLogPath, runLog: l.runLog, sourceInFiles: l.sourceInFiles}
+	return &Logger{base: l.slog().WithGroup(name), closers: l.closers, textLogPath: l.textLogPath, jsonlLogPath: l.jsonlLogPath, runLogPath: l.runLogPath, runLog: l.runLog, sourceInFiles: l.sourceInFiles, childLevel: l.childLevel}
 }
 
 // Event emits an INFO record with event_type set to verb.
