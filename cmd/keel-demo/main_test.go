@@ -327,7 +327,7 @@ func TestRenderHelpDirectMachineModesEmitHelpEvent(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out, code := captureRunOutput(t, func() int {
-				return renderHelp(tree, tc.mode, []string{"workflow"})
+				return renderHelp(tree, cli.RuntimeConfig{Mode: tc.mode}, []string{"workflow"})
 			})
 			if code != 0 {
 				t.Fatalf("renderHelp exit = %d, want 0\n%s", code, out)
@@ -361,7 +361,7 @@ func TestRunDirectDefaultShowcaseAndHelpAllMachineMode(t *testing.T) {
 	}
 
 	for _, mode := range []cli.Mode{cli.ModeAI, cli.ModeJSON} {
-		out, code := captureRunOutput(t, func() int { return renderAllHelp(commandTree(), mode) })
+		out, code := captureRunOutput(t, func() int { return renderAllHelp(commandTree(), cli.RuntimeConfig{Mode: mode}) })
 		if code != 0 {
 			t.Fatalf("renderAllHelp(%s) exit = %d, want 0\n%s", mode, code, out)
 		}

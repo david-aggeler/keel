@@ -20,8 +20,11 @@
 // before command dispatch. It returns RuntimeConfig, whose Mode selects the
 // console protocol and whose Help, HelpAll, Version, Verbose, and NoHeader
 // fields let binaries route shared behavior before invoking the command tree.
+// Its Quiet, Color, NoInput, and Plain fields carry the operator's output
+// policy; ConsoleLevel and TermConfig thread that policy into keel/log and
+// keel/term so every consumer resolves it the same way.
 //
-// DHF-REQ: keel/requirement-21, keel/requirement-30, keel/requirement-57
+// DHF-REQ: keel/requirement-21, keel/requirement-30, keel/requirement-57, keel/requirement-166
 package cli
 
 import (
@@ -29,8 +32,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"sort"
 	"strings"
+
+	"github.com/david-aggeler/keel/term"
 )
 
 // Mode names the shared console protocol selected by a CLI invocation.
@@ -68,6 +74,96 @@ type RuntimeConfig struct {
 	HelpJSON bool
 	// Version requests version output instead of command execution.
 	Version bool
+	// Quiet raises the console floor to Warn. It is a console floor only:
+	// file sinks keep their own verbosity. See [RuntimeConfig.ConsoleLevel].
+	Quiet bool
+	// Color is the explicit --color policy. The zero value is
+	// [term.ColorAuto]. [RuntimeConfig.EffectiveColor] folds Plain into it.
+	Color term.ColorPolicy
+	// NoInput forbids interactive prompting. keel prompts nowhere today, so
+	// the flag is inert by design; consumers thread it through
+	// [RuntimeConfig.TermConfig] so a future prompt is built against it.
+	NoInput bool
+	// Plain is the pipeline umbrella: no color, no animation, and no
+	// prompting. It is equivalent to --color=never together with --no-input.
+	Plain bool
+}
+
+// ConsoleLevel returns the console floor for this invocation given the
+// consumer's own default. Quiet yields Warn, Verbose yields Debug, and
+// neither leaves base unchanged. It applies to the console sink only: a
+// consumer must not pass it to file-sink verbosity, because quiet declutters
+// the terminal and never thins the evidence trail.
+//
+// DHF-REQ: keel/requirement-166
+func (c RuntimeConfig) ConsoleLevel(base slog.Level) slog.Level {
+	switch {
+	case c.Quiet:
+		return slog.LevelWarn
+	case c.Verbose:
+		return slog.LevelDebug
+	default:
+		return base
+	}
+}
+
+// EffectiveColor returns the color policy after the --plain umbrella is
+// applied: Plain forces [term.ColorNever]; otherwise it is Color.
+//
+// DHF-REQ: keel/requirement-166
+func (c RuntimeConfig) EffectiveColor() term.ColorPolicy {
+	if c.Plain {
+		return term.ColorNever
+	}
+	return c.Color
+}
+
+// TermConfig returns the keel/term inputs this invocation's policy flags
+// select for stream. The caller may add Getenv and Probe before [term.New].
+//
+// --color=never forbids every escape sequence, and animation is drawn with
+// escape sequences, so it forbids animation as well. That is what makes
+// --plain exactly equivalent to --color=never together with --no-input.
+//
+// DHF-REQ: keel/requirement-166
+func (c RuntimeConfig) TermConfig(stream term.Stream) term.Config {
+	color := c.EffectiveColor()
+	return term.Config{
+		Stream:      stream,
+		Color:       color,
+		NoInput:     c.NoInput || c.Plain,
+		NoAnimation: color == term.ColorNever,
+	}
+}
+
+// HelpWidth returns the column count generated help should wrap to on the
+// stream c describes: the width keel/term reports when the stream is a
+// terminal, and zero (no wrapping) otherwise, so piped help keeps its
+// unwrapped lines for grep and diff.
+//
+// DHF-REQ: keel/requirement-166
+func HelpWidth(c term.Capability) int {
+	if !c.Terminal() {
+		return 0
+	}
+	return c.Size().Cols
+}
+
+// ParseColorPolicy parses a --color value. It accepts exactly auto, always,
+// and never and rejects every other value with UsageError.
+//
+// DHF-REQ: keel/requirement-166
+func ParseColorPolicy(value string) (term.ColorPolicy, error) {
+	switch value {
+	case "auto":
+		return term.ColorAuto, nil
+	case "always":
+		return term.ColorAlways, nil
+	case "never":
+		return term.ColorNever, nil
+	default:
+		return term.ColorAuto, NewUsageError("unknown --color %q: expected auto, always, or never", value)
+	}
 }
 
 // Config describes the generated root-help shell around a consumer command
@@ -99,6 +195,10 @@ type Config struct {
 	ModeHelp []string
 	// Trailing is optional final root-help guidance.
 	Trailing string
+	// HelpWidth, when positive, wraps generated help prose to this many
+	// columns. Consumers set it from the width keel/term reports for the help
+	// destination; zero leaves help unwrapped.
+	HelpWidth int
 	// HelpWriter receives help rendered directly by Dispatch for -h/--help.
 	// Nil discards dispatcher-owned help; binaries that route help through their
 	// own presentation layer may keep doing so while migrating to Dispatch.
@@ -249,6 +349,7 @@ func (c *CommandSpec) ParseGlobalConfig(argv []string) (RuntimeConfig, []string,
 	return cfg, words, nil
 }
 
+// DHF-REQ: keel/requirement-57, keel/requirement-166
 func parseGlobalConfig(argv []string, node *CommandSpec) (RuntimeConfig, []string, error) {
 	cfg := RuntimeConfig{Mode: ModeHuman}
 	var words []string
@@ -271,6 +372,22 @@ func parseGlobalConfig(argv []string, node *CommandSpec) (RuntimeConfig, []strin
 			cfg.Mode = mode
 		case "-v", "--verbose":
 			cfg.Verbose = true
+		case "-q", "--quiet":
+			cfg.Quiet = true
+		case "--color":
+			if i+1 >= len(argv) {
+				return cfg, nil, NewUsageError("--color requires one of: auto, always, never")
+			}
+			i++
+			policy, err := ParseColorPolicy(argv[i])
+			if err != nil {
+				return cfg, nil, err
+			}
+			cfg.Color = policy
+		case "--no-input":
+			cfg.NoInput = true
+		case "--plain":
+			cfg.Plain = true
 		case "--no-header":
 			cfg.NoHeader = true
 		case "-h", "--help":
@@ -283,8 +400,19 @@ func parseGlobalConfig(argv []string, node *CommandSpec) (RuntimeConfig, []strin
 		case "--version":
 			cfg.Version = true
 		default:
+			if value, ok := strings.CutPrefix(arg, "--color="); ok {
+				policy, err := ParseColorPolicy(value)
+				if err != nil {
+					return cfg, nil, err
+				}
+				cfg.Color = policy
+				continue
+			}
 			words = append(words, arg)
 		}
+	}
+	if cfg.Quiet && cfg.Verbose {
+		return cfg, nil, NewUsageError("--quiet and --verbose are mutually exclusive")
 	}
 	return cfg, words, nil
 }
@@ -830,11 +958,15 @@ func commandPath(path []string, fallback string) string {
 // cannot drift from the parser; a consumer's Config.GlobalFlags contributes only
 // its own additional binary-specific globals. The order mirrors ParseGlobalConfig.
 //
-// DHF-REQ: keel/requirement-101
+// DHF-REQ: keel/requirement-101, keel/requirement-166
 func GlobalFlagSpecs() []FlagSpec {
 	return []FlagSpec{
 		{Name: "mode", Value: "human|ai|json", Default: "human", Short: "Select the console output protocol."},
 		{Name: "verbose", Short: "Include debug-level console detail."},
+		{Name: "quiet", Alias: "q", Short: "Show only warnings and errors on the console; log files are unchanged."},
+		{Name: "color", Value: "auto|always|never", Default: "auto", Enum: []string{"auto", "always", "never"}, Short: "Set the console color policy; an explicit value outranks NO_COLOR."},
+		{Name: "no-input", Short: "Never prompt for input."},
+		{Name: "plain", Short: "Pipeline output: no color, no animation, and no prompting."},
 		{Name: "no-header", Short: "Suppress the run header for machine protocol consumers."},
 		{Name: "help", Short: "Print generated help and exit."},
 		{Name: "help-all", Short: "Print root help plus every command topic and exit."},
@@ -947,12 +1079,12 @@ func (c *CommandSpec) renderHelpHeader(w io.Writer, title, summary string, usage
 	}
 	if summary != "" {
 		if title != "" {
-			fmt.Fprintf(w, "  %s\n", summary)
+			printWrapped(w, "  ", "  ", summary, c.Config.HelpWidth)
 		} else {
 			if wrote {
 				fmt.Fprintln(w)
 			}
-			fmt.Fprintln(w, summary)
+			printWrapped(w, "", "", summary, c.Config.HelpWidth)
 		}
 		wrote = true
 	}
@@ -995,16 +1127,16 @@ func (c *CommandSpec) RenderRootHelp(w io.Writer) {
 	if globals := mergeGlobalFlags(c.Config.GlobalFlags); len(globals) > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Global flags:")
-		PrintFlagRows(w, globals)
+		printFlagRows(w, globals, c.Config.HelpWidth)
 	}
 	if len(c.Subcommands) > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Commands:")
-		PrintGroupedCommandRows(w, c.Subcommands)
+		printGroupedCommandRows(w, c.Subcommands, c.Config.HelpWidth)
 	}
 	if c.Config.Trailing != "" {
 		fmt.Fprintln(w)
-		fmt.Fprintln(w, c.Config.Trailing)
+		printWrapped(w, "", "", c.Config.Trailing, c.Config.HelpWidth)
 	}
 	if topics := helpOnlyTopics(); len(topics) > 0 {
 		fmt.Fprintln(w)
@@ -1226,7 +1358,7 @@ func (c *CommandSpec) RenderCommandHelp(w io.Writer, path []string) {
 	if len(c.Flags) > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Flags:")
-		PrintFlagRows(w, c.Flags)
+		printFlagRows(w, c.Flags, c.Config.HelpWidth)
 	}
 	if len(c.ExitCodes) > 0 {
 		fmt.Fprintln(w)
@@ -1238,7 +1370,7 @@ func (c *CommandSpec) RenderCommandHelp(w io.Writer, path []string) {
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Subcommands:")
-	PrintGroupedCommandRows(w, c.Subcommands)
+	printGroupedCommandRows(w, c.Subcommands, c.Config.HelpWidth)
 }
 
 // RenderSubcommandHelp writes a nested subcommand listing below parent. Rows
@@ -1282,25 +1414,30 @@ func PrintCommandRows(w io.Writer, commands []*CommandSpec) {
 //
 // DHF-REQ: keel/requirement-105
 func PrintGroupedCommandRows(w io.Writer, commands []*CommandSpec) {
+	printGroupedCommandRows(w, commands, 0)
+}
+
+func printGroupedCommandRows(w io.Writer, commands []*CommandSpec, helpWidth int) {
 	groups := groupCommands(commands)
 	width := commandNameWidth(commands)
 	if len(groups) == 1 && groups[0].defaulted {
-		printIndentedCommandRows(w, groups[0].commands, 2, width)
+		printIndentedCommandRows(w, groups[0].commands, 2, width, helpWidth)
 		return
 	}
 	for _, group := range groups {
 		fmt.Fprintf(w, "%s:\n", group.name)
-		printIndentedCommandRows(w, group.commands, 2, width)
+		printIndentedCommandRows(w, group.commands, 2, width, helpWidth)
 	}
 }
 
-func printIndentedCommandRows(w io.Writer, commands []*CommandSpec, indent, width int) {
+func printIndentedCommandRows(w io.Writer, commands []*CommandSpec, indent, width, helpWidth int) {
 	if width == 0 {
 		width = commandNameWidth(commands)
 	}
 	prefix := strings.Repeat(" ", indent)
+	hanging := strings.Repeat(" ", indent+width+2)
 	for _, cmd := range commands {
-		fmt.Fprintf(w, "%s%-*s  %s\n", prefix, width, cmd.Name, cmd.Short)
+		printWrapped(w, fmt.Sprintf("%s%-*s  ", prefix, width, cmd.Name), hanging, cmd.Short, helpWidth)
 	}
 }
 
@@ -1358,6 +1495,10 @@ func commandGroup(cmd *CommandSpec) string {
 // PrintFlagRows writes flag help rows using the package's shared two-line flag
 // layout.
 func PrintFlagRows(w io.Writer, flags []FlagSpec) {
+	printFlagRows(w, flags, 0)
+}
+
+func printFlagRows(w io.Writer, flags []FlagSpec, helpWidth int) {
 	for _, f := range flags {
 		value := ""
 		if f.Value != "" {
@@ -1367,7 +1508,43 @@ func PrintFlagRows(w io.Writer, flags []FlagSpec) {
 		if f.Default != "" {
 			def = " (default " + f.Default + ")"
 		}
-		fmt.Fprintf(w, "  --%s%s\n      %s%s\n", f.Name, value, f.Short, def)
+		fmt.Fprintf(w, "  --%s%s\n", f.Name, value)
+		printWrapped(w, "      ", "      ", f.Short+def, helpWidth)
+	}
+}
+
+// printWrapped writes text as one or more lines. The first line starts with
+// first and every continuation line with rest. When width is positive, words
+// are packed greedily so no line exceeds width unless a single word is longer
+// than the space left for it; zero or negative width writes one line. Existing
+// line breaks in text are kept. Unwrapped output is byte-identical to the
+// renderer before HelpWidth existed.
+//
+// DHF-REQ: keel/requirement-166
+func printWrapped(w io.Writer, first, rest, text string, width int) {
+	if width <= 0 {
+		fmt.Fprintf(w, "%s%s\n", first, text)
+		return
+	}
+	prefix := first
+	for _, para := range strings.Split(text, "\n") {
+		words := strings.Fields(para)
+		if len(words) == 0 {
+			fmt.Fprintln(w, strings.TrimRight(prefix, " "))
+			prefix = rest
+			continue
+		}
+		line := prefix + words[0]
+		for _, word := range words[1:] {
+			if len(line)+1+len(word) > width {
+				fmt.Fprintln(w, line)
+				line = rest + word
+				continue
+			}
+			line += " " + word
+		}
+		fmt.Fprintln(w, line)
+		prefix = rest
 	}
 }
 
@@ -1431,6 +1608,11 @@ func (c *CommandSpec) inheritConfig(cfg Config) {
 	// render the identity line requirement-111 puts on every help page.
 	if c.Config.Version == "" {
 		c.Config.Version = cfg.Version
+	}
+	// HelpWidth travels with the root so every topic wraps to the same
+	// width the consumer measured once.
+	if c.Config.HelpWidth == 0 {
+		c.Config.HelpWidth = cfg.HelpWidth
 	}
 	for _, child := range c.Subcommands {
 		child.inheritConfig(c.Config)

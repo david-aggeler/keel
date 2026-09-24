@@ -17,6 +17,7 @@ import (
 	"github.com/david-aggeler/keel/cli"
 	procexec "github.com/david-aggeler/keel/exec"
 	logging "github.com/david-aggeler/keel/log"
+	"github.com/david-aggeler/keel/term"
 )
 
 func main() {
@@ -37,6 +38,9 @@ func run(argv []string) int {
 		tree.RenderRootHelp(os.Stderr)
 		return 2
 	}
+	// DHF-REQ: keel/requirement-166 — the operator's color and input policy
+	// resolve once into keel/term; requested help wraps to its width.
+	tree.Config.HelpWidth = cli.HelpWidth(term.New(terminalConfig(cfg)))
 	if cfg.Version {
 		// DHF-REQ: keel/requirement-109, keel/requirement-110
 		fmt.Fprintln(os.Stdout, versionString())
@@ -44,7 +48,7 @@ func run(argv []string) int {
 	}
 	if cfg.HelpAll {
 		// DHF-REQ: keel/requirement-57
-		return renderAllHelp(tree, mode)
+		return renderAllHelp(tree, cfg)
 	}
 	if cfg.HelpJSON {
 		// DHF-REQ: keel/requirement-100 — structured inventory on stdout,
@@ -56,9 +60,9 @@ func run(argv []string) int {
 		return 0
 	}
 	if cfg.Help {
-		return renderHelp(tree, mode, words)
+		return renderHelp(tree, cfg, words)
 	}
-	logger, closeLogger, err := buildLogger(mode)
+	logger, closeLogger, err := buildLogger(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "keel-demo: "+err.Error())
 		return 1
@@ -137,15 +141,22 @@ func handleWorkflowReplay(speed *string) cli.Handler {
 	}
 }
 
-// DHF-REQ: keel/requirement-28
-func renderHelp(tree *cli.CommandSpec, mode cli.Mode, path []string) int {
+// DHF-REQ: keel/requirement-28, keel/requirement-164
+func renderHelp(tree *cli.CommandSpec, rt cli.RuntimeConfig, path []string) int {
+	mode := rt.Mode
 	var help bytes.Buffer
 	helpErr := tree.RenderHelp(&help, path)
 	if mode == cli.ModeHuman {
-		fmt.Fprint(os.Stdout, help.String())
+		// A resolvable topic is requested help: stdout. An unknown topic is
+		// a usage error and keeps stderr.
+		out := os.Stdout
+		if helpErr != nil {
+			out = os.Stderr
+		}
+		fmt.Fprint(out, help.String())
 		return helpErrorExitCode(helpErr)
 	}
-	logger, closeLogger, err := buildLogger(mode)
+	logger, closeLogger, err := buildLogger(rt)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "keel-demo: "+err.Error())
 		return 1
@@ -170,15 +181,16 @@ func helpErrorExitCode(err error) int {
 	return 1
 }
 
-// DHF-REQ: keel/requirement-57
-func renderAllHelp(tree *cli.CommandSpec, mode cli.Mode) int {
+// DHF-REQ: keel/requirement-57, keel/requirement-164
+func renderAllHelp(tree *cli.CommandSpec, rt cli.RuntimeConfig) int {
+	mode := rt.Mode
 	var help bytes.Buffer
 	tree.RenderAllHelp(&help)
 	if mode == cli.ModeHuman {
 		fmt.Fprint(os.Stdout, help.String())
 		return 0
 	}
-	logger, closeLogger, err := buildLogger(mode)
+	logger, closeLogger, err := buildLogger(rt)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "keel-demo: "+err.Error())
 		return 1
@@ -189,21 +201,43 @@ func renderAllHelp(tree *cli.CommandSpec, mode cli.Mode) int {
 }
 
 // DHF-REQ: keel/requirement-29
-func buildLogger(mode cli.Mode) (*logging.Logger, func(), error) {
-	logger, err := logging.New(logging.Config{
-		Service:          "keel-demo",
-		ConsoleVerbosity: slog.LevelDebug,
-		Console:          consoleForSharedMode(mode),
-		Writer:           os.Stdout,
-		TextDir:          ".logs",
-		JSONLDir:         ".logs",
-		PerRun:           true,
-		ConsoleOmitKeys:  []string{"service"},
-	})
+func buildLogger(rt cli.RuntimeConfig) (*logging.Logger, func(), error) {
+	logger, err := logging.New(loggerConfig(rt))
 	if err != nil {
 		return nil, nil, err
 	}
 	return logger, func() { _ = logger.Close() }, nil
+}
+
+// loggerConfig is keel-demo's three-sink logger config for one invocation's
+// global flags. The showcase defaults the console to Debug so every rendering
+// is visible; -q raises that floor to Warn on the console only, and --color
+// and --plain set the color policy. File sinks keep keel/log's own verbosity.
+//
+// DHF-REQ: keel/requirement-29, keel/requirement-166
+func loggerConfig(rt cli.RuntimeConfig) logging.Config {
+	color := rt.EffectiveColor()
+	return logging.Config{
+		Service:          "keel-demo",
+		ConsoleVerbosity: rt.ConsoleLevel(slog.LevelDebug),
+		Console:          consoleForSharedMode(rt.Mode),
+		Writer:           os.Stdout,
+		TextDir:          ".logs",
+		JSONLDir:         ".logs",
+		PerRun:           true,
+		ForceColor:       color == term.ColorAlways,
+		DisableColor:     color == term.ColorNever,
+		ConsoleOmitKeys:  []string{"service"},
+	}
+}
+
+// terminalConfig is the keel/term input keel-demo resolves its terminal
+// capability from: stdout, the destination of requested help, under the
+// operator's --color, --no-input and --plain policy.
+//
+// DHF-REQ: keel/requirement-166
+func terminalConfig(rt cli.RuntimeConfig) term.Config {
+	return rt.TermConfig(term.Stdout)
 }
 
 func consoleForSharedMode(mode cli.Mode) logging.Console {
@@ -281,7 +315,7 @@ func exitCodeFor(logger *logging.Logger, err error) int {
 		return 0
 	}
 	if logger == nil {
-		logger, closeLogger, buildErr := buildLogger(cli.ModeHuman)
+		logger, closeLogger, buildErr := buildLogger(cli.RuntimeConfig{Mode: cli.ModeHuman})
 		if buildErr != nil {
 			fmt.Fprintln(os.Stderr, "keel-demo: "+buildErr.Error())
 			return 1

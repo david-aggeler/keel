@@ -78,6 +78,9 @@ type Config struct {
 	Color ColorPolicy
 	// NoInput forbids prompting, as a --no-input flag would.
 	NoInput bool
+	// NoAnimation forbids spinners and redrawn progress, as a --plain flag
+	// would. It only removes permission; nothing forces animation on.
+	NoAnimation bool
 	// Getenv reads the environment. Nil means [os.Getenv].
 	Getenv func(string) string
 	// Probe answers detection. Nil means [OSProbe].
@@ -127,7 +130,7 @@ func New(cfg Config) Capability {
 		stream:    cfg.Stream,
 		terminal:  terminal,
 		color:     color,
-		animation: termUsable && probe.IsTerminal(Stderr),
+		animation: !cfg.NoAnimation && termUsable && probe.IsTerminal(Stderr),
 		prompt:    !cfg.NoInput && probe.IsTerminal(Stdin),
 		probe:     probe,
 		getenv:    getenv,
@@ -154,8 +157,8 @@ func (c Capability) Terminal() bool { return c.terminal }
 func (c Capability) Color() bool { return c.color }
 
 // Animation reports whether spinners and redrawn progress may be drawn: stderr
-// must be a terminal and TERM must be set and not "dumb". No color policy
-// forces it, so animation never reaches a pipe.
+// must be a terminal, TERM must be set and not "dumb", and [Config.NoAnimation]
+// must be false. No color policy forces it, so animation never reaches a pipe.
 func (c Capability) Animation() bool { return c.animation }
 
 // Prompt reports whether the process may prompt for input: stdin must be a

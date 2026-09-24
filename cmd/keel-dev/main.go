@@ -9,6 +9,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -23,6 +24,7 @@ import (
 	keel "github.com/david-aggeler/keel"
 	"github.com/david-aggeler/keel/cli"
 	logging "github.com/david-aggeler/keel/log"
+	"github.com/david-aggeler/keel/term"
 )
 
 func main() {
@@ -35,21 +37,24 @@ func main() {
 func run(argv []string) int {
 	tree := commandTree()
 	cfg, words, err := tree.ParseGlobalConfig(argv)
-	mode := string(cfg.Mode)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "keel-dev: "+err.Error())
 		fmt.Fprintln(os.Stderr)
-		printUsage(tree)
+		printUsage(tree, os.Stderr)
 		return 2
 	}
+	// DHF-REQ: keel/requirement-166 — the operator's color and input policy
+	// resolve once into keel/term; requested help wraps to its width.
+	tree.Config.HelpWidth = cli.HelpWidth(term.New(terminalConfig(cfg)))
 
 	if cfg.Version {
 		fmt.Fprintln(os.Stdout, versionString())
 		return 0
 	}
 	if cfg.HelpAll {
-		// DHF-REQ: keel/requirement-57
-		tree.RenderAllHelp(os.Stderr)
+		// DHF-REQ: keel/requirement-57, keel/requirement-164 — requested help
+		// is the payload the operator asked for: stdout.
+		tree.RenderAllHelp(os.Stdout)
 		return 0
 	}
 	if cfg.HelpJSON {
@@ -62,14 +67,24 @@ func run(argv []string) int {
 		return 0
 	}
 	if cfg.Help && len(words) == 0 {
-		printUsage(tree)
+		// DHF-REQ: keel/requirement-164
+		printUsage(tree, os.Stdout)
 		return 0
 	}
 	if cfg.Help {
-		return helpExitCode(tree.RenderHelp(os.Stderr, words))
+		// DHF-REQ: keel/requirement-164 — a resolvable topic is requested help
+		// and goes to stdout; an unknown topic is a usage error and keeps stderr.
+		var help bytes.Buffer
+		helpErr := tree.RenderHelp(&help, words)
+		out := io.Writer(os.Stdout)
+		if helpErr != nil {
+			out = os.Stderr
+		}
+		_, _ = out.Write(help.Bytes())
+		return helpExitCode(helpErr)
 	}
 	if len(words) == 0 {
-		printUsage(tree)
+		printUsage(tree, os.Stderr)
 		return 2
 	}
 
@@ -78,13 +93,9 @@ func run(argv []string) int {
 	// .logs sinks anchor at the root too.
 	root, err := findModuleRoot(".")
 	if err != nil {
-		return exitFor(newLogger(mode, slog.LevelInfo, os.Stdout), err)
+		return exitFor(newLogger(cfg, os.Stdout), err)
 	}
 
-	level := slog.LevelInfo
-	if cfg.Verbose {
-		level = slog.LevelDebug
-	}
 	// DHF-REQ: keel/requirement-38, keel/requirement-114 — test-bridge and
 	// worktree verbs keep stdout pure protocol: the console sink routes to
 	// stderr while both file sinks stay on.
@@ -92,9 +103,9 @@ func run(argv []string) int {
 	if len(words) > 0 && protocolStdoutVerbs[words[0]] {
 		consoleWriter = os.Stderr
 	}
-	logger, closeSinks, err := buildLogger(mode, level, filepath.Join(root, ".logs"), consoleWriter)
+	logger, closeSinks, err := buildLogger(cfg, filepath.Join(root, ".logs"), consoleWriter)
 	if err != nil {
-		return exitFor(newLogger(mode, level, os.Stdout), err)
+		return exitFor(newLogger(cfg, os.Stdout), err)
 	}
 	defer closeSinks()
 
@@ -112,10 +123,12 @@ func run(argv []string) int {
 	return exitFor(slogLogger, dispatchKeelDev(withRunState(ctx, slogLogger, logger, root), tree, words))
 }
 
-// printUsage writes the static help text. Help is documentation, not run
-// output; run output (gate progress, results, errors) flows through keel/log.
-func printUsage(tree *cli.CommandSpec) {
-	tree.RenderRootHelp(os.Stderr)
+// printUsage writes the static help text to w: stdout when help was
+// requested, stderr when it accompanies a usage error. Help is documentation,
+// not run output; run output (gate progress, results, errors) flows through
+// keel/log.
+func printUsage(tree *cli.CommandSpec, w io.Writer) {
+	tree.RenderRootHelp(w)
 }
 
 func helpExitCode(err error) int {
@@ -158,9 +171,8 @@ func newProtocolStream() io.Writer {
 //
 // The returned closer releases both file handlers; call it once at exit.
 // DHF-REQ: keel/requirement-11, keel/requirement-19, keel/requirement-25, keel/requirement-29
-func buildLogger(mode string, level slog.Leveler, logDir string, writer io.Writer) (*logging.Logger, func(), error) {
-	cfg := loggerConfig(level)
-	cfg.Console, _ = consoleForMode(mode)
+func buildLogger(rt cli.RuntimeConfig, logDir string, writer io.Writer) (*logging.Logger, func(), error) {
+	cfg := loggerConfig(rt)
 	cfg.Writer = writer
 	cfg.TextDir = logDir
 	cfg.JSONLDir = logDir
@@ -174,15 +186,23 @@ func buildLogger(mode string, level slog.Leveler, logDir string, writer io.Write
 
 // newLogger builds a console-only keel/log logger (bootstrap path, before the
 // module root — and thus the .logs directory — is known).
-func newLogger(mode string, level slog.Leveler, writer io.Writer) *slog.Logger {
-	cfg := loggerConfig(level)
-	cfg.Console, _ = consoleForMode(mode)
+func newLogger(rt cli.RuntimeConfig, writer io.Writer) *slog.Logger {
+	cfg := loggerConfig(rt)
 	cfg.Writer = writer
 	logger, err := logging.New(cfg)
 	if err != nil {
 		return slog.New(slog.NewTextHandler(writer, nil))
 	}
 	return logger.Slog()
+}
+
+// terminalConfig is the keel/term input keel-dev resolves its terminal
+// capability from: stdout, the destination of requested help, under the
+// operator's --color, --no-input and --plain policy.
+//
+// DHF-REQ: keel/requirement-166
+func terminalConfig(rt cli.RuntimeConfig) term.Config {
+	return rt.TermConfig(term.Stdout)
 }
 
 // DHF-REQ: keel/requirement-110
@@ -208,15 +228,27 @@ func consoleForMode(mode string) (logging.Console, error) {
 	}
 }
 
-// loggerConfig is keel-dev's base logger config. The service attr is
-// suppressed on the human console only (keel/log ConsoleOmitKeys, keel/issue-3)
-// — a single-service CLI repeating service=keel-dev per line is noise. JSON
-// mode and both .logs file sinks keep the field.
-func loggerConfig(level slog.Leveler) logging.Config {
+// loggerConfig is keel-dev's base logger config for one invocation's global
+// flags. The service attr is suppressed on the human console only (keel/log
+// ConsoleOmitKeys, keel/issue-3) — a single-service CLI repeating
+// service=keel-dev per line is noise. JSON mode and both .logs file sinks keep
+// the field.
+//
+// The operator policy flags set the console floor (-q, -v) and the color
+// policy (--color, --plain). File sinks keep keel/log's own verbosity: quiet
+// is a console floor, never a sink switch.
+//
+// DHF-REQ: keel/requirement-166
+func loggerConfig(rt cli.RuntimeConfig) logging.Config {
+	console, _ := consoleForMode(string(rt.Mode))
+	color := rt.EffectiveColor()
 	return logging.Config{
 		Service:          "keel-dev",
-		ConsoleVerbosity: level,
+		Console:          console,
+		ConsoleVerbosity: rt.ConsoleLevel(slog.LevelInfo),
 		Writer:           os.Stdout,
+		ForceColor:       color == term.ColorAlways,
+		DisableColor:     color == term.ColorNever,
 		ConsoleOmitKeys:  []string{"service"},
 	}
 }

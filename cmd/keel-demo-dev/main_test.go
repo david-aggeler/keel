@@ -533,9 +533,9 @@ func TestRunEntrypointRoutesProtocolHelpVersionAndErrors(t *testing.T) {
 		t.Fatalf("--version = code %d stdout %q, want version prefix %q", code, stdout, wantVersion)
 	}
 
-	_, stderr, code = captureRun(t, root, "--help-all")
-	if code != 0 || !strings.Contains(stderr, "test-bridge") {
-		t.Fatalf("--help-all = code %d stderr %q, want command help", code, stderr)
+	stdout, stderr, code = captureRun(t, root, "--help-all")
+	if code != 0 || stderr != "" || !strings.Contains(stdout, "test-bridge") {
+		t.Fatalf("--help-all = code %d stdout %q stderr %q, want command help on stdout", code, stdout, stderr)
 	}
 
 	stdout, stderr, code = captureRun(t, root, "--help-json")
@@ -551,9 +551,9 @@ func TestRunEntrypointRoutesProtocolHelpVersionAndErrors(t *testing.T) {
 		t.Fatalf("path/mode-scoped inventory count = %d, want %d", scopedCount, bareCount)
 	}
 
-	_, stderr, code = captureRun(t, root, "help", "test-bridge")
-	if code != 0 || !strings.Contains(stderr, "test-bridge") {
-		t.Fatalf("help test-bridge = code %d stderr %q, want topic help", code, stderr)
+	stdout, stderr, code = captureRun(t, root, "help", "test-bridge")
+	if code != 0 || stderr != "" || !strings.Contains(stdout, "test-bridge") {
+		t.Fatalf("help test-bridge = code %d stdout %q stderr %q, want topic help on stdout", code, stdout, stderr)
 	}
 
 	_, stderr, code = captureRun(t, root, "--bad-flag")
