@@ -156,7 +156,7 @@ func renderHelp(tree *cli.CommandSpec, rt cli.RuntimeConfig, path []string) int 
 		fmt.Fprint(out, help.String())
 		return helpErrorExitCode(helpErr)
 	}
-	logger, closeLogger, err := buildLogger(rt)
+	logger, closeLogger, err := buildLogger(helpRuntime(rt))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "keel-demo: "+err.Error())
 		return 1
@@ -168,6 +168,16 @@ func renderHelp(tree *cli.CommandSpec, rt cli.RuntimeConfig, path []string) int 
 	}
 	logger.Event("help", "keel-demo help", "command", command, "help", help.String(), "mode", string(mode))
 	return helpErrorExitCode(helpErr)
+}
+
+// helpRuntime is the runtime a machine-mode help event is logged under. Help
+// is the document the operator asked for, not a diagnostic, so the -q console
+// floor does not apply to it.
+//
+// DHF-REQ: keel/requirement-164, keel/requirement-166
+func helpRuntime(rt cli.RuntimeConfig) cli.RuntimeConfig {
+	rt.Quiet = false
+	return rt
 }
 
 func helpErrorExitCode(err error) int {
@@ -190,7 +200,7 @@ func renderAllHelp(tree *cli.CommandSpec, rt cli.RuntimeConfig) int {
 		fmt.Fprint(os.Stdout, help.String())
 		return 0
 	}
-	logger, closeLogger, err := buildLogger(rt)
+	logger, closeLogger, err := buildLogger(helpRuntime(rt))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "keel-demo: "+err.Error())
 		return 1
