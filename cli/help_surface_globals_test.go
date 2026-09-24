@@ -190,6 +190,60 @@ func TestRootHelpSynopsisAndGlobalFlagsAdvertiseEveryAcceptedSpelling(t *testing
 	}
 }
 
+// DHF-TEST: keel/requirement-101 (keel/ac-724)
+// The raw rendered lines are asserted, never a re-joined synopsis: joining
+// continuation lines hides the width.
+func TestRootHelpSynopsisWrapsToHelpWidthWithoutSplittingFlagGroups(t *testing.T) {
+	const width = 40
+	var help bytes.Buffer
+	globalSurfaceTree(width).RenderRootHelp(&help)
+	var synopsis []string
+	in := false
+	for _, line := range strings.Split(help.String(), "\n") {
+		if line == "Usage:" {
+			in = true
+			continue
+		}
+		if !in {
+			continue
+		}
+		if len(synopsis) > 0 && !strings.HasPrefix(line, "   ") {
+			break
+		}
+		synopsis = append(synopsis, line)
+	}
+	if len(synopsis) < 2 {
+		t.Fatalf("width-%d root synopsis spans %d line(s), want more than one\n%s", width, len(synopsis), help.String())
+	}
+	if !strings.HasPrefix(synopsis[0], "  tool ") {
+		t.Fatalf("root synopsis first line = %q, want the block indent then the program name\n%s", synopsis[0], help.String())
+	}
+	continuation := "  " + strings.Repeat(" ", len("tool")+1)
+	for i, line := range synopsis {
+		if len(line) > width {
+			t.Fatalf("root synopsis line %d = %q is %d columns including its indent, want at most %d\n%s", i, line, len(line), width, help.String())
+		}
+		if i > 0 && (!strings.HasPrefix(line, continuation) || strings.HasPrefix(line, continuation+" ")) {
+			t.Fatalf("root synopsis continuation line %d = %q, want it indented past the program name (%d columns)\n%s", i, line, len(continuation), help.String())
+		}
+		depth := 0
+		for _, r := range line {
+			switch r {
+			case '[':
+				depth++
+			case ']':
+				depth--
+			}
+			if depth < 0 {
+				break
+			}
+		}
+		if depth != 0 {
+			t.Fatalf("root synopsis line %d = %q splits a bracketed flag group across lines\n%s", i, line, help.String())
+		}
+	}
+}
+
 // DHF-TEST: keel/requirement-101 (keel/ac-716)
 func TestRootHelpSynopsisListsConsumerGlobalsAndOptionalCommandForInvocableRoot(t *testing.T) {
 	tree := globalSurfaceTree(0)
