@@ -124,7 +124,7 @@ func TestProfilesResolveToAmendableConfigForNew(t *testing.T) {
 	}
 	for name, profile := range profiles {
 		t.Run(name, func(t *testing.T) {
-			var cfg logging.Config = profile("svc-" + name)
+			cfg := profile("svc-" + name)
 			if cfg.Service != "svc-"+name {
 				t.Fatalf("Service = %q, want svc-%s", cfg.Service, name)
 			}
