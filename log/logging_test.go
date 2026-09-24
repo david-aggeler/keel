@@ -1444,9 +1444,20 @@ func TestConsoleOutput_LevelThresholdAndColorGating(t *testing.T) {
 		Writer:           &noColor,
 		ForceColor:       true,
 	})
-	noColorLogger.Error("plain error")
-	if got := noColor.String(); strings.Contains(got, "\x1b[") {
-		t.Fatalf("NO_COLOR did not disable ANSI color: %q", got)
+	noColorLogger.Error("forced error")
+	if got := noColor.String(); !strings.Contains(got, "\x1b[") {
+		t.Fatalf("ForceColor is the explicit policy and must beat NO_COLOR: %q", got)
+	}
+
+	var autoNoColor bytes.Buffer
+	autoLogger := mustNewLogger(t, logging.Config{Console: logging.ConsolePlain,
+		Service:          "cli",
+		ConsoleVerbosity: slog.LevelDebug,
+		Writer:           &autoNoColor,
+	})
+	autoLogger.Error("plain error")
+	if got := autoNoColor.String(); strings.Contains(got, "\x1b[") {
+		t.Fatalf("NO_COLOR did not disable ANSI color without an explicit policy: %q", got)
 	}
 }
 

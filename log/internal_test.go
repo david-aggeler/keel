@@ -182,20 +182,21 @@ func TestConsoleLevelsAndColor(t *testing.T) {
 		}
 	}
 
-	// Non-file writer: never colored. Disable and NO_COLOR win over force.
+	// Non-file writer: never colored under auto. Force is the explicit policy
+	// and beats NO_COLOR; disable beats force.
 	rc := &recordCapture{}
-	if colorEnabled(rc, false, false) {
+	if consoleColor(rc, false, false) {
 		t.Error("non-file writer should not enable color")
 	}
-	if colorEnabled(rc, true, true) {
+	if consoleColor(rc, true, true) {
 		t.Error("disable must beat force")
 	}
 	t.Setenv("NO_COLOR", "1")
-	if colorEnabled(rc, true, false) {
-		t.Error("NO_COLOR must beat force")
+	if !consoleColor(rc, true, false) {
+		t.Error("force must beat NO_COLOR")
 	}
 	t.Setenv("NO_COLOR", "")
-	if !colorEnabled(rc, true, false) {
+	if !consoleColor(rc, true, false) {
 		t.Error("force should enable color for non-file writers")
 	}
 }
@@ -250,8 +251,17 @@ func TestLoggerLifecycleHelpersCoverNilAndFileBranches(t *testing.T) {
 	}
 	defer f.Close()
 	t.Setenv("NO_COLOR", "")
-	if colorEnabled(f, false, false) {
+	t.Setenv("TERM", "xterm-256color")
+	if consoleColor(f, false, false) {
 		t.Fatal("regular file should not enable color without force")
+	}
+	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer devNull.Close()
+	if consoleColor(devNull, false, false) {
+		t.Fatal("/dev/null is a character device, not a terminal; it must not enable color")
 	}
 }
 

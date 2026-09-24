@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/david-aggeler/keel/term"
 )
 
 // Console selects the process console rendering for [New].
@@ -34,7 +36,7 @@ const (
 
 // Config holds the parameters for constructing a production logger. The zero
 // value is usable: Service is blank, console verbosity defaults to Info, file
-// verbosity defaults to Debug, and output goes to os.Stdout with the sparse-AI
+// verbosity defaults to Debug, and output goes to os.Stderr with the sparse-AI
 // console and no file sinks. All fields are optional.
 //
 // DHF-REQ: keel/requirement-30, keel/requirement-33, keel/requirement-56
@@ -49,8 +51,9 @@ type Config struct {
 	FileVerbosity slog.Leveler
 	// Console selects the console rendering. Empty → ConsoleSparseAI.
 	Console Console
-	// Writer is the console sink destination. Nil → os.Stdout. Set it to a
-	// bytes.Buffer (or any io.Writer) to capture console output in tests.
+	// Writer is the console sink destination. Nil → os.Stderr: diagnostics
+	// never default onto the payload stream. Set it to a bytes.Buffer (or any
+	// io.Writer) to capture console output in tests.
 	Writer io.Writer
 	// TextDir, when non-empty, opens a daily human-readable .log file sink.
 	TextDir string
@@ -63,7 +66,9 @@ type Config struct {
 	// SourceInFiles keeps automatic caller source enabled for text file sinks.
 	SourceInFiles bool
 	// ForceColor forces ANSI color on the console sink even when the writer is
-	// not a terminal. Ignored when NO_COLOR is set or DisableColor is true.
+	// not a terminal and even when NO_COLOR is set: it is the explicit
+	// policy, as a --color=always flag would be. Ignored when DisableColor is
+	// true. With neither set, keel/term decides from detection and environment.
 	ForceColor bool
 	// DisableColor suppresses ANSI color on the console sink unconditionally.
 	DisableColor bool
@@ -202,7 +207,10 @@ func New(cfg Config) (*Logger, error) {
 	}
 	w := cfg.Writer
 	if w == nil {
-		w = os.Stdout
+		// Diagnostics default to stderr; stdout is reserved for payload a
+		// consumer's verb declares.
+		// DHF-REQ: keel/requirement-164
+		w = os.Stderr
 	}
 
 	handlers := make([]slog.Handler, 0, 3+len(cfg.Handlers))
@@ -220,7 +228,7 @@ func New(cfg Config) (*Logger, error) {
 	case ConsoleSparseAI:
 		handlers = append(handlers, newSparseAIHandler(w, consoleVerbosity))
 	default:
-		handlers = append(handlers, newConsoleHandler(w, consoleVerbosity, colorEnabled(w, cfg.ForceColor, cfg.DisableColor), cfg.ConsoleOmitKeys))
+		handlers = append(handlers, newConsoleHandler(w, consoleVerbosity, consoleColor(w, cfg.ForceColor, cfg.DisableColor), cfg.ConsoleOmitKeys))
 	}
 
 	closers := make([]io.Closer, 0, 2)
@@ -990,22 +998,26 @@ func levelColor(level slog.Level) string {
 	}
 }
 
-func colorEnabled(w io.Writer, force bool, disable bool) bool {
-	if disable || os.Getenv("NO_COLOR") != "" {
-		return false
+// consoleColor asks keel/term whether the console writer may carry color. keel/log
+// holds no color opinion of its own: DisableColor and ForceColor become the
+// explicit [term.ColorPolicy], so ForceColor beats NO_COLOR and DisableColor
+// beats both. A writer that is not an *os.File is never a terminal. The file
+// sits in the probe's stdout slot only because a probe answers per stream;
+// keel/term reads nothing else from that choice for Color.
+func consoleColor(w io.Writer, force bool, disable bool) bool {
+	policy := term.ColorAuto
+	switch {
+	case disable:
+		policy = term.ColorNever
+	case force:
+		policy = term.ColorAlways
 	}
-	if force {
-		return true
-	}
-	f, ok := w.(*os.File)
-	if !ok {
-		return false
-	}
-	st, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return st.Mode()&os.ModeCharDevice != 0
+	f, _ := w.(*os.File)
+	return term.New(term.Config{
+		Stream: term.Stdout,
+		Color:  policy,
+		Probe:  term.FileProbe(nil, f, nil),
+	}).Color()
 }
 
 func formatConsoleValue(v slog.Value) string {
