@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -230,14 +229,15 @@ func TestGateStageInventoryMatchesTheRunningBatteryBothWays(t *testing.T) {
 		t.Fatalf("declared stage commands = %v, want the stages a real run executes %v", declared, running)
 	}
 
-	var buf bytes.Buffer
-	if err := tree.RenderHelpJSON(&buf); err != nil {
-		t.Fatalf("RenderHelpJSON: %v", err)
-	}
+	helpJSON, _ := captureProcessStreams(t, func() {
+		if code := run([]string{"--help-json"}); code != 0 {
+			t.Fatalf("keel-dev --help-json exit = %d, want 0", code)
+		}
+	})
 	var inventory []struct {
 		Path string `json:"path"`
 	}
-	if err := json.Unmarshal(buf.Bytes(), &inventory); err != nil {
+	if err := json.Unmarshal([]byte(helpJSON), &inventory); err != nil {
 		t.Fatalf("parse command inventory: %v", err)
 	}
 	listed := map[string]bool{}

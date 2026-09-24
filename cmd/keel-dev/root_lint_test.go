@@ -162,7 +162,7 @@ func TestKeelDevHelpWordMatchesHelpFlagForEveryCommandNode(t *testing.T) {
 		assertKeelDevHelpParity(t, pair.name, pair.help, pair.flag)
 	}
 
-	for _, path := range commandInventoryPaths(t, commandTree()) {
+	for _, path := range commandInventoryPaths(t) {
 		parts := strings.Fields(path)
 		assertKeelDevHelpParity(t, path, append([]string{"help"}, parts...), append(append([]string{}, parts...), "--help"))
 	}
@@ -240,18 +240,19 @@ func assertKeelDevHelpParity(t *testing.T, name string, helpArgs, flagArgs []str
 	}
 }
 
-func commandInventoryPaths(t *testing.T, tree *cli.CommandSpec) []string {
+func commandInventoryPaths(t *testing.T) []string {
 	t.Helper()
-	var encoded bytes.Buffer
-	if err := tree.RenderHelpJSON(&encoded); err != nil {
-		t.Fatalf("RenderHelpJSON: %v", err)
-	}
+	encoded, _ := captureProcessStreams(t, func() {
+		if code := run([]string{"--help-json"}); code != 0 {
+			t.Fatalf("keel-dev --help-json exit = %d, want 0", code)
+		}
+	})
 	var inventory []struct {
 		Path string `json:"path"`
 		Kind string `json:"kind"`
 	}
-	if err := json.Unmarshal(encoded.Bytes(), &inventory); err != nil {
-		t.Fatalf("parse command inventory: %v\n%s", err, encoded.String())
+	if err := json.Unmarshal([]byte(encoded), &inventory); err != nil {
+		t.Fatalf("parse command inventory: %v\n%s", err, encoded)
 	}
 	paths := make([]string, 0, len(inventory))
 	for _, command := range inventory {
@@ -838,11 +839,11 @@ func TestKeelDevUsesGeneratedCommandTreeHelp(t *testing.T) {
 		{"release"},
 		{"verify"},
 	} {
-		var help bytes.Buffer
-		if err := tree.RenderTopicHelp(&help, path); err != nil {
-			t.Fatalf("RenderTopicHelp(%q): %v", strings.Join(path, " "), err)
-		}
-		got := help.String()
+		got, _ := captureProcessStreams(t, func() {
+			if code := run(append([]string{"help"}, path...)); code != 0 {
+				t.Fatalf("keel-dev help %s exit = %d, want 0", strings.Join(path, " "), code)
+			}
+		})
 		node, _, ok := tree.Find(path)
 		if !ok {
 			t.Fatalf("topic %v not found in the command tree", path)

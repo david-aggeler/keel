@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -51,28 +50,26 @@ func rootVersionSemver(t *testing.T) string {
 }
 
 type globalActionFlagCase struct {
-	arg   string
-	field string
+	arg string
 }
 
+// globalActionFlagCases lists every keel-owned global flag that asks for an
+// action instead of a run: a value-less flag for which keel/cli's Start serves
+// the invocation even when a command word follows it.
 func globalActionFlagCases(t *testing.T) []globalActionFlagCase {
 	t.Helper()
-	base, _, err := cli.ParseGlobalConfig(nil)
-	if err != nil {
-		t.Fatalf("parse baseline global config: %v", err)
-	}
-
+	tree := commandTree()
+	word := tree.Subcommands[0].Name
 	var cases []globalActionFlagCase
 	for _, spec := range cli.GlobalFlagSpecs() {
-		cfg, rest, err := cli.ParseGlobalConfig([]string{"--" + spec.Name})
-		if err != nil || len(rest) != 0 {
+		if spec.Value != "" {
 			continue
 		}
-		for _, field := range changedRuntimeBoolFields(base, cfg) {
-			if operatorPolicyFields[field] {
-				continue
-			}
-			cases = append(cases, globalActionFlagCase{arg: "--" + spec.Name, field: field})
+		arg := "--" + spec.Name
+		var done bool
+		discardProcessStreams(t, func() { _, _, _, done = tree.Start([]string{arg, word}) })
+		if done {
+			cases = append(cases, globalActionFlagCase{arg: arg})
 		}
 	}
 	if len(cases) == 0 {
@@ -82,31 +79,19 @@ func globalActionFlagCases(t *testing.T) []globalActionFlagCase {
 	return cases
 }
 
-// operatorPolicyFields are the RuntimeConfig bool fields a global flag sets
-// without asking for an action: they change how a run renders, not whether it
-// runs. TestKeel*HandlesEveryOperatorPolicyFlag owns their parity check.
-var operatorPolicyFields = map[string]bool{
-	"Verbose":  true,
-	"NoHeader": true,
-	"Quiet":    true,
-	"NoInput":  true,
-	"Plain":    true,
-}
-
-func changedRuntimeBoolFields(base, cfg cli.RuntimeConfig) []string {
-	baseValue := reflect.ValueOf(base)
-	cfgValue := reflect.ValueOf(cfg)
-	cfgType := cfgValue.Type()
-	var changed []string
-	for i := 0; i < cfgValue.NumField(); i++ {
-		if cfgValue.Field(i).Kind() != reflect.Bool {
-			continue
-		}
-		if cfgValue.Field(i).Bool() != baseValue.Field(i).Bool() {
-			changed = append(changed, cfgType.Field(i).Name)
-		}
+// discardProcessStreams runs fn with os.Stdout and os.Stderr pointed at the
+// null device.
+func discardProcessStreams(t *testing.T, fn func()) {
+	t.Helper()
+	null, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return changed
+	defer func() { _ = null.Close() }()
+	oldStdout, oldStderr := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = null, null
+	defer func() { os.Stdout, os.Stderr = oldStdout, oldStderr }()
+	fn()
 }
 
 func assertGlobalActionFlagOutput(t *testing.T, c globalActionFlagCase, out string, code int, program, wantVersion string) {
@@ -118,12 +103,12 @@ func assertGlobalActionFlagOutput(t *testing.T, c globalActionFlagCase, out stri
 		t.Fatalf("%s %s reached empty-args dispatch usage:\n%s", program, c.arg, out)
 	}
 
-	switch c.field {
-	case "Help", "HelpAll":
+	switch c.arg {
+	case "--help", "--help-all":
 		if !strings.Contains(out, program) {
 			t.Fatalf("%s %s output missing program name %q:\n%s", program, c.arg, program, out)
 		}
-	case "HelpJSON":
+	case "--help-json":
 		var inventory []map[string]any
 		if err := json.Unmarshal([]byte(out), &inventory); err != nil {
 			t.Fatalf("%s %s output is not JSON inventory: %v\n%s", program, c.arg, err, out)
@@ -131,7 +116,7 @@ func assertGlobalActionFlagOutput(t *testing.T, c globalActionFlagCase, out stri
 		if len(inventory) == 0 {
 			t.Fatalf("%s %s emitted empty JSON inventory", program, c.arg)
 		}
-	case "Version":
+	case "--version":
 		got := strings.TrimSpace(out)
 		if !strings.HasPrefix(got, wantVersion) {
 			t.Fatalf("%s %s output = %q, want prefix %q", program, c.arg, got, wantVersion)
@@ -141,7 +126,7 @@ func assertGlobalActionFlagOutput(t *testing.T, c globalActionFlagCase, out stri
 		}
 	default:
 		if strings.TrimSpace(out) == "" {
-			t.Fatalf("%s %s output is empty for action field %s", program, c.arg, c.field)
+			t.Fatalf("%s %s output is empty", program, c.arg)
 		}
 	}
 }

@@ -3,6 +3,7 @@ package cli_test
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/david-aggeler/keel/cli"
@@ -35,9 +36,11 @@ func ExampleCommandSpec() {
 		},
 	}
 
-	cfg, words, err := cli.ParseGlobalConfig([]string{"--mode", "json", "echo", "ready"})
-	if err != nil {
-		panic(err)
+	// Start serves every help request and usage error itself; a consumer
+	// only returns the exit code it reports.
+	cfg, words, code, done := root.Start([]string{"--mode", "json", "echo", "ready"})
+	if done {
+		os.Exit(code)
 	}
 	fmt.Println(cfg.Mode)
 	if err := root.Dispatch(context.Background(), words); err != nil {

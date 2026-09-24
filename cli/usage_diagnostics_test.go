@@ -115,7 +115,7 @@ func TestDispatchBareGroupShowsConciseHelp(t *testing.T) {
 func TestDispatchBareGroupExplicitHelpUnchanged(t *testing.T) {
 	var help strings.Builder
 	tree := diagnosticsTree()
-	tree.Config.HelpWriter = &help
+	tree.SetHelpOutput(&help, &help)
 	if err := tree.Dispatch(context.Background(), []string{"gate", "--help"}); err != nil {
 		t.Fatalf("Dispatch(gate --help) err = %v, want nil", err)
 	}

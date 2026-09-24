@@ -5,14 +5,12 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
-	"strings"
 
 	keel "github.com/david-aggeler/keel"
 	"github.com/david-aggeler/keel/cli"
@@ -30,36 +28,11 @@ func run(argv []string) int {
 	if err := tree.ValidateTree(); err != nil {
 		return bootstrapFailure(err, 1)
 	}
-	cfg, words, err := tree.ParseGlobalConfig(argv)
-	mode := cfg.Mode
-	if err != nil {
-		bootstrapFailure(err, 2)
-		_, _ = io.WriteString(helpStream(err), "\n")
-		tree.RenderRootHelp(helpStream(err))
-		return 2
-	}
-	// DHF-REQ: keel/requirement-166 — the operator's color and input policy
-	// resolve once into keel/term; requested help wraps to its width.
-	tree.Config.HelpWidth = cli.HelpWidth(term.New(terminalConfig(cfg)))
-	if cfg.Version {
-		// DHF-REQ: keel/requirement-109, keel/requirement-110
-		_, _ = io.WriteString(helpStream(nil), versionString()+"\n")
-		return 0
-	}
-	if cfg.HelpAll {
-		// DHF-REQ: keel/requirement-57
-		return renderAllHelp(tree, cfg)
-	}
-	if cfg.HelpJSON {
-		// DHF-REQ: keel/requirement-100 — structured inventory on stdout,
-		// path- and mode-independent, exit 0.
-		if err := tree.RenderHelpJSON(helpStream(nil)); err != nil {
-			return bootstrapFailure(err, 1)
-		}
-		return 0
-	}
-	if cfg.Help {
-		return renderHelp(tree, cfg, words)
+	// DHF-REQ: keel/requirement-172 — keel/cli serves every help output and
+	// usage error itself; keel-demo only returns the code it reports.
+	cfg, words, code, done := tree.Start(argv)
+	if done {
+		return code
 	}
 	logger, closeLogger, err := buildLogger(cfg)
 	if err != nil {
@@ -67,31 +40,19 @@ func run(argv []string) int {
 	}
 	defer closeLogger()
 	// A bare invocation dispatches to the root handler, the showcase.
-	ctx := withMode(withLogger(context.Background(), logger), string(mode))
+	ctx := withMode(withLogger(context.Background(), logger), string(cfg.Mode))
 	return exitCodeFor(logger, tree.Dispatch(ctx, words))
 }
 
 // bootstrapFailure reports a failure that precedes the logger — an invalid
-// command tree, a usage error in the global flags, a logger that cannot be
-// built — on stderr, and returns code. It is the one place keel-demo writes a
-// diagnostic without keel/log, because at that point there is no logger.
+// command tree or a logger that cannot be built — on stderr, and returns code.
+// It is the one place keel-demo writes a diagnostic without keel/log, because
+// at that point there is no logger.
 //
 // DHF-REQ: keel/requirement-164
 func bootstrapFailure(err error, code int) int {
 	_, _ = io.WriteString(os.Stderr, "keel-demo: "+err.Error()+"\n")
 	return code
-}
-
-// helpStream is where requested help, --version and --help-json go: stdout,
-// because the operator asked for that document. A help request that fails to
-// resolve is a usage error and goes to stderr.
-//
-// DHF-REQ: keel/requirement-164
-func helpStream(err error) io.Writer {
-	if err != nil {
-		return os.Stderr
-	}
-	return os.Stdout
 }
 
 // newPayloadStream is the stdout writer handed to a verb that declares a
@@ -240,83 +201,9 @@ func handleWorkflowReplay(speed *string) payloadHandler {
 	}
 }
 
-// DHF-REQ: keel/requirement-28, keel/requirement-164
-func renderHelp(tree *cli.CommandSpec, rt cli.RuntimeConfig, path []string) int {
-	mode := rt.Mode
-	var help bytes.Buffer
-	helpErr := tree.RenderHelp(&help, path)
-	if mode == cli.ModeHuman {
-		// A resolvable topic is requested help: stdout. An unknown topic is
-		// a usage error and keeps stderr.
-		_, _ = io.WriteString(helpStream(helpErr), help.String())
-		return helpErrorExitCode(helpErr)
-	}
-	logger, closeLogger, err := buildHelpLogger(rt)
-	if err != nil {
-		return bootstrapFailure(err, 1)
-	}
-	defer closeLogger()
-	command := "keel-demo"
-	if len(path) > 0 {
-		command += " " + strings.Join(path, " ")
-	}
-	logger.Event("help", "keel-demo help", "command", command, "help", help.String(), "mode", string(mode))
-	return helpErrorExitCode(helpErr)
-}
-
-// helpRuntime is the runtime a machine-mode help event is logged under. Help
-// is the document the operator asked for, not a diagnostic, so the -q console
-// floor does not apply to it.
-//
-// DHF-REQ: keel/requirement-164, keel/requirement-166
-func helpRuntime(rt cli.RuntimeConfig) cli.RuntimeConfig {
-	rt.Quiet = false
-	return rt
-}
-
-func helpErrorExitCode(err error) int {
-	if err == nil {
-		return 0
-	}
-	var usage cli.UsageError
-	if errors.As(err, &usage) {
-		return usage.ExitCode()
-	}
-	return 1
-}
-
-// DHF-REQ: keel/requirement-57, keel/requirement-164
-func renderAllHelp(tree *cli.CommandSpec, rt cli.RuntimeConfig) int {
-	mode := rt.Mode
-	var help bytes.Buffer
-	tree.RenderAllHelp(&help)
-	if mode == cli.ModeHuman {
-		_, _ = io.WriteString(helpStream(nil), help.String())
-		return 0
-	}
-	logger, closeLogger, err := buildHelpLogger(rt)
-	if err != nil {
-		return bootstrapFailure(err, 1)
-	}
-	defer closeLogger()
-	logger.Event("help", "keel-demo help-all", "command", "keel-demo --help-all", "help", help.String(), "mode", string(mode))
-	return 0
-}
-
 // DHF-REQ: keel/requirement-29
 func buildLogger(rt cli.RuntimeConfig) (*logging.Logger, func(), error) {
 	return newLogger(loggerConfig(rt))
-}
-
-// buildHelpLogger builds the logger a machine-mode help event is emitted
-// through. Help is the document the operator asked for, so its console is the
-// help stream — stdout — not the diagnostics stream.
-//
-// DHF-REQ: keel/requirement-164
-func buildHelpLogger(rt cli.RuntimeConfig) (*logging.Logger, func(), error) {
-	cfg := loggerConfig(helpRuntime(rt))
-	cfg.Writer = helpStream(nil)
-	return newLogger(cfg)
 }
 
 func newLogger(cfg logging.Config) (*logging.Logger, func(), error) {
@@ -347,15 +234,6 @@ func loggerConfig(rt cli.RuntimeConfig) logging.Config {
 	cfg.DisableColor = color == term.ColorNever
 	cfg.ConsoleOmitKeys = []string{"service"}
 	return cfg
-}
-
-// terminalConfig is the keel/term input keel-demo resolves its terminal
-// capability from: stdout, the destination of requested help, under the
-// operator's --color, --no-input and --plain policy.
-//
-// DHF-REQ: keel/requirement-166
-func terminalConfig(rt cli.RuntimeConfig) term.Config {
-	return rt.TermConfig(term.Stdout)
 }
 
 func consoleForSharedMode(mode cli.Mode) logging.Console {

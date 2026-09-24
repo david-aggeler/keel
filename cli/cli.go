@@ -11,28 +11,35 @@
 // The same tree is also the source for generated help. Config defines the root
 // usage shell, global flag rows, mode-topic additions, and trailing guidance;
 // command nodes provide their own usage suffixes, summaries, long descriptions,
-// flags, and nested subcommands. RenderRootHelp and RenderTopicHelp format that
-// model for human help output without requiring each CLI to maintain a second
-// hand-written usage text. RenderAllHelp emits that same generated model in one
-// full-tree dump for operators and agents that need the whole surface at once.
+// flags, and nested subcommands.
 //
-// ParseGlobalConfig handles keel's shared position-independent global flags
-// before command dispatch. It returns RuntimeConfig, whose Mode selects the
-// console protocol and whose Help, HelpAll, Version, Verbose, and NoHeader
-// fields let binaries route shared behavior before invoking the command tree.
-// Its Quiet, Color, NoInput, and Plain fields carry the operator's output
-// policy; ConsoleLevel and TermConfig thread that policy into keel/log and
-// keel/term so every consumer resolves it the same way.
+// keel/cli owns help end to end. CommandSpec.Start is a program's entry point:
+// it parses keel's shared position-independent global flags and serves every
+// help output itself — --help, help <topic>, --help-all, --help-json,
+// --version, and the help text of a usage error — with its own help renderer.
+// keel/cli picks the stream (stdout for requested help, stderr for a usage
+// error), the wrap width (from keel/term) and the exit code. Help never passes
+// through keel/log, and the package exports no writer-, stream-, format- or
+// logger-taking help API, so a consumer supplies help content only.
 //
-// DHF-REQ: keel/requirement-21, keel/requirement-30, keel/requirement-57, keel/requirement-166
+// When Start did not serve the invocation it returns RuntimeConfig and the
+// command words for Dispatch. RuntimeConfig's Mode selects the console
+// protocol and its Verbose and NoHeader fields route shared behavior. Its
+// Quiet, Color, NoInput, and Plain fields carry the operator's output policy;
+// ConsoleLevel and TermConfig thread that policy into keel/log and keel/term
+// so every consumer resolves it the same way.
+//
+// DHF-REQ: keel/requirement-21, keel/requirement-30, keel/requirement-57, keel/requirement-166, keel/requirement-172
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"sort"
 	"strings"
 
@@ -56,8 +63,9 @@ const (
 
 // RuntimeConfig is the shared global CLI configuration parsed before command
 // dispatch. Binaries use it to handle cross-cutting concerns such as output
-// protocol, verbosity, generated help, version output, and banner suppression
-// before handing the remaining words to a CommandSpec tree.
+// protocol, verbosity, and banner suppression before handing the remaining
+// words to a CommandSpec tree. It carries no help request: Start serves help
+// before a consumer receives a RuntimeConfig.
 type RuntimeConfig struct {
 	// Mode is the selected console output mode.
 	Mode Mode
@@ -65,16 +73,16 @@ type RuntimeConfig struct {
 	Verbose bool
 	// NoHeader suppresses the consumer's run banner for machine protocol flows.
 	NoHeader bool
-	// Help requests generated help instead of command execution.
-	Help bool
-	// HelpAll requests the full generated help tree instead of command execution.
-	HelpAll bool
-	// HelpJSON requests the structured JSON command inventory instead of command
+	// help requests generated help instead of command execution.
+	help bool
+	// helpAll requests the full generated help tree instead of command execution.
+	helpAll bool
+	// helpJSON requests the structured JSON command inventory instead of command
 	// execution. It is mode- and path-independent: the whole command tree is
 	// always emitted regardless of any trailing command path or output mode.
-	HelpJSON bool
-	// Version requests version output instead of command execution.
-	Version bool
+	helpJSON bool
+	// version requests version output instead of command execution.
+	version bool
 	// Quiet raises the console floor to Warn. It is a console floor only:
 	// file sinks keep their own verbosity. See [RuntimeConfig.ConsoleLevel].
 	Quiet bool
@@ -137,13 +145,13 @@ func (c RuntimeConfig) TermConfig(stream term.Stream) term.Config {
 	}
 }
 
-// HelpWidth returns the column count generated help should wrap to on the
+// helpWidth returns the column count generated help should wrap to on the
 // stream c describes: the width keel/term reports when the stream is a
 // terminal, and zero (no wrapping) otherwise, so piped help keeps its
 // unwrapped lines for grep and diff.
 //
-// DHF-REQ: keel/requirement-166
-func HelpWidth(c term.Capability) int {
+// DHF-REQ: keel/requirement-166, keel/requirement-172
+func helpWidth(c term.Capability) int {
 	if !c.Terminal() {
 		return 0
 	}
@@ -198,24 +206,25 @@ type Config struct {
 	ModeHelp []string
 	// Trailing is optional final root-help guidance.
 	Trailing string
-	// HelpWidth, when positive, wraps generated help prose to this many
-	// columns. Consumers set it from the width keel/term reports for the help
-	// destination; zero leaves help unwrapped.
-	HelpWidth int
 	// RootHandler, when set, runs when the program is invoked with no command
 	// words. It is the root's own action (for example a showcase), kept on
 	// Config because a CommandSpec node never mixes a Handler with children.
 	// Generated help marks the root invocable and makes the command optional.
 	RootHandler Handler
-	// HelpWriter receives help rendered directly by Dispatch for -h/--help.
-	// Nil discards dispatcher-owned help; binaries that route help through their
-	// own presentation layer may keep doing so while migrating to Dispatch.
-	HelpWriter io.Writer
+
+	// helpWidth, when positive, wraps generated help prose to this many
+	// columns. keel/cli sets it from the width keel/term reports for the
+	// stream the help goes to; zero leaves help unwrapped.
+	helpWidth int
+	// helpStdout and helpStderr are the help renderer's streams. Nil means the
+	// process's os.Stdout and os.Stderr, read at the time help is written;
+	// only this package's tests set them.
+	helpStdout, helpStderr io.Writer
 }
 
 // Handler executes a matched command with the arguments left after command-tree
 // navigation. It receives only the command-specific remainder; global flags are
-// parsed by ParseGlobalConfig before Dispatch.
+// parsed by Start before Dispatch.
 type Handler func(context.Context, []string) error
 
 // CommandSpec is a node in the shared command tree. A root node holds Config
@@ -330,28 +339,156 @@ func (e UsageError) Unwrap() error { return e.Err }
 // ExitCode returns the process exit code for usage errors.
 func (e UsageError) ExitCode() int { return 2 }
 
-// ParseGlobalConfig parses shared position-independent global flags without a
-// command tree and returns the non-global command words. Consumers with a tree
-// should call CommandSpec.ParseGlobalConfig so command declarations take
-// precedence over globally owned names.
+// Start is the entry point of a keel/cli program. It parses the shared
+// position-independent global flags of argv against the tree and serves every
+// help output itself with keel/cli's help renderer: --help and help <topic>,
+// --help-all, --help-json, --version, and the help text of a usage error — an
+// invalid global flag value, an unknown flag before any command word, an
+// unresolvable help topic, or a missing command on a root without
+// Config.RootHandler. keel/cli picks the stream (stdout for requested help,
+// stderr for a usage error), the wrap width (from keel/term for that stream)
+// and the exit code. Help output is identical in every console mode and never
+// passes through keel/log.
 //
-// DHF-REQ: keel/requirement-57
-func ParseGlobalConfig(argv []string) (RuntimeConfig, []string, error) {
-	return parseGlobalConfig(argv, nil)
+// When done is true, Start has served the invocation and the consumer returns
+// code without running anything else. Otherwise code is zero and cfg and words
+// are the runtime configuration and the command words to hand to Dispatch.
+// cfg carries no help request, so a consumer has no help flag to branch on
+// and no way to reach a handler with one set.
+//
+// A name or alias declared by the resolved command node stays in the command
+// words; every undeclared global keeps its position-independent meaning.
+//
+// DHF-REQ: keel/requirement-172, keel/requirement-57, keel/requirement-100, keel/requirement-153, keel/requirement-155, keel/requirement-164
+func (c *CommandSpec) Start(argv []string) (cfg RuntimeConfig, words []string, code int, done bool) {
+	c.InheritConfig()
+	stdout, stderr := c.helpStreams()
+	cfg, words, err := c.parseGlobals(argv)
+	if err == nil {
+		err = c.rootUsageError(words)
+	}
+	if err != nil {
+		c.measureHelpWidth(cfg, term.Stderr)
+		fmt.Fprintf(stderr, "%s: %s\n\n", c.program(), err)
+		c.writeRootHelp(stderr)
+		return RuntimeConfig{}, nil, UsageError{}.ExitCode(), true
+	}
+	switch {
+	case cfg.version:
+		fmt.Fprintln(stdout, c.versionLine())
+		return RuntimeConfig{}, nil, 0, true
+	case cfg.helpAll:
+		// DHF-REQ: keel/requirement-57
+		c.measureHelpWidth(cfg, term.Stdout)
+		c.writeAllHelp(stdout)
+		return RuntimeConfig{}, nil, 0, true
+	case cfg.helpJSON:
+		// DHF-REQ: keel/requirement-100 — path- and mode-independent.
+		if err := c.writeHelpJSON(stdout); err != nil {
+			fmt.Fprintf(stderr, "%s: %s\n", c.program(), err)
+			return RuntimeConfig{}, nil, 1, true
+		}
+		return RuntimeConfig{}, nil, 0, true
+	case cfg.help:
+		return RuntimeConfig{}, nil, c.serveTopicHelp(cfg, words), true
+	}
+	if len(words) == 0 && c.Config.RootHandler == nil {
+		// A bare invocation of a program without a root action is a usage
+		// error whose help text is the root help.
+		c.measureHelpWidth(cfg, term.Stderr)
+		c.writeRootHelp(stderr)
+		return RuntimeConfig{}, nil, UsageError{}.ExitCode(), true
+	}
+	return cfg, words, 0, false
 }
 
-// ParseGlobalConfig resolves the command node before parsing shared globals.
-// A name or alias declared by that node remains in the command words; every
-// undeclared global keeps the package function's position-independent meaning.
+// serveTopicHelp writes help for path: a resolvable topic to stdout with exit
+// code 0, an unresolvable one — its diagnostic and the nearest resolvable
+// help — to stderr with the usage exit code. Each is wrapped to the width of
+// the stream it is written to.
+//
+// DHF-REQ: keel/requirement-155, keel/requirement-164, keel/requirement-172
+func (c *CommandSpec) serveTopicHelp(cfg RuntimeConfig, path []string) int {
+	stdout, stderr := c.helpStreams()
+	c.measureHelpWidth(cfg, term.Stdout)
+	var help bytes.Buffer
+	if err := c.writeTopicHelp(&help, path); err == nil {
+		_, _ = stdout.Write(help.Bytes())
+		return 0
+	}
+	c.measureHelpWidth(cfg, term.Stderr)
+	help.Reset()
+	_ = c.writeTopicHelp(&help, path)
+	_, _ = stderr.Write(help.Bytes())
+	return UsageError{}.ExitCode()
+}
+
+// rootUsageError reports an unknown flag-shaped word that precedes every
+// command word. No command node can own it, so it is a usage error in the
+// global flags, served by Start rather than left for Dispatch.
+//
+// DHF-REQ: keel/requirement-172
+func (c *CommandSpec) rootUsageError(words []string) error {
+	if len(words) == 0 {
+		return nil
+	}
+	if _, matched, _ := c.match(words); len(matched) > 0 {
+		return nil
+	}
+	if token := words[0]; len(token) > 1 && token[0] == '-' {
+		return NewUsageError("unknown flag %q", token)
+	}
+	return nil
+}
+
+// versionLine is the --version output: Config.Version, or "unknown" when the
+// tree declares none.
+func (c *CommandSpec) versionLine() string {
+	if c.Config.Version == "" {
+		return "unknown"
+	}
+	return c.Config.Version
+}
+
+// helpStreams returns the help renderer's stdout and stderr: the process
+// streams unless this package's tests substituted their own.
+func (c *CommandSpec) helpStreams() (io.Writer, io.Writer) {
+	stdout, stderr := c.Config.helpStdout, c.Config.helpStderr
+	if stdout == nil {
+		stdout = os.Stdout
+	}
+	if stderr == nil {
+		stderr = os.Stderr
+	}
+	return stdout, stderr
+}
+
+// measureHelpWidth sets the wrap width of every help page in the tree from
+// the terminal capability keel/term reports for stream under cfg's policy.
+//
+// DHF-REQ: keel/requirement-166, keel/requirement-172
+func (c *CommandSpec) measureHelpWidth(cfg RuntimeConfig, stream term.Stream) {
+	c.setHelpWidth(helpWidth(term.New(cfg.TermConfig(stream))))
+}
+
+func (c *CommandSpec) setHelpWidth(width int) {
+	c.Config.helpWidth = width
+	for _, child := range c.Subcommands {
+		child.setHelpWidth(width)
+	}
+}
+
+// parseGlobals resolves the command node before parsing shared globals and
+// turns a leading "help" word into a help request.
 //
 // DHF-REQ: keel/requirement-153, keel/requirement-155
-func (c *CommandSpec) ParseGlobalConfig(argv []string) (RuntimeConfig, []string, error) {
+func (c *CommandSpec) parseGlobals(argv []string) (RuntimeConfig, []string, error) {
 	cfg, words, err := parseGlobalConfig(argv, c.commandNode(argv))
 	if err != nil {
 		return cfg, words, err
 	}
 	if len(words) > 0 && words[0] == "help" {
-		cfg.Help = true
+		cfg.help = true
 		words = words[1:]
 	}
 	return cfg, words, nil
@@ -399,14 +536,14 @@ func parseGlobalConfig(argv []string, node *CommandSpec) (RuntimeConfig, []strin
 		case "--no-header":
 			cfg.NoHeader = true
 		case "-h", "--help":
-			cfg.Help = true
+			cfg.help = true
 		case "--help-all":
-			cfg.HelpAll = true
+			cfg.helpAll = true
 		case "--help-json":
 			// DHF-REQ: keel/requirement-100
-			cfg.HelpJSON = true
+			cfg.helpJSON = true
 		case "--version":
-			cfg.Version = true
+			cfg.version = true
 		default:
 			if value, ok := strings.CutPrefix(arg, "--color="); ok {
 				policy, err := ParseColorPolicy(value)
@@ -529,26 +666,31 @@ func (c *CommandSpec) Child(name string) (*CommandSpec, bool) {
 // UsageError, parses command-declared typed flags, validates positional arity,
 // and passes the remaining positional arguments to the resolved Handler.
 //
-// DHF-REQ: keel/requirement-100, keel/requirement-104, keel/requirement-153, keel/requirement-155, keel/requirement-169
+// Help that reaches Dispatch — args that Start did not see — is served by the
+// help renderer as Start serves it: a "help" word and -h/--help write to
+// stdout, and an unresolvable topic writes to stderr and returns UsageError.
+//
+// DHF-REQ: keel/requirement-100, keel/requirement-104, keel/requirement-153, keel/requirement-155, keel/requirement-169, keel/requirement-172
 func (c *CommandSpec) Dispatch(ctx context.Context, args []string) error {
 	c.InheritConfig()
 	if len(args) > 0 && args[0] == "help" {
-		w := c.Config.HelpWriter
-		if w == nil {
-			w = io.Discard
+		stdout, stderr := c.helpStreams()
+		var help bytes.Buffer
+		err := c.writeTopicHelp(&help, args[1:])
+		out := stdout
+		if err != nil {
+			out = stderr
 		}
-		return c.RenderTopicHelp(w, args[1:])
+		_, _ = out.Write(help.Bytes())
+		return err
 	}
 	node, matched, remaining := c.match(args)
 	if helpRequestedByDispatcher(node, remaining) {
-		w := c.Config.HelpWriter
-		if w == nil {
-			w = io.Discard
-		}
+		stdout, _ := c.helpStreams()
 		if node == c {
-			c.RenderRootHelp(w)
+			c.writeRootHelp(stdout)
 		} else {
-			node.RenderCommandHelp(w, matched)
+			node.writeCommandHelp(stdout, matched)
 		}
 		return nil
 	}
@@ -639,7 +781,7 @@ func (c *CommandSpec) conciseHelp(path []string) string {
 	var b strings.Builder
 	b.WriteString(c.Usage(path))
 	b.WriteString("\n\nSubcommands:\n")
-	printGroupedCommandRows(&b, c.Subcommands, c.Config.HelpWidth)
+	printGroupedCommandRows(&b, c.Subcommands, c.Config.helpWidth)
 	return strings.TrimRight(b.String(), "\n")
 }
 
@@ -1044,9 +1186,9 @@ func commandPath(path []string, fallback string) string {
 }
 
 // GlobalFlagSpecs returns the canonical help rows for the shared global flags
-// ParseGlobalConfig parses. keel owns these names and descriptions so root help
+// Start parses. keel owns these names and descriptions so root help
 // cannot drift from the parser; a consumer's Config.GlobalFlags contributes only
-// its own additional binary-specific globals. The order mirrors ParseGlobalConfig.
+// its own additional binary-specific globals. The order mirrors the global flag parser.
 // It is the one source for every help surface that names a global flag: the root
 // usage synopsis, the Global flags section, and the --help-json root entry. Each
 // accepted spelling is listed: Name for the long form, Alias for the short form,
@@ -1134,7 +1276,7 @@ type helpOnlyTopic struct {
 }
 
 // helpOnlyTopics returns keel-owned generated help pages that are findable by
-// RenderTopicHelp and inventory renderers without becoming runnable commands.
+// writeTopicHelp and inventory renderers without becoming runnable commands.
 //
 // DHF-REQ: keel/requirement-101
 func helpOnlyTopics() []helpOnlyTopic {
@@ -1196,12 +1338,12 @@ func (c *CommandSpec) renderHelpHeader(w io.Writer, section helpSection, title, 
 	}
 	if summary != "" {
 		if title != "" {
-			printWrapped(w, "  ", "  ", summary, c.Config.HelpWidth)
+			printWrapped(w, "  ", "  ", summary, c.Config.helpWidth)
 		} else {
 			if wrote {
 				fmt.Fprintln(w)
 			}
-			printWrapped(w, "", "", summary, c.Config.HelpWidth)
+			printWrapped(w, "", "", summary, c.Config.helpWidth)
 		}
 		wrote = true
 	}
@@ -1230,7 +1372,7 @@ func (c *CommandSpec) helpTitle(path []string) string {
 	return title + ":"
 }
 
-// RenderRootHelp writes generated root help from Config, global flags,
+// writeRootHelp writes generated root help from Config, global flags,
 // first-level command summaries, trailing guidance, and help-only topic summaries.
 // The global flag rows and the --mode ai|json output-mode description are
 // keel-owned (GlobalFlagSpecs, ModeHelpLines); Config.GlobalFlags and
@@ -1238,27 +1380,27 @@ func (c *CommandSpec) helpTitle(path []string) string {
 // canonical entries, with any keel-owned re-declarations de-duped.
 //
 // DHF-REQ: keel/requirement-101, keel/requirement-111
-func (c *CommandSpec) RenderRootHelp(w io.Writer) {
+func (c *CommandSpec) writeRootHelp(w io.Writer) {
 	c.InheritConfig()
 	c.renderRootHelp(w, helpSection{})
 }
 
 func (c *CommandSpec) renderRootHelp(w io.Writer, section helpSection) {
-	usage := append(wrapSynopsis(c.rootSynopsisParts(), c.Config.HelpWidth-2), c.Config.HelpUsage, c.Config.CommandUsage)
+	usage := append(wrapSynopsis(c.rootSynopsisParts(), c.Config.helpWidth-2), c.Config.HelpUsage, c.Config.CommandUsage)
 	c.renderHelpHeader(w, section, "", c.Config.RootSummary, usage)
 	if globals := mergeGlobalFlags(c.Config.GlobalFlags); len(globals) > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Global flags:")
-		printFlagRows(w, globals, c.Config.HelpWidth)
+		printFlagRows(w, globals, c.Config.helpWidth)
 	}
 	if len(c.Subcommands) > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Commands:")
-		printGroupedCommandRows(w, c.Subcommands, c.Config.HelpWidth)
+		printGroupedCommandRows(w, c.Subcommands, c.Config.helpWidth)
 	}
 	if c.Config.Trailing != "" {
 		fmt.Fprintln(w)
-		printWrapped(w, "", "", c.Config.Trailing, c.Config.HelpWidth)
+		printWrapped(w, "", "", c.Config.Trailing, c.Config.helpWidth)
 	}
 	if topics := helpOnlyTopics(); len(topics) > 0 {
 		fmt.Fprintln(w)
@@ -1318,21 +1460,12 @@ func wrapSynopsis(parts []string, width int) []string {
 	return append(lines, line)
 }
 
-// RenderHelp writes help for the command path or root help when path is empty.
-// Unknown topics render a diagnostic followed by nearest resolvable help and
-// return UsageError so callers can exit 2.
-//
-// DHF-REQ: keel/requirement-155
-func (c *CommandSpec) RenderHelp(w io.Writer, path []string) error {
-	return c.RenderTopicHelp(w, path)
-}
-
-// RenderTopicHelp writes help for the command path or root help when path is
+// writeTopicHelp writes help for the command path or root help when path is
 // empty. Unknown topics render a diagnostic followed by nearest resolvable help
 // and return UsageError.
 //
 // DHF-REQ: keel/requirement-155
-func (c *CommandSpec) RenderTopicHelp(w io.Writer, path []string) error {
+func (c *CommandSpec) writeTopicHelp(w io.Writer, path []string) error {
 	c.InheritConfig()
 	node, topic, matched, remaining, ok := c.findTopic(path, true)
 	if !ok || len(remaining) > 0 {
@@ -1340,9 +1473,9 @@ func (c *CommandSpec) RenderTopicHelp(w io.Writer, path []string) error {
 		if topic != nil {
 			c.renderHelpOnlyTopic(w, *topic)
 		} else if node == c {
-			c.RenderRootHelp(w)
+			c.writeRootHelp(w)
 		} else {
-			node.RenderCommandHelp(w, matched)
+			node.writeCommandHelp(w, matched)
 		}
 		return NewUsageError("unknown help topic %q", strings.Join(path, " "))
 	}
@@ -1351,10 +1484,10 @@ func (c *CommandSpec) RenderTopicHelp(w io.Writer, path []string) error {
 			c.renderHelpOnlyTopic(w, *topic)
 			return nil
 		}
-		c.RenderRootHelp(w)
+		c.writeRootHelp(w)
 		return nil
 	}
-	node.RenderCommandHelp(w, path)
+	node.writeCommandHelp(w, path)
 	return nil
 }
 
@@ -1416,7 +1549,7 @@ func (c *CommandSpec) renderHelpOnlyTopicSection(w io.Writer, section helpSectio
 	}
 }
 
-// RenderAllHelp writes generated root help followed by command-topic help for
+// writeAllHelp writes generated root help followed by command-topic help for
 // every command in the tree exactly once, depth-first in declaration order, then
 // every keel-owned help-only topic — as one composite dump, not a join of
 // standalone pages. The dump opens with the keel/log Header help edition around
@@ -1428,7 +1561,7 @@ func (c *CommandSpec) renderHelpOnlyTopicSection(w io.Writer, section helpSectio
 // Standalone pages are rendered by the same page renderers and are unchanged.
 //
 // DHF-REQ: keel/requirement-57
-func (c *CommandSpec) RenderAllHelp(w io.Writer) {
+func (c *CommandSpec) writeAllHelp(w io.Writer) {
 	c.InheritConfig()
 	identity := c.program()
 	if c.Config.Version != "" {
@@ -1502,7 +1635,7 @@ type helpJSONCommand struct {
 	ExitCodes []ExitCodeSpec `json:"exit_codes,omitempty"`
 }
 
-// RenderHelpJSON writes a single JSON array describing the program root, every
+// writeHelpJSON writes a single JSON array describing the program root, every
 // command, and every help-only topic in the tree. Each element carries a kind
 // so consumers can tell them apart: exactly one "root" element, one "command"
 // element per command, and one "topic" element per help-only topic. The root
@@ -1513,7 +1646,7 @@ type helpJSONCommand struct {
 // deterministic across calls.
 //
 // DHF-REQ: keel/requirement-100, keel/requirement-101
-func (c *CommandSpec) RenderHelpJSON(w io.Writer) error {
+func (c *CommandSpec) writeHelpJSON(w io.Writer) error {
 	c.InheritConfig()
 	invocable := c.Config.RootHandler != nil
 	commands := []helpJSONCommand{{
@@ -1559,9 +1692,9 @@ func (c *CommandSpec) appendHelpJSON(out *[]helpJSONCommand, path []string) {
 	}
 }
 
-// RenderCommandHelp writes command help for one command node, including its
+// writeCommandHelp writes command help for one command node, including its
 // summary, usage, declared flags, and nested subcommands.
-func (c *CommandSpec) RenderCommandHelp(w io.Writer, path []string) {
+func (c *CommandSpec) writeCommandHelp(w io.Writer, path []string) {
 	c.renderCommandHelp(w, helpSection{}, path)
 }
 
@@ -1574,65 +1707,28 @@ func (c *CommandSpec) renderCommandHelp(w io.Writer, section helpSection, path [
 	if len(c.Flags) > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Flags:")
-		printFlagRows(w, c.Flags, c.Config.HelpWidth)
+		printFlagRows(w, c.Flags, c.Config.helpWidth)
 	}
 	if len(c.ExitCodes) > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Exit codes:")
-		PrintExitCodeRows(w, c.ExitCodes)
+		printExitCodeRows(w, c.ExitCodes)
 	}
 	if len(c.Subcommands) == 0 {
 		return
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Subcommands:")
-	printGroupedCommandRows(w, c.Subcommands, c.Config.HelpWidth)
+	printGroupedCommandRows(w, c.Subcommands, c.Config.helpWidth)
 }
 
-// RenderSubcommandHelp writes a nested subcommand listing below parent. Rows
-// are sorted by command name at each level for stable generated help.
-func RenderSubcommandHelp(w io.Writer, parent []string, commands []*CommandSpec, depth int) {
-	ordered := append([]*CommandSpec{}, commands...)
-	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Name < ordered[j].Name })
-	for _, cmd := range ordered {
-		path := append(append([]string{}, parent...), cmd.Name)
-		indent := strings.Repeat("  ", depth+1)
-		use := strings.TrimPrefix(cmd.Usage(path), "usage: "+cmd.program()+" ")
-		fmt.Fprintf(w, "%s%s\n", indent, use)
-		if cmd.Short != "" {
-			fmt.Fprintf(w, "%s    %s\n", indent, cmd.Short)
-		}
-		if len(cmd.Subcommands) > 0 {
-			RenderSubcommandHelp(w, path, cmd.Subcommands, depth+1)
-		}
-	}
-}
-
-// PrintCommandRows writes aligned command summary rows in the order supplied by
-// the caller.
-func PrintCommandRows(w io.Writer, commands []*CommandSpec) {
-	width := 0
-	for _, cmd := range commands {
-		if len(cmd.Name) > width {
-			width = len(cmd.Name)
-		}
-	}
-	for _, cmd := range commands {
-		fmt.Fprintf(w, "  %-*s  %s\n", width, cmd.Name, cmd.Short)
-	}
-}
-
-// PrintGroupedCommandRows writes command summary rows under group headings.
+// printGroupedCommandRows writes command summary rows under group headings.
 // Group order and command order within each group follow declaration order.
 // A list in which no command declares a group resolves to the single
 // synthesized default group and is written with no heading, because a heading
 // there would name a partition the command tree never declared.
 //
 // DHF-REQ: keel/requirement-105
-func PrintGroupedCommandRows(w io.Writer, commands []*CommandSpec) {
-	printGroupedCommandRows(w, commands, 0)
-}
-
 func printGroupedCommandRows(w io.Writer, commands []*CommandSpec, helpWidth int) {
 	groups := groupCommands(commands)
 	width := commandNameWidth(commands)
@@ -1669,7 +1765,7 @@ func commandNameWidth(commands []*CommandSpec) int {
 
 // defaultCommandGroup is the group name synthesized for a command that
 // declares none. It is stated once so the default and the heading-suppression
-// rule in PrintGroupedCommandRows cannot drift apart.
+// rule in printGroupedCommandRows cannot drift apart.
 const defaultCommandGroup = "Other"
 
 // commandGroupRows is one heading's worth of command rows. defaulted records
@@ -1708,12 +1804,6 @@ func commandGroup(cmd *CommandSpec) string {
 	return defaultCommandGroup
 }
 
-// PrintFlagRows writes flag help rows using the package's shared two-line flag
-// layout.
-func PrintFlagRows(w io.Writer, flags []FlagSpec) {
-	printFlagRows(w, flags, 0)
-}
-
 func printFlagRows(w io.Writer, flags []FlagSpec, helpWidth int) {
 	for _, f := range flags {
 		value := ""
@@ -1738,7 +1828,7 @@ func printFlagRows(w io.Writer, flags []FlagSpec, helpWidth int) {
 // are packed greedily so no line exceeds width unless a single word is longer
 // than the space left for it; zero or negative width writes one line. Existing
 // line breaks in text are kept. Unwrapped output is byte-identical to the
-// renderer before HelpWidth existed.
+// renderer before help wrapping existed.
 //
 // DHF-REQ: keel/requirement-166
 func printWrapped(w io.Writer, first, rest, text string, width int) {
@@ -1768,8 +1858,8 @@ func printWrapped(w io.Writer, first, rest, text string, width int) {
 	}
 }
 
-// PrintExitCodeRows writes aligned exit-code taxonomy rows in declaration order.
-func PrintExitCodeRows(w io.Writer, codes []ExitCodeSpec) {
+// printExitCodeRows writes aligned exit-code taxonomy rows in declaration order.
+func printExitCodeRows(w io.Writer, codes []ExitCodeSpec) {
 	width := 0
 	for _, row := range codes {
 		if n := len(fmt.Sprint(row.Code)); n > width {
@@ -1829,10 +1919,10 @@ func (c *CommandSpec) inheritConfig(cfg Config) {
 	if c.Config.Version == "" {
 		c.Config.Version = cfg.Version
 	}
-	// HelpWidth travels with the root so every topic wraps to the same
-	// width the consumer measured once.
-	if c.Config.HelpWidth == 0 {
-		c.Config.HelpWidth = cfg.HelpWidth
+	// The help width travels with the root so every topic wraps to the
+	// same width keel/cli measured once.
+	if c.Config.helpWidth == 0 {
+		c.Config.helpWidth = cfg.helpWidth
 	}
 	for _, child := range c.Subcommands {
 		child.inheritConfig(c.Config)

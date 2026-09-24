@@ -25,25 +25,15 @@ var worktreeLeafVerbs = []string{"up", "down", "branch-delete", "resume", "statu
 // DHF-TEST: keel/requirement-114 (keel/ac-413)
 func TestWorktreeHelpSurfacesExitCodeTaxonomy(t *testing.T) {
 	wantRows := worktree.ExitCodeTaxonomy()
-	tree := commandTree()
-
-	var topic strings.Builder
-	if err := tree.RenderTopicHelp(&topic, []string{"worktree"}); err != nil {
-		t.Fatalf("RenderTopicHelp(worktree): %v", err)
-	}
-	assertHelpContainsExitCodes(t, "topic help", topic.String(), wantRows)
-	if !strings.Contains(topic.String(), "Exit codes:") {
-		t.Fatalf("topic help does not render an exit-code section:\n%s", topic.String())
+	topic := keelDevHelp(t, "help", "worktree")
+	assertHelpContainsExitCodes(t, "topic help", topic, wantRows)
+	if !strings.Contains(topic, "Exit codes:") {
+		t.Fatalf("topic help does not render an exit-code section:\n%s", topic)
 	}
 
-	var all strings.Builder
-	tree.RenderAllHelp(&all)
-	assertHelpContainsExitCodes(t, "--help-all", all.String(), wantRows)
+	assertHelpContainsExitCodes(t, "--help-all", keelDevHelp(t, "--help-all"), wantRows)
 
-	var rawJSON strings.Builder
-	if err := tree.RenderHelpJSON(&rawJSON); err != nil {
-		t.Fatalf("RenderHelpJSON: %v", err)
-	}
+	rawJSON := keelDevHelp(t, "--help-json")
 	var inventory []struct {
 		Path      string `json:"path"`
 		ExitCodes []struct {
@@ -51,8 +41,8 @@ func TestWorktreeHelpSurfacesExitCodeTaxonomy(t *testing.T) {
 			Meaning string `json:"meaning"`
 		} `json:"exit_codes"`
 	}
-	if err := json.Unmarshal([]byte(rawJSON.String()), &inventory); err != nil {
-		t.Fatalf("--help-json did not render a JSON command inventory: %v\n%s", err, rawJSON.String())
+	if err := json.Unmarshal([]byte(rawJSON), &inventory); err != nil {
+		t.Fatalf("--help-json did not render a JSON command inventory: %v\n%s", err, rawJSON)
 	}
 	wantJSONRows := make([]cli.ExitCodeSpec, 0, len(wantRows))
 	for _, row := range wantRows {
@@ -76,7 +66,7 @@ func TestWorktreeHelpSurfacesExitCodeTaxonomy(t *testing.T) {
 	}
 	for _, wantPath := range wantPaths {
 		if !seenPaths[wantPath] {
-			t.Fatalf("--help-json has no %q command object:\n%s", wantPath, rawJSON.String())
+			t.Fatalf("--help-json has no %q command object:\n%s", wantPath, rawJSON)
 		}
 	}
 }
@@ -87,11 +77,7 @@ func TestWorktreeHelpSurfacesExitCodeTaxonomy(t *testing.T) {
 // DHF-TEST: keel/requirement-113, keel/requirement-114 (keel/ac-408, keel/ac-409)
 func TestWorktreeResumeHelpDoesNotAdvertiseBase(t *testing.T) {
 	tree := commandTree()
-	var help strings.Builder
-	if err := tree.RenderTopicHelp(&help, []string{"worktree", "resume"}); err != nil {
-		t.Fatalf("RenderTopicHelp(worktree resume): %v", err)
-	}
-	got := help.String()
+	got := keelDevHelp(t, "help", "worktree", "resume")
 	if strings.Contains(got, "--base") {
 		t.Fatalf("resume help advertises a no-op base flag:\n%s", got)
 	}
@@ -200,19 +186,14 @@ func TestWorktreeUpReplicateFlagControlsPolicy(t *testing.T) {
 
 // DHF-TEST: keel/requirement-157
 func TestWorktreeUpHelpSurfacesReplicateFlag(t *testing.T) {
-	tree := commandTree()
-	var help strings.Builder
-	if err := tree.RenderTopicHelp(&help, []string{"worktree", "up"}); err != nil {
-		t.Fatalf("RenderTopicHelp(worktree up): %v", err)
-	}
-	got := help.String()
+	got := keelDevHelp(t, "help", "worktree", "up")
 	for _, want := range []string{"--replicate", "missing_only", "refresh", "off"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("worktree up help missing %q:\n%s", want, got)
 		}
 	}
 
-	namespace, ok := tree.Child("worktree")
+	namespace, ok := commandTree().Child("worktree")
 	if !ok {
 		t.Fatal("missing worktree namespace")
 	}
