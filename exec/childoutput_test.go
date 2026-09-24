@@ -411,3 +411,30 @@ func TestFailureTailBelowWarnDoesNotNameItsProgram(t *testing.T) {
 		t.Fatalf("Info tail record carries program = %#v, want the key absent", v)
 	}
 }
+
+// DHF-TEST: keel/requirement-171, keel/ac-733
+func TestSuccessfulChildLogsStartAndEndAtInfoWithOutputAtDebugInBetween(t *testing.T) {
+	records := runChild(t, logging.Config{ConsoleVerbosity: slog.LevelDebug}, nil,
+		"echo out-line; echo err-line 1>&2; exit 0")
+	type step struct{ event, level string }
+	var got []step
+	for _, rec := range records {
+		ev, _ := rec["event_type"].(string)
+		lvl, _ := rec["level"].(string)
+		got = append(got, step{ev, lvl})
+	}
+	if len(got) != 4 {
+		t.Fatalf("records = %#v, want start, two output lines, end", records)
+	}
+	if got[0] != (step{"process_start", "INFO"}) {
+		t.Fatalf("first record = %+v, want process_start at INFO", got[0])
+	}
+	for _, s := range got[1:3] {
+		if s != (step{"process_output", "DEBUG"}) {
+			t.Fatalf("middle record = %+v, want process_output at DEBUG", s)
+		}
+	}
+	if got[3] != (step{"process_end", "INFO"}) {
+		t.Fatalf("last record = %+v, want process_end at INFO", got[3])
+	}
+}
