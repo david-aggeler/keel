@@ -17,7 +17,7 @@ import (
 	logging "github.com/david-aggeler/keel/log"
 )
 
-// DHF-TEST: keel/requirement-26
+// DHF-TEST: keel/requirement-26 (keel/ac-88)
 func TestKeelDemoRunsEveryModeAndSurfacesLogAndExecFeatures(t *testing.T) {
 	for _, mode := range []string{"human", "ai", "json"} {
 		t.Run(mode, func(t *testing.T) {
@@ -61,8 +61,51 @@ func TestKeelDemoRunsEveryModeAndSurfacesLogAndExecFeatures(t *testing.T) {
 			if mode == "ai" {
 				assertSparseAIEvents(t, out)
 			}
+			if got := demoStepMode(t, mode, out); got != mode {
+				t.Fatalf("showcase demo_step logged mode %q, want the --mode argument %q\noutput:\n%s", got, mode, out)
+			}
 		})
 	}
+}
+
+// demoStepMode returns the mode field of the showcase's demo_step event as
+// rendered under the given console mode. The value, not the word "mode", is
+// what proves the --mode argument reached the showcase (keel/ac-88).
+func demoStepMode(t *testing.T, mode, out string) string {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		switch mode {
+		case "human":
+			if !strings.Contains(line, "event_type=demo_step") {
+				continue
+			}
+			for _, token := range strings.Fields(line) {
+				if value, ok := strings.CutPrefix(token, "mode="); ok {
+					return value
+				}
+			}
+			return ""
+		case "ai":
+			var payload struct {
+				Event  string         `json:"event"`
+				Fields map[string]any `json:"fields"`
+			}
+			if json.Unmarshal([]byte(line), &payload) != nil || payload.Event != "demo_step" {
+				continue
+			}
+			value, _ := payload.Fields["mode"].(string)
+			return value
+		case "json":
+			var payload map[string]any
+			if json.Unmarshal([]byte(line), &payload) != nil || payload["event_type"] != "demo_step" {
+				continue
+			}
+			value, _ := payload["mode"].(string)
+			return value
+		}
+	}
+	t.Fatalf("output for --mode %s has no demo_step event\noutput:\n%s", mode, out)
+	return ""
 }
 
 // DHF-TEST: keel/requirement-26, keel/requirement-28
