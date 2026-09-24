@@ -155,7 +155,7 @@ func TestRenderAllHelpLeavesStandalonePagesUnchanged(t *testing.T) {
 	if before.String() != after.String() {
 		t.Fatalf("standalone page changed after RenderAllHelp:\nbefore:\n%s\nafter:\n%s", before.String(), after.String())
 	}
-	if !strings.HasPrefix(after.String(), "tool v1.2.3\n\ngrp leaf:\n  Leaf command.\n") {
+	if want := strings.Join([]string{"tool v1.2.3", "", "grp leaf:", "  Leaf command.", ""}, "\n"); !strings.HasPrefix(after.String(), want) {
 		t.Fatalf("standalone page lost its identity line or title:\n%s", after.String())
 	}
 }
