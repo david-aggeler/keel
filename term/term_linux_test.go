@@ -29,13 +29,13 @@ func TestPipedStdoutTerminalStderr(t *testing.T) {
 	probe := term.FileProbe(nil, openPipe(t), tty)
 	env := envOf(colorTerm)
 	out := term.New(term.Config{Stream: term.Stdout, Getenv: env, Probe: probe})
-	errc := term.New(term.Config{Stream: term.Stderr, Getenv: env, Probe: probe})
+	diag := term.New(term.Config{Stream: term.Stderr, Getenv: env, Probe: probe})
 	if out.Terminal() || out.Color() {
 		t.Errorf("stdout on a pipe: Terminal=%v Color=%v, want false false", out.Terminal(), out.Color())
 	}
-	if !errc.Terminal() || !errc.Color() || !errc.Animation() {
+	if !diag.Terminal() || !diag.Color() || !diag.Animation() {
 		t.Errorf("stderr on a pty: Terminal=%v Color=%v Animation=%v, want true true true",
-			errc.Terminal(), errc.Color(), errc.Animation())
+			diag.Terminal(), diag.Color(), diag.Animation())
 	}
 }
 

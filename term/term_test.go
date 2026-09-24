@@ -124,15 +124,15 @@ func TestIsTerminalRejectsNonTerminals(t *testing.T) {
 func TestStreamsAreAnsweredIndependently(t *testing.T) {
 	probe := fakeProbe{terminal: map[term.Stream]bool{term.Stderr: true}}
 	out := term.New(term.Config{Stream: term.Stdout, Getenv: envOf(colorTerm), Probe: probe})
-	errc := term.New(term.Config{Stream: term.Stderr, Getenv: envOf(colorTerm), Probe: probe})
+	diag := term.New(term.Config{Stream: term.Stderr, Getenv: envOf(colorTerm), Probe: probe})
 	if out.Terminal() || out.Color() {
 		t.Errorf("stdout on a pipe: Terminal=%v Color=%v, want false false", out.Terminal(), out.Color())
 	}
-	if !errc.Terminal() || !errc.Color() {
-		t.Errorf("stderr on a terminal: Terminal=%v Color=%v, want true true", errc.Terminal(), errc.Color())
+	if !diag.Terminal() || !diag.Color() {
+		t.Errorf("stderr on a terminal: Terminal=%v Color=%v, want true true", diag.Terminal(), diag.Color())
 	}
-	if out.Stream() != term.Stdout || errc.Stream() != term.Stderr {
-		t.Errorf("Stream() = %v, %v; want stdout, stderr", out.Stream(), errc.Stream())
+	if out.Stream() != term.Stdout || diag.Stream() != term.Stderr {
+		t.Errorf("Stream() = %v, %v; want stdout, stderr", out.Stream(), diag.Stream())
 	}
 }
 

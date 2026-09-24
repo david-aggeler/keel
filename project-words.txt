@@ -207,3 +207,13 @@ Xfixes
 Xrandr
 zricethezav
 renderable
+CLICOLOR
+COLORTERM
+ptmx
+TCGETS
+TIOCGPTN
+TIOCSPTLCK
+truecolor
+winsize
+Xpixel
+Ypixel
