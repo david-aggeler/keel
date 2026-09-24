@@ -29,7 +29,10 @@
 // [ColorAlways] policy permits color even when NO_COLOR is set; a
 // [ColorNever] policy forbids it even on a terminal. [Config.NoInput] and
 // [Config.NoAnimation] only forbid: no policy forces prompting or animation
-// onto a stream that detection and the environment do not permit.
+// onto a stream that detection and the environment do not permit. Animation
+// is permitted only where color on stderr is permitted and stderr is a
+// terminal, so [ColorNever] and NO_COLOR also forbid animation, while
+// [ColorAlways] never grants it into a pipe.
 //
 // # Read-only, live size
 //
