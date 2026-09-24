@@ -7,8 +7,8 @@ import (
 	"testing"
 )
 
-// TestStreamLintsRejectPlantedViolationsInEveryBinary plants an unallowlisted
-// os.Stdout reference and a raw fmt print in each first-party binary outside
+// TestStreamLintsRejectPlantedViolationsInEveryBinary plants an os.Stdout
+// reference outside the allowlist and a raw fmt print in each first-party binary outside
 // cmd/keel-dev, and requires both stream policies to report each plant. The
 // plant is the positive control: a scan whose scope stopped at cmd/keel-dev
 // would pass the same tree silently. cmd/keel-future stands for a binary that
