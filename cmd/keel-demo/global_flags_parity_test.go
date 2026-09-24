@@ -69,7 +69,7 @@ func globalActionFlagCases(t *testing.T) []globalActionFlagCase {
 			continue
 		}
 		for _, field := range changedRuntimeBoolFields(base, cfg) {
-			if field == "Verbose" || field == "NoHeader" {
+			if operatorPolicyFields[field] {
 				continue
 			}
 			cases = append(cases, globalActionFlagCase{arg: "--" + spec.Name, field: field})
@@ -80,6 +80,17 @@ func globalActionFlagCases(t *testing.T) []globalActionFlagCase {
 	}
 	sort.Slice(cases, func(i, j int) bool { return cases[i].arg < cases[j].arg })
 	return cases
+}
+
+// operatorPolicyFields are the RuntimeConfig bool fields a global flag sets
+// without asking for an action: they change how a run renders, not whether it
+// runs. TestKeel*HandlesEveryOperatorPolicyFlag owns their parity check.
+var operatorPolicyFields = map[string]bool{
+	"Verbose":  true,
+	"NoHeader": true,
+	"Quiet":    true,
+	"NoInput":  true,
+	"Plain":    true,
 }
 
 func changedRuntimeBoolFields(base, cfg cli.RuntimeConfig) []string {

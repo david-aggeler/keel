@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,8 @@ import (
 	keel "github.com/david-aggeler/keel"
 	"github.com/david-aggeler/keel/cli"
 	procexec "github.com/david-aggeler/keel/exec"
+	logging "github.com/david-aggeler/keel/log"
+	"github.com/david-aggeler/keel/term"
 	"github.com/david-aggeler/keel/testbridge"
 	"github.com/david-aggeler/keel/vscode"
 )
@@ -159,13 +162,17 @@ func run(argv []string) int {
 		fmt.Fprintln(os.Stderr, "keel-demo-dev: "+err.Error())
 		return 2
 	}
+	// DHF-REQ: keel/requirement-166 — the operator's color and input policy
+	// resolve once into keel/term; requested help wraps to its width.
+	tree.Config.HelpWidth = cli.HelpWidth(term.New(terminalConfig(cfg)))
 	if cfg.Version {
 		// DHF-REQ: keel/requirement-110
 		fmt.Fprintln(os.Stdout, versionString())
 		return 0
 	}
 	if cfg.HelpAll {
-		tree.RenderAllHelp(os.Stderr)
+		// DHF-REQ: keel/requirement-164
+		tree.RenderAllHelp(os.Stdout)
 		return 0
 	}
 	if cfg.HelpJSON {
@@ -177,7 +184,16 @@ func run(argv []string) int {
 		return 0
 	}
 	if cfg.Help {
-		return helpExitCode(tree.RenderHelp(os.Stderr, words))
+		// DHF-REQ: keel/requirement-164 — a resolvable topic is requested help
+		// and goes to stdout; an unknown topic is a usage error and keeps stderr.
+		var help bytes.Buffer
+		helpErr := tree.RenderHelp(&help, words)
+		out := os.Stdout
+		if helpErr != nil {
+			out = os.Stderr
+		}
+		_, _ = out.Write(help.Bytes())
+		return helpExitCode(helpErr)
 	}
 
 	root, err := os.Getwd()
@@ -185,10 +201,16 @@ func run(argv []string) int {
 		fmt.Fprintln(os.Stderr, "keel-demo-dev: "+err.Error())
 		return 1
 	}
+	logger, err := logging.New(loggerConfig(cfg))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "keel-demo-dev: "+err.Error())
+		return 1
+	}
+	defer func() { _ = logger.Close() }()
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{
 		Root:     root,
 		Protocol: os.Stdout,
-		Log:      slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})),
+		Log:      logger.Slog(),
 	})
 	if err := tree.Dispatch(ctx, words); err != nil {
 		fmt.Fprintln(os.Stderr, "keel-demo-dev: "+err.Error())
@@ -203,6 +225,42 @@ func run(argv []string) int {
 		return 1
 	}
 	return 0
+}
+
+// loggerConfig is keel-demo-dev's console-only diagnostics logger for one
+// invocation's global flags. stdout carries the test-bridge protocol, so the
+// console is stderr. Its floor defaults to Warn, which keeps a protocol run
+// quiet; -v lowers it to Debug and -q holds it at Warn. --color and --plain set
+// the color policy. keel-demo-dev opens no file sink.
+//
+// DHF-REQ: keel/requirement-166
+func loggerConfig(rt cli.RuntimeConfig) logging.Config {
+	color := rt.EffectiveColor()
+	console := logging.ConsolePlain
+	switch rt.Mode {
+	case cli.ModeAI:
+		console = logging.ConsoleSparseAI
+	case cli.ModeJSON:
+		console = logging.ConsoleJSON
+	}
+	return logging.Config{
+		Service:          "keel-demo-dev",
+		Console:          console,
+		ConsoleVerbosity: rt.ConsoleLevel(slog.LevelWarn),
+		Writer:           os.Stderr,
+		ForceColor:       color == term.ColorAlways,
+		DisableColor:     color == term.ColorNever,
+		ConsoleOmitKeys:  []string{"service"},
+	}
+}
+
+// terminalConfig is the keel/term input keel-demo-dev resolves its terminal
+// capability from: stdout, the destination of requested help, under the
+// operator's --color, --no-input and --plain policy.
+//
+// DHF-REQ: keel/requirement-166
+func terminalConfig(rt cli.RuntimeConfig) term.Config {
+	return rt.TermConfig(term.Stdout)
 }
 
 func helpExitCode(err error) int {

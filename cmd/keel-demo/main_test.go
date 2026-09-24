@@ -327,7 +327,7 @@ func TestRenderHelpDirectMachineModesEmitHelpEvent(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out, code := captureRunOutput(t, func() int {
-				return renderHelp(tree, tc.mode, []string{"workflow"})
+				return renderHelp(tree, cli.RuntimeConfig{Mode: tc.mode}, []string{"workflow"})
 			})
 			if code != 0 {
 				t.Fatalf("renderHelp exit = %d, want 0\n%s", code, out)
@@ -347,6 +347,24 @@ func TestRenderHelpDirectMachineModesEmitHelpEvent(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-164 (keel/ac-697), keel/requirement-166
+// Requested help is the payload, not a diagnostic: -q must not swallow it in
+// the machine modes, where it travels as a log event.
+func TestQuietDoesNotSwallowRequestedHelpInMachineModes(t *testing.T) {
+	t.Chdir(t.TempDir())
+	for _, mode := range []cli.Mode{cli.ModeAI, cli.ModeJSON} {
+		rt := cli.RuntimeConfig{Mode: mode, Quiet: true}
+		out, code := captureRunOutput(t, func() int { return renderHelp(commandTree(), rt, []string{"workflow"}) })
+		if code != 0 || !strings.Contains(out, "keel-demo workflow") {
+			t.Fatalf("renderHelp(%s, -q) exit = %d, want help event\n%s", mode, code, out)
+		}
+		out, code = captureRunOutput(t, func() int { return renderAllHelp(commandTree(), rt) })
+		if code != 0 || !strings.Contains(out, "keel-demo help-all") {
+			t.Fatalf("renderAllHelp(%s, -q) exit = %d, want help-all event\n%s", mode, code, out)
+		}
+	}
+}
+
 // DHF-TEST: keel/requirement-11, keel/requirement-26, keel/requirement-57
 func TestRunDirectDefaultShowcaseAndHelpAllMachineMode(t *testing.T) {
 	t.Chdir(t.TempDir())
@@ -361,7 +379,7 @@ func TestRunDirectDefaultShowcaseAndHelpAllMachineMode(t *testing.T) {
 	}
 
 	for _, mode := range []cli.Mode{cli.ModeAI, cli.ModeJSON} {
-		out, code := captureRunOutput(t, func() int { return renderAllHelp(commandTree(), mode) })
+		out, code := captureRunOutput(t, func() int { return renderAllHelp(commandTree(), cli.RuntimeConfig{Mode: mode}) })
 		if code != 0 {
 			t.Fatalf("renderAllHelp(%s) exit = %d, want 0\n%s", mode, code, out)
 		}

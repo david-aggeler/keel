@@ -37,7 +37,7 @@ func TestFindModuleRoot(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-11, keel/requirement-57
+// DHF-TEST: keel/requirement-11, keel/requirement-57, keel/requirement-164 (keel/ac-697)
 func TestRunDirectVersionHelpAndNoCommandBranches(t *testing.T) {
 	wantVersion := rootVersionSemver(t)
 
@@ -55,8 +55,8 @@ func TestRunDirectVersionHelpAndNoCommandBranches(t *testing.T) {
 			t.Fatalf("run --help-all exit = %d, want 0", code)
 		}
 	})
-	if stdout != "" || !strings.Contains(stderr, "test-bridge run") {
-		t.Fatalf("run --help-all stdout=%q stderr=%q, want help on stderr", stdout, stderr)
+	if stderr != "" || !strings.Contains(stdout, "test-bridge run") {
+		t.Fatalf("run --help-all stdout=%q stderr=%q, want help on stdout and empty stderr", stdout, stderr)
 	}
 
 	stdout, stderr = captureProcessStreams(t, func() {
@@ -133,17 +133,17 @@ func TestVSIXCommandHelpTopicAndInventoryPath(t *testing.T) {
 				t.Fatalf("run %v exit = %d, want 0", argv, code)
 			}
 		})
-		if stdout != "" {
-			t.Fatalf("run %v stdout = %q, want empty", argv, stdout)
+		if stderr != "" {
+			t.Fatalf("run %v stderr = %q, want empty", argv, stderr)
 		}
 		for _, want := range []string{"vsix ci:", "Run Keel Test Bridge VSIX checks.", "Usage:", "keel-dev vsix ci"} {
-			if !strings.Contains(stderr, want) {
-				t.Fatalf("run %v help missing %q:\n%s", argv, want, stderr)
+			if !strings.Contains(stdout, want) {
+				t.Fatalf("run %v help missing %q:\n%s", argv, want, stdout)
 			}
 		}
 		for _, forbidden := range []string{"unknown help topic", "keel-dev is keel's development CLI."} {
-			if strings.Contains(stderr, forbidden) {
-				t.Fatalf("run %v help included %q:\n%s", argv, forbidden, stderr)
+			if strings.Contains(stdout, forbidden) {
+				t.Fatalf("run %v help included %q:\n%s", argv, forbidden, stdout)
 			}
 		}
 	}

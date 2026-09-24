@@ -14,6 +14,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/david-aggeler/keel/cli"
 	logging "github.com/david-aggeler/keel/log"
 )
 
@@ -336,7 +337,7 @@ func TestRunCISectionNamesPhaseOnly(t *testing.T) {
 // TestConsoleSuppressesServiceAttr proves the human console omits the
 // redundant service=keel-dev attr while JSON mode keeps it (keel/issue-3).
 func TestConsoleSuppressesServiceAttr(t *testing.T) {
-	cfg := loggerConfig(nil)
+	cfg := loggerConfig(cli.RuntimeConfig{Mode: cli.ModeHuman})
 
 	rc := &recordCapture{}
 	cfg.Writer = rc
@@ -393,7 +394,7 @@ func TestConsoleModeSelectsRendering(t *testing.T) {
 // DHF-TEST: keel/requirement-25
 func TestLoggerConfigUsesConsoleMode(t *testing.T) {
 	rc := &recordCapture{}
-	logger := newLogger("ai", slog.LevelInfo, rc)
+	logger := newLogger(cli.RuntimeConfig{Mode: cli.ModeAI}, rc)
 	logger.Info("gate started", "gate", "probe")
 
 	rec := rc.LastJSON()
@@ -402,7 +403,7 @@ func TestLoggerConfigUsesConsoleMode(t *testing.T) {
 	}
 
 	jsonCap := &recordCapture{}
-	jsonLogger := newLogger("json", slog.LevelInfo, jsonCap)
+	jsonLogger := newLogger(cli.RuntimeConfig{Mode: cli.ModeJSON}, jsonCap)
 	jsonLogger.Info("gate started", "gate", "probe")
 	if rec := jsonCap.LastJSON(); rec["service"] != "keel-dev" || rec["msg"] != "gate started" {
 		t.Fatalf("json mode should use verbose JSON records, got %#v", rec)

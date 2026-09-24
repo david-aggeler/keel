@@ -227,6 +227,18 @@ func TestAnimation(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-166 (keel/ac-707)
+// NoAnimation removes the permission a terminal stderr would otherwise grant.
+func TestNoAnimationForbidsAnimationOnATerminal(t *testing.T) {
+	c := term.New(term.Config{Stream: term.Stderr, NoAnimation: true, Getenv: envOf(colorTerm), Probe: allTerminals()})
+	if c.Animation() {
+		t.Fatal("NoAnimation on a terminal: Animation() = true")
+	}
+	if !term.New(term.Config{Stream: term.Stderr, Getenv: envOf(colorTerm), Probe: allTerminals()}).Animation() {
+		t.Fatal("baseline on a terminal: Animation() = false")
+	}
+}
+
 // DHF-TEST: keel/requirement-165
 // Prompting needs a terminal on stdin and no --no-input.
 func TestPrompt(t *testing.T) {
