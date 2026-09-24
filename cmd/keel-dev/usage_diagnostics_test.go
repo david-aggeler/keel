@@ -33,8 +33,9 @@ func TestKeelDevUnknownFlagIsReportedAsFlag(t *testing.T) {
 
 // DHF-TEST: keel/requirement-169 (keel/ac-720)
 func TestKeelDevNearMissCommandSuggestsSibling(t *testing.T) {
-	stderr := runUsageDiagnostic(t, "worktre")
-	if !strings.Contains(stderr, "worktree") || !strings.Contains(stderr, "did you mean") {
+	// The near-miss is worktree less its last letter, as in keel/ac-720.
+	stderr := runUsageDiagnostic(t, strings.TrimSuffix("worktree", "e"))
+	if !strings.Contains(stderr, `did you mean "worktree"?`) {
 		t.Fatalf("stderr = %q, want a worktree suggestion", stderr)
 	}
 	stderr = runUsageDiagnostic(t, "frobnicate")

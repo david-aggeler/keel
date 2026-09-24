@@ -60,12 +60,11 @@ func TestDispatchSuggestsNearestSiblingWithinBound(t *testing.T) {
 		suggest string
 	}{
 		// distance 1
-		{args: []string{"worktre"}, suggest: "worktree"},
+		{args: []string{"releases"}, suggest: "release"},
 		// distance 2: the bound, inclusive
-		{args: []string{"rolase"}, suggest: "release"},
-		{args: []string{"wroktree"}, suggest: "worktree"},
+		{args: []string{"relapse"}, suggest: "release"},
 		// suggestion among a group's children
-		{args: []string{"gate", "gofnt"}, suggest: "gofmt"},
+		{args: []string{"gate", "vex"}, suggest: "vet"},
 	}
 	for _, tc := range cases {
 		msg := dispatchUsageError(t, tc.args...)
@@ -77,7 +76,7 @@ func TestDispatchSuggestsNearestSiblingWithinBound(t *testing.T) {
 		}
 	}
 	// distance 3: one past the bound, and a word far from every sibling.
-	for _, args := range [][]string{{"relxxxe"}, {"frobnicate"}, {"gate", "frobnicate"}} {
+	for _, args := range [][]string{{"reload"}, {"frobnicate"}, {"gate", "frobnicate"}} {
 		msg := dispatchUsageError(t, args...)
 		if strings.Contains(msg, "did you mean") {
 			t.Fatalf("Dispatch(%q) = %q, want no suggestion", args, msg)
@@ -94,8 +93,8 @@ func TestNearestCommandBound(t *testing.T) {
 	if got, ok := nearestCommand("x", siblings); ok {
 		t.Fatalf("nearestCommand(x) = %q, want none: the edit rewrites the whole candidate", got)
 	}
-	if got, ok := nearestCommand("releas", siblings); !ok || got != "release" {
-		t.Fatalf("nearestCommand(releas) = %q, %v, want release", got, ok)
+	if got, ok := nearestCommand("releases", siblings); !ok || got != "release" {
+		t.Fatalf("nearestCommand(releases) = %q, %v, want release", got, ok)
 	}
 	if got := suggestionMaxDistance; got != 2 {
 		t.Fatalf("suggestionMaxDistance = %d, want 2", got)
