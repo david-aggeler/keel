@@ -6,7 +6,9 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -21,11 +23,12 @@ import (
 // DHF-REQ: keel/requirement-11
 const coverageFloorPercent = 90.0
 
-// runTestWithCoverage is the ci test step: it runs the full suite with a
-// coverage profile, surfaces the per-package results live through keel/log,
-// computes the total statement coverage, and fails the gate below the floor.
+// runTestWithCoverage is the ci test step: it runs the git-tracked packages'
+// suite with a coverage profile, surfaces the per-package results live through
+// keel/log, computes the total statement coverage, and fails the gate below the
+// floor.
 //
-// DHF-REQ: keel/requirement-11 (keel/ac-37)
+// DHF-REQ: keel/requirement-11 (keel/ac-37), keel/requirement-85 (keel/ac-666)
 func runTestWithCoverage(ctx context.Context, logger *slog.Logger, dir string) error {
 	tmp, err := os.MkdirTemp("", "keel-cover-")
 	if err != nil {
@@ -34,7 +37,11 @@ func runTestWithCoverage(ctx context.Context, logger *slog.Logger, dir string) e
 	defer os.RemoveAll(tmp)
 	profile := filepath.Join(tmp, "cover.out")
 
-	if err := runCmd(ctx, logger, dir, "go", "test", "./...", "-coverprofile="+profile, "-covermode=atomic", "-coverpkg=./..."); err != nil {
+	packages, err := trackedGoPackages(ctx, logger, dir)
+	if err != nil {
+		return err
+	}
+	if err := runCmd(ctx, logger, dir, "go", goTestCoverageArgs(packages, profile)...); err != nil {
 		return err
 	}
 
@@ -56,9 +63,10 @@ func runTestWithCoverage(ctx context.Context, logger *slog.Logger, dir string) e
 
 // runVSCodeTestCoverage is the VS Code coverage-profile lane. It deliberately
 // persists the profile under .logs so the run artifact survives handler return;
-// runTestWithCoverage keeps using a temp profile for the ci gate.
+// runTestWithCoverage keeps using a temp profile for the ci gate. Both select
+// packages through trackedGoPackages.
 //
-// DHF-REQ: keel/requirement-39
+// DHF-REQ: keel/requirement-39, keel/requirement-85 (keel/ac-666)
 func runVSCodeTestCoverage(ctx context.Context, logger *slog.Logger, root, runID string, maxOutputBytes int, writer vscode.RunEventWriter) error {
 	coverRoot := filepath.Join(root, ".logs", "vscode-cover")
 	if err := os.MkdirAll(coverRoot, 0o755); err != nil {
@@ -72,7 +80,11 @@ func runVSCodeTestCoverage(ctx context.Context, logger *slog.Logger, root, runID
 	}
 	profile := filepath.Join(runDir, "cover.out")
 
-	stdout, stderr, err := captureWithMaxOutput(ctx, logger, root, maxOutputBytes, "go", "test", "./...", "-coverprofile="+profile, "-covermode=atomic", "-coverpkg=./...")
+	packages, err := trackedGoPackages(ctx, logger, root)
+	if err != nil {
+		return err
+	}
+	stdout, stderr, err := captureWithMaxOutput(ctx, logger, root, maxOutputBytes, "go", goTestCoverageArgs(packages, profile)...)
 	emitVSCodeCoveragePackages(stdout, writer)
 	if err != nil {
 		return fmt.Errorf("go test coverage: %w: %s", err, strings.TrimSpace(stderr))
@@ -178,4 +190,67 @@ func pruneOldVSCodeCoverageDirs(dir string, logger *slog.Logger) {
 			logger.Warn("remove old vscode coverage profile", "path", path, "error", err.Error())
 		}
 	}
+}
+
+// trackedGoPackages returns the ./-relative package patterns of every directory
+// that holds a git-tracked, non-excluded .go file, sorted. It is the test
+// stage's package selector: `./...` would also enumerate gitignored and
+// untracked directories (scratchpad/), so a scratch package could fail a test
+// or dilute the coverage denominator on a clean tracked tree (keel/issue-246).
+// Directories the Go toolchain itself never treats as packages (testdata, and
+// path segments starting with "." or "_") are skipped, matching `./...`.
+//
+// DHF-REQ: keel/requirement-85 (keel/ac-666)
+func trackedGoPackages(ctx context.Context, logger *slog.Logger, dir string) ([]string, error) {
+	cfg, err := loadKeelDevConfig(dir)
+	if err != nil {
+		return nil, err
+	}
+	files, err := trackedFilesWithExt(ctx, logger, dir, cfg.Gate.Excludes, ".go")
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	for _, file := range files {
+		pkgDir := path.Dir(filepath.ToSlash(file))
+		if !toolchainPackageDir(pkgDir) {
+			continue
+		}
+		if pkgDir == "." {
+			seen["."] = true
+			continue
+		}
+		seen["./"+pkgDir] = true
+	}
+	if len(seen) == 0 {
+		return nil, fmt.Errorf("keel-dev: no git-tracked Go package under %s", dir)
+	}
+	packages := make([]string, 0, len(seen))
+	for pkg := range seen {
+		packages = append(packages, pkg)
+	}
+	sort.Strings(packages)
+	return packages, nil
+}
+
+// toolchainPackageDir reports whether `go list ./...` would consider a
+// repo-relative directory: it skips testdata and any segment starting with
+// "." or "_".
+func toolchainPackageDir(dir string) bool {
+	if dir == "." {
+		return true
+	}
+	for _, segment := range strings.Split(dir, "/") {
+		if segment == "testdata" || strings.HasPrefix(segment, ".") || strings.HasPrefix(segment, "_") {
+			return false
+		}
+	}
+	return true
+}
+
+// goTestCoverageArgs builds the coverage run's argv: the tracked packages are
+// both the packages under test and the -coverpkg denominator.
+func goTestCoverageArgs(packages []string, profile string) []string {
+	args := append([]string{"test"}, packages...)
+	return append(args, "-coverprofile="+profile, "-covermode=atomic", "-coverpkg="+strings.Join(packages, ","))
 }
