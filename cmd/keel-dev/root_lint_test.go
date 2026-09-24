@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/david-aggeler/keel/cli"
+	logging "github.com/david-aggeler/keel/log"
 )
 
 func TestFindModuleRoot(t *testing.T) {
@@ -882,13 +883,14 @@ func TestKeelDevHelpAllRendersFullCommandTreeAndExitsZero(t *testing.T) {
 	}
 
 	got := out.String()
+	assertCompositeHelpHeader(t, "keel-dev", got)
 	for _, want := range []string{
 		"keel-dev is keel's development CLI.",
 		"--help-all",
-		"ci:",
-		"release:",
-		"test-bridge commands:",
-		"vsix commands:",
+		"\nkeel-dev ci\n",
+		"\nkeel-dev release\n",
+		"\nkeel-dev test-bridge\n",
+		"\nkeel-dev vsix\n",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("keel-dev --help-all missing %q\noutput:\n%s", want, got)
@@ -896,6 +898,27 @@ func TestKeelDevHelpAllRendersFullCommandTreeAndExitsZero(t *testing.T) {
 	}
 	if strings.Contains(got, "keel-dev ci\n\nkeel-dev ci") {
 		t.Fatalf("keel-dev --help-all appears to duplicate ci help\noutput:\n%s", got)
+	}
+}
+
+// assertCompositeHelpHeader checks keel/ac-722 on a built binary's --help-all
+// dump: the Header help edition frames "<program> v<version>" on lines 1-3 and
+// the identity line occurs exactly once.
+func assertCompositeHelpHeader(t *testing.T, program, got string) {
+	t.Helper()
+	lines := strings.Split(got, "\n")
+	rule := strings.Repeat("=", logging.BannerWidth)
+	if len(lines) < 3 || lines[0] != rule || !strings.HasPrefix(lines[1], program+" v") || lines[2] != rule {
+		t.Fatalf("%s --help-all does not open with the Header help edition\noutput:\n%s", program, got)
+	}
+	n := 0
+	for _, line := range lines {
+		if line == lines[1] {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%s --help-all identity line %q occurs %d times, want 1\noutput:\n%s", program, lines[1], n, got)
 	}
 }
 

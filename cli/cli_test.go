@@ -254,22 +254,24 @@ func TestRenderAllHelpEmitsRootAndEveryCommandOnceInTreeOrder(t *testing.T) {
 		t.Fatalf("RenderAllHelp is not deterministic:\nfirst:\n%s\nsecond:\n%s", first.String(), second.String())
 	}
 
+	// Each section after the root is headed by its full invocation path on a
+	// line of its own (keel/ac-723), so the headings are matched line-anchored.
 	got := first.String()
 	for _, want := range []string{
 		"Usage:\n  tool <command>",
-		"parent commands:",
-		"parent beta:",
-		"parent alpha:",
-		"status:",
+		"\ntool parent\n",
+		"\ntool parent beta\n",
+		"\ntool parent alpha\n",
+		"\ntool status\n",
 	} {
 		if strings.Count(got, want) != 1 {
 			t.Fatalf("RenderAllHelp count(%q) = %d, want 1\n%s", want, strings.Count(got, want), got)
 		}
 	}
-	assertBefore(t, got, "Usage:\n  tool <command>", "parent commands:")
-	assertBefore(t, got, "parent commands:", "parent beta:")
-	assertBefore(t, got, "parent beta:", "parent alpha:")
-	assertBefore(t, got, "parent alpha:", "status:")
+	assertBefore(t, got, "Usage:\n  tool <command>", "\ntool parent\n")
+	assertBefore(t, got, "\ntool parent\n", "\ntool parent beta\n")
+	assertBefore(t, got, "\ntool parent beta\n", "\ntool parent alpha\n")
+	assertBefore(t, got, "\ntool parent alpha\n", "\ntool status\n")
 }
 
 func assertBefore(t *testing.T, text, earlier, later string) {
@@ -841,7 +843,7 @@ func TestRenderAllHelpIncludesModeTopicAfterCommands(t *testing.T) {
 	var all bytes.Buffer
 	root.RenderAllHelp(&all)
 	got := all.String()
-	assertBefore(t, got, "ci:", "mode:")
+	assertBefore(t, got, "\ntool ci\n", "\ntool help mode\n")
 	for _, want := range ModeHelpLines() {
 		if !strings.Contains(got, want) {
 			t.Fatalf("RenderAllHelp missing mode topic line %q:\n%s", want, got)

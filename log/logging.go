@@ -860,13 +860,13 @@ func (h *consoleHandler) writeBanner(b *strings.Builder, r slog.Record, boundAtt
 		if version != "" {
 			title = strings.TrimSpace(title + " " + version)
 		}
-		writeConsoleBannerLine(b, r.Time, r.Level, h.color, strings.Repeat("=", ruleWidth))
+		writeConsoleBannerLine(b, r.Time, r.Level, h.color, headerRule)
 		writeConsoleBannerLine(b, r.Time, r.Level, h.color, title)
-		writeConsoleBannerLine(b, r.Time, r.Level, h.color, strings.Repeat("=", ruleWidth))
+		writeConsoleBannerLine(b, r.Time, r.Level, h.color, headerRule)
 		return true
 	case "section":
 		name := bannerText("name", h.groups, boundAttrs, recordAttrs)
-		writeConsoleBannerLine(b, r.Time, r.Level, h.color, strings.Repeat("-", ruleWidth))
+		writeConsoleBannerLine(b, r.Time, r.Level, h.color, sectionRule)
 		writeConsoleBannerLine(b, r.Time, r.Level, h.color, name)
 		return true
 	default:
@@ -1437,7 +1437,39 @@ func safeLogService(service string) string {
 	return b.String()
 }
 
-const ruleWidth = 70
+// BannerWidth is the rule width of every banner keel/log draws: the console
+// Header and Section banners and their plain-text help editions
+// ([WriteHeaderBanner], [WriteSectionBanner]). It is the one width source, so
+// the log and help surfaces cannot drift apart.
+const BannerWidth = 70
+
+// headerRule and sectionRule are the banner rule lines shared by the console
+// handler and the help editions.
+var (
+	headerRule  = strings.Repeat("=", BannerWidth)
+	sectionRule = strings.Repeat("-", BannerWidth)
+)
+
+// WriteHeaderBanner writes the plain-text help edition of the Header banner to
+// w: a rule of '=', the title, a rule of '='. It carries no timestamp, level,
+// or color, so a CLI can frame help text on stdout with the same banner the
+// console log draws.
+//
+// DHF-REQ: keel/requirement-57
+func WriteHeaderBanner(w io.Writer, title string) error {
+	_, err := io.WriteString(w, headerRule+"\n"+title+"\n"+headerRule+"\n")
+	return err
+}
+
+// WriteSectionBanner writes the plain-text help edition of the Section banner
+// to w: a rule of '-', then the name. Like [WriteHeaderBanner] it carries no
+// timestamp, level, or color.
+//
+// DHF-REQ: keel/requirement-57
+func WriteSectionBanner(w io.Writer, name string) error {
+	_, err := io.WriteString(w, sectionRule+"\n"+name+"\n")
+	return err
+}
 
 // FieldRow is one aligned label/value row rendered by [Fields].
 type FieldRow struct {
