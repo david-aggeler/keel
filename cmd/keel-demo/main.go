@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -27,15 +28,14 @@ func main() {
 func run(argv []string) int {
 	tree := commandTree()
 	if err := tree.ValidateTree(); err != nil {
-		fmt.Fprintln(os.Stderr, "keel-demo: "+err.Error())
-		return 1
+		return bootstrapFailure(err, 1)
 	}
 	cfg, words, err := tree.ParseGlobalConfig(argv)
 	mode := cfg.Mode
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "keel-demo: "+err.Error())
-		fmt.Fprintln(os.Stderr)
-		tree.RenderRootHelp(os.Stderr)
+		bootstrapFailure(err, 2)
+		_, _ = io.WriteString(helpStream(err), "\n")
+		tree.RenderRootHelp(helpStream(err))
 		return 2
 	}
 	// DHF-REQ: keel/requirement-166 — the operator's color and input policy
@@ -43,7 +43,7 @@ func run(argv []string) int {
 	tree.Config.HelpWidth = cli.HelpWidth(term.New(terminalConfig(cfg)))
 	if cfg.Version {
 		// DHF-REQ: keel/requirement-109, keel/requirement-110
-		fmt.Fprintln(os.Stdout, versionString())
+		_, _ = io.WriteString(helpStream(nil), versionString()+"\n")
 		return 0
 	}
 	if cfg.HelpAll {
@@ -53,9 +53,8 @@ func run(argv []string) int {
 	if cfg.HelpJSON {
 		// DHF-REQ: keel/requirement-100 — structured inventory on stdout,
 		// path- and mode-independent, exit 0.
-		if err := tree.RenderHelpJSON(os.Stdout); err != nil {
-			fmt.Fprintln(os.Stderr, "keel-demo: "+err.Error())
-			return 1
+		if err := tree.RenderHelpJSON(helpStream(nil)); err != nil {
+			return bootstrapFailure(err, 1)
 		}
 		return 0
 	}
@@ -64,14 +63,74 @@ func run(argv []string) int {
 	}
 	logger, closeLogger, err := buildLogger(cfg)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "keel-demo: "+err.Error())
-		return 1
+		return bootstrapFailure(err, 1)
 	}
 	defer closeLogger()
 	if len(words) == 0 {
 		return exitCodeFor(logger, runShowcase(context.Background(), logger, string(mode)))
 	}
-	return exitCodeFor(logger, tree.Dispatch(context.Background(), words))
+	return exitCodeFor(logger, tree.Dispatch(withLogger(context.Background(), logger), words))
+}
+
+// bootstrapFailure reports a failure that precedes the logger — an invalid
+// command tree, a usage error in the global flags, a logger that cannot be
+// built — on stderr, and returns code. It is the one place keel-demo writes a
+// diagnostic without keel/log, because at that point there is no logger.
+//
+// DHF-REQ: keel/requirement-164
+func bootstrapFailure(err error, code int) int {
+	_, _ = io.WriteString(os.Stderr, "keel-demo: "+err.Error()+"\n")
+	return code
+}
+
+// helpStream is where requested help, --version and --help-json go: stdout,
+// because the operator asked for that document. A help request that fails to
+// resolve is a usage error and goes to stderr.
+//
+// DHF-REQ: keel/requirement-164
+func helpStream(err error) io.Writer {
+	if err != nil {
+		return os.Stderr
+	}
+	return os.Stdout
+}
+
+// newPayloadStream is the stdout writer handed to a verb that declares a
+// payload. keel/log never writes here: every log record goes to stderr through
+// the CLI profile, so a consumer reading stdout sees the result and nothing else.
+//
+// DHF-REQ: keel/requirement-164
+func newPayloadStream() io.Writer {
+	return os.Stdout
+}
+
+// payloadHandler is a verb handler that writes a result. payload is the
+// declared stdout stream; the logger in ctx carries every diagnostic.
+type payloadHandler func(ctx context.Context, args []string, payload io.Writer) error
+
+// declarePayload is how a keel-demo verb states that it writes to stdout. A
+// verb built without it has no stdout writer to reach for.
+//
+// DHF-REQ: keel/requirement-164
+func declarePayload(h payloadHandler) cli.Handler {
+	return func(ctx context.Context, args []string) error {
+		return h(ctx, args, newPayloadStream())
+	}
+}
+
+type loggerKey struct{}
+
+func withLogger(ctx context.Context, logger *logging.Logger) context.Context {
+	return context.WithValue(ctx, loggerKey{}, logger)
+}
+
+// loggerFrom returns the invocation's logger. A verb dispatched without one is
+// a wiring defect and fails rather than dropping its diagnostics.
+func loggerFrom(ctx context.Context) (*logging.Logger, error) {
+	if logger, ok := ctx.Value(loggerKey{}).(*logging.Logger); ok && logger != nil {
+		return logger, nil
+	}
+	return nil, errors.New("keel-demo: verb dispatched without a logger")
 }
 
 // DHF-REQ: keel/requirement-28, keel/requirement-57, keel/requirement-108, keel/requirement-111
@@ -105,7 +164,7 @@ func commandTree() *cli.CommandSpec {
 						Flags: []cli.FlagSpec{
 							{Name: "format", Value: "text|json", Default: "text", Enum: []string{"text", "json"}, Short: "Preview format.", StringTarget: &inspectFormat},
 						},
-						Handler: handleWorkflowInspect(&inspectFormat),
+						Handler: declarePayload(handleWorkflowInspect(&inspectFormat)),
 					},
 					{
 						Name:        "replay",
@@ -115,7 +174,7 @@ func commandTree() *cli.CommandSpec {
 						Flags: []cli.FlagSpec{
 							{Name: "speed", Value: "normal|fast", Default: "normal", Enum: []string{"normal", "fast"}, Short: "Replay pacing.", StringTarget: &replaySpeed},
 						},
-						Handler: handleWorkflowReplay(&replaySpeed),
+						Handler: declarePayload(handleWorkflowReplay(&replaySpeed)),
 					},
 				},
 			},
@@ -125,19 +184,35 @@ func commandTree() *cli.CommandSpec {
 	return tree
 }
 
-// DHF-REQ: keel/requirement-108
-func handleWorkflowInspect(format *string) cli.Handler {
-	return func(_ context.Context, args []string) error {
-		fmt.Fprintf(os.Stdout, "workflow inspect run_id=%s format=%s\n", args[0], *format)
-		return nil
+// handleWorkflowInspect logs what it previews and writes the result line to
+// the declared payload stream — two output kinds, two paths.
+//
+// DHF-REQ: keel/requirement-108, keel/requirement-164
+func handleWorkflowInspect(format *string) payloadHandler {
+	return func(ctx context.Context, args []string, payload io.Writer) error {
+		logger, err := loggerFrom(ctx)
+		if err != nil {
+			return err
+		}
+		logger.Event("workflow_inspect", "previewing captured run", "run_id", args[0], "format", *format)
+		_, err = io.WriteString(payload, fmt.Sprintf("workflow inspect run_id=%s format=%s\n", args[0], *format))
+		return err
 	}
 }
 
-// DHF-REQ: keel/requirement-108
-func handleWorkflowReplay(speed *string) cli.Handler {
-	return func(_ context.Context, args []string) error {
-		fmt.Fprintf(os.Stdout, "workflow replay transcript=%s speed=%s\n", args[0], *speed)
-		return nil
+// handleWorkflowReplay logs what it replays and writes the result line to the
+// declared payload stream.
+//
+// DHF-REQ: keel/requirement-108, keel/requirement-164
+func handleWorkflowReplay(speed *string) payloadHandler {
+	return func(ctx context.Context, args []string, payload io.Writer) error {
+		logger, err := loggerFrom(ctx)
+		if err != nil {
+			return err
+		}
+		logger.Event("workflow_replay", "replaying transcript", "transcript", args[0], "speed", *speed)
+		_, err = io.WriteString(payload, fmt.Sprintf("workflow replay transcript=%s speed=%s\n", args[0], *speed))
+		return err
 	}
 }
 
@@ -149,17 +224,12 @@ func renderHelp(tree *cli.CommandSpec, rt cli.RuntimeConfig, path []string) int 
 	if mode == cli.ModeHuman {
 		// A resolvable topic is requested help: stdout. An unknown topic is
 		// a usage error and keeps stderr.
-		out := os.Stdout
-		if helpErr != nil {
-			out = os.Stderr
-		}
-		fmt.Fprint(out, help.String())
+		_, _ = io.WriteString(helpStream(helpErr), help.String())
 		return helpErrorExitCode(helpErr)
 	}
-	logger, closeLogger, err := buildLogger(helpRuntime(rt))
+	logger, closeLogger, err := buildHelpLogger(rt)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "keel-demo: "+err.Error())
-		return 1
+		return bootstrapFailure(err, 1)
 	}
 	defer closeLogger()
 	command := "keel-demo"
@@ -197,13 +267,12 @@ func renderAllHelp(tree *cli.CommandSpec, rt cli.RuntimeConfig) int {
 	var help bytes.Buffer
 	tree.RenderAllHelp(&help)
 	if mode == cli.ModeHuman {
-		fmt.Fprint(os.Stdout, help.String())
+		_, _ = io.WriteString(helpStream(nil), help.String())
 		return 0
 	}
-	logger, closeLogger, err := buildLogger(helpRuntime(rt))
+	logger, closeLogger, err := buildHelpLogger(rt)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "keel-demo: "+err.Error())
-		return 1
+		return bootstrapFailure(err, 1)
 	}
 	defer closeLogger()
 	logger.Event("help", "keel-demo help-all", "command", "keel-demo --help-all", "help", help.String(), "mode", string(mode))
@@ -212,7 +281,22 @@ func renderAllHelp(tree *cli.CommandSpec, rt cli.RuntimeConfig) int {
 
 // DHF-REQ: keel/requirement-29
 func buildLogger(rt cli.RuntimeConfig) (*logging.Logger, func(), error) {
-	logger, err := logging.New(loggerConfig(rt))
+	return newLogger(loggerConfig(rt))
+}
+
+// buildHelpLogger builds the logger a machine-mode help event is emitted
+// through. Help is the document the operator asked for, so its console is the
+// help stream — stdout — not the diagnostics stream.
+//
+// DHF-REQ: keel/requirement-164
+func buildHelpLogger(rt cli.RuntimeConfig) (*logging.Logger, func(), error) {
+	cfg := loggerConfig(helpRuntime(rt))
+	cfg.Writer = helpStream(nil)
+	return newLogger(cfg)
+}
+
+func newLogger(cfg logging.Config) (*logging.Logger, func(), error) {
+	logger, err := logging.New(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -220,25 +304,25 @@ func buildLogger(rt cli.RuntimeConfig) (*logging.Logger, func(), error) {
 }
 
 // loggerConfig is keel-demo's three-sink logger config for one invocation's
-// global flags. The showcase defaults the console to Debug so every rendering
-// is visible; -q raises that floor to Warn on the console only, and --color
-// and --plain set the color policy. File sinks keep keel/log's own verbosity.
+// global flags, amended from the keel/log CLI profile: diagnostics on stderr,
+// stdout left to the payload a verb declares. The showcase defaults the console
+// to Debug so every rendering is visible; -q raises that floor to Warn on the
+// console only, and --color and --plain set the color policy. File sinks keep
+// keel/log's own verbosity.
 //
-// DHF-REQ: keel/requirement-29, keel/requirement-166
+// DHF-REQ: keel/requirement-29, keel/requirement-164, keel/requirement-166
 func loggerConfig(rt cli.RuntimeConfig) logging.Config {
 	color := rt.EffectiveColor()
-	return logging.Config{
-		Service:          "keel-demo",
-		ConsoleVerbosity: rt.ConsoleLevel(slog.LevelDebug),
-		Console:          consoleForSharedMode(rt.Mode),
-		Writer:           os.Stdout,
-		TextDir:          ".logs",
-		JSONLDir:         ".logs",
-		PerRun:           true,
-		ForceColor:       color == term.ColorAlways,
-		DisableColor:     color == term.ColorNever,
-		ConsoleOmitKeys:  []string{"service"},
-	}
+	cfg := logging.CLIProfile("keel-demo")
+	cfg.ConsoleVerbosity = rt.ConsoleLevel(slog.LevelDebug)
+	cfg.Console = consoleForSharedMode(rt.Mode)
+	cfg.TextDir = ".logs"
+	cfg.JSONLDir = ".logs"
+	cfg.PerRun = true
+	cfg.ForceColor = color == term.ColorAlways
+	cfg.DisableColor = color == term.ColorNever
+	cfg.ConsoleOmitKeys = []string{"service"}
+	return cfg
 }
 
 // terminalConfig is the keel/term input keel-demo resolves its terminal
@@ -327,8 +411,7 @@ func exitCodeFor(logger *logging.Logger, err error) int {
 	if logger == nil {
 		logger, closeLogger, buildErr := buildLogger(cli.RuntimeConfig{Mode: cli.ModeHuman})
 		if buildErr != nil {
-			fmt.Fprintln(os.Stderr, "keel-demo: "+buildErr.Error())
-			return 1
+			return bootstrapFailure(buildErr, 1)
 		}
 		defer closeLogger()
 		return exitCodeFor(logger, err)
