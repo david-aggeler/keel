@@ -26,6 +26,9 @@
 // whose format the caller knows: it can override a line's level and report the
 // level the child declared itself, which travels in a "declared_level" field
 // that is absent when nothing was declared. Core keel/exec never infers one.
+// An output or tail record logged at Warn or higher also carries a "program"
+// attribute naming the child, so a line that reaches the default console says
+// which command wrote it; lower records stay untagged.
 //
 // # Usage
 //
