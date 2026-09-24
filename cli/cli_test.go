@@ -115,7 +115,8 @@ func TestCommandModelDispatchHelpAndUsageErrors(t *testing.T) {
 	root.RenderRootHelp(&help)
 	for _, want := range []string{
 		"keel-dev is keel's development CLI.",
-		"keel-dev [--mode human|ai|json] [-v|--verbose] <command> [args]",
+		// The root synopsis is generated from GlobalFlagSpecs, not Config.Usage.
+		"keel-dev [--mode human|ai|json] [-v|--verbose] [-q|--quiet]",
 		"--mode human|ai|json",
 		"ci       Run the verification gate.",
 	} {
@@ -258,7 +259,7 @@ func TestRenderAllHelpEmitsRootAndEveryCommandOnceInTreeOrder(t *testing.T) {
 	// line of its own (keel/ac-723), so the headings are matched line-anchored.
 	got := first.String()
 	for _, want := range []string{
-		"Usage:\n  tool <command>",
+		"Usage:\n  tool [--mode human|ai|json]",
 		"\ntool parent\n",
 		"\ntool parent beta\n",
 		"\ntool parent alpha\n",
@@ -268,7 +269,7 @@ func TestRenderAllHelpEmitsRootAndEveryCommandOnceInTreeOrder(t *testing.T) {
 			t.Fatalf("RenderAllHelp count(%q) = %d, want 1\n%s", want, strings.Count(got, want), got)
 		}
 	}
-	assertBefore(t, got, "Usage:\n  tool <command>", "\ntool parent\n")
+	assertBefore(t, got, "Usage:\n  tool [--mode human|ai|json]", "\ntool parent\n")
 	assertBefore(t, got, "\ntool parent\n", "\ntool parent beta\n")
 	assertBefore(t, got, "\ntool parent beta\n", "\ntool parent alpha\n")
 	assertBefore(t, got, "\ntool parent alpha\n", "\ntool status\n")
@@ -339,9 +340,9 @@ func TestRenderHelpJSONEmitsFlatArrayOneElementPerCommand(t *testing.T) {
 			{Name: "status", Use: "status", Short: "Show status."},
 		},
 	}
-	// Commands across all depths plus the keel-owned help-only mode topic: parent,
-	// parent beta, parent alpha, status, mode => 5.
-	const wantCount = 5
+	// The root entry, commands across all depths, and the keel-owned help-only
+	// mode topic: tool, parent, parent beta, parent alpha, status, mode => 6.
+	const wantCount = 6
 
 	var buf bytes.Buffer
 	if err := root.RenderHelpJSON(&buf); err != nil {
@@ -390,6 +391,12 @@ func TestRenderHelpJSONEmitsFlatArrayOneElementPerCommand(t *testing.T) {
 				if !stringSliceContains(e.Lines, want) {
 					t.Fatalf("mode inventory lines missing %q: %+v", want, e.Lines)
 				}
+			}
+			continue
+		}
+		if e.Path == "tool" {
+			if e.Kind != "root" {
+				t.Fatalf("root inventory kind = %q, want root", e.Kind)
 			}
 			continue
 		}
@@ -667,10 +674,14 @@ func TestRenderRootHelpRendersKeelOwnedGlobalFlagsWithoutConsumerRedeclaration(t
 
 	// Every global flag ParseGlobalConfig parses appears exactly once, keel-owned.
 	for _, name := range []string{"--mode", "--verbose", "--no-header", "--help", "--help-all", "--help-json", "--version"} {
-		// A flag row is "  --name\n" (no value) or "  --name <value>\n"; count
-		// both forms so name-prefix aliases (--help vs --help-all) don't collide.
-		rowPrefix := "  " + name
-		if got := strings.Count(section, rowPrefix+" ") + strings.Count(section, rowPrefix+"\n"); got != 1 {
+		// A flag row is "  --name" or "  -x, --name", then " <value>" or a
+		// newline; count every form so name-prefix aliases (--help vs
+		// --help-all) don't collide.
+		got := 0
+		for _, lead := range []string{"  ", ", "} {
+			got += strings.Count(section, lead+name+" ") + strings.Count(section, lead+name+"\n")
+		}
+		if got != 1 {
 			t.Fatalf("global flag row %q appears %d times, want exactly 1:\n%s", name, got, section)
 		}
 	}

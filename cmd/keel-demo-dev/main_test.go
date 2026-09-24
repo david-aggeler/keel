@@ -96,12 +96,18 @@ func demoDevCommandInventoryPaths(t *testing.T) []string {
 	}
 	var inventory []struct {
 		Path string `json:"path"`
+		Kind string `json:"kind"`
 	}
 	if err := json.Unmarshal([]byte(out), &inventory); err != nil {
 		t.Fatalf("parse --help-json inventory: %v\n%s", err, out)
 	}
 	paths := make([]string, 0, len(inventory))
 	for _, command := range inventory {
+		// The root element names the program itself; the caller covers the
+		// root separately.
+		if command.Kind == "root" {
+			continue
+		}
 		paths = append(paths, command.Path)
 	}
 	return paths

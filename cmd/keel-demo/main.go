@@ -66,10 +66,9 @@ func run(argv []string) int {
 		return bootstrapFailure(err, 1)
 	}
 	defer closeLogger()
-	if len(words) == 0 {
-		return exitCodeFor(logger, runShowcase(context.Background(), logger, string(mode)))
-	}
-	return exitCodeFor(logger, tree.Dispatch(withLogger(context.Background(), logger), words))
+	// A bare invocation dispatches to the root handler, the showcase.
+	ctx := withMode(withLogger(context.Background(), logger), string(mode))
+	return exitCodeFor(logger, tree.Dispatch(ctx, words))
 }
 
 // bootstrapFailure reports a failure that precedes the logger — an invalid
@@ -120,6 +119,19 @@ func declarePayload(h payloadHandler) cli.Handler {
 
 type loggerKey struct{}
 
+type modeKey struct{}
+
+func withMode(ctx context.Context, mode string) context.Context {
+	return context.WithValue(ctx, modeKey{}, mode)
+}
+
+// modeFrom returns the invocation's console mode name, or "" when none was
+// threaded.
+func modeFrom(ctx context.Context) string {
+	mode, _ := ctx.Value(modeKey{}).(string)
+	return mode
+}
+
 func withLogger(ctx context.Context, logger *logging.Logger) context.Context {
 	return context.WithValue(ctx, loggerKey{}, logger)
 }
@@ -146,6 +158,9 @@ func commandTree() *cli.CommandSpec {
 			Usage:        "keel-demo [--mode human|ai|json]",
 			HelpUsage:    "keel-demo help [command]",
 			CommandUsage: "keel-demo <command> --help",
+			// DHF-REQ: keel/requirement-100 — the showcase is the root's own
+			// action, so --help-json lists the root as invocable.
+			RootHandler: handleShowcase,
 			// keel/cli owns and renders the shared global flags and the --mode
 			// output-mode description (keel/requirement-101); keel-demo declares no
 			// additional globals, so GlobalFlags/ModeHelp are left empty.
@@ -182,6 +197,15 @@ func commandTree() *cli.CommandSpec {
 	}
 	tree.InheritConfig()
 	return tree
+}
+
+// handleShowcase runs the showcase for a bare keel-demo invocation.
+func handleShowcase(ctx context.Context, _ []string) error {
+	logger, err := loggerFrom(ctx)
+	if err != nil {
+		return err
+	}
+	return runShowcase(ctx, logger, modeFrom(ctx))
 }
 
 // handleWorkflowInspect logs what it previews and writes the result line to

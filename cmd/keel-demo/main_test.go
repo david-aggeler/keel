@@ -309,12 +309,18 @@ func demoCommandInventoryPaths(t *testing.T, tree *cli.CommandSpec) []string {
 	}
 	var inventory []struct {
 		Path string `json:"path"`
+		Kind string `json:"kind"`
 	}
 	if err := json.Unmarshal(encoded.Bytes(), &inventory); err != nil {
 		t.Fatalf("parse command inventory: %v\n%s", err, encoded.String())
 	}
 	paths := make([]string, 0, len(inventory))
 	for _, command := range inventory {
+		// The root element names the program itself; the caller covers the
+		// root separately.
+		if command.Kind == "root" {
+			continue
+		}
 		paths = append(paths, command.Path)
 	}
 	return paths
