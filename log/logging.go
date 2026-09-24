@@ -138,7 +138,7 @@ func replaceForOpenBrain(groups []string, a slog.Attr) slog.Attr {
 	if a.Key == slog.TimeKey {
 		a.Key = "ts"
 		if t, ok := a.Value.Any().(time.Time); ok {
-			a.Value = slog.StringValue(t.Format(time.RFC3339Nano))
+			a.Value = slog.StringValue(formatEventTime(t))
 		}
 		return a
 	}
@@ -157,6 +157,15 @@ func replaceForOpenBrain(groups []string, a slog.Attr) slog.Attr {
 		a.Value = slog.StringValue(redactString(a.Value.String()))
 	}
 	return a
+}
+
+// formatEventTime renders a record's event time for the machine consoles
+// (json and ai). One helper keeps both modes' ts byte-compatible, so one
+// parser reads the time from either. A zero time is rendered, not omitted.
+//
+// DHF-REQ: keel/requirement-170, keel/requirement-17
+func formatEventTime(t time.Time) string {
+	return t.Format(time.RFC3339Nano)
 }
 
 // DHF-REQ: keel/requirement-20
@@ -642,7 +651,10 @@ func (h *sparseAIHandler) Enabled(_ context.Context, level slog.Level) bool {
 	return level >= min
 }
 
-// DHF-REQ: keel/requirement-17, keel/requirement-20
+// Handle writes one {ts, level, event, message, fields} event per line. ts is
+// the record's event time and comes first on every event, banners included.
+//
+// DHF-REQ: keel/requirement-17, keel/requirement-20, keel/requirement-170
 func (h *sparseAIHandler) Handle(_ context.Context, r slog.Record) error {
 	attrs := make([]slog.Attr, 0, len(h.attrs)+r.NumAttrs())
 	attrs = append(attrs, h.attrs...)
@@ -674,11 +686,13 @@ func (h *sparseAIHandler) Handle(_ context.Context, r slog.Record) error {
 	}
 
 	payload := struct {
+		TS      string         `json:"ts"`
 		Level   string         `json:"level"`
 		Event   string         `json:"event"`
 		Message string         `json:"message"`
 		Fields  map[string]any `json:"fields"`
 	}{
+		TS:      formatEventTime(r.Time),
 		Level:   r.Level.String(),
 		Event:   event,
 		Message: redactString(r.Message),

@@ -141,8 +141,8 @@ func TestMachineSinksAreUnaffectedByTheSeparatorRule(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	sparseLine := strings.TrimSuffix(sparse.String(), "\n")
-	const wantSparse = `{"level":"INFO","event":"log","message":"","fields":{"activity":"ci-extra-lint","service":"cli","work":"started"}}`
+	sparseLine := normalizeJSONTime(strings.TrimSuffix(sparse.String(), "\n"))
+	const wantSparse = `{"ts":"<t>","level":"INFO","event":"log","message":"","fields":{"activity":"ci-extra-lint","service":"cli","work":"started"}}`
 	if sparseLine != wantSparse {
 		t.Fatalf("sparse-AI console line:\n got %q\nwant %q", sparseLine, wantSparse)
 	}
