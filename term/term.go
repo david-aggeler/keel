@@ -205,8 +205,9 @@ func IsTerminal(f *os.File) bool {
 	if f == nil {
 		return false
 	}
-	fd, ok := rawFd(f)
-	return ok && isTerminal(fd)
+	var terminal bool
+	ok := withFd(f, func(fd uintptr) { terminal = isTerminal(fd) })
+	return ok && terminal
 }
 
 // FileSize reads the terminal size of f by TIOCGWINSZ. ok is false when f is
@@ -217,24 +218,25 @@ func FileSize(f *os.File) (size Size, ok bool) {
 	if f == nil {
 		return Size{}, false
 	}
-	fd, ok := rawFd(f)
-	if !ok {
+	if !withFd(f, func(fd uintptr) { size, ok = windowSize(fd) }) {
 		return Size{}, false
 	}
-	return windowSize(fd)
+	return size, ok
 }
 
-// rawFd returns f's descriptor without switching it to blocking mode, as
-// f.Fd would. ok is false for a closed file.
-func rawFd(f *os.File) (fd uintptr, ok bool) {
+// withFd runs fn on f's descriptor inside f.SyscallConn().Control, so f holds
+// the descriptor open for the whole call and a concurrent Close waits for fn
+// to return. It never switches f to blocking mode, as f.Fd would. It reports
+// false for a closed file, where fn does not run, and for any SyscallConn or
+// Control error.
+//
+// DHF-REQ: keel/requirement-165
+func withFd(f *os.File, fn func(fd uintptr)) bool {
 	sc, err := f.SyscallConn()
 	if err != nil {
-		return 0, false
+		return false
 	}
-	if err := sc.Control(func(d uintptr) { fd = d }); err != nil {
-		return 0, false
-	}
-	return fd, true
+	return sc.Control(fn) == nil
 }
 
 // OSProbe returns a [Probe] over the process's own os.Stdin, os.Stdout and
