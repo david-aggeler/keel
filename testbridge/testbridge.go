@@ -1863,8 +1863,12 @@ func handleConfigInit(bridge Bridge) cli.Handler {
 	return func(ctx context.Context, args []string) error {
 		rt := runtimeOrDefault(ctx, bridge)
 		logBridgeDispatch(rt, "config-init", bridgeDispatchLog{Args: args})
-		_, err := InitConfig(runtimeRoot(rt, bridge), bridge.ConfigTemplate())
-		return err
+		result, err := InitConfig(runtimeRoot(rt, bridge), bridge.ConfigTemplate())
+		if err != nil {
+			return err
+		}
+		logConfigOutcome(rt, "config-init", result, "created", "already present")
+		return nil
 	}
 }
 
@@ -1872,9 +1876,35 @@ func handleConfigUpgrade(bridge Bridge) cli.Handler {
 	return func(ctx context.Context, args []string) error {
 		rt := runtimeOrDefault(ctx, bridge)
 		logBridgeDispatch(rt, "config-upgrade", bridgeDispatchLog{Args: args})
-		_, err := UpgradeConfig(runtimeRoot(rt, bridge), bridge.ConfigTemplate())
-		return err
+		result, err := UpgradeConfig(runtimeRoot(rt, bridge), bridge.ConfigTemplate())
+		if err != nil {
+			return err
+		}
+		logConfigOutcome(rt, "config-upgrade", result, "upgraded", "already current")
+		return nil
 	}
+}
+
+// logConfigOutcome records what a config verb did to the workspace config
+// file, so the operator learns it without inspecting the filesystem. The
+// record goes to keel/log, never to the protocol stream.
+//
+// DHF-REQ: keel/requirement-168
+func logConfigOutcome(rt Runtime, verb string, result ConfigResult, changed, unchanged string) {
+	if rt.Log == nil {
+		return
+	}
+	outcome := unchanged
+	if result.Changed {
+		outcome = changed
+	}
+	rt.Log.Info("testbridge config",
+		"verb", verb,
+		"path", result.Path,
+		"outcome", outcome,
+		"from_version", result.FromVersion,
+		"to_version", result.ToVersion,
+	)
 }
 
 func writeDocument(rt Runtime, doc any) error {
