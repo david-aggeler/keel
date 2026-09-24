@@ -338,7 +338,7 @@ func TestRunDirectCIDispatchesThroughLoggerAndGate(t *testing.T) {
 		t.Fatalf("run ci stdout = %q, want empty: ci declares no payload", stdout)
 	}
 	got := calls(t, callsFile)
-	for _, want := range []string{"go build ./...", "go test ./...", "go tool cover"} {
+	for _, want := range []string{"go build ./...", "go test . -coverprofile=", "go tool cover"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("run ci calls missing %q:\n%s", want, got)
 		}
@@ -584,6 +584,7 @@ case "$1 $2" in
   "tool cover") echo "total:	(statements)	10.0%" ;;
 esac
 exit 0`)
+	stubTrackedGoFiles(t, bin, callsFile, "p.go")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	err := runTestWithCoverage(context.Background(), discardLogger(), t.TempDir())
@@ -592,7 +593,11 @@ exit 0`)
 	}
 }
 
-// DHF-TEST: keel/requirement-12
+// TestCoverageUsesAllPackageDenominator proves every tracked package — root,
+// nested, and test-only — is both under test and in the -coverpkg denominator,
+// while excluded and toolchain-skipped directories are in neither.
+//
+// DHF-TEST: keel/requirement-12, keel/requirement-85 (keel/ac-666)
 func TestCoverageUsesAllPackageDenominator(t *testing.T) {
 	bin := t.TempDir()
 	callsFile := filepath.Join(bin, "calls.log")
@@ -601,14 +606,34 @@ case "$1 $2" in
   "tool cover") echo "total:	(statements)	92.0%" ;;
 esac
 exit 0`)
+	stubTrackedGoFiles(t, bin, callsFile,
+		"go.mod", "root.go", "a/a.go", "a/b/b.go", "only/only_test.go",
+		"docs/handoffs/h.go", "a/testdata/fixture.go", "_skip/s.go", ".hidden/h.go", "README.md")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	if err := runTestWithCoverage(context.Background(), discardLogger(), t.TempDir()); err != nil {
 		t.Fatalf("coverage run failed: %v", err)
 	}
 	got := calls(t, callsFile)
-	if !strings.Contains(got, "-coverpkg=./...") {
-		t.Fatalf("coverage gate must use all-package denominator; calls:\n%s", got)
+	if !strings.Contains(got, "go test . ./a ./a/b ./only -coverprofile=") || !strings.Contains(got, "-coverpkg=.,./a,./a/b,./only\n") {
+		t.Fatalf("coverage gate must test and cover exactly the tracked packages; calls:\n%s", got)
+	}
+}
+
+// DHF-TEST: keel/requirement-85 (keel/ac-666)
+func TestCoverageRefusesACheckoutWithNoTrackedGoPackage(t *testing.T) {
+	bin := t.TempDir()
+	callsFile := filepath.Join(bin, "calls.log")
+	stub(t, bin, callsFile, "go", "exit 0")
+	stubTrackedGoFiles(t, bin, callsFile, "README.md")
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	err := runTestWithCoverage(context.Background(), discardLogger(), t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "no git-tracked Go package") {
+		t.Fatalf("empty tracked package set err = %v, want refusal", err)
+	}
+	if strings.Contains(calls(t, callsFile), "go test") {
+		t.Fatalf("no go test may run on an empty package set; calls:\n%s", calls(t, callsFile))
 	}
 }
 

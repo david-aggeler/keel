@@ -91,12 +91,13 @@ func TestRunTestWithCoverageReportsCommandAndParseFailures(t *testing.T) {
 	callsFile := filepath.Join(bin, "calls.log")
 	stub(t, bin, callsFile, "go", `
 case "$1 $2" in
-  "test ./...")
+  "test .")
     printf 'unit failure\n' >&2
     exit 7
     ;;
 esac
 exit 0`)
+	stubTrackedGoFiles(t, bin, callsFile, "p.go")
 	t.Setenv("PATH", bin)
 	if err := runTestWithCoverage(context.Background(), logger, root); err == nil {
 		t.Fatal("failing go test returned nil error, want child failure")
@@ -106,7 +107,7 @@ exit 0`)
 	callsFile = filepath.Join(bin, "calls.log")
 	stub(t, bin, callsFile, "go", `
 case "$1 $2" in
-  "test ./...")
+  "test .")
     for arg in "$@"; do
       case "$arg" in
         -coverprofile=*)
@@ -124,6 +125,7 @@ case "$1 $2" in
     ;;
 esac
 exit 0`)
+	stubTrackedGoFiles(t, bin, callsFile, "p.go")
 	t.Setenv("PATH", bin)
 	if err := runTestWithCoverage(context.Background(), logger, root); err == nil || !strings.Contains(err.Error(), "go tool cover") || !strings.Contains(err.Error(), "cover broke") {
 		t.Fatalf("failing go tool cover err = %v, want stderr surfaced", err)
@@ -133,7 +135,7 @@ exit 0`)
 	callsFile = filepath.Join(bin, "calls.log")
 	stub(t, bin, callsFile, "go", `
 case "$1 $2" in
-  "test ./...")
+  "test .")
     exit 0
     ;;
   "tool cover")
@@ -141,6 +143,7 @@ case "$1 $2" in
     ;;
 esac
 exit 0`)
+	stubTrackedGoFiles(t, bin, callsFile, "p.go")
 	t.Setenv("PATH", bin)
 	if err := runTestWithCoverage(context.Background(), logger, root); err == nil || !strings.Contains(err.Error(), "no total: line") {
 		t.Fatalf("missing total err = %v, want parse failure", err)
@@ -156,13 +159,14 @@ func TestRunVSCodeTestCoverageReportsFailureBranches(t *testing.T) {
 	callsFile := filepath.Join(bin, "calls.log")
 	stub(t, bin, callsFile, "go", `
 case "$1 $2" in
-  "test ./...")
+  "test .")
     printf 'ok  \tgithub.com/david-aggeler/keel/log\t0.010s\n'
     printf 'suite failed\n' >&2
     exit 1
     ;;
 esac
 exit 0`)
+	stubTrackedGoFiles(t, bin, callsFile, "p.go")
 	t.Setenv("PATH", bin)
 	var events []vscode.RunEvent
 	err := runVSCodeTestCoverage(context.Background(), logger, root, "run-fail-test", 1024, func(event vscode.RunEvent) {
@@ -179,7 +183,7 @@ exit 0`)
 	callsFile = filepath.Join(bin, "calls.log")
 	stub(t, bin, callsFile, "go", `
 case "$1 $2" in
-  "test ./...")
+  "test .")
     for arg in "$@"; do
       case "$arg" in
         -coverprofile=*)
@@ -196,6 +200,7 @@ case "$1 $2" in
     ;;
 esac
 exit 0`)
+	stubTrackedGoFiles(t, bin, callsFile, "p.go")
 	t.Setenv("PATH", bin)
 	events = nil
 	err = runVSCodeTestCoverage(context.Background(), logger, root, "run-below-floor", 1024, func(event vscode.RunEvent) {

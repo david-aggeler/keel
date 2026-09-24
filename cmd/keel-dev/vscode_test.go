@@ -1970,6 +1970,9 @@ func TestVSCodeSystemGateLanesDiscoverPrepareAndRun(t *testing.T) {
 		t.Fatalf("vsix-ci should not start gate work when pnpm is absent; calls:\n%s", calls(t, callsFile))
 	}
 
+	// The git stub reads the fixture's tracked-file list with cat, and the test
+	// stage now selects packages from it, so the system PATH must be back.
+	t.Setenv("PATH", originalPath)
 	callsFile = stubTools(t, false, false)
 	goodRoot := moduleFixture(t)
 	alignFixtureVersions(t, goodRoot)
@@ -3041,9 +3044,10 @@ func TestVSCodeCoverageLaneEmitsPersistedCoverageArtifact(t *testing.T) {
 foundCoverageLane:
 	bin := t.TempDir()
 	callsFile := filepath.Join(bin, "calls.log")
+	stubTrackedGoFiles(t, bin, callsFile, "go.mod", "go.sum", "main_test.go")
 	stub(t, bin, callsFile, "go", `
 case "$1 $2" in
-  "test ./...")
+  "test .")
     for arg in "$@"; do
       case "$arg" in
         -coverprofile=*)
