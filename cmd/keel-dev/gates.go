@@ -806,11 +806,16 @@ func runStep(ctx context.Context, logger *slog.Logger, dir string, s step) error
 		Logger:         logger,
 		MaxOutputBytes: s.maxOutputBytes,
 	}
+	if s.advisory {
+		// An advisory step's non-zero exit reports findings, not a failure; the
+		// Warn below is the step's own verdict (keel/ac-41, keel/requirement-24).
+		req.FailureLevel = slog.LevelWarn
+	}
 	if s.stderr.reinterpret {
 		if err := s.stderr.validate(s.name); err != nil {
 			return err
 		}
-		req.Logger = childStderrFilterLogger{Logger: logger, filter: s.stderr.filter}
+		req.Classify = s.stderr.classify
 	}
 	// Child output travels through keel/log, never as a raw terminal stream
 	// (keel/ac-35, keel/issue-2): line-wise records for live progress, except
@@ -902,6 +907,9 @@ type acceptedStderrSeverity struct {
 type stderrSeverityParser struct {
 	key          string
 	fieldIndexes []int
+	// declared maps the tool's own severity tokens to the level the tool
+	// declared, independent of the level the filter records the line at.
+	declared map[string]slog.Level
 }
 
 func emptyChildStderrFilter() *childStderrFilter {
@@ -920,7 +928,9 @@ func cspellStderrFilter() *childStderrFilter {
 
 func golangciLintStderrFilter() *childStderrFilter {
 	return &childStderrFilter{
-		parser: stderrSeverityParser{key: "level"},
+		parser: stderrSeverityParser{key: "level", declared: map[string]slog.Level{
+			"debug": slog.LevelDebug, "info": slog.LevelInfo, "warning": slog.LevelWarn, "error": slog.LevelError,
+		}},
 		severities: []acceptedStderrSeverity{
 			{blessedVersion: "2.12.2", token: "warning", level: slog.LevelWarn},
 			{blessedVersion: "2.12.2", token: "error", level: slog.LevelError},
@@ -937,7 +947,11 @@ func govulncheckStderrFilter() *childStderrFilter {
 
 func gitleaksStderrFilter() *childStderrFilter {
 	return &childStderrFilter{
-		parser: stderrSeverityParser{fieldIndexes: []int{1, 0}},
+		// Console severity tokens as gitleaks v8.30.1 writes them.
+		parser: stderrSeverityParser{fieldIndexes: []int{1, 0}, declared: map[string]slog.Level{
+			"TRC": slog.LevelDebug - 4, "DBG": slog.LevelDebug, "INF": slog.LevelInfo, "WRN": slog.LevelWarn,
+			"ERR": slog.LevelError, "FTL": slog.LevelError, "PNC": slog.LevelError,
+		}},
 		severities: []acceptedStderrSeverity{
 			{blessedVersion: "v8.30.1", token: "INF", level: slog.LevelDebug},
 			{blessedVersion: "v8.30.1", token: "WRN", level: slog.LevelWarn},
@@ -975,6 +989,35 @@ func (f *childStderrFilter) acceptedEntryVersions() []string {
 		versions = append(versions, sev.blessedVersion)
 	}
 	return versions
+}
+
+// classify is the gate step's per-process-type adapter for keel/exec: on
+// stderr it records the line at the filter's level (default-deny keeps an
+// unaccepted line at Error) and reports the tool's own severity token as the
+// declared level when the filter's vocabulary knows it. Stdout is left to
+// keel/exec's configured level.
+//
+// DHF-REQ: keel/requirement-158, keel/requirement-24
+func (p childStderrPolicy) classify(stream, line string) procexec.LineClass {
+	if stream != "stderr" || p.filter == nil {
+		return procexec.LineClass{}
+	}
+	class := procexec.LineClass{Level: p.filter.level(line)}
+	if declared, ok := p.filter.declared(line); ok {
+		class.Declared = declared
+	}
+	return class
+}
+
+// declared returns the level the tool itself declared on line, read by the
+// filter's parser. ok is false when the parser finds no token it knows.
+func (f *childStderrFilter) declared(line string) (slog.Level, bool) {
+	token, ok := f.parser.parse(strings.TrimSpace(stripANSI(line)))
+	if !ok {
+		return 0, false
+	}
+	level, ok := f.parser.declared[token]
+	return level, ok
 }
 
 func (f *childStderrFilter) level(line string) slog.Level {
@@ -1021,77 +1064,6 @@ func (p stderrSeverityParser) parse(line string) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-type childStderrFilterLogger struct {
-	*slog.Logger
-	filter *childStderrFilter
-}
-
-func (l childStderrFilterLogger) Error(msg string, args ...any) {
-	if l.logFiltered(context.Background(), slog.LevelError, msg, args...) {
-		return
-	}
-	l.Logger.Error(msg, args...)
-}
-
-func (l childStderrFilterLogger) Debug(msg string, args ...any) {
-	l.Logger.Debug(msg, args...)
-}
-
-func (l childStderrFilterLogger) Info(msg string, args ...any) {
-	if l.logFiltered(context.Background(), slog.LevelInfo, msg, args...) {
-		return
-	}
-	l.Logger.Info(msg, args...)
-}
-
-func (l childStderrFilterLogger) InfoContext(ctx context.Context, msg string, args ...any) {
-	if l.logFiltered(ctx, slog.LevelInfo, msg, args...) {
-		return
-	}
-	l.Logger.InfoContext(ctx, msg, args...)
-}
-
-func (l childStderrFilterLogger) logFiltered(ctx context.Context, fallback slog.Level, msg string, args ...any) bool {
-	fields := stderrProcessOutputFields(args)
-	if !fields.processOutput || !fields.stderr || l.filter == nil {
-		return false
-	}
-	level := l.filter.level(fields.data)
-	if level == fallback {
-		return false
-	}
-	l.Log(ctx, level, msg, args...)
-	return true
-}
-
-type processOutputFields struct {
-	processOutput bool
-	stderr        bool
-	step          string
-	data          string
-}
-
-func stderrProcessOutputFields(args []any) processOutputFields {
-	var fields processOutputFields
-	for i := 0; i+1 < len(args); i += 2 {
-		key, ok := args[i].(string)
-		if !ok {
-			continue
-		}
-		switch key {
-		case "event_type":
-			fields.processOutput = args[i+1] == "process_output"
-		case "stream":
-			fields.stderr = args[i+1] == "stderr"
-		case "step":
-			fields.step, _ = args[i+1].(string)
-		case "data":
-			fields.data, _ = args[i+1].(string)
-		}
-	}
-	return fields
 }
 
 func stripANSI(line string) string {

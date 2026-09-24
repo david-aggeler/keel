@@ -3,7 +3,10 @@ package exec
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // capturedLine is one record emitted by captureWriter, reduced to the fields
@@ -70,8 +73,8 @@ func TestCaptureWriterBuffersLinesAcrossSplitWrites(t *testing.T) {
 		if logger.lines[i].data != expect {
 			t.Fatalf("record[%d].data = %q, want %q (all: %#v)", i, logger.lines[i].data, expect, logger.lines)
 		}
-		if logger.lines[i].level != "ERROR" {
-			t.Fatalf("record[%d].level = %q, want ERROR (stderr)", i, logger.lines[i].level)
+		if logger.lines[i].level != "DEBUG" {
+			t.Fatalf("record[%d].level = %q, want DEBUG (the stream-independent default)", i, logger.lines[i].level)
 		}
 	}
 }
@@ -164,5 +167,51 @@ func TestCaptureWriterReportsBytesKeptWhenTeeFails(t *testing.T) {
 				t.Fatalf("output-limit budget dropped by %d, want %d (the reported count)", spent, n)
 			}
 		})
+	}
+}
+
+// levelsLogger records every call by method, for the logAt fallback path.
+type levelsLogger struct{ calls []string }
+
+func (l *levelsLogger) Debug(msg string, _ ...any) { l.calls = append(l.calls, "DEBUG "+msg) }
+func (l *levelsLogger) Error(msg string, _ ...any) { l.calls = append(l.calls, "ERROR "+msg) }
+func (l *levelsLogger) Info(msg string, _ ...any)  { l.calls = append(l.calls, "INFO "+msg) }
+func (l *levelsLogger) InfoContext(_ context.Context, msg string, _ ...any) {
+	l.calls = append(l.calls, "INFO "+msg)
+}
+
+// DHF-TEST: keel/requirement-24
+func TestLogAtFallsBackToNearestMethodAtOrBelowLevel(t *testing.T) {
+	logger := &levelsLogger{}
+	logAt(logger, slog.LevelDebug, "d")
+	logAt(logger, slog.LevelInfo, "i")
+	logAt(logger, slog.LevelWarn, "w")
+	logAt(logger, slog.LevelError, "e")
+	want := []string{"DEBUG d", "INFO i", "INFO w", "ERROR e"}
+	if strings.Join(logger.calls, "|") != strings.Join(want, "|") {
+		t.Fatalf("calls = %v, want %v", logger.calls, want)
+	}
+}
+
+// DHF-TEST: keel/requirement-24
+func TestOutputTailTruncatesLongLinesOnARuneBoundary(t *testing.T) {
+	tail := &outputTail{}
+	long := strings.Repeat("a", failureTailLineBytes-1) + "é" + "tail"
+	tail.add("stderr", long, nil)
+	got := tail.lines()
+	if len(got) != 1 {
+		t.Fatalf("lines = %#v, want 1", got)
+	}
+	if !utf8.ValidString(got[0].data) || len(got[0].data) != failureTailLineBytes-1 {
+		t.Fatalf("truncated data len = %d valid=%v, want %d bytes cut before the split rune",
+			len(got[0].data), utf8.ValidString(got[0].data), failureTailLineBytes-1)
+	}
+	if got[0].truncated != len(long)-len(got[0].data) {
+		t.Fatalf("truncated = %d, want %d", got[0].truncated, len(long)-len(got[0].data))
+	}
+	var nilTail *outputTail
+	nilTail.add("stdout", "x", nil)
+	if nilTail.lines() != nil {
+		t.Fatal("nil tail must keep nothing")
 	}
 }

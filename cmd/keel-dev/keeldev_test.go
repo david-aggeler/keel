@@ -250,38 +250,56 @@ func TestRunStepLogsThroughKeelLog(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-158 (keel/ac-659, keel/ac-660, keel/ac-664)
-func TestChildStderrFilterLoggerMapsRealStderrAndAcceptedLines(t *testing.T) {
-	logger, cap := testLogger("keel-dev")
-	wrapped := childStderrFilterLogger{Logger: logger, filter: gitleaksStderrFilter()}
+// DHF-TEST: keel/requirement-158 (keel/ac-659, keel/ac-660, keel/ac-664), keel/requirement-24
+func TestChildStderrPolicyClassifiesRealStderrAndAcceptedLines(t *testing.T) {
+	classify := reinterpretChildStderr(gitleaksStderrFilter()).classify
 
-	wrapped.Error("process output",
-		"event_type", "process_output",
-		"stream", "stderr",
-		"step", "gitleaks",
-		"data", `3:33AM ERR real leak detected while quoting " INF "`,
-	)
-	wrapped.Error("process output",
-		"event_type", "process_output",
-		"stream", "stderr",
-		"step", "gitleaks",
-		"data", "\x1b[90m3:33AM\x1b[0m \x1b[32mINF\x1b[0m scan completed in 42ms",
-	)
+	real := classify("stderr", `3:33AM ERR real leak detected while quoting " INF "`)
+	if real.Level == nil || real.Level.Level() != slog.LevelError {
+		t.Fatalf("real stderr level = %v, want ERROR", real.Level)
+	}
+	benign := classify("stderr", "\x1b[90m3:33AM\x1b[0m \x1b[32mINF\x1b[0m scan completed in 42ms")
+	if benign.Level == nil || benign.Level.Level() != slog.LevelDebug {
+		t.Fatalf("known-benign stderr level = %v, want DEBUG", benign.Level)
+	}
+	if stdout := classify("stdout", "3:33AM ERR on stdout"); stdout.Level != nil || stdout.Declared != nil {
+		t.Fatalf("stdout class = %#v, want unclassified: the policy governs stderr only", stdout)
+	}
+}
 
-	records := cap.AllJSON()
-	if len(records) != 2 {
-		t.Fatalf("records = %#v, want real stderr plus reclassified benign stderr", records)
+// DHF-TEST: keel/requirement-24
+func TestChildStderrPolicyReportsTheToolsDeclaredLevel(t *testing.T) {
+	// keel/ac-714: a filter that parses the tool's own severity token reports
+	// it as the declared level; a line without a recognized token declares none.
+	cases := []struct {
+		name   string
+		filter *childStderrFilter
+		line   string
+		want   string // "" = absent
+	}{
+		{"gitleaks WRN", gitleaksStderrFilter(), "3:33AM WRN config file not found", "WARN"},
+		{"gitleaks ANSI INF", gitleaksStderrFilter(), "\x1b[90m3:33AM\x1b[0m \x1b[32mINF\x1b[0m scan completed", "INFO"},
+		{"gitleaks no token", gitleaksStderrFilter(), "unstructured noise", ""},
+		{"golangci warning", golangciLintStderrFilter(), `level=warning msg="cache"`, "WARN"},
+		{"golangci error", golangciLintStderrFilter(), `level=error msg="boom"`, "ERROR"},
+		{"golangci no token", golangciLintStderrFilter(), "panic: runtime error", ""},
+		{"cspell has no vocabulary", cspellStderrFilter(), "CSpell: Files checked: 1, Issues found: 0 in 0 files.", ""},
 	}
-	if records[0]["level"] != "ERROR" || records[0]["data"] != `3:33AM ERR real leak detected while quoting " INF "` {
-		t.Fatalf("real stderr record = %#v, want ERROR", records[0])
-	}
-	if records[1]["level"] != "DEBUG" || records[1]["data"] != "\x1b[90m3:33AM\x1b[0m \x1b[32mINF\x1b[0m scan completed in 42ms" {
-		t.Fatalf("known-benign stderr record = %#v, want DEBUG", records[1])
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := reinterpretChildStderr(tc.filter).classify("stderr", tc.line)
+			switch {
+			case tc.want == "" && got.Declared != nil:
+				t.Fatalf("declared = %v, want absent", got.Declared)
+			case tc.want != "" && (got.Declared == nil || got.Declared.Level().String() != tc.want):
+				t.Fatalf("declared = %v, want %s", got.Declared, tc.want)
+			}
+		})
 	}
 }
 
 // DHF-TEST: keel/requirement-17, keel/requirement-24
-func TestLineLogWriterRoutesStderrAtError(t *testing.T) {
+func TestLineLogWriterRoutesStderrAtTheSameLevelAsStdout(t *testing.T) {
 	logger, cap := testLogger("keel-dev")
 	lines := newLineLogWriter(logger, "probe", "stderr")
 	if _, err := lines.Write([]byte("failure\n")); err != nil {
@@ -289,8 +307,8 @@ func TestLineLogWriterRoutesStderrAtError(t *testing.T) {
 	}
 
 	rec := cap.LastJSON()
-	if rec["level"] != "ERROR" || rec["stream"] != "stderr" || rec["msg"] != "failure" {
-		t.Fatalf("stderr line record = %#v, want ERROR process output", rec)
+	if rec["level"] != "DEBUG" || rec["stream"] != "stderr" || rec["msg"] != "failure" {
+		t.Fatalf("stderr line record = %#v, want DEBUG process output with stream=stderr", rec)
 	}
 }
 

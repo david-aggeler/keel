@@ -10,10 +10,22 @@
 // redacted command line, working directory) before the child runs and a
 // "process end" record (exit code, elapsed ms) when it is reaped by
 // [Process.Wait]. Child stdout and stderr are captured, mirrored to the caller's
-// optional writers, and additionally logged line-wise through keel/log — stdout
-// at Debug, stderr at Error — with every line passed through the same redaction
-// path as the rest of keel's logging. This is what lets a consumer reconstruct
-// exactly what ran and what it printed from the logs alone.
+// optional writers, and additionally logged line-wise through keel/log, with
+// every line passed through the same redaction path as the rest of keel's
+// logging. This is what lets a consumer reconstruct exactly what ran and what it
+// printed from the logs alone.
+//
+// # Child output severity
+//
+// Both streams log at one level: keel/log's Config.ChildOutputLevel, else
+// Debug. The stream is a "stream" attribute, never a severity — which stream a
+// child writes to is its transport choice. The exit status is the only source
+// of a child's severity: a non-zero exit replays the last [FailureTailLines]
+// lines at Error and ends at Error, so a failure reads in full at the default
+// console floor. [Request.Classify] is the per-process-type adapter for a child
+// whose format the caller knows: it can override a line's level and report the
+// level the child declared itself, which travels in a "declared_level" field
+// that is absent when nothing was declared. Core keel/exec never infers one.
 //
 // # Usage
 //

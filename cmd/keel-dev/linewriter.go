@@ -15,7 +15,7 @@ import (
 // This is the only sanctioned way for keel-dev to surface child output; handing
 // os.Stdout/os.Stderr to a subprocess is a lint violation (no-raw-stdout-stream).
 //
-// DHF-REQ: keel/requirement-11 (keel/ac-35), keel/requirement-17
+// DHF-REQ: keel/requirement-11 (keel/ac-35), keel/requirement-17, keel/requirement-24
 type lineLogWriter struct {
 	mu     sync.Mutex
 	logger *slog.Logger
@@ -59,11 +59,9 @@ func (w *lineLogWriter) emit(line string) {
 	if strings.TrimSpace(line) == "" {
 		return
 	}
-	if w.stream == "stdout" {
-		w.logger.Debug(line, "stream", w.stream, "step", w.step, "event_type", "process_output")
-		return
-	}
-	w.logger.Error(line, "stream", w.stream, "step", w.step, "event_type", "process_output")
+	// One level for both streams; the stream is an attribute, and a child's
+	// failure is reported from its exit status by keel/exec (keel/requirement-24).
+	w.logger.Debug(line, "stream", w.stream, "step", w.step, "event_type", "process_output")
 }
 
 // lineFuncWriter splits a child process's output stream into complete lines and
