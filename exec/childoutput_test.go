@@ -198,10 +198,10 @@ func TestAdapterDeclaredLevelIsCarriedInItsOwnFieldAndAbsentWhenUndeclared(t *te
 	}
 	undeclared, ok := byData["no level here"]
 	if !ok {
-		t.Fatalf("no record for the undeclaring line: %#v", byData)
+		t.Fatalf("no record for the line without a level: %#v", byData)
 	}
 	if v, present := undeclared["declared_level"]; present {
-		t.Fatalf("declared_level = %#v on an undeclaring line, want the field absent", v)
+		t.Fatalf("declared_level = %#v on a line without a level, want the field absent", v)
 	}
 	// The declared level is carried, never promoted into the record's severity.
 	if declared["level"] != "DEBUG" || undeclared["level"] != "DEBUG" {

@@ -270,7 +270,7 @@ func TestChildStderrPolicyClassifiesRealStderrAndAcceptedLines(t *testing.T) {
 // DHF-TEST: keel/requirement-24
 func TestChildStderrPolicyReportsTheToolsDeclaredLevel(t *testing.T) {
 	// keel/ac-714: a filter that parses the tool's own severity token reports
-	// it as the declared level; a line without a recognised token declares none.
+	// it as the declared level; a line without a recognized token declares none.
 	cases := []struct {
 		name   string
 		filter *childStderrFilter

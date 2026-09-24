@@ -947,7 +947,7 @@ func govulncheckStderrFilter() *childStderrFilter {
 
 func gitleaksStderrFilter() *childStderrFilter {
 	return &childStderrFilter{
-		// zerolog console tokens as gitleaks v8.30.1 writes them.
+		// Console severity tokens as gitleaks v8.30.1 writes them.
 		parser: stderrSeverityParser{fieldIndexes: []int{1, 0}, declared: map[string]slog.Level{
 			"TRC": slog.LevelDebug - 4, "DBG": slog.LevelDebug, "INF": slog.LevelInfo, "WRN": slog.LevelWarn,
 			"ERR": slog.LevelError, "FTL": slog.LevelError, "PNC": slog.LevelError,
