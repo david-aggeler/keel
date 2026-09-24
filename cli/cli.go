@@ -36,6 +36,7 @@ import (
 	"sort"
 	"strings"
 
+	logging "github.com/david-aggeler/keel/log"
 	"github.com/david-aggeler/keel/term"
 )
 
@@ -480,7 +481,13 @@ func (c *CommandSpec) Usage(path []string) string {
 	} else if len(c.Subcommands) > 0 {
 		parts = append(parts, SubcommandAlternates(c.Subcommands))
 	}
-	return "usage: " + program + " " + strings.Join(parts, " ")
+	return "usage: " + c.invocation(parts)
+}
+
+// invocation returns the full invocation path "<program> <path...>". Usage and
+// the --help-all Section banner both build it here.
+func (c *CommandSpec) invocation(path []string) string {
+	return strings.Join(append([]string{c.program()}, path...), " ")
 }
 
 // Find returns the deepest node matching path, any unmatched remainder, and
@@ -1055,27 +1062,50 @@ func helpOnlyTopics() []helpOnlyTopic {
 	}
 }
 
+// helpSection selects how a help page opens. The zero value is a standalone
+// page: identity line, then the page title. A composite section is one part of
+// the --help-all dump: the dump's Header banner already carries the identity
+// line, so the section drops it, and a non-empty banner replaces the page title
+// with the keel/log Section help edition naming the full invocation path.
+type helpSection struct {
+	composite bool
+	banner    string
+}
+
 // renderHelpHeader writes the header every help page shares: the
 // "<program> v<version>" identity line from Config.Version, then what was asked
 // for — a title line with its indented summary on a command topic, or the root
 // summary paragraph at root — then the Usage: block. Both renderers call it, so
 // the identity line and the header ordering have one source and root help reads
 // the same way as every topic below it. The identity line is omitted whenever
-// Config.Version is empty.
+// Config.Version is empty. Inside the composite dump (section.composite) the
+// identity line is left to the dump's Header banner and section.banner stands
+// in for the title.
 //
-// DHF-REQ: keel/requirement-111, keel/requirement-149
-func (c *CommandSpec) renderHelpHeader(w io.Writer, title, summary string, usage []string) {
+// DHF-REQ: keel/requirement-111, keel/requirement-149, keel/requirement-57
+func (c *CommandSpec) renderHelpHeader(w io.Writer, section helpSection, title, summary string, usage []string) {
 	wrote := false
-	if c.Config.Version != "" {
-		fmt.Fprintf(w, "%s v%s\n", c.program(), c.Config.Version)
+	switch {
+	case section.composite:
+		// The dump's Header banner precedes the root section and the Section
+		// banner precedes every later one, so something is always above.
 		wrote = true
-	}
-	if title != "" {
-		if wrote {
-			fmt.Fprintln(w)
+		if section.banner != "" {
+			_ = logging.WriteSectionBanner(w, section.banner)
+			title = section.banner
 		}
-		fmt.Fprintln(w, title)
-		wrote = true
+	default:
+		if c.Config.Version != "" {
+			fmt.Fprintf(w, "%s v%s\n", c.program(), c.Config.Version)
+			wrote = true
+		}
+		if title != "" {
+			if wrote {
+				fmt.Fprintln(w)
+			}
+			fmt.Fprintln(w, title)
+			wrote = true
+		}
 	}
 	if summary != "" {
 		if title != "" {
@@ -1123,7 +1153,11 @@ func (c *CommandSpec) helpTitle(path []string) string {
 // DHF-REQ: keel/requirement-101, keel/requirement-111
 func (c *CommandSpec) RenderRootHelp(w io.Writer) {
 	c.InheritConfig()
-	c.renderHelpHeader(w, "", c.Config.RootSummary, []string{c.Config.Usage, c.Config.HelpUsage, c.Config.CommandUsage})
+	c.renderRootHelp(w, helpSection{})
+}
+
+func (c *CommandSpec) renderRootHelp(w io.Writer, section helpSection) {
+	c.renderHelpHeader(w, section, "", c.Config.RootSummary, []string{c.Config.Usage, c.Config.HelpUsage, c.Config.CommandUsage})
 	if globals := mergeGlobalFlags(c.Config.GlobalFlags); len(globals) > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Global flags:")
@@ -1229,7 +1263,11 @@ func findHelpOnlyTopic(name string) (*helpOnlyTopic, bool) {
 }
 
 func (c *CommandSpec) renderHelpOnlyTopic(w io.Writer, topic helpOnlyTopic) {
-	c.renderHelpHeader(w, topic.Name+":", topic.Summary, []string{c.program() + " help " + topic.Name})
+	c.renderHelpOnlyTopicSection(w, helpSection{}, topic)
+}
+
+func (c *CommandSpec) renderHelpOnlyTopicSection(w io.Writer, section helpSection, topic helpOnlyTopic) {
+	c.renderHelpHeader(w, section, topic.Name+":", topic.Summary, []string{c.program() + " help " + topic.Name})
 	if lines := topic.Lines(c.Config); len(lines) > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Output mode:")
@@ -1241,31 +1279,39 @@ func (c *CommandSpec) renderHelpOnlyTopic(w io.Writer, topic helpOnlyTopic) {
 
 // RenderAllHelp writes generated root help followed by command-topic help for
 // every command in the tree exactly once, depth-first in declaration order, then
-// every keel-owned help-only topic.
+// every keel-owned help-only topic — as one composite dump, not a join of
+// standalone pages. The dump opens with the keel/log Header help edition around
+// the "<program> v<version>" identity line (the program alone when
+// Config.Version is empty), exactly once. Every section after the root opens
+// with one blank line and the keel/log Section help edition naming the full
+// invocation path ("<program> <command path>", "<program> help <topic>"), which
+// replaces the standalone page title. Section bodies stay flush-left.
+// Standalone pages are rendered by the same page renderers and are unchanged.
 //
 // DHF-REQ: keel/requirement-57
 func (c *CommandSpec) RenderAllHelp(w io.Writer) {
 	c.InheritConfig()
-	c.RenderRootHelp(w)
-	for i, child := range c.Subcommands {
-		fmt.Fprintln(w)
-		if i > 0 {
-			fmt.Fprintln(w)
-		}
+	identity := c.program()
+	if c.Config.Version != "" {
+		identity += " v" + c.Config.Version
+	}
+	_ = logging.WriteHeaderBanner(w, identity)
+	c.renderRootHelp(w, helpSection{composite: true})
+	for _, child := range c.Subcommands {
 		child.renderAllCommandHelp(w, []string{child.Name})
 	}
 	for _, topic := range helpOnlyTopics() {
 		fmt.Fprintln(w)
-		fmt.Fprintln(w)
-		c.renderHelpOnlyTopic(w, topic)
+		c.renderHelpOnlyTopicSection(w, helpSection{composite: true, banner: c.program() + " help " + topic.Name}, topic)
 	}
 }
 
+// renderAllCommandHelp writes one composite section per node, depth-first:
+// a blank line, then the node's page opened by its Section banner.
 func (c *CommandSpec) renderAllCommandHelp(w io.Writer, path []string) {
-	c.RenderCommandHelp(w, path)
+	fmt.Fprintln(w)
+	c.renderCommandHelp(w, helpSection{composite: true, banner: c.invocation(path)}, path)
 	for _, child := range c.Subcommands {
-		fmt.Fprintln(w)
-		fmt.Fprintln(w)
 		childPath := append(append([]string{}, path...), child.Name)
 		child.renderAllCommandHelp(w, childPath)
 	}
@@ -1350,11 +1396,15 @@ func (c *CommandSpec) appendHelpJSON(out *[]helpJSONCommand, path []string) {
 // RenderCommandHelp writes command help for one command node, including its
 // summary, usage, declared flags, and nested subcommands.
 func (c *CommandSpec) RenderCommandHelp(w io.Writer, path []string) {
+	c.renderCommandHelp(w, helpSection{}, path)
+}
+
+func (c *CommandSpec) renderCommandHelp(w io.Writer, section helpSection, path []string) {
 	summary := c.Long
 	if summary == "" {
 		summary = c.Short
 	}
-	c.renderHelpHeader(w, c.helpTitle(path), summary, []string{strings.TrimPrefix(c.Usage(path), "usage: ")})
+	c.renderHelpHeader(w, section, c.helpTitle(path), summary, []string{strings.TrimPrefix(c.Usage(path), "usage: ")})
 	if len(c.Flags) > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Flags:")

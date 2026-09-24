@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	logging "github.com/david-aggeler/keel/log"
 	"github.com/david-aggeler/keel/testbridge"
 	"github.com/david-aggeler/keel/vscode"
 )
@@ -29,8 +30,11 @@ func TestRunDirectVersionHelpConfigAndUsageBranches(t *testing.T) {
 		t.Fatalf("run --version = code %d out %q, want version prefix %q", code, versionOut, wantVersion)
 	}
 	helpOut, code := captureDemoDevOutput(t, func() int { return run([]string{"--help-all"}) })
-	if code != 0 || !strings.Contains(helpOut, "test-bridge run") {
+	if code != 0 || !strings.Contains(helpOut, "\nkeel-demo-dev test-bridge run\n") {
 		t.Fatalf("run --help-all = code %d out %q, want command tree", code, helpOut)
+	}
+	if identity := "keel-demo-dev v" + wantVersion; !strings.HasPrefix(helpOut, strings.Repeat("=", logging.BannerWidth)+"\n"+identity) || strings.Count(helpOut, "\n"+identity) != 1 {
+		t.Fatalf("run --help-all does not carry %q once inside the Header help edition:\n%s", identity, helpOut)
 	}
 	helpJSONOut, code := captureDemoDevOutput(t, func() int {
 		return run([]string{"--help-json", "test-bridge", "run", "--mode", "ai"})
