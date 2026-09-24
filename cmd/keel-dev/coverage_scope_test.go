@@ -41,7 +41,7 @@ func ignoredPackageFixture(t *testing.T) string {
 	root := t.TempDir()
 	writeFile(t, root, "go.mod", "module example.com/fixture\n\ngo 1.25\n")
 	writeFile(t, root, ".gitignore", "scratchpad/\n")
-	for _, dir := range []string{"p", "scratchpad/probe", "scratchpad/testonly"} {
+	for _, dir := range []string{"p", "scratchpad/probe", "scratchpad/failing"} {
 		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -55,7 +55,7 @@ func ignoredPackageFixture(t *testing.T) string {
 	}
 	probe.WriteString("\t_ = x\n}\n")
 	writeFile(t, root, "scratchpad/probe/main.go", probe.String())
-	writeFile(t, root, "scratchpad/testonly/probe_test.go", "package probe_test\n\nimport \"testing\"\n\nfunc TestGitignoredProbe(t *testing.T) { t.Fatal(\"gitignored package reached the test stage\") }\n")
+	writeFile(t, root, "scratchpad/failing/probe_test.go", "package probe_test\n\nimport \"testing\"\n\nfunc TestGitignoredProbe(t *testing.T) { t.Fatal(\"gitignored package reached the test stage\") }\n")
 	mustRun(t, root, "git", "init", "-q")
 	mustRun(t, root, "git", "add", ".")
 	return root

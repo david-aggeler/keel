@@ -37,11 +37,11 @@ func runTestWithCoverage(ctx context.Context, logger *slog.Logger, dir string) e
 	defer os.RemoveAll(tmp)
 	profile := filepath.Join(tmp, "cover.out")
 
-	pkgs, err := trackedGoPackages(ctx, logger, dir)
+	packages, err := trackedGoPackages(ctx, logger, dir)
 	if err != nil {
 		return err
 	}
-	if err := runCmd(ctx, logger, dir, "go", goTestCoverageArgs(pkgs, profile)...); err != nil {
+	if err := runCmd(ctx, logger, dir, "go", goTestCoverageArgs(packages, profile)...); err != nil {
 		return err
 	}
 
@@ -80,11 +80,11 @@ func runVSCodeTestCoverage(ctx context.Context, logger *slog.Logger, root, runID
 	}
 	profile := filepath.Join(runDir, "cover.out")
 
-	pkgs, err := trackedGoPackages(ctx, logger, root)
+	packages, err := trackedGoPackages(ctx, logger, root)
 	if err != nil {
 		return err
 	}
-	stdout, stderr, err := captureWithMaxOutput(ctx, logger, root, maxOutputBytes, "go", goTestCoverageArgs(pkgs, profile)...)
+	stdout, stderr, err := captureWithMaxOutput(ctx, logger, root, maxOutputBytes, "go", goTestCoverageArgs(packages, profile)...)
 	emitVSCodeCoveragePackages(stdout, writer)
 	if err != nil {
 		return fmt.Errorf("go test coverage: %w: %s", err, strings.TrimSpace(stderr))
@@ -225,12 +225,12 @@ func trackedGoPackages(ctx context.Context, logger *slog.Logger, dir string) ([]
 	if len(seen) == 0 {
 		return nil, fmt.Errorf("keel-dev: no git-tracked Go package under %s", dir)
 	}
-	pkgs := make([]string, 0, len(seen))
+	packages := make([]string, 0, len(seen))
 	for pkg := range seen {
-		pkgs = append(pkgs, pkg)
+		packages = append(packages, pkg)
 	}
-	sort.Strings(pkgs)
-	return pkgs, nil
+	sort.Strings(packages)
+	return packages, nil
 }
 
 // toolchainPackageDir reports whether `go list ./...` would consider a
@@ -250,7 +250,7 @@ func toolchainPackageDir(dir string) bool {
 
 // goTestCoverageArgs builds the coverage run's argv: the tracked packages are
 // both the packages under test and the -coverpkg denominator.
-func goTestCoverageArgs(pkgs []string, profile string) []string {
-	args := append([]string{"test"}, pkgs...)
-	return append(args, "-coverprofile="+profile, "-covermode=atomic", "-coverpkg="+strings.Join(pkgs, ","))
+func goTestCoverageArgs(packages []string, profile string) []string {
+	args := append([]string{"test"}, packages...)
+	return append(args, "-coverprofile="+profile, "-covermode=atomic", "-coverpkg="+strings.Join(packages, ","))
 }
