@@ -628,7 +628,7 @@ func TestBuildIdentityPublicReExposure(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-17, keel/requirement-20
+// DHF-TEST: keel/requirement-17, keel/requirement-20, keel/ac-60, keel/ac-61
 func TestSparseAIConsoleEmitsCuratedEventsAndKeepsDebugChildOutputInFiles(t *testing.T) {
 	var console bytes.Buffer
 	textDir := t.TempDir()
@@ -676,8 +676,15 @@ func TestSparseAIConsoleEmitsCuratedEventsAndKeepsDebugChildOutputInFiles(t *tes
 	if got, _ := fields["step"].(string); got != "test" {
 		t.Fatalf("sparse fields.step = %#v, want test", fields["step"])
 	}
-	if _, ok := sparse["ts"]; ok {
-		t.Fatalf("sparse console exposed verbose ts field: %#v", sparse)
+	ts, ok := sparse["ts"].(string)
+	if !ok {
+		t.Fatalf("sparse console event has no ts string: %#v", sparse)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, ts); err != nil {
+		t.Fatalf("sparse ts %q is not RFC 3339: %v", ts, err)
+	}
+	if !strings.HasPrefix(lines[0], `{"ts":`) {
+		t.Fatalf("sparse event = %q, want ts as the first key", lines[0])
 	}
 	if _, ok := sparse["msg"]; ok {
 		t.Fatalf("sparse console exposed verbose msg field: %#v", sparse)

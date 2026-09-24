@@ -39,12 +39,12 @@ record is written:
 21:00:53 ERROR  process end event_type=process_end exit_code=1 elapsed_ms=0 output_tail_lines=1
 ```
 
-Sparse-AI console — compact records, and errors carry an exact file+line
-pointer into the run's `.jsonl` log:
+Sparse-AI console — compact records that lead with the event time, and errors
+carry an exact file+line pointer into the run's `.jsonl` log:
 
 ```json
-{"level":"INFO","event":"process_start","message":"process start","fields":{"program":"sh","service":"keel-demo"}}
-{"level":"ERROR","event":"log","message":"keel-demo failed","fields":{"err":{"exit_code":4,"log_file":".logs/20260712T190059Z.jsonl","start_line":13,"hint":"inspect .logs/20260712T190059Z.jsonl from line 13"}}}
+{"ts":"2026-07-12T21:00:59.412871Z","level":"INFO","event":"process_start","message":"process start","fields":{"program":"sh","service":"keel-demo"}}
+{"ts":"2026-07-12T21:00:59.418207Z","level":"ERROR","event":"log","message":"keel-demo failed","fields":{"err":{"exit_code":4,"log_file":".logs/20260712T190059Z.jsonl","start_line":13,"hint":"inspect .logs/20260712T190059Z.jsonl from line 13"}}}
 ```
 
 ### CLI
