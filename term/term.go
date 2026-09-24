@@ -115,26 +115,36 @@ func New(cfg Config) Capability {
 	}
 	terminal := probe.IsTerminal(cfg.Stream)
 	termUsable := termUsable(getenv("TERM"))
-
-	var color bool
-	switch cfg.Color {
-	case ColorAlways:
-		color = true
-	case ColorNever:
-		color = false
-	default:
-		color = terminal && getenv("NO_COLOR") == "" && termUsable
-	}
+	noColor := getenv("NO_COLOR") != ""
+	stderrTerminal := probe.IsTerminal(Stderr)
+	// Animation is strictly narrower than color on stderr, whatever stream
+	// cfg describes.
+	stderrColor := colorFor(cfg.Color, stderrTerminal, noColor, termUsable)
 
 	return Capability{
 		stream:    cfg.Stream,
 		terminal:  terminal,
-		color:     color,
-		animation: !cfg.NoAnimation && termUsable && probe.IsTerminal(Stderr),
+		color:     colorFor(cfg.Color, terminal, noColor, termUsable),
+		animation: !cfg.NoAnimation && termUsable && stderrTerminal && stderrColor,
 		prompt:    !cfg.NoInput && probe.IsTerminal(Stdin),
 		probe:     probe,
 		getenv:    getenv,
 	}
+}
+
+// colorFor applies the color rule to one stream: an explicit policy decides
+// outright; under [ColorAuto] the stream must be a terminal, NO_COLOR must be
+// unset or empty, and TERM must be usable.
+//
+// DHF-REQ: keel/requirement-165
+func colorFor(policy ColorPolicy, terminal, noColor, termUsable bool) bool {
+	switch policy {
+	case ColorAlways:
+		return true
+	case ColorNever:
+		return false
+	}
+	return terminal && !noColor && termUsable
 }
 
 // termUsable reports whether TERM names a terminal that renders escapes: set,
@@ -157,8 +167,11 @@ func (c Capability) Terminal() bool { return c.terminal }
 func (c Capability) Color() bool { return c.color }
 
 // Animation reports whether spinners and redrawn progress may be drawn: stderr
-// must be a terminal, TERM must be set and not "dumb", and [Config.NoAnimation]
-// must be false. No color policy forces it, so animation never reaches a pipe.
+// must be a terminal, TERM must be set and not "dumb", color on stderr must be
+// permitted, and [Config.NoAnimation] must be false. Animation is strictly
+// narrower than color on stderr: [ColorNever] and NO_COLOR under [ColorAuto]
+// forbid it, and no color policy forces it, so animation never reaches a pipe.
+// The color decision is the one for stderr, not for [Config.Stream].
 func (c Capability) Animation() bool { return c.animation }
 
 // Prompt reports whether the process may prompt for input: stdin must be a
@@ -205,8 +218,9 @@ func IsTerminal(f *os.File) bool {
 	if f == nil {
 		return false
 	}
-	fd, ok := rawFd(f)
-	return ok && isTerminal(fd)
+	var terminal bool
+	ok := withFd(f, func(fd uintptr) { terminal = isTerminal(fd) })
+	return ok && terminal
 }
 
 // FileSize reads the terminal size of f by TIOCGWINSZ. ok is false when f is
@@ -217,24 +231,25 @@ func FileSize(f *os.File) (size Size, ok bool) {
 	if f == nil {
 		return Size{}, false
 	}
-	fd, ok := rawFd(f)
-	if !ok {
+	if !withFd(f, func(fd uintptr) { size, ok = windowSize(fd) }) {
 		return Size{}, false
 	}
-	return windowSize(fd)
+	return size, ok
 }
 
-// rawFd returns f's descriptor without switching it to blocking mode, as
-// f.Fd would. ok is false for a closed file.
-func rawFd(f *os.File) (fd uintptr, ok bool) {
+// withFd runs fn on f's descriptor inside f.SyscallConn().Control, so f holds
+// the descriptor open for the whole call and a concurrent Close waits for fn
+// to return. It never switches f to blocking mode, as f.Fd would. It reports
+// false for a closed file, where fn does not run, and for any SyscallConn or
+// Control error.
+//
+// DHF-REQ: keel/requirement-165
+func withFd(f *os.File, fn func(fd uintptr)) bool {
 	sc, err := f.SyscallConn()
 	if err != nil {
-		return 0, false
+		return false
 	}
-	if err := sc.Control(func(d uintptr) { fd = d }); err != nil {
-		return 0, false
-	}
-	return fd, true
+	return sc.Control(fn) == nil
 }
 
 // OSProbe returns a [Probe] over the process's own os.Stdin, os.Stdout and

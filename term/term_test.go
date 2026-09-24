@@ -199,26 +199,34 @@ func TestColorPrecedence(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-165
-// Animation needs a terminal on stderr and a usable TERM; color policy cannot
-// force it into a pipe.
+// DHF-TEST: keel/requirement-165 (keel/ac-731)
+// Animation needs a terminal on stderr, a usable TERM, and color permitted on
+// stderr; color policy cannot force it into a pipe. The color decision is the
+// one for stderr, not for Config.Stream.
 func TestAnimation(t *testing.T) {
+	noColor := map[string]string{"TERM": "xterm-256color", "NO_COLOR": "1"}
 	cases := []struct {
 		name   string
+		stdout bool
 		stderr bool
 		env    map[string]string
 		policy term.ColorPolicy
 		want   bool
 	}{
-		{"terminal stderr", true, colorTerm, term.ColorAuto, true},
-		{"piped stderr", false, colorTerm, term.ColorAuto, false},
-		{"piped stderr, color forced", false, colorTerm, term.ColorAlways, false},
-		{"TERM=dumb", true, map[string]string{"TERM": "dumb"}, term.ColorAlways, false},
-		{"TERM unset", true, map[string]string{}, term.ColorAuto, false},
+		{"terminal stderr", true, true, colorTerm, term.ColorAuto, true},
+		{"piped stderr", true, false, colorTerm, term.ColorAuto, false},
+		{"piped stderr, color forced", true, false, colorTerm, term.ColorAlways, false},
+		{"TERM=dumb", true, true, map[string]string{"TERM": "dumb"}, term.ColorAlways, false},
+		{"TERM unset", true, true, map[string]string{}, term.ColorAuto, false},
+		{"terminal stderr, color never", true, true, colorTerm, term.ColorNever, false},
+		{"terminal stderr, NO_COLOR", true, true, noColor, term.ColorAuto, false},
+		{"terminal stderr, NO_COLOR, color forced", true, true, noColor, term.ColorAlways, true},
+		{"piped stdout, terminal stderr, color never", false, true, colorTerm, term.ColorNever, false},
+		{"piped stdout, terminal stderr", false, true, colorTerm, term.ColorAuto, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			probe := fakeProbe{terminal: map[term.Stream]bool{term.Stdout: true, term.Stderr: tc.stderr}}
+			probe := fakeProbe{terminal: map[term.Stream]bool{term.Stdout: tc.stdout, term.Stderr: tc.stderr}}
 			c := term.New(term.Config{Stream: term.Stdout, Color: tc.policy, Getenv: envOf(tc.env), Probe: probe})
 			if got := c.Animation(); got != tc.want {
 				t.Errorf("Animation() = %v, want %v", got, tc.want)
