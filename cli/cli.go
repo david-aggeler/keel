@@ -183,7 +183,9 @@ type Config struct {
 	Version string
 	// RootSummary is the opening paragraph in root help.
 	RootSummary string
-	// Usage is the primary root usage line without the leading "usage:" prefix.
+	// Usage is the root usage line, without the leading "usage:" prefix, that
+	// Dispatch quotes in its usage errors. Root help does not render it: the
+	// root help synopsis is generated from GlobalFlagSpecs and GlobalFlags.
 	Usage string
 	// HelpUsage is the root help entry-point usage line.
 	HelpUsage string
@@ -200,6 +202,11 @@ type Config struct {
 	// columns. Consumers set it from the width keel/term reports for the help
 	// destination; zero leaves help unwrapped.
 	HelpWidth int
+	// RootHandler, when set, runs when the program is invoked with no command
+	// words. It is the root's own action (for example a showcase), kept on
+	// Config because a CommandSpec node never mixes a Handler with children.
+	// Generated help marks the root invocable and makes the command optional.
+	RootHandler Handler
 	// HelpWriter receives help rendered directly by Dispatch for -h/--help.
 	// Nil discards dispatcher-owned help; binaries that route help through their
 	// own presentation layer may keep doing so while migrating to Dispatch.
@@ -517,11 +524,12 @@ func (c *CommandSpec) Child(name string) (*CommandSpec, bool) {
 }
 
 // Dispatch invokes the deepest matching command handler. It inherits root
-// Config into child nodes, rejects empty or unknown command paths with
+// Config into child nodes, runs Config.RootHandler for an empty command path
+// when one is set, rejects other empty and all unknown command paths with
 // UsageError, parses command-declared typed flags, validates positional arity,
 // and passes the remaining positional arguments to the resolved Handler.
 //
-// DHF-REQ: keel/requirement-104, keel/requirement-153, keel/requirement-155
+// DHF-REQ: keel/requirement-100, keel/requirement-104, keel/requirement-153, keel/requirement-155
 func (c *CommandSpec) Dispatch(ctx context.Context, args []string) error {
 	c.InheritConfig()
 	if len(args) > 0 && args[0] == "help" {
@@ -545,6 +553,9 @@ func (c *CommandSpec) Dispatch(ctx context.Context, args []string) error {
 		return nil
 	}
 	if len(args) == 0 {
+		if c.Config.RootHandler != nil {
+			return c.Config.RootHandler(ctx, nil)
+		}
 		return UsageError{Err: fmt.Errorf("%s", c.Usage(nil))}
 	}
 	if len(matched) == 0 {
@@ -964,18 +975,22 @@ func commandPath(path []string, fallback string) string {
 // ParseGlobalConfig parses. keel owns these names and descriptions so root help
 // cannot drift from the parser; a consumer's Config.GlobalFlags contributes only
 // its own additional binary-specific globals. The order mirrors ParseGlobalConfig.
+// It is the one source for every help surface that names a global flag: the root
+// usage synopsis, the Global flags section, and the --help-json root entry. Each
+// accepted spelling is listed: Name for the long form, Alias for the short form,
+// and Enum for a value flag's value set.
 //
-// DHF-REQ: keel/requirement-101, keel/requirement-166
+// DHF-REQ: keel/requirement-100, keel/requirement-101, keel/requirement-166
 func GlobalFlagSpecs() []FlagSpec {
 	return []FlagSpec{
-		{Name: "mode", Value: "human|ai|json", Default: "human", Short: "Select the console output protocol."},
-		{Name: "verbose", Short: "Include debug-level console detail."},
+		{Name: "mode", Value: "human|ai|json", Default: "human", Enum: []string{"human", "ai", "json"}, Short: "Select the console output protocol."},
+		{Name: "verbose", Alias: "v", Short: "Include debug-level console detail."},
 		{Name: "quiet", Alias: "q", Short: "Show only warnings and errors on the console; log files are unchanged."},
 		{Name: "color", Value: "auto|always|never", Default: "auto", Enum: []string{"auto", "always", "never"}, Short: "Set the console color policy; an explicit value outranks NO_COLOR."},
 		{Name: "no-input", Short: "Never prompt for input."},
 		{Name: "plain", Short: "Pipeline output: no color, no animation, and no prompting."},
 		{Name: "no-header", Short: "Suppress the run header for machine protocol consumers."},
-		{Name: "help", Short: "Print generated help and exit."},
+		{Name: "help", Alias: "h", Short: "Print generated help and exit."},
 		{Name: "help-all", Short: "Print root help plus every command topic and exit."},
 		{Name: "help-json", Short: "Print the full command tree as a JSON inventory and exit."},
 		{Name: "version", Short: "Print version and exit."},
@@ -1157,7 +1172,8 @@ func (c *CommandSpec) RenderRootHelp(w io.Writer) {
 }
 
 func (c *CommandSpec) renderRootHelp(w io.Writer, section helpSection) {
-	c.renderHelpHeader(w, section, "", c.Config.RootSummary, []string{c.Config.Usage, c.Config.HelpUsage, c.Config.CommandUsage})
+	usage := append(wrapSynopsis(c.rootSynopsisParts(), c.Config.HelpWidth-2), c.Config.HelpUsage, c.Config.CommandUsage)
+	c.renderHelpHeader(w, section, "", c.Config.RootSummary, usage)
 	if globals := mergeGlobalFlags(c.Config.GlobalFlags); len(globals) > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Global flags:")
@@ -1177,6 +1193,57 @@ func (c *CommandSpec) renderRootHelp(w io.Writer, section helpSection) {
 		fmt.Fprintln(w, "Topics:")
 		printHelpOnlyTopicRows(w, topics)
 	}
+}
+
+// rootSynopsisParts returns the root usage synopsis as unbreakable parts: the
+// program, one bracketed group per global flag, then the command words. The
+// flag groups derive from GlobalFlagSpecs plus Config.GlobalFlags, so the
+// synopsis lists every accepted spelling ("[-q|--quiet]", "[--color
+// auto|always|never]"). The command words are optional when the root is
+// invocable through Config.RootHandler.
+//
+// DHF-REQ: keel/requirement-101
+func (c *CommandSpec) rootSynopsisParts() []string {
+	parts := []string{c.program()}
+	for _, f := range mergeGlobalFlags(c.Config.GlobalFlags) {
+		spelling := "--" + f.Name
+		if f.Alias != "" {
+			spelling = "-" + f.Alias + "|" + spelling
+		}
+		if f.Value != "" {
+			spelling += " " + f.Value
+		}
+		parts = append(parts, "["+spelling+"]")
+	}
+	if len(c.Subcommands) > 0 {
+		if c.Config.RootHandler != nil {
+			parts = append(parts, "[<command> [args]]")
+		} else {
+			parts = append(parts, "<command> [args]")
+		}
+	}
+	return parts
+}
+
+// wrapSynopsis packs synopsis parts into lines no wider than width, never
+// splitting a part. Continuation lines are indented past the program name.
+// Zero or negative width yields one line.
+func wrapSynopsis(parts []string, width int) []string {
+	if len(parts) == 0 {
+		return nil
+	}
+	indent := strings.Repeat(" ", len(parts[0])+1)
+	var lines []string
+	line := parts[0]
+	for _, part := range parts[1:] {
+		if width > 0 && len(line)+1+len(part) > width {
+			lines = append(lines, line)
+			line = indent + part
+			continue
+		}
+		line += " " + part
+	}
+	return append(lines, line)
 }
 
 // RenderHelp writes help for the command path or root help when path is empty.
@@ -1320,10 +1387,33 @@ func (c *CommandSpec) renderAllCommandHelp(w io.Writer, path []string) {
 // helpJSONFlag is the JSON element shape for one flag row in the structured
 // help inventory.
 type helpJSONFlag struct {
-	Name        string `json:"name"`
-	Value       string `json:"value"`
-	Default     string `json:"default"`
-	Description string `json:"description"`
+	Name        string   `json:"name"`
+	Aliases     []string `json:"aliases,omitempty"`
+	Value       string   `json:"value"`
+	Enum        []string `json:"enum,omitempty"`
+	Default     string   `json:"default"`
+	Description string   `json:"description"`
+}
+
+// helpJSONFlags converts flag specs to their inventory shape. Aliases carries
+// each short alias without its dash, and Enum the accepted value set.
+func helpJSONFlags(specs []FlagSpec) []helpJSONFlag {
+	flags := make([]helpJSONFlag, 0, len(specs))
+	for _, f := range specs {
+		var aliases []string
+		if f.Alias != "" {
+			aliases = []string{f.Alias}
+		}
+		flags = append(flags, helpJSONFlag{
+			Name:        f.Name,
+			Aliases:     aliases,
+			Value:       f.Value,
+			Enum:        append([]string(nil), f.Enum...),
+			Default:     f.Default,
+			Description: f.Short,
+		})
+	}
+	return flags
 }
 
 // helpJSONCommand is the JSON element shape for one command in the structured
@@ -1334,21 +1424,34 @@ type helpJSONCommand struct {
 	Group     string         `json:"group"`
 	Summary   string         `json:"summary"`
 	Usage     string         `json:"usage"`
+	Invocable *bool          `json:"invocable,omitempty"`
 	Lines     []string       `json:"lines,omitempty"`
 	Flags     []helpJSONFlag `json:"flags"`
 	ExitCodes []ExitCodeSpec `json:"exit_codes,omitempty"`
 }
 
-// RenderHelpJSON writes a single JSON array describing every command and
-// help-only topic in the tree. The root node is the program shell, not a
-// command, so it is not emitted; each element carries a kind so consumers can
-// distinguish runnable commands from help-only topics. Output is
+// RenderHelpJSON writes a single JSON array describing the program root, every
+// command, and every help-only topic in the tree. Each element carries a kind
+// so consumers can tell them apart: exactly one "root" element, one "command"
+// element per command, and one "topic" element per help-only topic. The root
+// element comes first. Its path is the program name, its usage is the root
+// synopsis, its flags are the global flags (GlobalFlagSpecs plus
+// Config.GlobalFlags, each with aliases and value set), and its invocable key
+// states whether a bare invocation runs Config.RootHandler. Output is
 // deterministic across calls.
 //
 // DHF-REQ: keel/requirement-100, keel/requirement-101
 func (c *CommandSpec) RenderHelpJSON(w io.Writer) error {
 	c.InheritConfig()
-	commands := []helpJSONCommand{}
+	invocable := c.Config.RootHandler != nil
+	commands := []helpJSONCommand{{
+		Path:      c.program(),
+		Kind:      "root",
+		Summary:   c.Config.RootSummary,
+		Usage:     strings.Join(c.rootSynopsisParts(), " "),
+		Invocable: &invocable,
+		Flags:     helpJSONFlags(mergeGlobalFlags(c.Config.GlobalFlags)),
+	}}
 	for _, child := range c.Subcommands {
 		child.appendHelpJSON(&commands, []string{child.Name})
 	}
@@ -1369,22 +1472,13 @@ func (c *CommandSpec) RenderHelpJSON(w io.Writer) error {
 }
 
 func (c *CommandSpec) appendHelpJSON(out *[]helpJSONCommand, path []string) {
-	flags := make([]helpJSONFlag, 0, len(c.Flags))
-	for _, f := range c.Flags {
-		flags = append(flags, helpJSONFlag{
-			Name:        f.Name,
-			Value:       f.Value,
-			Default:     f.Default,
-			Description: f.Short,
-		})
-	}
 	*out = append(*out, helpJSONCommand{
 		Path:      strings.Join(path, " "),
 		Kind:      "command",
 		Group:     commandGroup(c),
 		Summary:   c.Short,
 		Usage:     strings.TrimPrefix(c.Usage(path), "usage: "),
-		Flags:     flags,
+		Flags:     helpJSONFlags(c.Flags),
 		ExitCodes: append([]ExitCodeSpec{}, c.ExitCodes...),
 	})
 	for _, child := range c.Subcommands {
@@ -1558,7 +1652,11 @@ func printFlagRows(w io.Writer, flags []FlagSpec, helpWidth int) {
 		if f.Default != "" {
 			def = " (default " + f.Default + ")"
 		}
-		fmt.Fprintf(w, "  --%s%s\n", f.Name, value)
+		alias := ""
+		if f.Alias != "" {
+			alias = "-" + f.Alias + ", "
+		}
+		fmt.Fprintf(w, "  %s--%s%s\n", alias, f.Name, value)
 		printWrapped(w, "      ", "      ", f.Short+def, helpWidth)
 	}
 }
