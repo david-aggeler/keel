@@ -247,8 +247,21 @@ func TestKeelDemoUsesSharedCLIForUsageErrors(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("unknown global flag exit = %d, want 2\noutput:\n%s", code, out)
 	}
-	if !strings.Contains(out, `unknown command "--unknown"`) && !strings.Contains(out, `unknown flag "--unknown"`) {
+	if !strings.Contains(out, `unknown flag "--unknown"`) || strings.Contains(out, "unknown command") {
 		t.Fatalf("unknown flag did not report a shared CLI usage error:\n%s", out)
+	}
+}
+
+// DHF-TEST: keel/requirement-169 (keel/ac-721)
+func TestKeelDemoBareWorkflowGroupShowsConciseHelp(t *testing.T) {
+	out, code := captureRunOutput(t, func() int { return run([]string{"--no-header", "workflow"}) })
+	if code != 2 {
+		t.Fatalf("run(workflow) exit = %d, want 2\n%s", code, out)
+	}
+	for _, want := range []string{"Subcommands:", "inspect", "Preview a captured run tree.", "replay", "Replay a saved demo transcript."} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("run(workflow) output missing %q:\n%s", want, out)
+		}
 	}
 }
 
@@ -263,7 +276,7 @@ func TestRunDirectHelpBranchesAndUsageError(t *testing.T) {
 		{name: "root help flag", args: []string{"--help"}, code: 0, want: []string{"keel-demo runs the log and exec showcase.", "workflow"}},
 		{name: "help command nested", args: []string{"help", "workflow"}, code: 0, want: []string{"workflow commands:", "inspect", "replay"}},
 		{name: "help all", args: []string{"--help-all"}, code: 0, want: []string{"\nkeel-demo workflow inspect\n", "\nkeel-demo workflow replay\n"}},
-		{name: "usage error", args: []string{"--bad-flag"}, code: 2, want: []string{"keel-demo failed", `unknown command "--bad-flag"`, "usage: keel-demo"}},
+		{name: "usage error", args: []string{"--bad-flag"}, code: 2, want: []string{"keel-demo failed", `unknown flag "--bad-flag"`, "usage: keel-demo"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

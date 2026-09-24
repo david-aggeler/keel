@@ -48,7 +48,7 @@ func TestRunDirectVersionHelpConfigAndUsageBranches(t *testing.T) {
 		t.Fatalf("run help test-bridge = code %d out %q, want topic help", code, topicOut)
 	}
 	badOut, code := captureDemoDevOutput(t, func() int { return run([]string{"--bad"}) })
-	if code != 2 || !strings.Contains(badOut, "unknown command") {
+	if code != 2 || !strings.Contains(badOut, `unknown flag "--bad"`) {
 		t.Fatalf("run --bad = code %d out %q, want usage error", code, badOut)
 	}
 

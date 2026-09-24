@@ -34,6 +34,7 @@ exfiltration
 exploitability
 faketool
 fanout
+frob
 frobnicate
 frontmatter
 fset

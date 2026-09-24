@@ -529,7 +529,7 @@ func (c *CommandSpec) Child(name string) (*CommandSpec, bool) {
 // UsageError, parses command-declared typed flags, validates positional arity,
 // and passes the remaining positional arguments to the resolved Handler.
 //
-// DHF-REQ: keel/requirement-100, keel/requirement-104, keel/requirement-153, keel/requirement-155
+// DHF-REQ: keel/requirement-100, keel/requirement-104, keel/requirement-153, keel/requirement-155, keel/requirement-169
 func (c *CommandSpec) Dispatch(ctx context.Context, args []string) error {
 	c.InheritConfig()
 	if len(args) > 0 && args[0] == "help" {
@@ -559,16 +559,88 @@ func (c *CommandSpec) Dispatch(ctx context.Context, args []string) error {
 		return UsageError{Err: fmt.Errorf("%s", c.Usage(nil))}
 	}
 	if len(matched) == 0 {
-		return UsageError{Err: fmt.Errorf("unknown command %q\n%s", args[0], c.Usage(nil))}
+		return unknownTokenError(args[0], c.Subcommands, c.Usage(nil))
 	}
 	if node.Handler == nil {
-		return UsageError{Err: fmt.Errorf("%s", node.Usage(matched))}
+		if len(remaining) > 0 {
+			return unknownTokenError(remaining[0], node.Subcommands, node.Usage(matched))
+		}
+		return UsageError{Err: fmt.Errorf("%s", node.conciseHelp(matched))}
 	}
 	handlerArgs, err := node.parseCommandArgs(matched, remaining)
 	if err != nil {
 		return err
 	}
 	return node.Handler(ctx, handlerArgs)
+}
+
+// suggestionMaxDistance is the largest edit distance at which an unknown
+// command word still names a sibling command as a suggestion.
+const suggestionMaxDistance = 2
+
+// unknownTokenError builds the usage diagnostic for a token that matched no
+// child of the current node. A dash-prefixed token is an unconsumed flag, not a
+// command word; a near-miss word names its nearest sibling.
+//
+// DHF-REQ: keel/requirement-169
+func unknownTokenError(token string, siblings []*CommandSpec, usage string) UsageError {
+	if len(token) > 1 && token[0] == '-' {
+		return UsageError{Err: fmt.Errorf("unknown flag %q\n%s", token, usage)}
+	}
+	if name, ok := nearestCommand(token, siblings); ok {
+		return UsageError{Err: fmt.Errorf("unknown command %q\ndid you mean %q?\n%s", token, name, usage)}
+	}
+	return UsageError{Err: fmt.Errorf("unknown command %q\n%s", token, usage)}
+}
+
+// nearestCommand returns the sibling name closest to token by edit distance
+// when that distance is within suggestionMaxDistance and smaller than the
+// candidate's length, so a short token never "matches" by rewriting a whole
+// name. Ties resolve to declaration order.
+//
+// DHF-REQ: keel/requirement-169
+func nearestCommand(token string, siblings []*CommandSpec) (string, bool) {
+	best, bestDistance := "", suggestionMaxDistance+1
+	for _, sibling := range siblings {
+		d := editDistance(token, sibling.Name)
+		if d < bestDistance && d < len(sibling.Name) {
+			best, bestDistance = sibling.Name, d
+		}
+	}
+	return best, best != ""
+}
+
+// editDistance is the Levenshtein distance between a and b over bytes.
+func editDistance(a, b string) int {
+	prev := make([]int, len(b)+1)
+	cur := make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		cur[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
+		}
+		prev, cur = cur, prev
+	}
+	return prev[len(b)]
+}
+
+// conciseHelp is the usage diagnostic for a handler-less group invoked without
+// a subcommand: its usage line plus one summary row per child.
+//
+// DHF-REQ: keel/requirement-169
+func (c *CommandSpec) conciseHelp(path []string) string {
+	var b strings.Builder
+	b.WriteString(c.Usage(path))
+	b.WriteString("\n\nSubcommands:\n")
+	printGroupedCommandRows(&b, c.Subcommands, c.Config.HelpWidth)
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func helpRequestedByDispatcher(node *CommandSpec, remaining []string) bool {
