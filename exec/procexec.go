@@ -178,7 +178,7 @@ type Process struct {
 // It returns an error ("keel/exec: …") when Program is empty or the child fails
 // to start; a non-zero exit is not an error here — it is reported by Wait.
 //
-// DHF-REQ: openbrain/requirement-565, keel/requirement-1, keel/requirement-81
+// DHF-REQ: openbrain/requirement-565, keel/requirement-1, keel/requirement-81, keel/requirement-171
 func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 	if req.Program == "" {
 		return nil, errors.New("keel/exec: program is required")
@@ -461,6 +461,8 @@ func appendProgramAtWarn(args []any, level slog.Level, program string) []any {
 
 // childOutputLevel resolves the level of one child output line. Nothing about
 // the stream enters the decision.
+//
+// DHF-REQ: keel/requirement-24, keel/requirement-171
 func childOutputLevel(logger processLogger, class LineClass) slog.Level {
 	if class.Level != nil {
 		return class.Level.Level()
