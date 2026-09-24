@@ -602,3 +602,43 @@ func TestExecOutputFieldDocsNameCounterpartAndSelector(t *testing.T) {
 		})
 	}
 }
+
+// DHF-TEST: keel/requirement-167
+func TestProcessStartClassifiesChildOutputAtConfiguredLevel(t *testing.T) {
+	// keel/ac-711: a consumer-set Config.ChildOutputLevel is the level of the
+	// process_output record for a line on either child stream.
+	var logBuf bytes.Buffer
+	logger := mustLogger(t, logging.Config{
+		Console:          logging.ConsoleJSON,
+		ConsoleVerbosity: slog.LevelDebug,
+		Writer:           &logBuf,
+		ChildOutputLevel: slog.LevelWarn,
+	})
+	proc, err := procexec.ProcessStart(context.Background(), procexec.Request{
+		Logger:  logger,
+		Program: "sh",
+		Args:    []string{"-c", "echo child-out; echo child-err 1>&2"},
+	})
+	if err != nil {
+		t.Fatalf("ProcessStart: %v", err)
+	}
+	if _, err := proc.Wait(); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	seen := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(logBuf.String()), "\n") {
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("decode %q: %v", line, err)
+		}
+		if rec["event_type"] != "process_output" {
+			continue
+		}
+		seen[rec["data"].(string)], _ = rec["level"].(string)
+	}
+	for _, data := range []string{"child-out", "child-err"} {
+		if seen[data] != "WARN" {
+			t.Fatalf("process_output %q level = %q, want WARN (records %v)", data, seen[data], seen)
+		}
+	}
+}

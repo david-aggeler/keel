@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strconv"
@@ -310,21 +311,39 @@ func (w *captureWriter) flush() {
 }
 
 // logLine records one child-output line: trailing CR trimmed, blank lines
-// dropped, stdout at Debug and stderr at Error. The caller holds w.mu.
+// dropped. The level is the logger's configured child-output level when it
+// carries one, else stdout at Debug and stderr at Error. The caller holds w.mu.
 func (w *captureWriter) logLine(line string) {
 	line = strings.TrimRight(line, "\r")
 	if strings.TrimSpace(line) == "" {
 		return
 	}
+	args := []any{
+		"event_type", "process_output",
+		"stream", w.streamName,
+		"data", redactedString(line),
+	}
+	// A logger carrying a configured child-output level classifies both
+	// streams at that level.
+	// DHF-REQ: keel/requirement-167
+	if cl, ok := w.logger.(childLevelLogger); ok {
+		if level := cl.ChildOutputLevel(); level != nil {
+			cl.Log(context.Background(), level.Level(), "process output", args...)
+			return
+		}
+	}
 	log := w.logger.Debug
 	if w.streamName == "stderr" {
 		log = w.logger.Error
 	}
-	log("process output",
-		"event_type", "process_output",
-		"stream", w.streamName,
-		"data", redactedString(line),
-	)
+	log("process output", args...)
+}
+
+// childLevelLogger is the optional logger capability that carries
+// keel/log's Config.ChildOutputLevel.
+type childLevelLogger interface {
+	ChildOutputLevel() slog.Leveler
+	Log(ctx context.Context, level slog.Level, msg string, args ...any)
 }
 
 // capture returns the bytes this stream contributes to [Result], which is
