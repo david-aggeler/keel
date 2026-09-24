@@ -6,6 +6,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -251,6 +252,48 @@ func TestRunStepChildStderrFilterMapsAcceptedAndUnacceptedLevels(t *testing.T) {
 				t.Fatalf("stderr record level = %#v, want %s; record=%#v", rec["level"], tc.want, rec)
 			}
 		})
+	}
+}
+
+// DHF-TEST: keel/requirement-24, keel/requirement-158 (keel/ac-659)
+func TestRunStepCarriesTheToolsDeclaredLevelBesideThePolicyLevel(t *testing.T) {
+	// keel/ac-714 end to end through a gate step: the record keeps the policy's
+	// level and carries the tool's own token in declared_level; a line the tool
+	// did not label has no declared_level and stays at Error (default-deny).
+	dir := t.TempDir()
+	tool := filepath.Join(dir, "gitleaks-like")
+	script := "#!/bin/sh\nprintf '%s\\n' '3:33AM WRN config not found' >&2\nprintf '%s\\n' 'unlabelled' >&2\nexit 0\n"
+	if err := os.WriteFile(tool, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logger, cap := testLogger("keel-dev")
+	if err := runStep(context.Background(), logger, ".", step{
+		name: "gitleaks-probe", program: tool, stderr: reinterpretChildStderr(gitleaksStderrFilter()),
+	}); err != nil {
+		t.Fatalf("probe should pass, got %v", err)
+	}
+	labelled := childStderrRecord(t, cap.AllJSON(), "3:33AM WRN config not found")
+	if labelled["level"] != "WARN" || labelled["declared_level"] != "WARN" {
+		t.Fatalf("labelled record = %#v, want level WARN and declared_level WARN", labelled)
+	}
+	unlabelled := childStderrRecord(t, cap.AllJSON(), "unlabelled")
+	if _, present := unlabelled["declared_level"]; present || unlabelled["level"] != "ERROR" {
+		t.Fatalf("unlabelled record = %#v, want level ERROR and no declared_level", unlabelled)
+	}
+}
+
+// DHF-TEST: keel/requirement-24
+func TestRunStepWithoutStderrPolicyKeepsChildStderrAtDebug(t *testing.T) {
+	// keel/ac-712 through keel-dev: a step that declares no reinterpretation
+	// leaves child stderr at the stream-independent default.
+	dir := t.TempDir()
+	tool := writeStderrExecStub(t, dir, "plain-tool", "compiler chatter", 0)
+	logger, cap := testLogger("keel-dev")
+	if err := runStep(context.Background(), logger, ".", step{name: "plain", program: tool}); err != nil {
+		t.Fatalf("plain step should pass, got %v", err)
+	}
+	if rec := childStderrRecord(t, cap.AllJSON(), "compiler chatter"); rec["level"] != "DEBUG" {
+		t.Fatalf("stderr record = %#v, want DEBUG", rec)
 	}
 }
 
@@ -943,4 +986,38 @@ func stringSliceEqual(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// DHF-TEST: keel/requirement-24
+func TestNonZeroExitsThatAreAnswersRecordNoError(t *testing.T) {
+	// An advisory step's findings and a git probe's miss are answers, not
+	// failures: neither may manufacture an Error record.
+	dir := t.TempDir()
+	stub := writeStderrExecStub(t, dir, "reporter", "found: some unreachable func", 1)
+
+	cases := map[string]func(logger *slog.Logger) error{
+		"advisory step": func(logger *slog.Logger) error {
+			return runStep(context.Background(), logger, ".", step{name: "advisory-probe", program: stub, advisory: true})
+		},
+		"git probe": func(logger *slog.Logger) error {
+			_, code, err := gitProbe(context.Background(), logger, ".", "rev-parse", "--verify", "--quiet", "no-such-ref")
+			if err == nil && code == 0 {
+				t.Fatal("git probe for a missing ref exited 0; the case exercises nothing")
+			}
+			return err
+		},
+	}
+	for name, run := range cases {
+		t.Run(name, func(t *testing.T) {
+			logger, cap := testLogger("keel-dev")
+			if err := run(logger); err != nil {
+				t.Fatalf("%s returned error: %v", name, err)
+			}
+			for _, rec := range cap.AllJSON() {
+				if rec["level"] == "ERROR" {
+					t.Fatalf("%s produced an ERROR record: %#v", name, rec)
+				}
+			}
+		})
+	}
 }

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	logging "github.com/david-aggeler/keel/log"
 )
@@ -55,13 +56,13 @@ type Request struct {
 	// child's stdout, and it then becomes the caller's only copy: [Result.Stdout]
 	// is left empty so the same bytes cannot be read twice. Set CaptureWithTee to
 	// have both carry the stream. Nil selects the capture instead, and the
-	// line-wise debug log is emitted either way.
+	// line-wise child-output log is emitted either way.
 	Stdout io.Writer
 	// Stderr, when non-nil, is the tee that receives a verbatim copy of the
 	// child's stderr, and it then becomes the caller's only copy: [Result.Stderr]
 	// is left empty so the same bytes cannot be read twice. Set CaptureWithTee to
 	// have both carry the stream. Nil selects the capture instead, and the
-	// line-wise error log is emitted either way.
+	// line-wise child-output log is emitted either way.
 	Stderr io.Writer
 	// CaptureWithTee delivers a stream through both paths at once — the tee
 	// writer and the Result capture — for every stream whose tee writer is
@@ -87,7 +88,53 @@ type Request struct {
 	// before it starts — the escape hatch for setting a process group, custom
 	// Cancel, WaitDelay, or other fields keel/exec does not model directly.
 	Configure func(*exec.Cmd)
+	// Classify, when non-nil, is the per-process-type adapter (keel/requirement-2)
+	// for a child whose output format the caller knows. keel/exec calls it once
+	// per clean output line with the stream name ("stdout" or "stderr") and the
+	// line, and applies the returned [LineClass]. Core keel/exec never reads a
+	// level out of the text itself; nil leaves every line unclassified.
+	Classify func(stream, line string) LineClass
+	// FailureLevel is the severity of the END record and the replayed output
+	// tail when the child exits non-zero. Nil means Error. Set it for a child
+	// whose non-zero exit is an answer rather than a failure — a probe such as
+	// "git rev-parse --verify" — or whose findings are advisory, so the exit
+	// status still decides and no false Error is recorded.
+	//
+	// DHF-REQ: keel/requirement-24
+	FailureLevel slog.Leveler
 }
+
+// LineClass is what a [Request.Classify] adapter reports about one child
+// output line. The zero value says nothing and changes nothing.
+//
+// DHF-REQ: keel/requirement-24
+type LineClass struct {
+	// Level overrides the child-output level for this line's record. Nil keeps
+	// the level configured on the logger (Config.ChildOutputLevel), else Debug.
+	Level slog.Leveler
+	// Declared is the level the child itself declared on this line, carried in
+	// the record's "declared_level" field. It never changes the record's own
+	// severity. Nil means the child declared none, or the adapter could not
+	// read one, and the field is then absent: an absent level is never
+	// reported as an inferred one.
+	Declared slog.Leveler
+}
+
+// FailureTailLines is the number of most recent child output lines, across
+// both streams, that [Process.Wait] replays when the child exits non-zero, at
+// Error unless [Request.FailureLevel] says otherwise.
+//
+// DHF-REQ: keel/requirement-24
+const FailureTailLines = 20
+
+// failureTailLineBytes caps one replayed tail line; the full line stays in the
+// per-line record.
+const failureTailLineBytes = 4096
+
+// defaultChildOutputLevel is the level of a child output line when neither the
+// adapter nor the logger configures one. It is the same on both streams: the
+// stream a child writes to is its transport choice, not a severity.
+const defaultChildOutputLevel = slog.LevelDebug
 
 // Result reports the observed outcome of a launched process, filled in by
 // [Process.Wait] once the child has exited.
@@ -113,6 +160,8 @@ type Process struct {
 	stdout  *captureWriter
 	stderr  *captureWriter
 	logger  processLogger
+	tail    *outputTail
+	failure slog.Level
 	waitErr error
 	result  Result
 	waitCh  chan error
@@ -176,10 +225,11 @@ func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 	// of the same bytes. The buffer still fills either way: MaxOutputBytes
 	// accounting and the line-wise logging read it and must stay unaffected.
 	// DHF-REQ: keel/requirement-150
+	tail := &outputTail{}
 	stdout := &captureWriter{stream: req.Stdout, logger: logger, streamName: "stdout", limit: outputLimit,
-		suppressCapture: req.Stdout != nil && !req.CaptureWithTee}
+		suppressCapture: req.Stdout != nil && !req.CaptureWithTee, classify: req.Classify, tail: tail}
 	stderr := &captureWriter{stream: req.Stderr, logger: logger, streamName: "stderr", limit: outputLimit,
-		suppressCapture: req.Stderr != nil && !req.CaptureWithTee}
+		suppressCapture: req.Stderr != nil && !req.CaptureWithTee, classify: req.Classify, tail: tail}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 
@@ -194,7 +244,12 @@ func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 		stdout:  stdout,
 		stderr:  stderr,
 		logger:  logger,
+		tail:    tail,
+		failure: slog.LevelError,
 		waitCh:  make(chan error, 1),
+	}
+	if req.FailureLevel != nil {
+		p.failure = req.FailureLevel.Level()
 	}
 	go func() {
 		p.waitCh <- cmd.Wait()
@@ -206,6 +261,15 @@ func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 // Wait blocks until the process exits and returns its captured result. It may
 // be called more than once; the process is reaped, captured result assembled,
 // and "process end" lifecycle record emitted only on the first call.
+//
+// The exit status is the only source of a child's severity. A zero exit ends
+// at Info. Any other status, including -1 for a child that never produced one,
+// first replays the last [FailureTailLines] output lines at Error and then
+// ends at Error, so the reason for a failure is visible at the default console
+// floor without re-running at Debug. [Request.FailureLevel] replaces Error for
+// a child whose non-zero exit is not a failure.
+//
+// DHF-REQ: keel/requirement-1, keel/requirement-24
 func (p *Process) Wait() (Result, error) {
 	if p == nil {
 		return Result{ExitCode: -1}, errors.New("keel/exec: nil process")
@@ -231,10 +295,34 @@ func (p *Process) Wait() (Result, error) {
 		if limitErr := p.stdout.limit.Err(); limitErr != nil {
 			p.waitErr = limitErr
 		}
-		p.logger.Info("process end",
+		if p.result.ExitCode == 0 {
+			p.logger.Info("process end",
+				"event_type", "process_end",
+				"exit_code", p.result.ExitCode,
+				"elapsed_ms", p.result.Duration.Milliseconds(),
+			)
+			return
+		}
+		tail := p.tail.lines()
+		for _, line := range tail {
+			args := []any{
+				"event_type", "process_output_tail",
+				"stream", line.stream,
+				"data", line.data,
+			}
+			if line.declared != nil {
+				args = append(args, "declared_level", line.declared.Level().String())
+			}
+			if line.truncated > 0 {
+				args = append(args, "truncated_bytes", line.truncated)
+			}
+			logAt(p.logger, p.failure, "process output tail", args...)
+		}
+		logAt(p.logger, p.failure, "process end",
 			"event_type", "process_end",
 			"exit_code", p.result.ExitCode,
 			"elapsed_ms", p.result.Duration.Milliseconds(),
+			"output_tail_lines", len(tail),
 		)
 	})
 
@@ -252,6 +340,11 @@ type captureWriter struct {
 	// suppressCapture withholds the buffered bytes from [Result], leaving the
 	// caller's tee writer as the single delivery path for this stream.
 	suppressCapture bool
+	// classify is the caller's per-process-type adapter; nil classifies nothing.
+	classify func(stream, line string) LineClass
+	// tail is shared by both streams of one process and keeps the most recent
+	// lines for the failure replay. Nil keeps none.
+	tail *outputTail
 }
 
 // DHF-REQ: openbrain/requirement-602, keel/requirement-24, keel/requirement-81, keel/requirement-151
@@ -311,39 +404,130 @@ func (w *captureWriter) flush() {
 }
 
 // logLine records one child-output line: trailing CR trimmed, blank lines
-// dropped. The level is the logger's configured child-output level when it
-// carries one, else stdout at Debug and stderr at Error. The caller holds w.mu.
+// dropped. Both streams share one level — the adapter's override, else the
+// logger's configured child-output level, else Debug — and the stream travels
+// as an attribute. A level the adapter read from the child travels in its own
+// declared_level field. The caller holds w.mu.
+//
+// DHF-REQ: keel/requirement-24, keel/requirement-167
 func (w *captureWriter) logLine(line string) {
 	line = strings.TrimRight(line, "\r")
 	if strings.TrimSpace(line) == "" {
 		return
 	}
+	var class LineClass
+	if w.classify != nil {
+		class = w.classify(w.streamName, line)
+	}
+	data := redactedString(line)
+	w.tail.add(w.streamName, data, class.Declared)
+
 	args := []any{
 		"event_type", "process_output",
 		"stream", w.streamName,
-		"data", redactedString(line),
+		"data", data,
 	}
-	// A logger carrying a configured child-output level classifies both
-	// streams at that level.
-	// DHF-REQ: keel/requirement-167
-	if cl, ok := w.logger.(childLevelLogger); ok {
+	if class.Declared != nil {
+		args = append(args, "declared_level", class.Declared.Level().String())
+	}
+	logAt(w.logger, childOutputLevel(w.logger, class), "process output", args...)
+}
+
+// childOutputLevel resolves the level of one child output line. Nothing about
+// the stream enters the decision.
+func childOutputLevel(logger processLogger, class LineClass) slog.Level {
+	if class.Level != nil {
+		return class.Level.Level()
+	}
+	if cl, ok := logger.(childLevelLogger); ok {
 		if level := cl.ChildOutputLevel(); level != nil {
-			cl.Log(context.Background(), level.Level(), "process output", args...)
-			return
+			return level.Level()
 		}
 	}
-	log := w.logger.Debug
-	if w.streamName == "stderr" {
-		log = w.logger.Error
-	}
-	log("process output", args...)
+	return defaultChildOutputLevel
 }
 
 // childLevelLogger is the optional logger capability that carries
 // keel/log's Config.ChildOutputLevel.
 type childLevelLogger interface {
 	ChildOutputLevel() slog.Leveler
+}
+
+// levelLogger is the optional logger capability to emit at an arbitrary
+// level. keel/log's Logger and *slog.Logger both provide it.
+type levelLogger interface {
 	Log(ctx context.Context, level slog.Level, msg string, args ...any)
+}
+
+// logAt emits at level. A logger without Log gets the nearest of its three
+// methods at or below level.
+func logAt(logger processLogger, level slog.Level, msg string, args ...any) {
+	if ll, ok := logger.(levelLogger); ok {
+		ll.Log(context.Background(), level, msg, args...)
+		return
+	}
+	switch {
+	case level >= slog.LevelError:
+		logger.Error(msg, args...)
+	case level >= slog.LevelInfo:
+		logger.Info(msg, args...)
+	default:
+		logger.Debug(msg, args...)
+	}
+}
+
+// outputTail is a bounded ring of the most recent child output lines across
+// both streams, in arrival order.
+type outputTail struct {
+	mu   sync.Mutex
+	buf  []tailLine
+	next int
+	full bool
+}
+
+type tailLine struct {
+	stream    string
+	data      string
+	declared  slog.Leveler
+	truncated int
+}
+
+func (t *outputTail) add(stream, data string, declared slog.Leveler) {
+	if t == nil {
+		return
+	}
+	line := tailLine{stream: stream, data: data, declared: declared}
+	if len(data) > failureTailLineBytes {
+		cut := failureTailLineBytes
+		for cut > 0 && !utf8.RuneStart(data[cut]) {
+			cut--
+		}
+		line.data = data[:cut]
+		line.truncated = len(data) - cut
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.buf == nil {
+		t.buf = make([]tailLine, FailureTailLines)
+	}
+	t.buf[t.next] = line
+	t.next = (t.next + 1) % FailureTailLines
+	if t.next == 0 {
+		t.full = true
+	}
+}
+
+// lines returns the retained lines, oldest first.
+func (t *outputTail) lines() []tailLine {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.full {
+		return append([]tailLine(nil), t.buf[:t.next]...)
+	}
+	return append(append([]tailLine(nil), t.buf[t.next:]...), t.buf[:t.next]...)
 }
 
 // capture returns the bytes this stream contributes to [Result], which is

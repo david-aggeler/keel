@@ -89,8 +89,8 @@ type Config struct {
 	Handlers []slog.Handler
 
 	// ChildOutputLevel is the severity at which keel/exec records a child
-	// process's output lines, on both of the child's streams. Nil → keel/exec's
-	// built-in stream mapping. Read it back with [Logger.ChildOutputLevel].
+	// process's output lines, on both of the child's streams. Nil → Debug on
+	// both. Read it back with [Logger.ChildOutputLevel].
 	ChildOutputLevel slog.Leveler
 }
 
@@ -408,7 +408,7 @@ func (l *Logger) RunLogLine() int {
 
 // ChildOutputLevel returns Config.ChildOutputLevel as given to [New]: the
 // severity keel/exec uses for a child's output lines. Nil means the field was
-// not set and keel/exec applies its built-in mapping.
+// not set and keel/exec records them at Debug.
 //
 // DHF-REQ: keel/requirement-167
 func (l *Logger) ChildOutputLevel() slog.Leveler {

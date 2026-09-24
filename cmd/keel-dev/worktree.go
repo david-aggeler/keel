@@ -781,9 +781,11 @@ func (b *worktreeBinding) ensureWorktreesDir() error {
 
 // gitProbe runs one read-only git command through keel/exec and returns its
 // stdout and exit status. A non-zero status is an answer, not an error, so the
-// caller decides what it means.
+// caller decides what it means — and keel/exec records it at Debug, not Error.
+//
+// DHF-REQ: keel/requirement-24
 func gitProbe(ctx context.Context, logger *slog.Logger, dir string, args ...string) (string, int, error) {
-	request := procexec.Request{Program: "git", Args: args, Dir: dir}
+	request := procexec.Request{Program: "git", Args: args, Dir: dir, FailureLevel: slog.LevelDebug}
 	if logger != nil {
 		request.Logger = logger
 	}

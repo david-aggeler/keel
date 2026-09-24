@@ -196,8 +196,8 @@ func TestProcessStartLogsStructuredLifecycleAndRedactsSensitiveArgs(t *testing.T
 	if got, ok := during["level"].(string); !ok || got != "DEBUG" {
 		t.Fatalf("stdout process_output level = %#v, want DEBUG", during["level"])
 	}
-	if got, ok := stderr["level"].(string); !ok || got != "ERROR" {
-		t.Fatalf("stderr process_output level = %#v, want ERROR", stderr["level"])
+	if got, ok := stderr["level"].(string); !ok || got != "DEBUG" {
+		t.Fatalf("stderr process_output level = %#v, want DEBUG (same as stdout)", stderr["level"])
 	}
 	if got, ok := end["exit_code"].(float64); !ok || got != 0 {
 		t.Fatalf("process_end exit_code = %#v, want 0", end["exit_code"])
@@ -251,14 +251,14 @@ func TestProcessWaitIsIdempotentAndEmitsProcessEndOnce(t *testing.T) {
 }
 
 // DHF-TEST: keel/requirement-24
-func TestRequestLoggerContractIncludesErrorForStderrRouting(t *testing.T) {
+func TestRequestLoggerContractIncludesErrorForFailureRouting(t *testing.T) {
 	loggerField, ok := reflect.TypeOf(procexec.Request{}).FieldByName("Logger")
 	if !ok {
 		t.Fatal("Request.Logger field missing")
 	}
 	errorMethod, ok := loggerField.Type.MethodByName("Error")
 	if !ok {
-		t.Fatal("Request.Logger contract does not require Error; stderr process_output can bypass the caller logger")
+		t.Fatal("Request.Logger contract does not require Error; a non-zero exit's END record can bypass the caller logger")
 	}
 	if got := errorMethod.Type.String(); got != "func(string, ...interface {})" {
 		t.Fatalf("Request.Logger Error method type = %s, want func(string, ...interface {})", got)
@@ -338,8 +338,8 @@ func TestProcessStartLogsChildOutputAsCleanPerLineRecords(t *testing.T) {
 		if stream == "stdout" && level != "DEBUG" {
 			t.Fatalf("stdout process_output level = %q, want DEBUG; record=%#v", level, record)
 		}
-		if stream == "stderr" && level != "ERROR" {
-			t.Fatalf("stderr process_output level = %q, want ERROR; record=%#v", level, record)
+		if stream == "stderr" && level != "DEBUG" {
+			t.Fatalf("stderr process_output level = %q, want DEBUG; record=%#v", level, record)
 		}
 		got[stream] = append(got[stream], data)
 	}

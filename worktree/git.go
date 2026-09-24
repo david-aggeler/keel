@@ -2,6 +2,7 @@ package worktree
 
 import (
 	"context"
+	"log/slog"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -12,9 +13,11 @@ import (
 // Logger receives the START/END lifecycle records keel/exec emits for every git
 // invocation this package makes. It is satisfied by *slog.Logger.
 type Logger interface {
-	// Debug records a diagnostic detail, including each captured stdout line.
+	// Debug records a diagnostic detail, including each captured output line
+	// on either stream.
 	Debug(msg string, args ...any)
-	// Error records a failure, including each captured stderr line.
+	// Error records a failed git invocation: the END record of a non-zero exit
+	// and the output tail replayed with it.
 	Error(msg string, args ...any)
 	// Info records the lifecycle end of a git invocation.
 	Info(msg string, args ...any)
@@ -26,14 +29,21 @@ type Logger interface {
 // root) and returns its trimmed stdout. A non-zero exit becomes an [*Error]
 // carrying git's stderr verbatim, so the cause is never swallowed.
 func (m *Manager) run(ctx context.Context, op, dir string, args ...string) (string, error) {
+	return m.runAt(ctx, op, dir, nil, args...)
+}
+
+// runAt is run with the severity keel/exec gives a non-zero exit; nil means
+// Error.
+func (m *Manager) runAt(ctx context.Context, op, dir string, failureLevel slog.Leveler, args ...string) (string, error) {
 	if dir == "" {
 		dir = m.repoRoot
 	}
 	req := procexec.Request{
-		Program: m.gitBin,
-		Args:    args,
-		Dir:     dir,
-		Env:     m.env,
+		Program:      m.gitBin,
+		Args:         args,
+		Dir:          dir,
+		Env:          m.env,
+		FailureLevel: failureLevel,
 	}
 	if m.logger != nil {
 		req.Logger = m.logger
@@ -54,9 +64,12 @@ func (m *Manager) run(ctx context.Context, op, dir string, args ...string) (stri
 }
 
 // runQuiet is run for a command whose failure is itself the answer (a ref that
-// does not resolve, a branch that does not exist). It reports success only.
+// does not resolve, a branch that does not exist). It reports success only, and
+// a miss is recorded at Debug rather than as a failure.
+//
+// DHF-REQ: keel/requirement-24
 func (m *Manager) runQuiet(ctx context.Context, dir string, args ...string) bool {
-	_, err := m.run(ctx, "probe", dir, args...)
+	_, err := m.runAt(ctx, "probe", dir, slog.LevelDebug, args...)
 	return err == nil
 }
 
