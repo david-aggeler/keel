@@ -108,7 +108,7 @@ func demoStepMode(t *testing.T, mode, out string) string {
 	return ""
 }
 
-// DHF-TEST: keel/requirement-26, keel/requirement-28
+// DHF-TEST: keel/requirement-26, keel/requirement-28 (keel/ac-92, keel/ac-735)
 func TestKeelDemoHelpTreeRendersTopLevelAndNestedPerMode(t *testing.T) {
 	for _, mode := range []string{"human", "ai", "json"} {
 		t.Run(mode, func(t *testing.T) {
@@ -132,20 +132,12 @@ func TestKeelDemoHelpTreeRendersTopLevelAndNestedPerMode(t *testing.T) {
 				}
 			}
 
-			if mode == "human" {
-				for _, notWant := range []string{"INFO", "====", `"event_type":"help"`, `"level":"INFO"`} {
-					if strings.Contains(top, notWant) || strings.Contains(nested, notWant) {
-						t.Fatalf("human help used log rendering marker %q\ntop:\n%s\nnested:\n%s", notWant, top, nested)
-					}
+			// Help is plain generated usage text in every mode, never a
+			// keel/log record.
+			for _, notWant := range []string{"INFO", "====", "----", `"event_type":"help"`, `"level":"INFO"`, `"event":"help"`} {
+				if strings.Contains(top, notWant) || strings.Contains(nested, notWant) {
+					t.Fatalf("--mode %s help used log rendering marker %q\ntop:\n%s\nnested:\n%s", mode, notWant, top, nested)
 				}
-			}
-			if mode == "json" {
-				assertEveryLineIsJSON(t, top)
-				assertEveryLineIsJSON(t, nested)
-			}
-			if mode == "ai" {
-				assertSparseAIEvents(t, top)
-				assertSparseAIEvents(t, nested)
 			}
 		})
 	}
@@ -319,7 +311,7 @@ func TestRunDirectHelpBranchesAndUsageError(t *testing.T) {
 		{name: "root help flag", args: []string{"--help"}, code: 0, want: []string{"keel-demo runs the log and exec showcase.", "workflow"}},
 		{name: "help command nested", args: []string{"help", "workflow"}, code: 0, want: []string{"workflow commands:", "inspect", "replay"}},
 		{name: "help all", args: []string{"--help-all"}, code: 0, want: []string{"\nkeel-demo workflow inspect\n", "\nkeel-demo workflow replay\n"}},
-		{name: "usage error", args: []string{"--bad-flag"}, code: 2, want: []string{"keel-demo failed", `unknown flag "--bad-flag"`, "usage: keel-demo"}},
+		{name: "usage error", args: []string{"--bad-flag"}, code: 2, want: []string{`keel-demo: unknown flag "--bad-flag"`, "Usage:\n  keel-demo "}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -339,7 +331,7 @@ func TestRunDirectHelpBranchesAndUsageError(t *testing.T) {
 // DHF-TEST: keel/requirement-155 (keel/ac-639)
 func TestKeelDemoHelpWordMatchesHelpFlagForEveryCommandNode(t *testing.T) {
 	assertKeelDemoHelpParity(t, "root", []string{"help"}, []string{"--help"})
-	for _, path := range demoCommandInventoryPaths(t, commandTree()) {
+	for _, path := range demoCommandInventoryPaths(t) {
 		parts := strings.Fields(path)
 		assertKeelDemoHelpParity(t, path, append([]string{"help"}, parts...), append(append([]string{}, parts...), "--help"))
 	}
@@ -357,18 +349,18 @@ func assertKeelDemoHelpParity(t *testing.T, name string, helpArgs, flagArgs []st
 	}
 }
 
-func demoCommandInventoryPaths(t *testing.T, tree *cli.CommandSpec) []string {
+func demoCommandInventoryPaths(t *testing.T) []string {
 	t.Helper()
-	var encoded bytes.Buffer
-	if err := tree.RenderHelpJSON(&encoded); err != nil {
-		t.Fatalf("RenderHelpJSON: %v", err)
+	encoded, code := captureRunOutput(t, func() int { return run([]string{"--help-json"}) })
+	if code != 0 {
+		t.Fatalf("keel-demo --help-json exit = %d, want 0\n%s", code, encoded)
 	}
 	var inventory []struct {
 		Path string `json:"path"`
 		Kind string `json:"kind"`
 	}
-	if err := json.Unmarshal(encoded.Bytes(), &inventory); err != nil {
-		t.Fatalf("parse command inventory: %v\n%s", err, encoded.String())
+	if err := json.Unmarshal([]byte(encoded), &inventory); err != nil {
+		t.Fatalf("parse command inventory: %v\n%s", err, encoded)
 	}
 	paths := make([]string, 0, len(inventory))
 	for _, command := range inventory {
@@ -382,52 +374,19 @@ func demoCommandInventoryPaths(t *testing.T, tree *cli.CommandSpec) []string {
 	return paths
 }
 
-// DHF-TEST: keel/requirement-11, keel/requirement-28
-func TestRenderHelpDirectMachineModesEmitHelpEvent(t *testing.T) {
-	tree := commandTree()
-	for _, tc := range []struct {
-		name string
-		mode cli.Mode
-	}{
-		{name: "ai", mode: cli.ModeAI},
-		{name: "json", mode: cli.ModeJSON},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			out, code := captureRunOutput(t, func() int {
-				return renderHelp(tree, cli.RuntimeConfig{Mode: tc.mode}, []string{"workflow"})
-			})
-			if code != 0 {
-				t.Fatalf("renderHelp exit = %d, want 0\n%s", code, out)
-			}
-			for _, want := range []string{"keel-demo help", "keel-demo workflow", "inspect", "replay"} {
-				if !strings.Contains(out, want) {
-					t.Fatalf("renderHelp(%s) missing %q\n%s", tc.name, want, out)
-				}
-			}
-			if tc.mode == cli.ModeJSON {
-				assertEveryLineIsJSON(t, out)
-			}
-			if tc.mode == cli.ModeAI {
-				assertSparseAIEvents(t, out)
-			}
-		})
-	}
-}
-
 // DHF-TEST: keel/requirement-164 (keel/ac-697), keel/requirement-166
 // Requested help is the payload, not a diagnostic: -q must not swallow it in
-// the machine modes, where it travels as a log event.
+// the machine modes.
 func TestQuietDoesNotSwallowRequestedHelpInMachineModes(t *testing.T) {
 	t.Chdir(t.TempDir())
-	for _, mode := range []cli.Mode{cli.ModeAI, cli.ModeJSON} {
-		rt := cli.RuntimeConfig{Mode: mode, Quiet: true}
-		out, code := captureRunOutput(t, func() int { return renderHelp(commandTree(), rt, []string{"workflow"}) })
-		if code != 0 || !strings.Contains(out, "keel-demo workflow") {
-			t.Fatalf("renderHelp(%s, -q) exit = %d, want help event\n%s", mode, code, out)
+	for _, mode := range []string{"ai", "json"} {
+		out, code := captureRunOutput(t, func() int { return run([]string{"--mode", mode, "-q", "help", "workflow"}) })
+		if code != 0 || !strings.Contains(out, "workflow commands:") {
+			t.Fatalf("--mode %s -q help workflow exit = %d, want help\n%s", mode, code, out)
 		}
-		out, code = captureRunOutput(t, func() int { return renderAllHelp(commandTree(), rt) })
-		if code != 0 || !strings.Contains(out, "keel-demo help-all") {
-			t.Fatalf("renderAllHelp(%s, -q) exit = %d, want help-all event\n%s", mode, code, out)
+		out, code = captureRunOutput(t, func() int { return run([]string{"--mode", mode, "-q", "--help-all"}) })
+		if code != 0 || !strings.Contains(out, "keel-demo workflow replay") {
+			t.Fatalf("--mode %s -q --help-all exit = %d, want the full help tree\n%s", mode, code, out)
 		}
 	}
 }
@@ -445,13 +404,13 @@ func TestRunDirectDefaultShowcaseAndHelpAllMachineMode(t *testing.T) {
 		}
 	}
 
-	for _, mode := range []cli.Mode{cli.ModeAI, cli.ModeJSON} {
-		out, code := captureRunOutput(t, func() int { return renderAllHelp(commandTree(), cli.RuntimeConfig{Mode: mode}) })
+	for _, mode := range []string{"ai", "json"} {
+		out, code := captureRunOutput(t, func() int { return run([]string{"--mode", mode, "--help-all"}) })
 		if code != 0 {
-			t.Fatalf("renderAllHelp(%s) exit = %d, want 0\n%s", mode, code, out)
+			t.Fatalf("--mode %s --help-all exit = %d, want 0\n%s", mode, code, out)
 		}
-		if !strings.Contains(out, "keel-demo help-all") || !strings.Contains(out, "keel-demo workflow replay") {
-			t.Fatalf("renderAllHelp(%s) missing full help event\n%s", mode, out)
+		if !strings.Contains(out, "keel-demo workflow replay") {
+			t.Fatalf("--mode %s --help-all missing the full help tree\n%s", mode, out)
 		}
 	}
 }

@@ -19,7 +19,8 @@ func TestDispatchRendersHelpForDeepestNamedNode(t *testing.T) {
 			Usage:        "tool <command>",
 			HelpUsage:    "tool help [command]",
 			CommandUsage: "tool <command> --help",
-			HelpWriter:   &help,
+			helpStdout:   &help,
+			helpStderr:   &help,
 		},
 		Subcommands: []*CommandSpec{{
 			Name:  "group",
@@ -86,7 +87,8 @@ func TestDispatchResolvesLeadingHelpWordLikeHelpFlag(t *testing.T) {
 			Usage:        "tool <command>",
 			HelpUsage:    "tool help [command]",
 			CommandUsage: "tool <command> --help",
-			HelpWriter:   &help,
+			helpStdout:   &help,
+			helpStderr:   &help,
 		},
 		Subcommands: []*CommandSpec{{
 			Name:  "group",
@@ -144,7 +146,8 @@ func TestDispatchHelpWordUnknownTopicFallsBackToNearestNode(t *testing.T) {
 			Usage:        "tool <command>",
 			HelpUsage:    "tool help [command]",
 			CommandUsage: "tool <command> --help",
-			HelpWriter:   &help,
+			helpStdout:   &help,
+			helpStderr:   &help,
 		},
 		Subcommands: []*CommandSpec{{
 			Name:  "group",
@@ -534,11 +537,11 @@ func TestUndeclaredGlobalFlagsRemainPositionIndependent(t *testing.T) {
 		{name: "verbose short leading", argv: []string{"-v", "run"}, want: RuntimeConfig{Mode: ModeHuman, Verbose: true}},
 		{name: "verbose long trailing", argv: []string{"run", "--verbose"}, want: RuntimeConfig{Mode: ModeHuman, Verbose: true}},
 		{name: "no header trailing", argv: []string{"run", "--no-header"}, want: RuntimeConfig{Mode: ModeHuman, NoHeader: true}},
-		{name: "help short trailing", argv: []string{"run", "-h"}, want: RuntimeConfig{Mode: ModeHuman, Help: true}},
-		{name: "help long leading", argv: []string{"--help", "run"}, want: RuntimeConfig{Mode: ModeHuman, Help: true}},
-		{name: "help all trailing", argv: []string{"run", "--help-all"}, want: RuntimeConfig{Mode: ModeHuman, HelpAll: true}},
-		{name: "help json trailing", argv: []string{"run", "--help-json"}, want: RuntimeConfig{Mode: ModeHuman, HelpJSON: true}},
-		{name: "version trailing", argv: []string{"run", "--version"}, want: RuntimeConfig{Mode: ModeHuman, Version: true}},
+		{name: "help short trailing", argv: []string{"run", "-h"}, want: RuntimeConfig{Mode: ModeHuman, help: true}},
+		{name: "help long leading", argv: []string{"--help", "run"}, want: RuntimeConfig{Mode: ModeHuman, help: true}},
+		{name: "help all trailing", argv: []string{"run", "--help-all"}, want: RuntimeConfig{Mode: ModeHuman, helpAll: true}},
+		{name: "help json trailing", argv: []string{"run", "--help-json"}, want: RuntimeConfig{Mode: ModeHuman, helpJSON: true}},
+		{name: "version trailing", argv: []string{"run", "--version"}, want: RuntimeConfig{Mode: ModeHuman, version: true}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

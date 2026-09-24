@@ -348,18 +348,15 @@ func scanNoRawFmtOutput(root string, files []string) ([]string, error) {
 //
 //   - newPayloadStream — the stdout writer a verb receives by declaring a
 //     payload; for keel-dev the sole protocol writer (keel/ac-112);
-//   - helpStream — requested help, --version and --help-json on stdout, an
-//     unresolvable help topic on stderr;
-//   - bootstrapFailure — a failure before any logger exists, on stderr;
-//   - keel-dev's run — the pre-logger usage refusal and the help branches.
+//   - bootstrapFailure — a failure before any logger exists, on stderr.
+//
+// Help needs no entry: keel/cli writes every help output and usage error
+// itself (keel/requirement-172), so no binary touches a stream for help.
 var stdoutAllowlist = map[string]bool{
 	fileFunc("cmd/keel-dev/main.go", "newPayloadStream"):      true,
-	fileFunc("cmd/keel-dev/main.go", "run"):                   true,
 	fileFunc("cmd/keel-demo/main.go", "bootstrapFailure"):     true,
-	fileFunc("cmd/keel-demo/main.go", "helpStream"):           true,
 	fileFunc("cmd/keel-demo/main.go", "newPayloadStream"):     true,
 	fileFunc("cmd/keel-demo-dev/main.go", "bootstrapFailure"): true,
-	fileFunc("cmd/keel-demo-dev/main.go", "helpStream"):       true,
 	fileFunc("cmd/keel-demo-dev/main.go", "newPayloadStream"): true,
 }
 

@@ -198,7 +198,7 @@ func TestHelpWidthWrapsFlagDescriptions(t *testing.T) {
 	long := "Select the console output protocol for this very long description that must wrap."
 	root := &cli.CommandSpec{
 		Name:   "tool",
-		Config: cli.Config{Program: "tool", Usage: "tool <command>", HelpWidth: 40},
+		Config: cli.Config{Program: "tool", Usage: "tool <command>"},
 		Subcommands: []*cli.CommandSpec{{
 			Name:    "run",
 			Short:   "Run it.",
@@ -209,6 +209,7 @@ func TestHelpWidthWrapsFlagDescriptions(t *testing.T) {
 	var buf bytes.Buffer
 	cmd := root.Subcommands[0]
 	root.InheritConfig()
+	root.SetHelpWidth(40)
 	cmd.RenderCommandHelp(&buf, []string{"run"})
 	for _, line := range strings.Split(buf.String(), "\n") {
 		if len(line) > 40 {

@@ -5,7 +5,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -157,37 +156,11 @@ func run(argv []string) int {
 		return bootstrapFailure(err, 1)
 	}
 
-	cfg, words, err := tree.ParseGlobalConfig(argv)
-	if err != nil {
-		return bootstrapFailure(err, 2)
-	}
-	// DHF-REQ: keel/requirement-166 — the operator's color and input policy
-	// resolve once into keel/term; requested help wraps to its width.
-	tree.Config.HelpWidth = cli.HelpWidth(term.New(terminalConfig(cfg)))
-	if cfg.Version {
-		// DHF-REQ: keel/requirement-110
-		_, _ = io.WriteString(helpStream(nil), versionString()+"\n")
-		return 0
-	}
-	if cfg.HelpAll {
-		// DHF-REQ: keel/requirement-164
-		tree.RenderAllHelp(helpStream(nil))
-		return 0
-	}
-	if cfg.HelpJSON {
-		// DHF-REQ: keel/requirement-100
-		if err := tree.RenderHelpJSON(helpStream(nil)); err != nil {
-			return bootstrapFailure(err, 1)
-		}
-		return 0
-	}
-	if cfg.Help {
-		// DHF-REQ: keel/requirement-164 — a resolvable topic is requested help
-		// and goes to stdout; an unknown topic is a usage error and keeps stderr.
-		var help bytes.Buffer
-		helpErr := tree.RenderHelp(&help, words)
-		_, _ = helpStream(helpErr).Write(help.Bytes())
-		return helpExitCode(helpErr)
+	// DHF-REQ: keel/requirement-172 — keel/cli serves every help output and
+	// usage error itself; keel-demo-dev only returns the code it reports.
+	cfg, words, code, done := tree.Start(argv)
+	if done {
+		return code
 	}
 
 	root, err := os.Getwd()
@@ -227,18 +200,6 @@ func run(argv []string) int {
 func bootstrapFailure(err error, code int) int {
 	_, _ = io.WriteString(os.Stderr, "keel-demo-dev: "+err.Error()+"\n")
 	return code
-}
-
-// helpStream is where requested help, --version and --help-json go: stdout,
-// because the operator asked for that document. A help request that fails to
-// resolve is a usage error and goes to stderr.
-//
-// DHF-REQ: keel/requirement-164
-func helpStream(err error) io.Writer {
-	if err != nil {
-		return os.Stderr
-	}
-	return os.Stdout
 }
 
 // newPayloadStream is the stdout writer handed to a verb that declares a
@@ -304,26 +265,6 @@ func loggerConfig(rt cli.RuntimeConfig) logging.Config {
 	cfg.DisableColor = color == term.ColorNever
 	cfg.ConsoleOmitKeys = []string{"service"}
 	return cfg
-}
-
-// terminalConfig is the keel/term input keel-demo-dev resolves its terminal
-// capability from: stdout, the destination of requested help, under the
-// operator's --color, --no-input and --plain policy.
-//
-// DHF-REQ: keel/requirement-166
-func terminalConfig(rt cli.RuntimeConfig) term.Config {
-	return rt.TermConfig(term.Stdout)
-}
-
-func helpExitCode(err error) int {
-	if err == nil {
-		return 0
-	}
-	var usage cli.UsageError
-	if errors.As(err, &usage) {
-		return usage.ExitCode()
-	}
-	return 1
 }
 
 // DHF-REQ: keel/requirement-108, keel/requirement-111

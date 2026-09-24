@@ -304,11 +304,7 @@ func runCommandTreeGate(ctx context.Context, logger *slog.Logger, dir string) er
 	if err := commandTree().ValidateTree(); err != nil {
 		return err
 	}
-	inventory, err := commandInventoryFromTree(commandTree())
-	if err != nil {
-		return fmt.Errorf("keel-dev command inventory: %w", err)
-	}
-	if err := validateCommandInventoryUse("keel-dev", inventory); err != nil {
+	if err := validateCommandInventoryUse("keel-dev", commandInventoryFromTree(commandTree())); err != nil {
 		return err
 	}
 	for _, firstParty := range []struct {
@@ -335,16 +331,26 @@ func runCommandTreeGate(ctx context.Context, logger *slog.Logger, dir string) er
 	return nil
 }
 
-func commandInventoryFromTree(tree *cli.CommandSpec) ([]commandInventoryItem, error) {
-	var out strings.Builder
-	if err := tree.RenderHelpJSON(&out); err != nil {
-		return nil, err
-	}
+// commandInventoryFromTree lists the path and usage of every command below the
+// root of the in-process tree: the command elements --help-json reports,
+// derived from the tree itself because keel/cli writes help only to its own
+// streams (keel/requirement-172).
+func commandInventoryFromTree(tree *cli.CommandSpec) []commandInventoryItem {
+	tree.InheritConfig()
 	var inventory []commandInventoryItem
-	if err := json.Unmarshal([]byte(out.String()), &inventory); err != nil {
-		return nil, err
+	var walk func(node *cli.CommandSpec, path []string)
+	walk = func(node *cli.CommandSpec, path []string) {
+		for _, child := range node.Subcommands {
+			childPath := append(append([]string{}, path...), child.Name)
+			inventory = append(inventory, commandInventoryItem{
+				Path:  strings.Join(childPath, " "),
+				Usage: strings.TrimPrefix(child.Usage(childPath), "usage: "),
+			})
+			walk(child, childPath)
+		}
 	}
-	return inventory, nil
+	walk(tree, nil)
+	return inventory
 }
 
 func commandInventoryFromGoRun(ctx context.Context, logger *slog.Logger, dir, pkg string) ([]commandInventoryItem, error) {

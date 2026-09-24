@@ -180,7 +180,12 @@ root := &cli.CommandSpec{
     }},
 }
 
-cfg, words, _ := cli.ParseGlobalConfig(os.Args[1:]) // shared global flags first
+// Start parses the shared global flags and serves every help output and
+// usage error itself; the consumer only returns the exit code it reports.
+cfg, words, code, done := root.Start(os.Args[1:])
+if done {
+    os.Exit(code)
+}
 _ = cfg
-err := root.Dispatch(context.Background(), words)   // walks the tree, runs the handler
+err := root.Dispatch(context.Background(), words) // walks the tree, runs the handler
 ```

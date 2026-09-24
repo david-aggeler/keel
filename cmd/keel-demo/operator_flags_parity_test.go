@@ -129,11 +129,22 @@ func assertEveryGlobalFlagHasParity(t *testing.T, checks map[string]func(*testin
 
 func parseRuntime(t *testing.T, argv ...string) cli.RuntimeConfig {
 	t.Helper()
-	cfg, _, err := cli.ParseGlobalConfig(argv)
-	if err != nil {
-		t.Fatalf("ParseGlobalConfig(%q): %v", argv, err)
+	tree := commandTree()
+	var cfg cli.RuntimeConfig
+	var done bool
+	discardProcessStreams(t, func() {
+		cfg, _, _, done = tree.Start(append(append([]string{}, argv...), tree.Subcommands[0].Name))
+	})
+	if done {
+		t.Fatalf("Start(%q) served the invocation; want a runtime config", argv)
 	}
 	return cfg
+}
+
+// terminalConfig is the keel/term input the operator's --color, --no-input
+// and --plain policy selects for stdout.
+func terminalConfig(rt cli.RuntimeConfig) term.Config {
+	return rt.TermConfig(term.Stdout)
 }
 
 // normalizedSink returns the records of the one file with ext under dir with

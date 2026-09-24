@@ -151,19 +151,20 @@ func globalFlagSectionSpellings(t *testing.T, help string) map[string]bool {
 }
 
 func globalSurfaceTree(width int) *cli.CommandSpec {
-	return &cli.CommandSpec{
+	tree := &cli.CommandSpec{
 		Name: "tool",
 		Config: cli.Config{
 			Program:      "tool",
 			Usage:        "tool <command>",
 			HelpUsage:    "tool help [command]",
 			CommandUsage: "tool <command> --help",
-			HelpWidth:    width,
 		},
 		Subcommands: []*cli.CommandSpec{
 			{Name: "status", Use: "status", Short: "Show status.", Handler: func(context.Context, []string) error { return nil }},
 		},
 	}
+	tree.SetHelpWidth(width)
+	return tree
 }
 
 // DHF-TEST: keel/requirement-101 (keel/ac-716)

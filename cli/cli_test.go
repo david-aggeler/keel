@@ -205,7 +205,7 @@ func TestParseGlobalConfigRecognizesHelpAllPositionIndependently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.HelpAll {
+	if !cfg.helpAll {
 		t.Fatalf("HelpAll = false, want true")
 	}
 	if cfg.Mode != ModeAI {
@@ -219,7 +219,7 @@ func TestParseGlobalConfigRecognizesHelpAllPositionIndependently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.HelpAll || strings.Join(rest, " ") != "--help-all=true" {
+	if cfg.helpAll || strings.Join(rest, " ") != "--help-all=true" {
 		t.Fatalf("--help-all=true parsed as cfg=%+v rest=%q, want unconsumed unknown flag", cfg, strings.Join(rest, " "))
 	}
 }
@@ -290,7 +290,7 @@ func TestParseGlobalConfigRecognizesHelpJSONPositionIndependently(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.HelpJSON {
+	if !cfg.helpJSON {
 		t.Fatalf("HelpJSON = false, want true")
 	}
 	if cfg.Mode != ModeAI {
@@ -565,7 +565,7 @@ func TestUsageErrorAndGlobalParseErrors(t *testing.T) {
 }
 
 // DHF-TEST: keel/requirement-21, keel/requirement-152
-func TestLegacyCommandRowHelpersAndDefaultUsage(t *testing.T) {
+func TestDefaultUsage(t *testing.T) {
 	// A root with no Use and no Config.Usage falls back to the generic
 	// "<command> [args]" suffix, but the program token itself has no fallback:
 	// it is the root's Config.Program and nothing else. The former assertion
@@ -575,37 +575,6 @@ func TestLegacyCommandRowHelpersAndDefaultUsage(t *testing.T) {
 	root := &CommandSpec{Name: "binary", Config: Config{Program: "tool"}}
 	if got := root.Usage(nil); got != "usage: tool <command> [args]" {
 		t.Fatalf("default Usage = %q, want %q", got, "usage: tool <command> [args]")
-	}
-
-	commands := []*CommandSpec{
-		{Name: "beta", Use: "beta", Short: "Second."},
-		{Name: "alpha", Use: "alpha", Short: "First."},
-	}
-	var rows bytes.Buffer
-	PrintCommandRows(&rows, commands)
-	for _, want := range []string{
-		"  beta   Second.",
-		"  alpha  First.",
-	} {
-		if !strings.Contains(rows.String(), want) {
-			t.Fatalf("PrintCommandRows missing %q:\n%s", want, rows.String())
-		}
-	}
-
-	parent := []string{"parent"}
-	var nested bytes.Buffer
-	RenderSubcommandHelp(&nested, parent, commands, 0)
-	got := nested.String()
-	assertBefore(t, got, "alpha", "beta")
-	for _, want := range []string{
-		"  alpha",
-		"      First.",
-		"  beta",
-		"      Second.",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("RenderSubcommandHelp missing %q:\n%s", want, got)
-		}
 	}
 }
 
@@ -704,7 +673,8 @@ func TestRenderRootHelpDocumentsModeOnceFromKeelText(t *testing.T) {
 			Usage:        "tool <command> [args]",
 			HelpUsage:    "tool help [command]",
 			CommandUsage: "tool <command> --help",
-			HelpWriter:   &dispatchHelp,
+			helpStdout:   &dispatchHelp,
+			helpStderr:   &dispatchHelp,
 			// No ModeHelp, no GlobalFlags: everything mode-related must come
 			// from keel.
 		},
@@ -813,7 +783,8 @@ func TestModeHelpTopicDoesNotLeakIntoCommandSurface(t *testing.T) {
 			Usage:        "tool <command> [args]",
 			HelpUsage:    "tool help [command]",
 			CommandUsage: "tool <command> --help",
-			HelpWriter:   &renderedHelp,
+			helpStdout:   &renderedHelp,
+			helpStderr:   &renderedHelp,
 		},
 		Subcommands: []*CommandSpec{
 			{Name: "ci", Use: "ci", Short: "Run the gate.", Handler: noopHandler},

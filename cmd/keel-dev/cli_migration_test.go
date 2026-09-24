@@ -73,9 +73,11 @@ func TestTestBridgeCommandTreeIsFlatAndUsesCLIBoundFlags(t *testing.T) {
 			t.Fatalf("%s group = %q, want %q", strings.Join(tc.path, " "), spec.Group, tc.want)
 		}
 	}
-	var help strings.Builder
-	testBridge.RenderCommandHelp(&help, []string{"test-bridge"})
-	helpText := help.String()
+	helpText, _ := captureProcessStreams(t, func() {
+		if code := run([]string{"help", "test-bridge"}); code != 0 {
+			t.Fatalf("keel-dev help test-bridge exit = %d, want 0", code)
+		}
+	})
 	for _, want := range []string{
 		"Config:\n  config-init",
 		"Config:\n  config-init     Write .vscode/test-bridge.json if absent.\n  config-upgrade",

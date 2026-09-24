@@ -9,7 +9,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -36,56 +35,11 @@ func main() {
 // main so tests can drive the whole CLI surface.
 func run(argv []string) int {
 	tree := commandTree()
-	cfg, words, err := tree.ParseGlobalConfig(argv)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "keel-dev: "+err.Error())
-		fmt.Fprintln(os.Stderr)
-		printUsage(tree, os.Stderr)
-		return 2
-	}
-	// DHF-REQ: keel/requirement-166 — the operator's color and input policy
-	// resolve once into keel/term; requested help wraps to its width.
-	tree.Config.HelpWidth = cli.HelpWidth(term.New(terminalConfig(cfg)))
-
-	if cfg.Version {
-		fmt.Fprintln(os.Stdout, versionString())
-		return 0
-	}
-	if cfg.HelpAll {
-		// DHF-REQ: keel/requirement-57, keel/requirement-164 — requested help
-		// is the payload the operator asked for: stdout.
-		tree.RenderAllHelp(os.Stdout)
-		return 0
-	}
-	if cfg.HelpJSON {
-		// DHF-REQ: keel/requirement-100 — structured inventory on stdout,
-		// path- and mode-independent, exit 0.
-		if err := tree.RenderHelpJSON(os.Stdout); err != nil {
-			fmt.Fprintln(os.Stderr, "keel-dev: "+err.Error())
-			return 1
-		}
-		return 0
-	}
-	if cfg.Help && len(words) == 0 {
-		// DHF-REQ: keel/requirement-164
-		printUsage(tree, os.Stdout)
-		return 0
-	}
-	if cfg.Help {
-		// DHF-REQ: keel/requirement-164 — a resolvable topic is requested help
-		// and goes to stdout; an unknown topic is a usage error and keeps stderr.
-		var help bytes.Buffer
-		helpErr := tree.RenderHelp(&help, words)
-		out := io.Writer(os.Stdout)
-		if helpErr != nil {
-			out = os.Stderr
-		}
-		_, _ = out.Write(help.Bytes())
-		return helpExitCode(helpErr)
-	}
-	if len(words) == 0 {
-		printUsage(tree, os.Stderr)
-		return 2
+	// DHF-REQ: keel/requirement-172 — keel/cli serves every help output and
+	// usage error itself; keel-dev only returns the code it reports.
+	cfg, words, code, done := tree.Start(argv)
+	if done {
+		return code
 	}
 
 	// Every verb operates on the keel module root, never on whatever directory
@@ -116,25 +70,6 @@ func run(argv []string) int {
 
 	slogLogger := logger.Slog()
 	return exitFor(slogLogger, dispatchKeelDev(withRunState(ctx, slogLogger, logger, root), tree, words))
-}
-
-// printUsage writes the static help text to w: stdout when help was
-// requested, stderr when it accompanies a usage error. Help is documentation,
-// not run output; run output (gate progress, results, errors) flows through
-// keel/log.
-func printUsage(tree *cli.CommandSpec, w io.Writer) {
-	tree.RenderRootHelp(w)
-}
-
-func helpExitCode(err error) int {
-	if err == nil {
-		return 0
-	}
-	var usage cli.UsageError
-	if errors.As(err, &usage) {
-		return usage.ExitCode()
-	}
-	return 1
 }
 
 // newPayloadStream is the single allowlisted payload writer — the only
@@ -187,15 +122,6 @@ func consoleLogger(cfg logging.Config) *slog.Logger {
 		return slog.New(slog.NewTextHandler(cfg.Writer, nil))
 	}
 	return logger.Slog()
-}
-
-// terminalConfig is the keel/term input keel-dev resolves its terminal
-// capability from: stdout, the destination of requested help, under the
-// operator's --color, --no-input and --plain policy.
-//
-// DHF-REQ: keel/requirement-166
-func terminalConfig(rt cli.RuntimeConfig) term.Config {
-	return rt.TermConfig(term.Stdout)
 }
 
 // DHF-REQ: keel/requirement-110
