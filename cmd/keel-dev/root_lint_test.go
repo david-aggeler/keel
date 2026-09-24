@@ -308,7 +308,11 @@ func TestRunHelpJSONReportsWriteFailure(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-11
+// TestRunDirectCIDispatchesThroughLoggerAndGate also pins the inverted
+// default: ci declares no payload, so its run output is diagnostics on stderr
+// and stdout stays empty (keel/impact_assessment-3 finding S2).
+//
+// DHF-TEST: keel/requirement-11, keel/requirement-164
 func TestRunDirectCIDispatchesThroughLoggerAndGate(t *testing.T) {
 	callsFile := stubTools(t, false, false)
 	root := moduleFixture(t)
@@ -320,11 +324,11 @@ func TestRunDirectCIDispatchesThroughLoggerAndGate(t *testing.T) {
 			t.Fatalf("run ci exit = %d, want 0\ncalls:\n%s", code, calls(t, callsFile))
 		}
 	})
-	if !strings.Contains(stdout, "ci gate green") {
-		t.Fatalf("run ci stdout missing success log:\n%s", stdout)
+	if !strings.Contains(stderr, "ci gate green") {
+		t.Fatalf("run ci stderr missing success log:\n%s", stderr)
 	}
-	if stderr != "" {
-		t.Fatalf("run ci stderr = %q, want empty", stderr)
+	if stdout != "" {
+		t.Fatalf("run ci stdout = %q, want empty: ci declares no payload", stdout)
 	}
 	got := calls(t, callsFile)
 	for _, want := range []string{"go build ./...", "go test ./...", "go tool cover"} {
@@ -379,8 +383,8 @@ func TestCILintUsesTrackedNonExcludedFiles(t *testing.T) {
 			t.Fatalf("ci with untracked and excluded lint offenders exit = %d, want 0", code)
 		}
 	})
-	if !strings.Contains(stdout, "ci gate green") || stderr != "" {
-		t.Fatalf("ci with untracked and excluded lint offenders stdout=%q stderr=%q, want green stdout and empty stderr", stdout, stderr)
+	if !strings.Contains(stderr, "ci gate green") || stdout != "" {
+		t.Fatalf("ci with untracked and excluded lint offenders stdout=%q stderr=%q, want green log on stderr and empty stdout", stdout, stderr)
 	}
 
 	writeFile(t, root, "tracked_bad.go", "package p\n\nimport \"log\"\n\nvar _ = log.Default\n")
@@ -463,9 +467,9 @@ func TestLintNoRawStdoutStream(t *testing.T) {
 	writeFile(t, keeldev, "stream.go",
 		"package main\n\nimport \"io\"\n\nvar _ io.Writer\n")
 	writeFile(t, keeldev, "main.go",
-		"package main\n\nimport (\n\t\"io\"\n\t\"os\"\n)\n\nfunc newLogger() io.Writer { return os.Stdout }\n")
+		"package main\n\nimport (\n\t\"io\"\n\t\"os\"\n)\n\nfunc newPayloadStream() io.Writer { return os.Stdout }\n")
 	if err := runLint(dir, lintFixtureFiles(t, dir)); err != nil {
-		t.Fatalf("allowlisted os.Stdout in newLogger should pass, got %v", err)
+		t.Fatalf("allowlisted os.Stdout in newPayloadStream should pass, got %v", err)
 	}
 }
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 
@@ -19,8 +20,44 @@ type runState struct {
 
 type runStateKey struct{}
 
+// withRunState binds the invocation's run state. The protocol writer starts
+// undeclared: a verb reaches stdout only after declarePayload rebinds it.
 func withRunState(ctx context.Context, logger *slog.Logger, runLog *logging.Logger, root string) context.Context {
-	return withRunStateProtocol(ctx, logger, runLog, root, newProtocolStream())
+	return withRunStateProtocol(ctx, logger, runLog, root, undeclaredPayload{})
+}
+
+// undeclaredPayload is the protocol writer of a verb that declared no payload.
+// Writing to it fails loudly instead of reaching stdout, so a verb that emits
+// payload without declaring it is caught on its first write.
+//
+// DHF-REQ: keel/requirement-164
+type undeclaredPayload struct{}
+
+func (undeclaredPayload) Write([]byte) (int, error) {
+	return 0, errors.New("keel-dev: verb declared no payload; stdout is closed to it (keel/requirement-164)")
+}
+
+// declarePayload marks every verb under spec as writing a payload to stdout:
+// its handler runs with the undeclared protocol writer rebound to
+// newPayloadStream (a writer the caller injected is kept), and the console sink
+// stays on stderr. Wrapping a spec here is the single statement of
+// which verbs reach stdout — there is no second list.
+//
+// DHF-REQ: keel/requirement-38, keel/requirement-114, keel/requirement-164
+func declarePayload(spec *cli.CommandSpec) *cli.CommandSpec {
+	if h := spec.Handler; h != nil {
+		spec.Handler = func(ctx context.Context, args []string) error {
+			state := stateFrom(ctx)
+			if _, undeclared := state.protocol.(undeclaredPayload); undeclared {
+				ctx = withRunStateProtocol(ctx, state.logger, state.runLog, state.root, newPayloadStream())
+			}
+			return h(ctx, args)
+		}
+	}
+	for _, sub := range spec.Subcommands {
+		declarePayload(sub)
+	}
+	return spec
 }
 
 func withRunStateProtocol(ctx context.Context, logger *slog.Logger, runLog *logging.Logger, root string, protocol io.Writer) context.Context {
@@ -60,9 +97,9 @@ func commandTree() *cli.CommandSpec {
 			gateCommandSpec(),
 			{Name: "release", Use: "release vX.Y.Z", Short: "Cut a release after a clean preflight.", Positionals: []cli.PositionalSpec{{Name: "version", Min: 1, Max: 1}}, Handler: handleRelease},
 			{Name: "verify", Use: "verify vX.Y.Z", Short: "Re-verify anonymous module fetch for an existing tag.", Positionals: []cli.PositionalSpec{{Name: "version", Min: 1, Max: 1}}, Handler: handleVerify},
-			testBridgeCommandSpec(),
+			declarePayload(testBridgeCommandSpec()),
 			vsixCommandSpec(),
-			worktreeCommandSpec(),
+			declarePayload(worktreeCommandSpec()),
 		},
 	}
 	tree.InheritConfig()

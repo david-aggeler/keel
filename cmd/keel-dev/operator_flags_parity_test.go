@@ -97,7 +97,7 @@ func keelDevRun(t *testing.T, argv ...string) (console, text, jsonl string) {
 	t.Helper()
 	dir := t.TempDir()
 	var buf bytes.Buffer
-	logger, closeSinks, err := buildLogger(parseRuntime(t, argv...), dir, &buf)
+	logger, closeSinks, err := openRunLogger(loggerConfigTo(parseRuntime(t, argv...), &buf), dir)
 	if err != nil {
 		t.Fatalf("buildLogger: %v", err)
 	}

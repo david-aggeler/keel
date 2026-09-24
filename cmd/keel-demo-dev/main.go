@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -153,33 +154,30 @@ func main() {
 func run(argv []string) int {
 	tree := demoDevCommandTree(demoBridge{})
 	if err := tree.ValidateTree(); err != nil {
-		fmt.Fprintln(os.Stderr, "keel-demo-dev: "+err.Error())
-		return 1
+		return bootstrapFailure(err, 1)
 	}
 
 	cfg, words, err := tree.ParseGlobalConfig(argv)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "keel-demo-dev: "+err.Error())
-		return 2
+		return bootstrapFailure(err, 2)
 	}
 	// DHF-REQ: keel/requirement-166 — the operator's color and input policy
 	// resolve once into keel/term; requested help wraps to its width.
 	tree.Config.HelpWidth = cli.HelpWidth(term.New(terminalConfig(cfg)))
 	if cfg.Version {
 		// DHF-REQ: keel/requirement-110
-		fmt.Fprintln(os.Stdout, versionString())
+		_, _ = io.WriteString(helpStream(nil), versionString()+"\n")
 		return 0
 	}
 	if cfg.HelpAll {
 		// DHF-REQ: keel/requirement-164
-		tree.RenderAllHelp(os.Stdout)
+		tree.RenderAllHelp(helpStream(nil))
 		return 0
 	}
 	if cfg.HelpJSON {
 		// DHF-REQ: keel/requirement-100
-		if err := tree.RenderHelpJSON(os.Stdout); err != nil {
-			fmt.Fprintln(os.Stderr, "keel-demo-dev: "+err.Error())
-			return 1
+		if err := tree.RenderHelpJSON(helpStream(nil)); err != nil {
+			return bootstrapFailure(err, 1)
 		}
 		return 0
 	}
@@ -188,32 +186,26 @@ func run(argv []string) int {
 		// and goes to stdout; an unknown topic is a usage error and keeps stderr.
 		var help bytes.Buffer
 		helpErr := tree.RenderHelp(&help, words)
-		out := os.Stdout
-		if helpErr != nil {
-			out = os.Stderr
-		}
-		_, _ = out.Write(help.Bytes())
+		_, _ = helpStream(helpErr).Write(help.Bytes())
 		return helpExitCode(helpErr)
 	}
 
 	root, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "keel-demo-dev: "+err.Error())
-		return 1
+		return bootstrapFailure(err, 1)
 	}
 	logger, err := logging.New(loggerConfig(cfg))
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "keel-demo-dev: "+err.Error())
-		return 1
+		return bootstrapFailure(err, 1)
 	}
 	defer func() { _ = logger.Close() }()
 	ctx := testbridge.WithRuntime(context.Background(), testbridge.Runtime{
 		Root:     root,
-		Protocol: os.Stdout,
+		Protocol: undeclaredPayload{},
 		Log:      logger.Slog(),
 	})
 	if err := tree.Dispatch(ctx, words); err != nil {
-		fmt.Fprintln(os.Stderr, "keel-demo-dev: "+err.Error())
+		logger.Error("keel-demo-dev failed", "error", logging.RedactErr(err).Error())
 		var usage cli.UsageError
 		if errors.As(err, &usage) {
 			return usage.ExitCode()
@@ -227,31 +219,91 @@ func run(argv []string) int {
 	return 0
 }
 
-// loggerConfig is keel-demo-dev's console-only diagnostics logger for one
-// invocation's global flags. stdout carries the test-bridge protocol, so the
-// console is stderr. Its floor defaults to Warn, which keeps a protocol run
-// quiet; -v lowers it to Debug and -q holds it at Warn. --color and --plain set
-// the color policy. keel-demo-dev opens no file sink.
+// bootstrapFailure reports a failure that precedes the logger on stderr and
+// returns code. It is the one place keel-demo-dev writes a diagnostic without
+// keel/log, because at that point there is no logger.
 //
-// DHF-REQ: keel/requirement-166
+// DHF-REQ: keel/requirement-164
+func bootstrapFailure(err error, code int) int {
+	_, _ = io.WriteString(os.Stderr, "keel-demo-dev: "+err.Error()+"\n")
+	return code
+}
+
+// helpStream is where requested help, --version and --help-json go: stdout,
+// because the operator asked for that document. A help request that fails to
+// resolve is a usage error and goes to stderr.
+//
+// DHF-REQ: keel/requirement-164
+func helpStream(err error) io.Writer {
+	if err != nil {
+		return os.Stderr
+	}
+	return os.Stdout
+}
+
+// newPayloadStream is the stdout writer handed to a verb that declares a
+// payload — here the test-bridge protocol stream. keel/log never writes here.
+//
+// DHF-REQ: keel/requirement-38, keel/requirement-164
+func newPayloadStream() io.Writer {
+	return os.Stdout
+}
+
+// undeclaredPayload is the protocol writer every verb starts with. A verb that
+// did not declare a payload and writes one anyway fails loudly instead of
+// reaching stdout.
+type undeclaredPayload struct{}
+
+func (undeclaredPayload) Write([]byte) (int, error) {
+	return 0, errors.New("keel-demo-dev: verb declared no payload; stdout is closed to it (keel/requirement-164)")
+}
+
+// declarePayload marks every verb under spec as writing a payload to stdout: its
+// handler runs with the undeclared test-bridge protocol stream rebound to
+// newPayloadStream; a writer the caller injected is kept.
+// It is the single statement of which verbs reach stdout.
+//
+// DHF-REQ: keel/requirement-38, keel/requirement-164
+func declarePayload(spec *cli.CommandSpec) *cli.CommandSpec {
+	if h := spec.Handler; h != nil {
+		spec.Handler = func(ctx context.Context, args []string) error {
+			if rt, ok := testbridge.RuntimeFrom(ctx); ok {
+				if _, undeclared := rt.Protocol.(undeclaredPayload); undeclared {
+					rt.Protocol = newPayloadStream()
+					ctx = testbridge.WithRuntime(ctx, rt)
+				}
+			}
+			return h(ctx, args)
+		}
+	}
+	for _, sub := range spec.Subcommands {
+		declarePayload(sub)
+	}
+	return spec
+}
+
+// loggerConfig is keel-demo-dev's console-only diagnostics logger for one
+// invocation's global flags, amended from the keel/log CLI profile: stdout
+// carries the test-bridge protocol, so the console stays on the profile's
+// stderr. Its floor defaults to Warn, which keeps a protocol run quiet; -v
+// lowers it to Debug and -q holds it at Warn. --color and --plain set the color
+// policy. keel-demo-dev opens no file sink.
+//
+// DHF-REQ: keel/requirement-164, keel/requirement-166
 func loggerConfig(rt cli.RuntimeConfig) logging.Config {
 	color := rt.EffectiveColor()
-	console := logging.ConsolePlain
+	cfg := logging.CLIProfile("keel-demo-dev")
 	switch rt.Mode {
 	case cli.ModeAI:
-		console = logging.ConsoleSparseAI
+		cfg.Console = logging.ConsoleSparseAI
 	case cli.ModeJSON:
-		console = logging.ConsoleJSON
+		cfg.Console = logging.ConsoleJSON
 	}
-	return logging.Config{
-		Service:          "keel-demo-dev",
-		Console:          console,
-		ConsoleVerbosity: rt.ConsoleLevel(slog.LevelWarn),
-		Writer:           os.Stderr,
-		ForceColor:       color == term.ColorAlways,
-		DisableColor:     color == term.ColorNever,
-		ConsoleOmitKeys:  []string{"service"},
-	}
+	cfg.ConsoleVerbosity = rt.ConsoleLevel(slog.LevelWarn)
+	cfg.ForceColor = color == term.ColorAlways
+	cfg.DisableColor = color == term.ColorNever
+	cfg.ConsoleOmitKeys = []string{"service"}
+	return cfg
 }
 
 // terminalConfig is the keel/term input keel-demo-dev resolves its terminal
@@ -276,7 +328,9 @@ func helpExitCode(err error) int {
 
 // DHF-REQ: keel/requirement-108, keel/requirement-111
 func demoDevCommandTree(bridge testbridge.Bridge) *cli.CommandSpec {
-	tree := testbridge.CommandSpec(bridge)
+	// Every keel-demo-dev verb is a test-bridge protocol verb, so the whole
+	// tree declares a payload.
+	tree := declarePayload(testbridge.CommandSpec(bridge))
 	tree.Config = cli.Config{
 		Program:      "keel-demo-dev",
 		Version:      versionString(),

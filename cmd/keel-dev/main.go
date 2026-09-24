@@ -93,19 +93,14 @@ func run(argv []string) int {
 	// .logs sinks anchor at the root too.
 	root, err := findModuleRoot(".")
 	if err != nil {
-		return exitFor(newLogger(cfg, os.Stdout), err)
+		return exitFor(newLogger(cfg), err)
 	}
 
-	// DHF-REQ: keel/requirement-38, keel/requirement-114 — test-bridge and
-	// worktree verbs keep stdout pure protocol: the console sink routes to
-	// stderr while both file sinks stay on.
-	consoleWriter := io.Writer(os.Stdout)
-	if len(words) > 0 && protocolStdoutVerbs[words[0]] {
-		consoleWriter = os.Stderr
-	}
-	logger, closeSinks, err := buildLogger(cfg, filepath.Join(root, ".logs"), consoleWriter)
+	// DHF-REQ: keel/requirement-164 — every verb's console sink is stderr; a
+	// verb reaches stdout only through the payload it declares.
+	logger, closeSinks, err := buildLogger(cfg, filepath.Join(root, ".logs"))
 	if err != nil {
-		return exitFor(newLogger(cfg, os.Stdout), err)
+		return exitFor(newLogger(cfg), err)
 	}
 	defer closeSinks()
 
@@ -142,38 +137,32 @@ func helpExitCode(err error) int {
 	return 1
 }
 
-// protocolStdoutVerbs are the top-level verbs that reserve stdout for their
-// machine-readable protocol — the VS Code test-bridge JSONL stream and the
-// worktree verbs' result lines. For them the keel/log console sink routes to
-// stderr; both .logs file sinks stay on.
+// newPayloadStream is the single allowlisted payload writer — the only
+// non-logger os.Stdout reference the no-raw-stdout-stream lint admits. A verb
+// receives it only by declaring a payload (declarePayload); it carries the VS
+// Code test-bridge JSONL stream and the worktree verbs' result lines.
 //
-// DHF-REQ: keel/requirement-38, keel/requirement-114
-var protocolStdoutVerbs = map[string]bool{
-	"test-bridge": true,
-	"worktree":    true,
-}
-
-// newProtocolStream is the single allowlisted protocol writer — the only
-// non-logger os.Stdout reference the no-raw-stdout-stream lint admits. It
-// carries the VS Code test-bridge JSONL stream and the worktree verbs' result
-// lines (see protocolStdoutVerbs).
-//
-// DHF-REQ: keel/requirement-38, keel/requirement-114
-func newProtocolStream() io.Writer {
+// DHF-REQ: keel/requirement-38, keel/requirement-114, keel/requirement-164
+func newPayloadStream() io.Writer {
 	return os.Stdout
 }
 
 // buildLogger builds keel-dev's three-sink logger from keel/log:
 //
-//  1. console on stdout — human by default; sparse-AI or JSON via --mode;
+//  1. console on stderr — human by default; sparse-AI or JSON via --mode;
 //  2. daily human-readable .log under logDir;
 //  3. per-run JSON Lines .jsonl under logDir.
 //
 // The returned closer releases both file handlers; call it once at exit.
 // DHF-REQ: keel/requirement-11, keel/requirement-19, keel/requirement-25, keel/requirement-29
-func buildLogger(rt cli.RuntimeConfig, logDir string, writer io.Writer) (*logging.Logger, func(), error) {
-	cfg := loggerConfig(rt)
-	cfg.Writer = writer
+func buildLogger(rt cli.RuntimeConfig, logDir string) (*logging.Logger, func(), error) {
+	return openRunLogger(loggerConfig(rt), logDir)
+}
+
+// openRunLogger adds both .logs file sinks under logDir to cfg and builds the
+// logger. buildLogger is its only production caller; tests reach it to swap
+// the console writer while keeping keel-dev's real config.
+func openRunLogger(cfg logging.Config, logDir string) (*logging.Logger, func(), error) {
 	cfg.TextDir = logDir
 	cfg.JSONLDir = logDir
 	cfg.PerRun = true
@@ -186,12 +175,16 @@ func buildLogger(rt cli.RuntimeConfig, logDir string, writer io.Writer) (*loggin
 
 // newLogger builds a console-only keel/log logger (bootstrap path, before the
 // module root — and thus the .logs directory — is known).
-func newLogger(rt cli.RuntimeConfig, writer io.Writer) *slog.Logger {
-	cfg := loggerConfig(rt)
-	cfg.Writer = writer
+func newLogger(rt cli.RuntimeConfig) *slog.Logger {
+	return consoleLogger(loggerConfig(rt))
+}
+
+// consoleLogger builds a console-only logger from cfg, falling back to a plain
+// slog text handler on cfg's writer if keel/log rejects the config.
+func consoleLogger(cfg logging.Config) *slog.Logger {
 	logger, err := logging.New(cfg)
 	if err != nil {
-		return slog.New(slog.NewTextHandler(writer, nil))
+		return slog.New(slog.NewTextHandler(cfg.Writer, nil))
 	}
 	return logger.Slog()
 }
@@ -229,7 +222,8 @@ func consoleForMode(mode string) (logging.Console, error) {
 }
 
 // loggerConfig is keel-dev's base logger config for one invocation's global
-// flags. The service attr is suppressed on the human console only (keel/log
+// flags, amended from the keel/log CLI profile: the console is stderr, stdout
+// is left to the payload a verb declares. The service attr is suppressed on the human console only (keel/log
 // ConsoleOmitKeys, keel/issue-3) — a single-service CLI repeating
 // service=keel-dev per line is noise. JSON mode and both .logs file sinks keep
 // the field.
@@ -238,19 +232,17 @@ func consoleForMode(mode string) (logging.Console, error) {
 // policy (--color, --plain). File sinks keep keel/log's own verbosity: quiet
 // is a console floor, never a sink switch.
 //
-// DHF-REQ: keel/requirement-166
+// DHF-REQ: keel/requirement-164, keel/requirement-166
 func loggerConfig(rt cli.RuntimeConfig) logging.Config {
 	console, _ := consoleForMode(string(rt.Mode))
 	color := rt.EffectiveColor()
-	return logging.Config{
-		Service:          "keel-dev",
-		Console:          console,
-		ConsoleVerbosity: rt.ConsoleLevel(slog.LevelInfo),
-		Writer:           os.Stdout,
-		ForceColor:       color == term.ColorAlways,
-		DisableColor:     color == term.ColorNever,
-		ConsoleOmitKeys:  []string{"service"},
-	}
+	cfg := logging.CLIProfile("keel-dev")
+	cfg.Console = console
+	cfg.ConsoleVerbosity = rt.ConsoleLevel(slog.LevelInfo)
+	cfg.ForceColor = color == term.ColorAlways
+	cfg.DisableColor = color == term.ColorNever
+	cfg.ConsoleOmitKeys = []string{"service"}
+	return cfg
 }
 
 // exitFor maps a verb's error to a process exit code, logging the failure

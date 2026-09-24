@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -394,7 +395,7 @@ func TestConsoleModeSelectsRendering(t *testing.T) {
 // DHF-TEST: keel/requirement-25
 func TestLoggerConfigUsesConsoleMode(t *testing.T) {
 	rc := &recordCapture{}
-	logger := newLogger(cli.RuntimeConfig{Mode: cli.ModeAI}, rc)
+	logger := consoleLogger(loggerConfigTo(cli.RuntimeConfig{Mode: cli.ModeAI}, rc))
 	logger.Info("gate started", "gate", "probe")
 
 	rec := rc.LastJSON()
@@ -403,7 +404,7 @@ func TestLoggerConfigUsesConsoleMode(t *testing.T) {
 	}
 
 	jsonCap := &recordCapture{}
-	jsonLogger := newLogger(cli.RuntimeConfig{Mode: cli.ModeJSON}, jsonCap)
+	jsonLogger := consoleLogger(loggerConfigTo(cli.RuntimeConfig{Mode: cli.ModeJSON}, jsonCap))
 	jsonLogger.Info("gate started", "gate", "probe")
 	if rec := jsonCap.LastJSON(); rec["service"] != "keel-dev" || rec["msg"] != "gate started" {
 		t.Fatalf("json mode should use verbose JSON records, got %#v", rec)
@@ -411,6 +412,15 @@ func TestLoggerConfigUsesConsoleMode(t *testing.T) {
 }
 
 // --- helpers ---
+
+// loggerConfigTo is keel-dev's real logger config with the console writer
+// swapped for w, so a test reads the records the CLI profile would put on
+// stderr.
+func loggerConfigTo(rt cli.RuntimeConfig, w io.Writer) logging.Config {
+	cfg := loggerConfig(rt)
+	cfg.Writer = w
+	return cfg
+}
 
 func writeModule(t *testing.T, dir string) {
 	t.Helper()

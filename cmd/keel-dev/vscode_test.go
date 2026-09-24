@@ -3469,24 +3469,24 @@ func TestVSCodeProtocolWriterIsOnlyStdoutAllowlistGrowth(t *testing.T) {
 	}
 	writeFile(t, dir, "go.mod", "module "+modulePath+"\n\ngo 1.25\n")
 	writeFile(t, keeldev, "main.go",
-		"package main\n\nimport (\n\t\"io\"\n\t\"os\"\n)\n\nfunc newLogger() io.Writer { return os.Stdout }\nfunc newProtocolStream() io.Writer { return os.Stdout }\n")
+		"package main\n\nimport (\n\t\"io\"\n\t\"os\"\n)\n\nfunc newPayloadStream() io.Writer { return os.Stdout }\n")
 	if err := runLint(dir, lintFixtureFiles(t, dir)); err != nil {
-		t.Fatalf("newProtocolStream should be the one protocol stdout allowlist entry: %v", err)
+		t.Fatalf("newPayloadStream should be the one protocol stdout allowlist entry: %v", err)
 	}
 
 	writeFile(t, keeldev, "main.go",
-		"package main\n\nimport (\n\t\"io\"\n\t\"os\"\n)\n\nfunc newLogger() io.Writer { return os.Stdout }\nfunc newProtocolStream() io.Writer { return os.Stdout }\nfunc extraProtocolStream() io.Writer { return os.Stdout }\n")
+		"package main\n\nimport (\n\t\"io\"\n\t\"os\"\n)\n\nfunc newPayloadStream() io.Writer { return os.Stdout }\nfunc extraProtocolStream() io.Writer { return os.Stdout }\n")
 	err := runLint(dir, lintFixtureFiles(t, dir))
 	if err == nil || !strings.Contains(err.Error(), "extraProtocolStream") {
 		t.Fatalf("unexpected stdout allowlist growth should fail, got %v", err)
 	}
 
 	writeFile(t, keeldev, "main.go",
-		"package main\n\nimport (\n\t\"io\"\n\t\"os\"\n)\n\nfunc newLogger() io.Writer { return os.Stdout }\n")
+		"package main\n")
 	writeFile(t, keeldev, "stream.go",
-		"package main\n\nimport (\n\t\"io\"\n\t\"os\"\n)\n\nfunc newProtocolStream() io.Writer { return os.Stdout }\n")
+		"package main\n\nimport (\n\t\"io\"\n\t\"os\"\n)\n\nfunc newPayloadStream() io.Writer { return os.Stdout }\n")
 	err = runLint(dir, lintFixtureFiles(t, dir))
-	if err == nil || !strings.Contains(err.Error(), "newProtocolStream") || !strings.Contains(err.Error(), "stream.go") {
+	if err == nil || !strings.Contains(err.Error(), "newPayloadStream") || !strings.Contains(err.Error(), "stream.go") {
 		t.Fatalf("stdout allowlist must include file and function, got %v", err)
 	}
 }

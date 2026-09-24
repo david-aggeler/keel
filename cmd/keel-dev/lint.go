@@ -21,15 +21,15 @@ import (
 //   - no-stdlib-log: the stdlib "log" package must not be imported anywhere in
 //     the module (log/slog is fine) — diagnostics flow through keel/log.
 //
-//   - no-raw-fmt-output: cmd/keel-dev plus the library surface (log, exec)
-//     must not print run output via fmt.Print*/Fprint* (ac-29, ac-54: no raw
-//     fmt fallback); the static usage text in main.go is the single
-//     allowlisted exception.
+//   - no-raw-fmt-output: every first-party binary under cmd/ plus the library
+//     surface (log, exec) must not print run output via fmt.Print*/Fprint*
+//     (ac-29, ac-54: no raw fmt fallback); keel-dev's pre-logger usage refusal
+//     in run is the single allowlisted exception (keel/ac-698).
 //
-//   - no-raw-stdout-stream: cmd/keel-dev must not reference os.Stdout/os.Stderr
-//     outside logger construction and the usage-text printer (keel/ac-36) —
-//     handing the raw stream to a child bypasses the keel/log console sink and
-//     its redaction path (keel/issue-2).
+//   - no-raw-stdout-stream: no first-party binary under cmd/ may reference
+//     os.Stdout/os.Stderr outside its allowlisted (file, function) pairs
+//     (keel/ac-36, keel/ac-698) — handing the raw stream to a child bypasses
+//     the keel/log console sink and its redaction path (keel/issue-2).
 //
 //   - no-undocumented-exports: every exported identifier in the library
 //     packages (log, exec, exec/claude, exec/codex) must carry a doc comment —
@@ -62,6 +62,7 @@ import (
 //     gitignored scratch and reds the gate on content no change owns
 //     (keel/requirement-85, keel/ac-501).
 //
+// DHF-REQ: keel/requirement-164 (keel/ac-698)
 // DHF-REQ: keel/requirement-10, keel/requirement-11, keel/requirement-85 (keel/ac-453, keel/ac-454, keel/ac-455, keel/ac-501), keel/requirement-118 (keel/ac-450), keel/requirement-126 (keel/ac-479), keel/requirement-33 (keel/ac-497), keel/requirement-122 (keel/ac-493)
 func runLint(dir string, files []string) error {
 	var violations []string
@@ -290,20 +291,29 @@ var rawFmtFuncs = map[string]bool{
 	"Fprint": true, "Fprintln": true, "Fprintf": true,
 }
 
-var rawFmtDirs = []string{filepath.Join("cmd", "keel-dev"), "log", "exec"}
+// binariesDir holds every first-party binary. The stream policies scan all of
+// it, so a binary added later is covered without joining a list (keel/ac-698).
+const binariesDir = "cmd"
 
-// scanNoRawFmtOutput reports fmt print calls in keel-dev and library packages
-// outside the usage-text allowlist (printUsage in main.go, which emits static
-// help, not run output). Missing roots are ignored for small lint fixtures.
+var rawFmtDirs = []string{binariesDir, "log", "exec"}
+
+// rawFmtAllowlist names the only (module-relative file, function) pairs
+// permitted a fmt print: keel-dev's run, whose pre-logger usage refusal is
+// static diagnostic text, not run output. Payload and help reach their streams
+// through io writers, never fmt.
+var rawFmtAllowlist = map[string]bool{
+	fileFunc("cmd/keel-dev/main.go", "run"): true,
+}
+
+// scanNoRawFmtOutput reports fmt print calls in every first-party binary and
+// the library packages outside rawFmtAllowlist. Missing roots are ignored for
+// small lint fixtures.
 func scanNoRawFmtOutput(root string, files []string) ([]string, error) {
 	var violations []string
 	for _, sub := range rawFmtDirs {
 		err := visitGoFiles(root, filesWithPrefix(files, sub), func(path string, file *ast.File, fset *token.FileSet) {
 			ast.Inspect(file, func(n ast.Node) bool {
-				// Allowlist: the printUsage function and the unknown-flag refusal
-				// in run() are static help/diagnostic text, not run output.
-				if fn, ok := n.(*ast.FuncDecl); ok && path == filepath.Join("cmd", "keel-dev", "main.go") &&
-					(fn.Name.Name == "printUsage" || fn.Name.Name == "run") {
+				if fn, ok := n.(*ast.FuncDecl); ok && rawFmtAllowlist[fileFunc(filepath.ToSlash(path), fn.Name.Name)] {
 					return false
 				}
 				call, ok := n.(*ast.CallExpr)
@@ -331,31 +341,40 @@ func scanNoRawFmtOutput(root string, files []string) ([]string, error) {
 	return violations, nil
 }
 
-// stdoutAllowlist names the only (file, function) pairs in cmd/keel-dev
-// permitted to touch os.Stdout/os.Stderr: logger construction (the writers
-// keel/log wraps), the static usage-text printer, and the sole VS Code protocol
-// JSONL stream. Everything else must go through the logger.
+// stdoutAllowlist names the only (module-relative file, function) pairs in the
+// first-party binaries permitted to touch os.Stdout/os.Stderr. Loggers take
+// their console writer from the keel/log CLI profile and need no entry. Each
+// binary keeps its raw streams behind named functions:
+//
+//   - newPayloadStream — the stdout writer a verb receives by declaring a
+//     payload; for keel-dev the sole protocol writer (keel/ac-112);
+//   - helpStream — requested help, --version and --help-json on stdout, an
+//     unresolvable help topic on stderr;
+//   - bootstrapFailure — a failure before any logger exists, on stderr;
+//   - keel-dev's run — the pre-logger usage refusal and the help branches.
 var stdoutAllowlist = map[string]bool{
-	fileFunc("main.go", "buildLogger"):       true,
-	fileFunc("main.go", "loggerConfig"):      true, // base logger config (console writer)
-	fileFunc("main.go", "newLogger"):         true,
-	fileFunc("main.go", "newProtocolStream"): true,
-	fileFunc("main.go", "printUsage"):        true,
-	fileFunc("main.go", "run"):               true, // unknown-flag refusal precedes logger construction
+	fileFunc("cmd/keel-dev/main.go", "newPayloadStream"):      true,
+	fileFunc("cmd/keel-dev/main.go", "run"):                   true,
+	fileFunc("cmd/keel-demo/main.go", "bootstrapFailure"):     true,
+	fileFunc("cmd/keel-demo/main.go", "helpStream"):           true,
+	fileFunc("cmd/keel-demo/main.go", "newPayloadStream"):     true,
+	fileFunc("cmd/keel-demo-dev/main.go", "bootstrapFailure"): true,
+	fileFunc("cmd/keel-demo-dev/main.go", "helpStream"):       true,
+	fileFunc("cmd/keel-demo-dev/main.go", "newPayloadStream"): true,
 }
 
-// scanNoRawStdoutStream reports os.Stdout/os.Stderr references in cmd/keel-dev
-// outside the allowlist (keel/ac-36). A tree without cmd/keel-dev has nothing
-// to scan.
+// scanNoRawStdoutStream reports os.Stdout/os.Stderr references in every
+// first-party binary under cmd/ outside the allowlist (keel/ac-36,
+// keel/ac-698). A tree without cmd/ has nothing to scan.
 func scanNoRawStdoutStream(root string, files []string) ([]string, error) {
 	var violations []string
-	err := visitGoFiles(root, filesWithPrefix(files, filepath.Join("cmd", "keel-dev")), func(path string, file *ast.File, fset *token.FileSet) {
+	err := visitGoFiles(root, filesWithPrefix(files, binariesDir), func(path string, file *ast.File, fset *token.FileSet) {
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok {
 				continue
 			}
-			if stdoutAllowlist[fileFunc(filepath.Base(path), fn.Name.Name)] {
+			if stdoutAllowlist[fileFunc(filepath.ToSlash(path), fn.Name.Name)] {
 				continue
 			}
 			ast.Inspect(fn, func(n ast.Node) bool {
@@ -369,7 +388,7 @@ func scanNoRawStdoutStream(root string, files []string) ([]string, error) {
 				}
 				pos := fset.Position(sel.Pos())
 				violations = append(violations,
-					fmt.Sprintf("  no-raw-stdout-stream: %s:%d references os.%s in %s — surface output through keel/log (lineLogWriter)", filepath.Base(path), pos.Line, sel.Sel.Name, fn.Name.Name))
+					fmt.Sprintf("  no-raw-stdout-stream: %s:%d references os.%s in %s — surface output through keel/log (lineLogWriter)", path, pos.Line, sel.Sel.Name, fn.Name.Name))
 				return true
 			})
 		}
