@@ -17,7 +17,7 @@ var ioctlFuncs = []string{"isTerminal", "windowSize"}
 // TestIoctlRunsInsideControlCallback pins that every ioctl in term/ receives
 // its descriptor inside the Control callback, so the file holds the descriptor
 // open for the whole call. A descriptor copied out of the callback can be
-// released by a finalizer or a concurrent Close and reused by another file.
+// released by garbage collection of the file or by a concurrent Close and reused by another file.
 // The race cannot be forced hermetically, so the check is on the syntax tree:
 // each call to an ioctl wrapper must sit in a function literal passed to a
 // Control method, or to a package helper that forwards it to Control.
