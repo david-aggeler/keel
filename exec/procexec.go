@@ -156,6 +156,7 @@ type Result struct {
 // Process is a started subprocess supervised by ProcessStart.
 type Process struct {
 	cmd     *exec.Cmd
+	program string
 	started time.Time
 	stdout  *captureWriter
 	stderr  *captureWriter
@@ -226,9 +227,9 @@ func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 	// accounting and the line-wise logging read it and must stay unaffected.
 	// DHF-REQ: keel/requirement-150
 	tail := &outputTail{}
-	stdout := &captureWriter{stream: req.Stdout, logger: logger, streamName: "stdout", limit: outputLimit,
+	stdout := &captureWriter{stream: req.Stdout, logger: logger, program: req.Program, streamName: "stdout", limit: outputLimit,
 		suppressCapture: req.Stdout != nil && !req.CaptureWithTee, classify: req.Classify, tail: tail}
-	stderr := &captureWriter{stream: req.Stderr, logger: logger, streamName: "stderr", limit: outputLimit,
+	stderr := &captureWriter{stream: req.Stderr, logger: logger, program: req.Program, streamName: "stderr", limit: outputLimit,
 		suppressCapture: req.Stderr != nil && !req.CaptureWithTee, classify: req.Classify, tail: tail}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
@@ -240,6 +241,7 @@ func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 
 	p := &Process{
 		cmd:     cmd,
+		program: req.Program,
 		started: started,
 		stdout:  stdout,
 		stderr:  stderr,
@@ -267,9 +269,11 @@ func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 // first replays the last [FailureTailLines] output lines at Error and then
 // ends at Error, so the reason for a failure is visible at the default console
 // floor without re-running at Debug. [Request.FailureLevel] replaces Error for
-// a child whose non-zero exit is not a failure.
+// a child whose non-zero exit is not a failure. A tail record at Warn or higher
+// names the child in its program attribute, because under --quiet the Info
+// "process start" record that names it is hidden.
 //
-// DHF-REQ: keel/requirement-1, keel/requirement-24
+// DHF-REQ: keel/requirement-1, keel/requirement-24, keel/requirement-171
 func (p *Process) Wait() (Result, error) {
 	if p == nil {
 		return Result{ExitCode: -1}, errors.New("keel/exec: nil process")
@@ -316,6 +320,7 @@ func (p *Process) Wait() (Result, error) {
 			if line.truncated > 0 {
 				args = append(args, "truncated_bytes", line.truncated)
 			}
+			args = appendProgramAtWarn(args, p.failure, p.program)
 			logAt(p.logger, p.failure, "process output tail", args...)
 		}
 		logAt(p.logger, p.failure, "process end",
@@ -330,11 +335,14 @@ func (p *Process) Wait() (Result, error) {
 }
 
 type captureWriter struct {
-	mu         sync.Mutex
-	buf        bytes.Buffer
-	pending    bytes.Buffer
-	stream     io.Writer
-	logger     processLogger
+	mu      sync.Mutex
+	buf     bytes.Buffer
+	pending bytes.Buffer
+	stream  io.Writer
+	logger  processLogger
+	// program is the Request's Program; it tags output records at Warn or
+	// higher so a line that reaches the default console names its command.
+	program    string
 	streamName string
 	limit      *outputLimit
 	// suppressCapture withholds the buffered bytes from [Result], leaving the
@@ -407,9 +415,11 @@ func (w *captureWriter) flush() {
 // dropped. Both streams share one level — the adapter's override, else the
 // logger's configured child-output level, else Debug — and the stream travels
 // as an attribute. A level the adapter read from the child travels in its own
-// declared_level field. The caller holds w.mu.
+// declared_level field. A record whose resolved level is Warn or higher also
+// carries the program attribute; lower records stay untagged. The caller holds
+// w.mu.
 //
-// DHF-REQ: keel/requirement-24, keel/requirement-167
+// DHF-REQ: keel/requirement-24, keel/requirement-167, keel/requirement-171
 func (w *captureWriter) logLine(line string) {
 	line = strings.TrimRight(line, "\r")
 	if strings.TrimSpace(line) == "" {
@@ -430,7 +440,23 @@ func (w *captureWriter) logLine(line string) {
 	if class.Declared != nil {
 		args = append(args, "declared_level", class.Declared.Level().String())
 	}
-	logAt(w.logger, childOutputLevel(w.logger, class), "process output", args...)
+	// Resolve the level once: the tag decision and the emitted record must
+	// agree even when the logger carries a configured child-output level.
+	level := childOutputLevel(w.logger, class)
+	args = appendProgramAtWarn(args, level, w.program)
+	logAt(w.logger, level, "process output", args...)
+}
+
+// appendProgramAtWarn appends the program attribute to a child output record
+// logged at level when that level is Warn or higher, and returns args unchanged
+// below Warn.
+//
+// DHF-REQ: keel/requirement-171
+func appendProgramAtWarn(args []any, level slog.Level, program string) []any {
+	if level < slog.LevelWarn {
+		return args
+	}
+	return append(args, "program", program)
 }
 
 // childOutputLevel resolves the level of one child output line. Nothing about

@@ -289,3 +289,125 @@ func TestFailureLevelOverridesTheNonZeroExitSeverityPerProcessType(t *testing.T)
 		t.Fatalf("tail = %#v, want the one line at DEBUG", tail)
 	}
 }
+
+// warnErrorAdapter raises the line "warn-line" to Warn and "error-line" to
+// Error and leaves every other line unclassified.
+func warnErrorAdapter(_ string, line string) procexec.LineClass {
+	switch line {
+	case "warn-line":
+		return procexec.LineClass{Level: slog.LevelWarn}
+	case "error-line":
+		return procexec.LineClass{Level: slog.LevelError}
+	}
+	return procexec.LineClass{}
+}
+
+// DHF-TEST: keel/requirement-171, keel/ac-734
+func TestChildOutputAtWarnOrHigherNamesItsProgramAndLowerLinesDoNot(t *testing.T) {
+	records := runChild(t, logging.Config{ConsoleVerbosity: slog.LevelDebug}, warnErrorAdapter,
+		"echo warn-line 1>&2; echo error-line 1>&2; echo plain-line")
+	byData := map[string]map[string]any{}
+	for _, rec := range recordsWithEvent(records, "process_output") {
+		byData[rec["data"].(string)] = rec
+	}
+	for data, level := range map[string]string{"warn-line": "WARN", "error-line": "ERROR"} {
+		rec, ok := byData[data]
+		if !ok {
+			t.Fatalf("no process_output record for %q in %#v", data, byData)
+		}
+		if rec["level"] != level {
+			t.Fatalf("%q level = %#v, want %s", data, rec["level"], level)
+		}
+		if got, present := rec["program"]; !present || got != "sh" {
+			t.Fatalf("%q record program = %#v (present %v), want %q", data, got, present, "sh")
+		}
+	}
+	plain, ok := byData["plain-line"]
+	if !ok {
+		t.Fatalf("no process_output record for the unclassified line in %#v", byData)
+	}
+	if plain["level"] != "DEBUG" {
+		t.Fatalf("unclassified line level = %#v, want DEBUG", plain["level"])
+	}
+	if v, present := plain["program"]; present {
+		t.Fatalf("unclassified Debug line carries program = %#v, want the key absent", v)
+	}
+}
+
+// DHF-TEST: keel/requirement-171, keel/ac-734
+func TestChildOutputAtConfiguredWarnLevelNamesItsProgram(t *testing.T) {
+	// The tag follows the one resolved level: a consumer-configured child-output
+	// level of Warn (keel/ac-711) tags an unclassified line, and an adapter that
+	// lowers a line to Info leaves that line untagged.
+	lower := func(_ string, line string) procexec.LineClass {
+		if line == "info-line" {
+			return procexec.LineClass{Level: slog.LevelInfo}
+		}
+		return procexec.LineClass{}
+	}
+	records := runChild(t, logging.Config{ConsoleVerbosity: slog.LevelDebug, ChildOutputLevel: slog.LevelWarn}, lower,
+		"echo plain-line; echo info-line")
+	byData := map[string]map[string]any{}
+	for _, rec := range recordsWithEvent(records, "process_output") {
+		byData[rec["data"].(string)] = rec
+	}
+	plain := byData["plain-line"]
+	if plain["level"] != "WARN" || plain["program"] != "sh" {
+		t.Fatalf("unclassified line at configured Warn = %#v, want level WARN and program sh", plain)
+	}
+	info := byData["info-line"]
+	if info["level"] != "INFO" {
+		t.Fatalf("lowered line level = %#v, want INFO", info["level"])
+	}
+	if v, present := info["program"]; present {
+		t.Fatalf("Info line carries program = %#v, want the key absent", v)
+	}
+}
+
+// runFailingChild runs script under sh with the given failure level (nil keeps
+// the default) and returns its JSON console records.
+func runFailingChild(t *testing.T, failure slog.Leveler, script string) []map[string]any {
+	t.Helper()
+	var logBuf bytes.Buffer
+	logger := mustLogger(t, logging.Config{Console: logging.ConsoleJSON, ConsoleVerbosity: slog.LevelDebug, Writer: &logBuf})
+	proc, err := procexec.ProcessStart(context.Background(), procexec.Request{
+		Logger:       logger,
+		Program:      "sh",
+		Args:         []string{"-c", script},
+		FailureLevel: failure,
+	})
+	if err != nil {
+		t.Fatalf("ProcessStart: %v", err)
+	}
+	_, _ = proc.Wait()
+	return parseJSONLogRecords(t, logBuf.String())
+}
+
+// DHF-TEST: keel/requirement-171, keel/ac-734
+func TestFailureTailAtDefaultLevelNamesItsProgram(t *testing.T) {
+	// Under --quiet the Info process start record is hidden, so each Error tail
+	// record must name the child by itself.
+	tail := recordsWithEvent(runFailingChild(t, nil, "echo out-before; echo err-reason 1>&2; exit 3"), "process_output_tail")
+	if len(tail) != 2 {
+		t.Fatalf("tail records = %#v, want two", tail)
+	}
+	for _, rec := range tail {
+		if rec["level"] != "ERROR" {
+			t.Fatalf("tail record level = %#v, want ERROR", rec["level"])
+		}
+		if got, present := rec["program"]; !present || got != "sh" {
+			t.Fatalf("tail record %#v program = %#v (present %v), want %q", rec["data"], got, present, "sh")
+		}
+	}
+}
+
+// DHF-TEST: keel/requirement-171, keel/ac-734
+func TestFailureTailBelowWarnDoesNotNameItsProgram(t *testing.T) {
+	tail := recordsWithEvent(runFailingChild(t, slog.LevelInfo, "echo not-found 1>&2; exit 1"), "process_output_tail")
+	if len(tail) != 1 || tail[0]["level"] != "INFO" {
+		t.Fatalf("tail = %#v, want the one line at INFO", tail)
+	}
+	if v, present := tail[0]["program"]; present {
+		t.Fatalf("Info tail record carries program = %#v, want the key absent", v)
+	}
+}
