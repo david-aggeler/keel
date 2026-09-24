@@ -30,12 +30,12 @@ same redaction path and severity vocabulary.
 
 Plain-text console for a child that fails. Child output lines are Debug on
 both streams, so the default console hides them. The non-zero exit is what
-raises the severity: the output tail is replayed at Error, and then the END
-record is written:
+raises the severity: the output tail is replayed at Error, each line naming
+its program, and then the END record is written:
 
 ```
 21:00:53 INFO  process start event_type=process_start program=sh command_line=sh -c "…" working_dir=/projects/keel
-21:00:53 ERROR  process output tail event_type=process_output_tail stream=stderr data=child stderr line
+21:00:53 ERROR  process output tail event_type=process_output_tail stream=stderr data=child stderr line program=sh
 21:00:53 ERROR  process end event_type=process_end exit_code=1 elapsed_ms=0 output_tail_lines=1
 ```
 
