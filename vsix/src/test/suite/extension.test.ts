@@ -3,6 +3,7 @@ import * as cp from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { constants as bufferConstants } from 'node:buffer';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import * as vscode from 'vscode';
@@ -47,7 +48,7 @@ import {
   triggerWatcherEventForTest
 } from '../../extension';
 import * as bridgeAdapterModule from '../../bridgeAdapter';
-import { adapterConfig, configRelativePath, configTemplateKeys, currentConfigVersion, defaultConfigTemplate, discoveryOutputMaxBufferBytes, discoverTests, readDesiredState, readAdapterConfig, runTests, upgradeConfig } from '../../bridgeAdapter';
+import { adapterConfig, configRelativePath, configTemplateKeys, currentConfigVersion, defaultConfigTemplate, discoveryMaxBufferBytesCeiling, discoveryOutputMaxBufferBytes, discoverTests, readDesiredState, readAdapterConfig, runTests, upgradeConfig } from '../../bridgeAdapter';
 import { publishDiscovery, replacePublishedTestItem } from '../../tree';
 import { DesiredStateGroup, DiscoveryDocument, DiscoveryItem, RunEvent } from '../../protocol';
 
@@ -482,7 +483,7 @@ suite('Keel Test Bridge config contract', () => {
 
   // DHF-TEST: keel/requirement-163
   test('an out-of-range or non-numeric discovery bound override is rejected at config parse', () => {
-    for (const invalid of ['4096', 0, -1, 1023, 1024.5, 512 * 1024 * 1024 + 1, null]) {
+    for (const invalid of ['4096', 0, -1, 1023, 1024.5, discoveryMaxBufferBytesCeiling + 1, null]) {
       const root = paddedDiscoveryWorkspace('keel-discovery-bound-invalid-', 64, invalid as number);
       try {
         assert.throws(
@@ -493,6 +494,21 @@ suite('Keel Test Bridge config contract', () => {
       } finally {
         fs.rmSync(root, { recursive: true, force: true });
       }
+    }
+  });
+
+  // DHF-TEST: keel/requirement-163 (keel/ac-762)
+  test('a discovery bound above the runtime string limit is rejected at config parse', () => {
+    assert.ok(discoveryMaxBufferBytesCeiling <= bufferConstants.MAX_STRING_LENGTH);
+    const invalid = bufferConstants.MAX_STRING_LENGTH + 1;
+    const root = paddedDiscoveryWorkspace('keel-discovery-bound-string-limit-', 64, invalid);
+    try {
+      assert.throws(
+        () => readAdapterConfig(root),
+        new RegExp(`discoveryMaxBufferBytes must be between 1024 and ${discoveryMaxBufferBytesCeiling} bytes`)
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 

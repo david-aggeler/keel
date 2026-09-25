@@ -31,7 +31,7 @@ The 4-group Test Explorer tree as a flat item list linked by `parent_id`.
 The VS Code Test Bridge reads the discovery document and desired-state document
 through bounded stdout. The built-in bound is **33554432 bytes**, and a workspace
 may override it with the optional `discoveryMaxBufferBytes` field in
-`.vscode/test-bridge.json` (an integer between 1024 and 536870912 bytes; an
+`.vscode/test-bridge.json` (an integer between 1024 and 536870888 bytes; an
 out-of-range or non-numeric value is rejected when the config is read, never
 coerced). The effective bound — the override when present, otherwise the
 built-in default — is what every enforcement site applies and what the breach
