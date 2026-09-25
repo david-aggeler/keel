@@ -163,6 +163,10 @@ func checkPinnedLiteral(root, name, tool, pattern string, pins map[string]hostTo
 	if err != nil {
 		return nil
 	}
+	if (tool == "node" && strings.Contains(string(body), `NODE_MAJOR="$(pin_value NODE_MAJOR)"`)) ||
+		(tool == "shellcheck" && strings.Contains(string(body), `EXPECTED_SHELLCHECK_VERSION="$(pin_value SHELLCHECK_VERSION)"`)) {
+		return nil
+	}
 	match := regexp.MustCompile(pattern).FindStringSubmatch(string(body))
 	if len(match) < 2 || trimVersion(match[1]) != trimVersion(pins[tool].version) {
 		found := "missing"

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # setup_as_root.sh — machine bootstrap for keel when already running as root.
-# Installs Go, the `just` task runner, shellcheck, and shared PATH wiring.
+# Installs Go, the host tools and shared libraries required by both gates, and
+# shared PATH wiring. Version values come from setup_user.sh's pin block.
 #
 # keel is a pure-Go, zero-dependency module with no Docker/DB stack, so this
 # is deliberately lean: no Docker, no BuildKit GC, no container tooling. See
@@ -21,6 +22,18 @@ fi
 # Exported so install_go.sh can scrub the right home directory without guessing.
 export DEV_USER="${DEV_USER:-homelab-devops}"
 
+pin_value() {
+	local variable="$1"
+	awk -F= -v variable="$variable" '$1 == variable { value=$2; sub(/[[:space:]]+#.*/, "", value); gsub(/^[[:space:]\"]+|[[:space:]\"]+$/, "", value); print value; exit }' ./scripts/setup_user.sh
+}
+
+NODE_MAJOR="$(pin_value NODE_MAJOR)"
+EXPECTED_SHELLCHECK_VERSION="$(pin_value SHELLCHECK_VERSION)"
+if [[ -z "$NODE_MAJOR" || -z "$EXPECTED_SHELLCHECK_VERSION" ]]; then
+	echo "ERROR: node or shellcheck pin missing from scripts/setup_user.sh" >&2
+	exit 1
+fi
+
 echo "Installing Go via scripts/install_go.sh..."
 bash ./scripts/install_go.sh
 
@@ -34,20 +47,37 @@ for SYSFILE in /etc/zsh/zshenv; do
 	fi
 done
 
-echo "Installing just + shellcheck + Node toolchain via apt-get..."
+echo "Installing base host packages via apt-get..."
 # `just` runs keel's Justfile; `shellcheck` lints these bootstrap scripts;
 # `nodejs`/`npm` provide the Node runtime that scripts/setup_user.sh needs to
 # install cspell (the keel-dev ci spell-check tool).
-# Pin to the distro package; the version assertion below guards drift.
-EXPECTED_SHELLCHECK_VERSION="0.10.0"
 apt-get update -qq
-apt-get install -y just shellcheck nodejs npm
+apt-get install -y ca-certificates curl just shellcheck \
+	xvfb \
+	libasound2t64 libatk1.0-0t64 libatk-bridge2.0-0t64 libatspi2.0-0t64 \
+	libc6 libcairo2 libcups2t64 libdbus-1-3 libexpat1 libgbm1 libgcc-s1 \
+	libglib2.0-0t64 libgtk-3-0t64 libnspr4 libnss3 libpango-1.0-0 \
+	libudev1 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 \
+	libxfixes3 libxkbcommon0 libxrandr2
+
+echo "Installing Node.js major ${NODE_MAJOR} from NodeSource..."
+curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash -
+apt-get install -y nodejs
 
 installed_sc_ver="$(shellcheck --version | awk '/^version:/{print $2}')"
 if [[ "$installed_sc_ver" != "$EXPECTED_SHELLCHECK_VERSION" ]]; then
-	echo "WARN: shellcheck version mismatch: installed=${installed_sc_ver} expected=${EXPECTED_SHELLCHECK_VERSION}" >&2
-	echo "      Update EXPECTED_SHELLCHECK_VERSION in setup_as_root.sh if the new version is intentional." >&2
+	echo "ERROR: shellcheck version mismatch: installed=${installed_sc_ver} expected=${EXPECTED_SHELLCHECK_VERSION}" >&2
+	exit 1
 fi
+
+installed_node_version="$(node --version 2>/dev/null || true)"
+installed_node_major="${installed_node_version#v}"
+installed_node_major="${installed_node_major%%.*}"
+if [[ "$installed_node_major" != "$NODE_MAJOR" ]]; then
+	echo "ERROR: node major version mismatch: installed=${installed_node_major:-(none)} expected=${NODE_MAJOR}" >&2
+	exit 1
+fi
+echo "Node installed: ${installed_node_version} (expected major ${NODE_MAJOR})"
 
 echo ""
 echo "Machine bootstrap complete. Next: run scripts/setup_user.sh as ${DEV_USER}."

@@ -24,22 +24,25 @@
 set -euo pipefail
 
 # pin-block: begin
-GO_VERSION=1.26.6                     # pin: go pinned
-NODE_MAJOR=24                         # pin: node pinned
-PNPM_VERSION=12.4.2                   # pin: pnpm pinned
-CSPELL_VERSION=10.0.1                 # pin: cspell pinned
-GOLANGCI_LINT_VERSION=v2.12.2         # pin: golangci-lint pinned
-GOVULNCHECK_VERSION=v1.7.0            # pin: govulncheck pinned
-GOFUMPT_VERSION=v0.7.0                # pin: gofumpt pinned
-SHFMT_VERSION=v3.13.1                 # pin: shfmt pinned
-DEADCODE_VERSION=v0.28.0              # pin: deadcode pinned
-GITLEAKS_VERSION=v8.30.1              # pin: gitleaks pinned
+GO_VERSION=1.26.6             # pin: go pinned
+NODE_MAJOR=24                 # pin: node pinned
+PNPM_VERSION=12.4.2           # pin: pnpm pinned
+CSPELL_VERSION=10.0.1         # pin: cspell pinned
+GOLANGCI_LINT_VERSION=v2.12.2 # pin: golangci-lint pinned
+GOVULNCHECK_VERSION=v1.7.0    # pin: govulncheck pinned
+GOFUMPT_VERSION=v0.7.0        # pin: gofumpt pinned
+SHFMT_VERSION=v3.13.1         # pin: shfmt pinned
+DEADCODE_VERSION=v0.28.0      # pin: deadcode pinned
+GITLEAKS_VERSION=v8.30.1      # pin: gitleaks pinned
 # pin: xvfb-run system -- provided by the apt package xvfb
-# pin: shellcheck system -- distro package version is asserted by setup_as_root.sh
+SHELLCHECK_VERSION=0.10.0 # pin: shellcheck pinned
 # pin: just system -- distro package; recipe runner is not a gate dependency
 # pin: gh system -- distro package; release authentication is host-owned
 # pin: gopls float -- editor LSP, not a build or gate dependency
 # pin-block: end
+# Some pins are consumed by sibling bootstrap scripts or policy checks rather
+# than this process; keep them referenced so shellcheck sees that as deliberate.
+: "$GO_VERSION" "$NODE_MAJOR" "$SHELLCHECK_VERSION"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
@@ -125,6 +128,24 @@ ensure_local_bin_link() {
 	fi
 	ln -sfn "$target" "$link"
 }
+
+# ---------------------------------------------------------------------------
+# pnpm — VSIX package manager. Corepack writes its shim into ~/.local/bin,
+# which is already first on PATH above; verify that no stale shim shadows it.
+# ---------------------------------------------------------------------------
+if ! command -v corepack >/dev/null 2>&1; then
+	echo "ERROR: corepack not found — run scripts/setup_as_root.sh first." >&2
+	exit 1
+fi
+corepack enable --install-directory "${HOME_DIR}/.local/bin"
+corepack prepare "pnpm@${PNPM_VERSION}" --activate
+resolved_pnpm="$(command -v pnpm 2>/dev/null || true)"
+reported_pnpm_version="$(pnpm --version 2>/dev/null || true)"
+if [[ -z "$resolved_pnpm" || "$reported_pnpm_version" != "$PNPM_VERSION" ]]; then
+	echo "ERROR: pnpm version mismatch: path=${resolved_pnpm:-(not found)} reported=${reported_pnpm_version:-(none)} expected=${PNPM_VERSION}" >&2
+	exit 1
+fi
+echo "pnpm installed: ${reported_pnpm_version} (${resolved_pnpm})"
 
 # ---------------------------------------------------------------------------
 # Go tools — Go gate baseline (all via `go install`; land in $GOBIN).
