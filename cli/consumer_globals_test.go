@@ -98,6 +98,17 @@ func TestStartKeepsKeelGlobalPrecedenceOverConsumerRedeclaration(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-176 (keel/ac-759)
+func TestStartKeepsConsumerLongNameWhenAliasCollidesWithKeelGlobal(t *testing.T) {
+	var target string
+	root, _, _ := consumerGlobalsTree([]FlagSpec{{Name: "target", Alias: "v", Value: "path", StringTarget: &target}}, nil)
+
+	cfg, words, code, done := root.Start([]string{"--target", "/r", "-v", "ci"})
+	if target != "/r" || !cfg.Verbose || !reflect.DeepEqual(words, []string{"ci"}) || code != 0 || done {
+		t.Fatalf("Start: target=%q verbose=%v words=%q code=%d done=%v", target, cfg.Verbose, words, code, done)
+	}
+}
+
 // DHF-TEST: keel/requirement-176 (keel/ac-760)
 func TestStartKeepsCommandFlagPrecedenceOverConsumerGlobal(t *testing.T) {
 	var global string

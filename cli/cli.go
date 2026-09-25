@@ -572,8 +572,8 @@ func parseGlobalConfig(argv []string, node *CommandSpec, consumer consumerGlobal
 	return cfg, words, nil
 }
 
-// consumerGlobalLookup contains only consumer globals that do not collide with
-// a keel-owned global name or alias.
+// consumerGlobalLookup contains each consumer-global spelling that does not
+// collide with a keel-owned global name or alias.
 //
 // DHF-REQ: keel/requirement-176
 type consumerGlobalLookup struct {
@@ -594,13 +594,12 @@ func newConsumerGlobalLookup(extra []FlagSpec) consumerGlobalLookup {
 		byAlias: make(map[string]FlagSpec),
 	}
 	for _, flag := range extra {
-		if flag.Name == "" || owned[flag.Name] || flag.Alias != "" && owned[flag.Alias] {
-			continue
+		if flag.Name != "" && !owned[flag.Name] {
+			if _, exists := lookup.byName[flag.Name]; !exists {
+				lookup.byName[flag.Name] = flag
+			}
 		}
-		if _, exists := lookup.byName[flag.Name]; !exists {
-			lookup.byName[flag.Name] = flag
-		}
-		if flag.Alias != "" {
+		if flag.Alias != "" && !owned[flag.Alias] {
 			if _, exists := lookup.byAlias[flag.Alias]; !exists {
 				lookup.byAlias[flag.Alias] = flag
 			}
