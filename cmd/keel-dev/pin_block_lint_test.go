@@ -24,7 +24,13 @@ func TestRunLintRejectsInvalidHostToolchainPinBlock(t *testing.T) {
 		{"missing reason", func(s string) string {
 			return strings.Replace(s, "# pin: gh system -- distro package", "# pin: gh system", 1)
 		}, "requires a -- reason"},
+		{"float missing reason", func(s string) string {
+			return strings.Replace(s, "# pin: gopls float -- editor tool", "# pin: gopls float", 1)
+		}, `tool "gopls" class float requires a -- reason`},
 		{"missing inventory", func(s string) string { return strings.Replace(s, "# pin: gh system -- distro package\n", "", 1) }, "tool \"gh\" is undeclared"},
+		{"duplicate directive", func(s string) string {
+			return strings.Replace(s, "# pin: gh system -- distro package", "# pin: gh system -- distro package\n# pin: gh system -- second declaration", 1)
+		}, `tool "gh" has more than one directive`},
 		{"wrong assignment", func(s string) string { return strings.Replace(s, "PNPM_VERSION=12.4.2", "TYPO_VERSION=12.4.2", 1) }, "must use variable PNPM_VERSION"},
 	}
 	for _, tc := range tests {
@@ -40,6 +46,21 @@ func TestRunLintRejectsInvalidHostToolchainPinBlock(t *testing.T) {
 				t.Fatalf("runLint error = %v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// DHF-TEST: keel/requirement-173 (keel/ac-741)
+func TestRunLintRequiresVSIXToolsInPinBlock(t *testing.T) {
+	root := validPinFixture(t)
+	path := filepath.Join(root, "scripts", "setup_user.sh")
+	body, _ := os.ReadFile(path)
+	changed := strings.Replace(string(body), "# pin: xvfb-run system -- apt package xvfb\n", "", 1)
+	if err := os.WriteFile(path, []byte(changed), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := runLint(root, lintFixtureFiles(t, root))
+	if err == nil || !strings.Contains(err.Error(), `VSIX tool "xvfb-run" has no pin-block directive`) {
+		t.Fatalf("runLint error = %v", err)
 	}
 }
 
@@ -63,7 +84,10 @@ func TestRunLintRejectsHostToolchainPinCopiesThatDrift(t *testing.T) {
 	tests := []struct{ file, old, replacement, want string }{
 		{"keel-dev.yaml", "version: v2.12.2", "version: v2.11.0", "golangci-lint"},
 		{"vsix/package.json", `"packageManager":"pnpm@12.4.2"`, `"packageManager":"pnpm@11.0.9"`, "pnpm@12.4.2"},
+		{"vsix/package.json", `{"packageManager":"pnpm@12.4.2"}`, `{}`, `found ""`},
 		{"scripts/install_go.sh", "GO_VERSION=1.26.6", "GO_VERSION=1.25.0", "install_go.sh"},
+		{"scripts/setup_as_root.sh", "NODE_MAJOR=24", "NODE_MAJOR=23", `setup_as_root.sh tool "node" version "23"`},
+		{"scripts/setup_as_root.sh", "EXPECTED_SHELLCHECK_VERSION=0.10.0", "EXPECTED_SHELLCHECK_VERSION=0.9.0", `setup_as_root.sh tool "shellcheck" version "0.9.0"`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.file, func(t *testing.T) {
@@ -78,6 +102,22 @@ func TestRunLintRejectsHostToolchainPinCopiesThatDrift(t *testing.T) {
 				t.Fatalf("runLint error = %v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// DHF-TEST: keel/requirement-174 (keel/ac-740)
+func TestRunLintRejectsConfiguredToolMissingFromPinBlock(t *testing.T) {
+	root := validPinFixture(t)
+	path := filepath.Join(root, "scripts", "setup_user.sh")
+	body, _ := os.ReadFile(path)
+	changed := strings.Replace(string(body), "GOLANGCI_LINT_VERSION=v2.12.2 # pin: golangci-lint pinned\n", "", 1)
+	if err := os.WriteFile(path, []byte(changed), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := runLint(root, lintFixtureFiles(t, root))
+	want := `keel-dev.yaml tool "golangci-lint" version "v2.12.2" differs from pin-block version "undeclared"`
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("runLint error = %v, want %q", err, want)
 	}
 }
 

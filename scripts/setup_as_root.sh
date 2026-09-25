@@ -69,17 +69,13 @@ tar -xJf "$shellcheck_archive" -C /tmp
 install -m 0755 "${shellcheck_dir}/shellcheck" /usr/local/bin/shellcheck
 rm -f "$shellcheck_archive"
 
-echo "Installing Node.js major ${NODE_MAJOR} from NodeSource..."
-curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash -
-apt-get install -y nodejs
+install_pinned_node "$NODE_MAJOR"
 
 installed_sc_ver="$(shellcheck --version | awk '/^version:/{print $2}')"
 if [[ "$installed_sc_ver" != "$EXPECTED_SHELLCHECK_VERSION" ]]; then
 	echo "ERROR: shellcheck version mismatch: installed=${installed_sc_ver} expected=${EXPECTED_SHELLCHECK_VERSION}" >&2
 	exit 1
 fi
-
-require_node_major "$NODE_MAJOR"
 
 echo ""
 echo "Machine bootstrap complete. Next: run scripts/setup_user.sh as ${DEV_USER}."

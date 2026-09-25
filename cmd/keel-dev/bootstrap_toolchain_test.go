@@ -47,20 +47,29 @@ func TestSetupUserPnpmConvergenceAndMismatchAreObservable(t *testing.T) {
 			if err := os.MkdirAll(stubDir, 0o755); err != nil {
 				t.Fatal(err)
 			}
-			corepack := `#!/usr/bin/env bash
+			for _, name := range []string{"cat", "chmod", "dirname", "grep", "head", "mkdir", "touch", "whoami"} {
+				realPath, lookErr := exec.LookPath(name)
+				if lookErr != nil {
+					t.Fatal(lookErr)
+				}
+				if err := os.Symlink(realPath, filepath.Join(stubDir, name)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			corepack := `#!/bin/bash
 set -eu
 if [[ "$1" == enable ]]; then
   mkdir -p "$3"
-  printf '%s\n' '#!/usr/bin/env bash' 'if [[ "${1:-}" == "--version" ]]; then echo "${COREPACK_PNPM_VERSION}"; fi' >"$3/pnpm"
+  printf '%s\n' '#!/bin/bash' 'if [[ "${1:-}" == "--version" ]]; then echo "${COREPACK_PNPM_VERSION}"; fi' >"$3/pnpm"
   chmod +x "$3/pnpm"
 fi
 `
 			if err := os.WriteFile(filepath.Join(stubDir, "corepack"), []byte(corepack), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			cmd := exec.Command("bash", filepath.Join(root, "scripts", "setup_user.sh"))
+			cmd := exec.Command("/bin/bash", filepath.Join(root, "scripts", "setup_user.sh"))
 			cmd.Dir = root
-			cmd.Env = append(os.Environ(), "HOME="+home, "TARGET_USER="+os.Getenv("USER"), "COREPACK_PNPM_VERSION="+tc.reported, "PATH="+stubDir+":/usr/bin:/bin")
+			cmd.Env = append(os.Environ(), "HOME="+home, "TARGET_USER="+os.Getenv("USER"), "COREPACK_PNPM_VERSION="+tc.reported, "PATH="+stubDir)
 			output, runErr := cmd.CombinedOutput()
 			if tc.wantOK && runErr != nil {
 				t.Fatalf("setup_user.sh: %v\n%s", runErr, output)
@@ -69,6 +78,43 @@ fi
 				t.Fatalf("mismatch result err=%v\n%s", runErr, output)
 			}
 		})
+	}
+}
+
+// DHF-TEST: keel/requirement-173 (keel/ac-745)
+func TestInstallPinnedNodeUsesNodeSourceAndVerifiesMajor(t *testing.T) {
+	root, err := findModuleRoot(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stubDir := t.TempDir()
+	logPath := filepath.Join(stubDir, "calls.log")
+	writeExecutable := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(stubDir, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeExecutable("curl", "#!/bin/sh\nprintf 'curl %s\\n' \"$*\" >>\"$BOOTSTRAP_CALL_LOG\"\n")
+	writeExecutable("apt-get", "#!/bin/sh\nprintf 'apt-get %s\\n' \"$*\" >>\"$BOOTSTRAP_CALL_LOG\"\n")
+	writeExecutable("node", "#!/bin/sh\necho v24.19.0\n")
+	cmd := exec.Command("/bin/bash", "-c", `source "$1"; install_pinned_node 24`, "test", filepath.Join(root, "scripts", "bootstrap_versions.sh"))
+	cmd.Env = append(os.Environ(), "BOOTSTRAP_CALL_LOG="+logPath, "PATH="+stubDir+":/usr/bin:/bin")
+	output, runErr := cmd.CombinedOutput()
+	if runErr != nil {
+		t.Fatalf("install_pinned_node: %v\n%s", runErr, output)
+	}
+	calls, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"https://deb.nodesource.com/setup_24.x", "apt-get install -y nodejs"} {
+		if !strings.Contains(string(calls), want) {
+			t.Errorf("bootstrap calls missing %q:\n%s", want, calls)
+		}
+	}
+	if !strings.Contains(string(output), "expected major 24") {
+		t.Errorf("bootstrap output did not verify node major:\n%s", output)
 	}
 }
 
@@ -83,7 +129,7 @@ func TestSetupAsRootProvisionsVSIXHostClosureAtPinnedNodeMajor(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(body)
-	for _, want := range []string{`setup_${NODE_MAJOR}.x`, `require_node_major "$NODE_MAJOR"`, `apt-get install -y`, "xvfb"} {
+	for _, want := range []string{`install_pinned_node "$NODE_MAJOR"`, `apt-get install -y`, "xvfb"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("setup_as_root.sh missing %q", want)
 		}
