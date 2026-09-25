@@ -33,8 +33,8 @@ var vsixHeldDependencyBaselines = []struct {
 	name    string
 	current string
 }{
-	{name: "@types/vscode", current: "1.125.0"},
-	{name: "@types/node", current: "26.2.0"},
+	{name: "@types/vscode", current: "1.138.0"},
+	{name: "@types/node", current: "26.6.2"},
 	{name: "typescript", current: "7.0.2"},
 }
 
@@ -60,7 +60,7 @@ func handleVSIXGate(ctx context.Context, _ []string) error {
 	return runVSIXGate(ctx, state.logger, state.root)
 }
 
-// DHF-REQ: keel/requirement-40, keel/requirement-76, keel/requirement-90
+// DHF-REQ: keel/requirement-40, keel/requirement-76, keel/requirement-90, keel/requirement-119
 // DHF-REQ: keel/requirement-159
 func runVSIXGate(ctx context.Context, logger *slog.Logger, dir string) error {
 	for _, tool := range []string{"node", "pnpm", "xvfb-run"} {
@@ -78,6 +78,13 @@ func runVSIXGate(ctx context.Context, logger *slog.Logger, dir string) error {
 		return err
 	}
 	if err := validateVSIXEngineDeclarations(ctx, logger, dir); err != nil {
+		return err
+	}
+	if err := runStep(ctx, logger, dir, step{
+		name:    "vsix:install-frozen",
+		program: "pnpm",
+		args:    []string{"--dir", filepath.Join(dir, "vsix"), "install", "--frozen-lockfile"},
+	}); err != nil {
 		return err
 	}
 	if err := runStep(ctx, logger, dir, step{
