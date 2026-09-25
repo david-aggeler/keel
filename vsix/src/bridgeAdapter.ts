@@ -20,10 +20,10 @@ export const configRelativePath = path.join('.vscode', 'test-bridge.json');
 export const discoveryOutputMaxBufferBytes = 32 * 1024 * 1024;
 // Sanity range for a workspace override. The floor rejects values too small to
 // carry any real document (and with them 0, negatives, and unit mix-ups); the
-// ceiling stays well inside Node's per-string and per-buffer limits so a
-// configured bound is a bound the runtime can actually honour.
+// ceiling is pinned to Node's per-string limit because execFile decodes stdout
+// to a string, so every configured bound is one the runtime can honour.
 export const discoveryMaxBufferBytesFloor = 1024;
-export const discoveryMaxBufferBytesCeiling = 512 * 1024 * 1024;
+export const discoveryMaxBufferBytesCeiling = 536870888;
 // The config writer's explicit key allowlist. Serializing through it is what
 // keeps an emitted config from carrying fields the contract does not define;
 // a field missing from this list is silently dropped on write.

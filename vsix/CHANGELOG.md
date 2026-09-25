@@ -37,6 +37,9 @@ side of that tag.
 
 ### Changed
 
+- `cr-295`: the workspace discovery size-bound override ceiling is pinned to
+  Node's maximum string length, so every accepted bound can be decoded by the
+  extension runtime; larger overrides now fail during config parsing.
 - `cr-219`: the Go module's `exec/codex` and `exec/claude` adapters share one
   outcome contract. Below the output ceiling, a non-zero exit or a failing
   terminal event fails the run, and callers get the decoded result back with the
