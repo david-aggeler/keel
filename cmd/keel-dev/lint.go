@@ -127,6 +127,12 @@ func runLint(dir string, files []string) error {
 	}
 	violations = append(violations, v...)
 
+	v, err = scanHostToolchainPins(dir)
+	if err != nil {
+		return err
+	}
+	violations = append(violations, v...)
+
 	if len(violations) > 0 {
 		sort.Strings(violations)
 		return fmt.Errorf("lint: %d violation(s):\n%s", len(violations), strings.Join(violations, "\n"))

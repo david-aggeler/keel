@@ -6,8 +6,9 @@
 #   Go gate baseline — gopls, golangci-lint, govulncheck, gofumpt, shfmt, deadcode
 #   Secret + spell    — gitleaks, cspell
 # All Go tools land in $GOBIN (or $GOPATH/bin); cspell via npm install -g.
-# Pinned versions — bumps are CR-sized decisions. Run scripts/setup_as_root.sh
-# first so `go` is on PATH.
+# The pin block below is the single machine-readable version authority. Version
+# copies in keel-dev.yaml and the bootstrap are held to it by keel-dev ci.
+# Run scripts/setup_as_root.sh first so `go` and Node are on PATH.
 #
 # WHERE THE GATE LOOKS (keel/ac-465, keel/issue-142): `keel-dev ci` does NOT run
 # these $GOBIN binaries for its go-installed pins. It resolves each pinned tool
@@ -21,6 +22,24 @@
 # re-running this script.
 
 set -euo pipefail
+
+# pin-block: begin
+GO_VERSION=1.26.6                     # pin: go pinned
+NODE_MAJOR=24                         # pin: node pinned
+PNPM_VERSION=12.4.2                   # pin: pnpm pinned
+CSPELL_VERSION=10.0.1                 # pin: cspell pinned
+GOLANGCI_LINT_VERSION=v2.12.2         # pin: golangci-lint pinned
+GOVULNCHECK_VERSION=v1.7.0            # pin: govulncheck pinned
+GOFUMPT_VERSION=v0.7.0                # pin: gofumpt pinned
+SHFMT_VERSION=v3.13.1                 # pin: shfmt pinned
+DEADCODE_VERSION=v0.28.0              # pin: deadcode pinned
+GITLEAKS_VERSION=v8.30.1              # pin: gitleaks pinned
+# pin: xvfb-run system -- provided by the apt package xvfb
+# pin: shellcheck system -- distro package version is asserted by setup_as_root.sh
+# pin: just system -- distro package; recipe runner is not a gate dependency
+# pin: gh system -- distro package; release authentication is host-owned
+# pin: gopls float -- editor LSP, not a build or gate dependency
+# pin-block: end
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
@@ -133,35 +152,30 @@ else
 	# --- golangci-lint (errcheck, govet, staticcheck, unused, ineffassign) ---
 	# v2 line: the module path gained a /v2 suffix and gosimple folded into
 	# staticcheck. Config is .golangci.yml v2 schema.
-	GOLANGCI_LINT_VERSION="v2.12.2"
 	GOLANGCI_LINT_BIN="${GO_BIN_DIR}/golangci-lint"
 	ensure_versioned_go_tool "golangci-lint" "$GOLANGCI_LINT_VERSION" "$GOLANGCI_LINT_BIN" \
 		"github.com/golangci/golangci-lint/v2/cmd/golangci-lint" "2.12.2" --version
 	ensure_local_bin_link "golangci-lint" "$GOLANGCI_LINT_BIN"
 
 	# --- govulncheck — stdlib/dependency vulnerability scan ---
-	GOVULNCHECK_VERSION="v1.7.0"
 	GOVULNCHECK_BIN="${GO_BIN_DIR}/govulncheck"
 	ensure_versioned_go_tool "govulncheck" "$GOVULNCHECK_VERSION" "$GOVULNCHECK_BIN" \
 		"golang.org/x/vuln/cmd/govulncheck" "$GOVULNCHECK_VERSION" --version
 	ensure_local_bin_link "govulncheck" "$GOVULNCHECK_BIN"
 
 	# --- gofumpt — stricter gofmt superset ---
-	GOFUMPT_VERSION="v0.7.0"
 	GOFUMPT_BIN="${GO_BIN_DIR}/gofumpt"
 	ensure_versioned_go_tool "gofumpt" "$GOFUMPT_VERSION" "$GOFUMPT_BIN" \
 		"mvdan.cc/gofumpt" "$GOFUMPT_VERSION" --version
 	ensure_local_bin_link "gofumpt" "$GOFUMPT_BIN"
 
 	# --- shfmt — shell formatter (lints/formats these bootstrap scripts) ---
-	SHFMT_VERSION="v3.13.1"
 	SHFMT_BIN="${GO_BIN_DIR}/shfmt"
 	ensure_versioned_go_tool "shfmt" "$SHFMT_VERSION" "$SHFMT_BIN" \
 		"mvdan.cc/sh/v3/cmd/shfmt" "$SHFMT_VERSION" --version
 	ensure_local_bin_link "shfmt" "$SHFMT_BIN"
 
 	# --- gitleaks — secret scanner (enforces keel/requirement-8: no secrets) ---
-	GITLEAKS_VERSION="v8.30.1"
 	GITLEAKS_BIN="${GO_BIN_DIR}/gitleaks"
 	# Module path is github.com/zricethezav/gitleaks — the GitHub repo moved
 	# to github.com/gitleaks but the Go module path never did. Go-installed
@@ -173,7 +187,6 @@ else
 
 	# --- deadcode — advisory unreachable-function report (golang.org/x/tools) ---
 	# DHF-REQ: keel/requirement-12
-	DEADCODE_VERSION="v0.28.0"
 	DEADCODE_BIN="${GO_BIN_DIR}/deadcode"
 	# deadcode has no CLI version probe. Reinstall the pinned module every run
 	# so an already-present off-pin binary still converges to the declared pin.
@@ -197,7 +210,6 @@ fi
 # Not a Go tool; installed as an npm global. Needs Node — scripts/setup_as_root.sh
 # installs nodejs + npm.
 # ---------------------------------------------------------------------------
-CSPELL_VERSION="10.0.1"
 CSPELL_BIN="$(command -v cspell 2>/dev/null || true)"
 if [[ -n "$CSPELL_BIN" ]] && cspell --version 2>/dev/null | grep -qF "$CSPELL_VERSION"; then
 	echo "cspell already installed: $(cspell --version 2>&1 | head -n1) (${CSPELL_BIN})"
