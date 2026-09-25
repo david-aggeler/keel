@@ -361,10 +361,10 @@ func writeVSIXPolicyFixture(t *testing.T, root, policyEngine, nodeMajor, manifes
 	}
 	policy += "\nReason: owner decision on 2026-08-14 raised the floor so the VSIX toolchain can track current releases.\n"
 	policy += "\nDependency hold notes:\n\n" +
-		"- `@types/vscode` is held at `" + strings.TrimPrefix(typesVSCode, "^") + "` (current: `1.125.0`).\n" +
+		"- `@types/vscode` is held at `" + strings.TrimPrefix(typesVSCode, "^") + "` (current: `1.138.0`).\n" +
 		"  Reason: it must not describe APIs above the declared VS Code engine floor.\n" +
 		"  Release condition: `keel/change_request-180` raises it to the declared floor.\n" +
-		"- `@types/node` is held at `" + strings.TrimPrefix(typesNode, "^") + "` (current: `26.2.0`).\n" +
+		"- `@types/node` is held at `" + strings.TrimPrefix(typesNode, "^") + "` (current: `26.6.2`).\n" +
 		"  Reason: it must not describe a Node runtime above the VS Code release named by the declared floor.\n" +
 		"  Release condition: `keel/change_request-180` completes the coupled VSIX toolchain update.\n" +
 		"- `typescript` is held at `5.9.3` (current: `7.0.2`).\n" +

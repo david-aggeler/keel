@@ -169,7 +169,7 @@ func moduleFixture(t *testing.T) string {
 	writeFile(t, dir, filepath.Join("vsix", "package.json"),
 		"{\n  \"name\": \"keel-test-bridge\",\n  \"version\": \"0.0.0\",\n  \"engines\": {\n    \"vscode\": \"^1.125.0\"\n  },\n  \"scripts\": {\n    \"package:vsix\": \"true\",\n    \"ci\": \"true\",\n    \"test:coverage\": \"true\"\n  },\n  \"devDependencies\": {\n    \"@types/node\": \"^22.20.1\",\n    \"@types/vscode\": \"1.102.0\",\n    \"typescript\": \"^5.9.3\"\n  }\n}\n")
 	writeFile(t, dir, filepath.Join("vsix", "SUPPORTED_VSCODE.md"),
-		"# Keel Test Bridge Supported VS Code\n\nMinimum supported VS Code: ^1.125.0\nVS Code runtime Node major: 24\nVS Code runtime Node major source: VS Code 1.125.0 ships Electron 42.3.0 with Node.js 24.15.0 — https://github.com/ewanharris/vscode-versions\n\nReason: fixture\n\nDependency hold notes:\n\n- `@types/vscode` is held at `1.102.0` (current: `1.125.0`).\n  Reason: it must not describe APIs above the declared VS Code engine floor.\n  Release condition: `keel/change_request-180` raises it to the declared floor.\n- `@types/node` is held at `22.20.1` (current: `26.2.0`).\n  Reason: it must not describe a Node runtime above the VS Code release named by the declared floor.\n  Release condition: `keel/change_request-180` completes the coupled VSIX toolchain update.\n- `typescript` is held at `5.9.3` (current: `7.0.2`).\n  Reason: TypeScript 7 cannot compile this workspace against the old Node type line.\n  Release condition: `keel/change_request-180` moves the type packages and TypeScript together.\n")
+		"# Keel Test Bridge Supported VS Code\n\nMinimum supported VS Code: ^1.125.0\nVS Code runtime Node major: 24\nVS Code runtime Node major source: VS Code 1.125.0 ships Electron 42.3.0 with Node.js 24.15.0 — https://github.com/ewanharris/vscode-versions\n\nReason: fixture\n\nDependency hold notes:\n\n- `@types/vscode` is held at `1.102.0` (current: `1.138.0`).\n  Reason: it must not describe APIs above the declared VS Code engine floor.\n  Release condition: `keel/change_request-180` raises it to the declared floor.\n- `@types/node` is held at `22.20.1` (current: `26.6.2`).\n  Reason: it must not describe a Node runtime above the VS Code release named by the declared floor.\n  Release condition: `keel/change_request-180` completes the coupled VSIX toolchain update.\n- `typescript` is held at `5.9.3` (current: `7.0.2`).\n  Reason: TypeScript 7 cannot compile this workspace against the old Node type line.\n  Release condition: `keel/change_request-180` moves the type packages and TypeScript together.\n")
 	return dir
 }
 
@@ -313,7 +313,7 @@ func TestCommitVSIXStampSkipsWhenAlreadyCommitted(t *testing.T) {
 	}
 }
 
-// DHF-TEST: keel/requirement-76
+// DHF-TEST: keel/requirement-76, keel/requirement-119 (keel/ac-749)
 func TestRunVSIXGateIncludesPackagedE2ELane(t *testing.T) {
 	callsFile := stubTools(t, false, false)
 	dir := moduleFixture(t)
@@ -324,12 +324,45 @@ func TestRunVSIXGateIncludesPackagedE2ELane(t *testing.T) {
 
 	got := calls(t, callsFile)
 	for _, want := range []string{
+		"pnpm --dir " + filepath.Join(dir, "vsix") + " install --frozen-lockfile",
 		"pnpm --dir " + filepath.Join(dir, "vsix") + " run ci",
 		"pnpm --dir " + filepath.Join(dir, "vsix") + " run test:e2e:packaged",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("vsix gate missing call %q; calls:\n%s", want, got)
 		}
+	}
+	if strings.Index(got, " install --frozen-lockfile") > strings.Index(got, " run ci") {
+		t.Fatalf("frozen install must run before VSIX tests; calls:\n%s", got)
+	}
+}
+
+// DHF-TEST: keel/requirement-119 (keel/ac-749)
+func TestRunVSIXGateStopsWhenFrozenLockfileInstallFails(t *testing.T) {
+	callsFile := stubTools(t, false, false)
+	bin := filepath.Dir(callsFile)
+	stub(t, bin, callsFile, "pnpm", `
+case "$*" in
+  "--dir "*" install --frozen-lockfile") exit 7 ;;
+  "--dir "*" run "*)
+    printf 'pnpm run must not start after frozen install failure\n' >&2
+    exit 8
+    ;;
+esac
+exit 0`)
+	dir := moduleFixture(t)
+
+	err := runVSIXGate(context.Background(), discardLogger(), dir)
+	if err == nil || !strings.Contains(err.Error(), "install --frozen-lockfile") || !strings.Contains(err.Error(), "exit status 7") {
+		t.Fatalf("runVSIXGate err = %v, want frozen install failure", err)
+	}
+	got := calls(t, callsFile)
+	install := "pnpm --dir " + filepath.Join(dir, "vsix") + " install --frozen-lockfile"
+	if !strings.Contains(got, install) {
+		t.Fatalf("vsix gate missing frozen install %q; calls:\n%s", install, got)
+	}
+	if strings.Contains(got, " run ") {
+		t.Fatalf("vsix gate started a pnpm run step after frozen install failure; calls:\n%s", got)
 	}
 }
 

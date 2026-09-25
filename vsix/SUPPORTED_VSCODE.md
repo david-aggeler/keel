@@ -29,7 +29,11 @@ declaration site the gate reads.
 
 Dependency hold notes:
 
-- `@types/node` is held at `24.13.3` (current: `26.2.0`).
+- `@types/vscode` is held at `1.125.0` (current: `1.138.0`).
+  Reason: it must equal the declared VS Code engine floor so the compiler does
+  not admit APIs unavailable to users on the minimum supported release.
+  Release condition: the declared VS Code floor moves to `^1.138.0` or later.
+- `@types/node` is held at `24.13.3` (current: `26.6.2`).
   Reason: it must not describe a Node runtime above the one the declared VS Code
   floor ships, which is Node 24 per the source line above; `24.13.3` is the
   highest published release of that line.
