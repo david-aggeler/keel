@@ -272,7 +272,7 @@ func (f ioCloserFunc) Close() error { return f() }
 func TestHumanAndJSONFileHandlerLifecycle(t *testing.T) {
 	dir := t.TempDir()
 
-	hh, _, err := newTextFileHandler(dir, "svc", false, slog.LevelDebug)
+	hh, _, err := newTextFileHandler(dir, "svc", false, slog.LevelDebug, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +293,7 @@ func TestHumanAndJSONFileHandlerLifecycle(t *testing.T) {
 		t.Error("human file handler should be closable")
 	}
 
-	jh, _, _, err := newJSONFileHandler(dir, "svc", false, false, slog.LevelDebug)
+	jh, _, _, err := newJSONFileHandler(dir, "svc", false, false, slog.LevelDebug, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
