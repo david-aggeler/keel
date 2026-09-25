@@ -109,6 +109,32 @@ func TestStartKeepsConsumerLongNameWhenAliasCollidesWithKeelGlobal(t *testing.T)
 	}
 }
 
+// DHF-TEST: keel/requirement-176 (keel/ac-759, keel/ac-761)
+func TestStartHelpOmitsConsumerAliasThatCollidesWithKeelGlobal(t *testing.T) {
+	root, stdout, _ := consumerGlobalsTree([]FlagSpec{{Name: "target", Alias: "v", Value: "path"}}, nil)
+
+	_, _, code, done := root.Start([]string{"--help"})
+	help := stdout.String()
+	if code != 0 || !done || !strings.Contains(help, "--target path") || strings.Contains(help, "-v, --target") || strings.Contains(help, "-v|--target") {
+		t.Fatalf("Start: code=%d done=%v stdout=%q", code, done, help)
+	}
+}
+
+// DHF-TEST: keel/requirement-176 (keel/ac-759, keel/ac-761)
+func TestStartSuppressesConsumerAliasWhenLongNameCollidesWithKeelGlobal(t *testing.T) {
+	var target string
+	root, stdout, _ := consumerGlobalsTree([]FlagSpec{{Name: "mode", Alias: "n", Value: "profile", StringTarget: &target}}, nil)
+
+	_, words, code, done := root.Start([]string{"ci", "-n", "custom"})
+	if target != "" || !reflect.DeepEqual(words, []string{"ci", "-n", "custom"}) || code != 0 || done {
+		t.Fatalf("Start: target=%q words=%q code=%d done=%v", target, words, code, done)
+	}
+	root.Start([]string{"--help"})
+	if strings.Contains(stdout.String(), "-n, --mode") || strings.Contains(stdout.String(), "-n|--mode") {
+		t.Fatalf("help unexpectedly rendered suppressed consumer alias: %q", stdout.String())
+	}
+}
+
 // DHF-TEST: keel/requirement-176 (keel/ac-760)
 func TestStartKeepsCommandFlagPrecedenceOverConsumerGlobal(t *testing.T) {
 	var global string

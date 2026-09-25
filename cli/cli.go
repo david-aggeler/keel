@@ -594,10 +594,11 @@ func newConsumerGlobalLookup(extra []FlagSpec) consumerGlobalLookup {
 		byAlias: make(map[string]FlagSpec),
 	}
 	for _, flag := range extra {
-		if flag.Name != "" && !owned[flag.Name] {
-			if _, exists := lookup.byName[flag.Name]; !exists {
-				lookup.byName[flag.Name] = flag
-			}
+		if flag.Name == "" || owned[flag.Name] {
+			continue
+		}
+		if _, exists := lookup.byName[flag.Name]; !exists {
+			lookup.byName[flag.Name] = flag
 		}
 		if flag.Alias != "" && !owned[flag.Alias] {
 			if _, exists := lookup.byAlias[flag.Alias]; !exists {
@@ -1365,20 +1366,26 @@ func ModeHelpLines() []string {
 }
 
 // mergeGlobalFlags returns keel's canonical global flag rows followed by any
-// consumer-supplied globals that are not keel-owned. A consumer entry re-listing
-// a keel-owned flag name is de-duped (rendered once, from keel) for back-compat.
+// consumer-supplied globals that are not keel-owned. Keel-owned names and
+// aliases are rendered only with their canonical keel flag.
 //
-// DHF-REQ: keel/requirement-101
+// DHF-REQ: keel/requirement-101, keel/requirement-176
 func mergeGlobalFlags(extra []FlagSpec) []FlagSpec {
 	canonical := GlobalFlagSpecs()
 	owned := make(map[string]bool, len(canonical))
 	for _, f := range canonical {
 		owned[f.Name] = true
+		if f.Alias != "" {
+			owned[f.Alias] = true
+		}
 	}
 	merged := append([]FlagSpec{}, canonical...)
 	for _, f := range extra {
 		if owned[f.Name] {
 			continue
+		}
+		if owned[f.Alias] {
+			f.Alias = ""
 		}
 		merged = append(merged, f)
 	}
