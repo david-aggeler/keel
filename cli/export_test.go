@@ -37,7 +37,7 @@ func (c *CommandSpec) SetHelpOutput(stdout, stderr io.Writer) {
 
 // ParseGlobalConfig parses the shared global flags without a command tree.
 func ParseGlobalConfig(argv []string) (RuntimeConfig, []string, error) {
-	return parseGlobalConfig(argv, nil)
+	return parseGlobalConfig(argv, nil, consumerGlobalLookup{})
 }
 
 // ParseGlobalConfig parses the shared global flags against the tree, as

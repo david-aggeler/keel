@@ -199,7 +199,9 @@ type Config struct {
 	HelpUsage string
 	// CommandUsage is the per-command help entry-point usage line.
 	CommandUsage string
-	// GlobalFlags are rendered in the root help global flag table.
+	// GlobalFlags are parsed by Start and rendered in the root help global flag
+	// table. Value flags bind through StringTarget and boolean flags bind through
+	// BoolTarget.
 	GlobalFlags []FlagSpec
 	// ModeHelp contains optional output-mode prose appended to the keel-owned
 	// help-only mode topic.
@@ -481,9 +483,10 @@ func (c *CommandSpec) setHelpWidth(width int) {
 // parseGlobals resolves the command node before parsing shared globals and
 // turns a leading "help" word into a help request.
 //
-// DHF-REQ: keel/requirement-153, keel/requirement-155
+// DHF-REQ: keel/requirement-153, keel/requirement-155, keel/requirement-176
 func (c *CommandSpec) parseGlobals(argv []string) (RuntimeConfig, []string, error) {
-	cfg, words, err := parseGlobalConfig(argv, c.commandNode(argv))
+	consumer := newConsumerGlobalLookup(c.Config.GlobalFlags)
+	cfg, words, err := parseGlobalConfig(argv, c.commandNode(argv, consumer), consumer)
 	if err != nil {
 		return cfg, words, err
 	}
@@ -495,7 +498,7 @@ func (c *CommandSpec) parseGlobals(argv []string) (RuntimeConfig, []string, erro
 }
 
 // DHF-REQ: keel/requirement-57, keel/requirement-166
-func parseGlobalConfig(argv []string, node *CommandSpec) (RuntimeConfig, []string, error) {
+func parseGlobalConfig(argv []string, node *CommandSpec, consumer consumerGlobalLookup) (RuntimeConfig, []string, error) {
 	cfg := RuntimeConfig{Mode: ModeHuman}
 	var words []string
 	for i := 0; i < len(argv); i++ {
@@ -553,6 +556,13 @@ func parseGlobalConfig(argv []string, node *CommandSpec) (RuntimeConfig, []strin
 				cfg.Color = policy
 				continue
 			}
+			matched, err := consumer.parse(arg, argv, &i)
+			if err != nil {
+				return cfg, nil, err
+			}
+			if matched {
+				continue
+			}
 			words = append(words, arg)
 		}
 	}
@@ -562,9 +572,125 @@ func parseGlobalConfig(argv []string, node *CommandSpec) (RuntimeConfig, []strin
 	return cfg, words, nil
 }
 
-func (c *CommandSpec) commandNode(argv []string) *CommandSpec {
+// consumerGlobalLookup contains each consumer-global spelling that does not
+// collide with a keel-owned global name or alias.
+//
+// DHF-REQ: keel/requirement-176
+type consumerGlobalLookup struct {
+	byName  map[string]FlagSpec
+	byAlias map[string]FlagSpec
+}
+
+func newConsumerGlobalLookup(extra []FlagSpec) consumerGlobalLookup {
+	owned := make(map[string]bool)
+	for _, flag := range GlobalFlagSpecs() {
+		owned[flag.Name] = true
+		if flag.Alias != "" {
+			owned[flag.Alias] = true
+		}
+	}
+	lookup := consumerGlobalLookup{
+		byName:  make(map[string]FlagSpec),
+		byAlias: make(map[string]FlagSpec),
+	}
+	for _, flag := range extra {
+		if flag.Name == "" || owned[flag.Name] {
+			continue
+		}
+		if _, exists := lookup.byName[flag.Name]; !exists {
+			lookup.byName[flag.Name] = flag
+		}
+		if flag.Alias != "" && !owned[flag.Alias] {
+			if _, exists := lookup.byAlias[flag.Alias]; !exists {
+				lookup.byAlias[flag.Alias] = flag
+			}
+		}
+	}
+	return lookup
+}
+
+func (l consumerGlobalLookup) parse(arg string, argv []string, index *int) (bool, error) {
+	if strings.HasPrefix(arg, "--") {
+		body := strings.TrimPrefix(arg, "--")
+		name, value, hasValue := body, "", false
+		if eq := strings.IndexByte(body, '='); eq >= 0 {
+			name, value, hasValue = body[:eq], body[eq+1:], true
+		}
+		flag, ok := l.byName[name]
+		if !ok {
+			return false, nil
+		}
+		if flag.Value == "" {
+			if hasValue {
+				parsed, err := parseBoolFlagValue(value)
+				if err != nil {
+					return true, err
+				}
+				if flag.BoolTarget != nil {
+					*flag.BoolTarget = parsed
+				}
+			} else if flag.BoolTarget != nil {
+				*flag.BoolTarget = true
+			}
+			return true, nil
+		}
+		if !hasValue {
+			if *index+1 >= len(argv) {
+				return true, NewUsageError("--%s requires a value", name)
+			}
+			*index++
+			value = argv[*index]
+		}
+		return true, setConsumerGlobalValue(flag, value)
+	}
+	if len(arg) == 2 && strings.HasPrefix(arg, "-") {
+		alias := strings.TrimPrefix(arg, "-")
+		flag, ok := l.byAlias[alias]
+		if !ok {
+			return false, nil
+		}
+		if flag.Value == "" {
+			if flag.BoolTarget != nil {
+				*flag.BoolTarget = true
+			}
+			return true, nil
+		}
+		if *index+1 >= len(argv) {
+			return true, NewUsageError("-%s requires a value", alias)
+		}
+		*index++
+		return true, setConsumerGlobalValue(flag, argv[*index])
+	}
+	return false, nil
+}
+
+func setConsumerGlobalValue(flag FlagSpec, value string) error {
+	if len(flag.Enum) > 0 {
+		valid := false
+		for _, allowed := range flag.Enum {
+			if value == allowed {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			return NewUsageError("invalid --%s %q: expected one of: %s", flag.Name, value, strings.Join(flag.Enum, ", "))
+		}
+	}
+	if flag.StringTarget != nil {
+		*flag.StringTarget = value
+	}
+	return nil
+}
+
+func (c *CommandSpec) commandNode(argv []string, consumer consumerGlobalLookup) *CommandSpec {
 	node := c
-	for _, arg := range argv {
+	for i := 0; i < len(argv); i++ {
+		arg := argv[i]
+		if !node.declaresArg(arg) && consumerConsumesFollowingValue(arg, consumer) && i+1 < len(argv) {
+			i++
+			continue
+		}
 		child, ok := node.Child(arg)
 		if !ok {
 			continue
@@ -572,6 +698,18 @@ func (c *CommandSpec) commandNode(argv []string) *CommandSpec {
 		node = child
 	}
 	return node
+}
+
+func consumerConsumesFollowingValue(arg string, consumer consumerGlobalLookup) bool {
+	if strings.HasPrefix(arg, "--") && !strings.Contains(arg, "=") {
+		flag, ok := consumer.byName[strings.TrimPrefix(arg, "--")]
+		return ok && flag.Value != ""
+	}
+	if len(arg) == 2 && strings.HasPrefix(arg, "-") {
+		flag, ok := consumer.byAlias[strings.TrimPrefix(arg, "-")]
+		return ok && flag.Value != ""
+	}
+	return false
 }
 
 func (c *CommandSpec) declaresArg(arg string) bool {
@@ -1186,9 +1324,10 @@ func commandPath(path []string, fallback string) string {
 }
 
 // GlobalFlagSpecs returns the canonical help rows for the shared global flags
-// Start parses. keel owns these names and descriptions so root help
-// cannot drift from the parser; a consumer's Config.GlobalFlags contributes only
-// its own additional binary-specific globals. The order mirrors the global flag parser.
+// Start parses. keel owns these names and descriptions so root help cannot
+// drift from the parser; a consumer's Config.GlobalFlags contributes its own
+// additional binary-specific globals to both parsing and help. The order mirrors
+// the global flag parser.
 // It is the one source for every help surface that names a global flag: the root
 // usage synopsis, the Global flags section, and the --help-json root entry. Each
 // accepted spelling is listed: Name for the long form, Alias for the short form,
@@ -1227,20 +1366,26 @@ func ModeHelpLines() []string {
 }
 
 // mergeGlobalFlags returns keel's canonical global flag rows followed by any
-// consumer-supplied globals that are not keel-owned. A consumer entry re-listing
-// a keel-owned flag name is de-duped (rendered once, from keel) for back-compat.
+// consumer-supplied globals that are not keel-owned. Keel-owned names and
+// aliases are rendered only with their canonical keel flag.
 //
-// DHF-REQ: keel/requirement-101
+// DHF-REQ: keel/requirement-101, keel/requirement-176
 func mergeGlobalFlags(extra []FlagSpec) []FlagSpec {
 	canonical := GlobalFlagSpecs()
 	owned := make(map[string]bool, len(canonical))
 	for _, f := range canonical {
 		owned[f.Name] = true
+		if f.Alias != "" {
+			owned[f.Alias] = true
+		}
 	}
 	merged := append([]FlagSpec{}, canonical...)
 	for _, f := range extra {
 		if owned[f.Name] {
 			continue
+		}
+		if owned[f.Alias] {
+			f.Alias = ""
 		}
 		merged = append(merged, f)
 	}
