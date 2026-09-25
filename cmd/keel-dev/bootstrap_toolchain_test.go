@@ -48,7 +48,7 @@ func TestSetupUserPnpmConvergenceAndMismatchAreObservable(t *testing.T) {
 				t.Fatal(err)
 			}
 			corepack := `#!/usr/bin/env bash
-set -euo pipefail
+set -eu
 if [[ "$1" == enable ]]; then
   mkdir -p "$3"
   printf '%s\n' '#!/usr/bin/env bash' 'if [[ "${1:-}" == "--version" ]]; then echo "${COREPACK_PNPM_VERSION}"; fi' >"$3/pnpm"
