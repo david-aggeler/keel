@@ -18,6 +18,11 @@ type hostToolPin struct {
 
 var pinDirectiveRE = regexp.MustCompile(`# pin: ([a-z0-9-]+) ([a-z]+)(?: -- (.+))?\s*$`)
 var pinAssignmentRE = regexp.MustCompile(`^([A-Z][A-Z0-9_]*)=(?:"([^"]+)"|([^\s]+))`)
+var pinVariables = map[string]string{
+	"go": "GO_VERSION", "node": "NODE_MAJOR", "pnpm": "PNPM_VERSION", "cspell": "CSPELL_VERSION",
+	"golangci-lint": "GOLANGCI_LINT_VERSION", "govulncheck": "GOVULNCHECK_VERSION", "gofumpt": "GOFUMPT_VERSION",
+	"shfmt": "SHFMT_VERSION", "deadcode": "DEADCODE_VERSION", "gitleaks": "GITLEAKS_VERSION", "shellcheck": "SHELLCHECK_VERSION",
+}
 
 // scanHostToolchainPins holds the bootstrap, gate config, and VSIX package
 // manager to the one machine-readable pin block in setup_user.sh.
@@ -44,7 +49,11 @@ func scanHostToolchainPins(root string) ([]string, error) {
 		for _, configured := range cfg.Tools.Pins {
 			pin, ok := pins[configured.Name]
 			if !ok {
-				violations = append(violations, fmt.Sprintf("  host-toolchain-pins: keel-dev.yaml tool %q pin-block version is undeclared", configured.Name))
+				want := configured.Want
+				if configured.Install.Method == toolInstallGo {
+					want = configured.Install.Version
+				}
+				violations = append(violations, fmt.Sprintf("  host-toolchain-pins: keel-dev.yaml tool %q version %q differs from pin-block version \"undeclared\"", configured.Name, want))
 				continue
 			}
 			want := configured.Want
@@ -55,6 +64,8 @@ func scanHostToolchainPins(root string) ([]string, error) {
 				violations = append(violations, fmt.Sprintf("  host-toolchain-pins: tool %q keel-dev.yaml version %q differs from pin-block version %q", configured.Name, want, pin.version))
 			}
 		}
+	} else {
+		return nil, fmt.Errorf("host-toolchain-pins: stat %s: %w", configPath, statErr)
 	}
 
 	violations = append(violations, checkPinnedLiteral(root, "scripts/install_go.sh", "go", `(?m)^GO_VERSION="?([^"\s]+)`, pins)...)
@@ -73,6 +84,8 @@ func scanHostToolchainPins(root string) ([]string, error) {
 		if pkg.PackageManager != expected {
 			violations = append(violations, fmt.Sprintf("  host-toolchain-pins: vsix/package.json packageManager: expected %q, found %q", expected, pkg.PackageManager))
 		}
+	} else {
+		return nil, fmt.Errorf("host-toolchain-pins: read %s: %w", packageJSON, readErr)
 	}
 
 	rootScript, readErr := os.ReadFile(filepath.Join(root, "scripts", "setup_as_root.sh"))
@@ -87,11 +100,14 @@ func scanHostToolchainPins(root string) ([]string, error) {
 		for _, resource := range vsixCIRuntimeLibraryResources {
 			packages[resource.packageName] = true
 		}
+		installed := aptInstallPackages(text)
 		for pkg := range packages {
-			if !regexp.MustCompile(`(^|[[:space:]])` + regexp.QuoteMeta(pkg) + `([[:space:]\\]|$)`).MatchString(text) {
+			if !installed[pkg] {
 				violations = append(violations, fmt.Sprintf("  host-toolchain-pins: scripts/setup_as_root.sh does not install package %q", pkg))
 			}
 		}
+	} else {
+		return nil, fmt.Errorf("host-toolchain-pins: read scripts/setup_as_root.sh: %w", readErr)
 	}
 	sort.Strings(violations)
 	return violations, nil
@@ -129,7 +145,7 @@ func parseHostToolPins(path string) (map[string]hostToolPin, []string, error) {
 		}
 		tool, class, reason := match[1], match[2], strings.TrimSpace(match[3])
 		if class != "pinned" && class != "system" && class != "float" {
-			violations = append(violations, fmt.Sprintf("  host-toolchain-pins: tool %q has unknown class %q", tool, class))
+			violations = append(violations, fmt.Sprintf("  host-toolchain-pins: scripts/setup_user.sh line %d has unknown class %q: %s", lineNo, class, strings.TrimSpace(line)))
 			continue
 		}
 		if (class == "system" || class == "float") && reason == "" {
@@ -144,6 +160,9 @@ func parseHostToolPins(path string) (map[string]hostToolPin, []string, error) {
 				version = assignment[2]
 			} else {
 				version = assignment[3]
+			}
+			if assignment != nil && pinVariables[tool] != assignment[1] {
+				violations = append(violations, fmt.Sprintf("  host-toolchain-pins: scripts/setup_user.sh line %d tool %q must use variable %s, found %s", lineNo, tool, pinVariables[tool], assignment[1]))
 			}
 		}
 		if _, duplicate := pins[tool]; duplicate {
@@ -161,7 +180,7 @@ func parseHostToolPins(path string) (map[string]hostToolPin, []string, error) {
 func checkPinnedLiteral(root, name, tool, pattern string, pins map[string]hostToolPin) []string {
 	body, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
 	if err != nil {
-		return nil
+		return []string{fmt.Sprintf("  host-toolchain-pins: cannot read %s: %v", name, err)}
 	}
 	if (tool == "node" && strings.Contains(string(body), `NODE_MAJOR="$(pin_value NODE_MAJOR)"`)) ||
 		(tool == "shellcheck" && strings.Contains(string(body), `EXPECTED_SHELLCHECK_VERSION="$(pin_value SHELLCHECK_VERSION)"`)) {
@@ -179,3 +198,28 @@ func checkPinnedLiteral(root, name, tool, pattern string, pins map[string]hostTo
 }
 
 func trimVersion(version string) string { return strings.TrimPrefix(version, "v") }
+
+func aptInstallPackages(script string) map[string]bool {
+	packages := map[string]bool{}
+	inInstall := false
+	for _, line := range strings.Split(script, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "apt-get install ") {
+			inInstall = true
+		}
+		if !inInstall {
+			continue
+		}
+		for _, field := range strings.Fields(trimmed) {
+			field = strings.TrimSuffix(field, "\\")
+			if field == "" || field == "apt-get" || field == "install" || strings.HasPrefix(field, "-") {
+				continue
+			}
+			packages[field] = true
+		}
+		if !strings.HasSuffix(trimmed, "\\") {
+			inInstall = false
+		}
+	}
+	return packages
+}

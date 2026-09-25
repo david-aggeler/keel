@@ -25,6 +25,7 @@ func TestRunLintRejectsInvalidHostToolchainPinBlock(t *testing.T) {
 			return strings.Replace(s, "# pin: gh system -- distro package", "# pin: gh system", 1)
 		}, "requires a -- reason"},
 		{"missing inventory", func(s string) string { return strings.Replace(s, "# pin: gh system -- distro package\n", "", 1) }, "tool \"gh\" is undeclared"},
+		{"wrong assignment", func(s string) string { return strings.Replace(s, "PNPM_VERSION=12.4.2", "TYPO_VERSION=12.4.2", 1) }, "must use variable PNPM_VERSION"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -39,6 +40,21 @@ func TestRunLintRejectsInvalidHostToolchainPinBlock(t *testing.T) {
 				t.Fatalf("runLint error = %v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// DHF-TEST: keel/requirement-173 (keel/ac-741)
+func TestRunLintRequiresPackagesInAptInstallCommand(t *testing.T) {
+	root := validPinFixture(t)
+	path := filepath.Join(root, "scripts", "setup_as_root.sh")
+	body, _ := os.ReadFile(path)
+	changed := strings.Replace(string(body), " libnss3", "", 1) + "# libnss3 mentioned but not installed\n"
+	if err := os.WriteFile(path, []byte(changed), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := runLint(root, lintFixtureFiles(t, root))
+	if err == nil || !strings.Contains(err.Error(), `does not install package "libnss3"`) {
+		t.Fatalf("runLint error = %v", err)
 	}
 }
 
@@ -76,11 +92,19 @@ func TestSetupUserPinBlockRemainsReadableByOpenbrain(t *testing.T) {
 		t.Fatal(err)
 	}
 	re := regexp.MustCompile(`(?m)^\s*([A-Z][A-Z0-9_]*)_VERSION="?([^"\s]+)"?`)
+	pins, violations, err := parseHostToolPins(filepath.Join(root, "scripts", "setup_user.sh"))
+	if err != nil || len(violations) != 0 {
+		t.Fatalf("parse pin block: violations=%v err=%v", violations, err)
+	}
 	want := map[string]bool{"GOLANGCI_LINT": true, "GOVULNCHECK": true, "GOFUMPT": true, "SHFMT": true, "DEADCODE": true, "GITLEAKS": true, "CSPELL": true}
+	tools := map[string]string{"GOLANGCI_LINT": "golangci-lint", "GOVULNCHECK": "govulncheck", "GOFUMPT": "gofumpt", "SHFMT": "shfmt", "DEADCODE": "deadcode", "GITLEAKS": "gitleaks", "CSPELL": "cspell"}
 	seen := map[string]int{}
 	for _, match := range re.FindAllStringSubmatch(string(body), -1) {
 		if want[match[1]] {
 			seen[match[1]]++
+			if got := match[2]; got != pins[tools[match[1]]].version {
+				t.Errorf("%s captured %q, pin block has %q", match[1], got, pins[tools[match[1]]].version)
+			}
 		}
 	}
 	for stem := range want {

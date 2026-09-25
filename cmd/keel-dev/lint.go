@@ -127,11 +127,15 @@ func runLint(dir string, files []string) error {
 	}
 	violations = append(violations, v...)
 
-	v, err = scanHostToolchainPins(dir)
-	if err != nil {
-		return err
+	if _, statErr := os.Stat(filepath.Join(dir, "scripts", "setup_user.sh")); statErr == nil {
+		v, err = scanHostToolchainPins(dir)
+		if err != nil {
+			return err
+		}
+		violations = append(violations, v...)
+	} else if !os.IsNotExist(statErr) {
+		return fmt.Errorf("lint: stat scripts/setup_user.sh: %w", statErr)
 	}
-	violations = append(violations, v...)
 
 	if len(violations) > 0 {
 		sort.Strings(violations)

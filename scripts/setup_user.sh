@@ -139,6 +139,7 @@ if ! command -v corepack >/dev/null 2>&1; then
 fi
 corepack enable --install-directory "${HOME_DIR}/.local/bin"
 corepack prepare "pnpm@${PNPM_VERSION}" --activate
+pnpm config set global-bin-dir "${HOME_DIR}/.local/bin"
 resolved_pnpm="$(command -v pnpm 2>/dev/null || true)"
 reported_pnpm_version="$(pnpm --version 2>/dev/null || true)"
 if [[ -z "$resolved_pnpm" || "$reported_pnpm_version" != "$PNPM_VERSION" ]]; then

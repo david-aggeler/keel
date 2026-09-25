@@ -12,6 +12,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
+# shellcheck source=scripts/bootstrap_versions.sh
+source "$SCRIPT_DIR/bootstrap_versions.sh"
 
 if [[ "${EUID}" -ne 0 ]]; then
 	echo "Run this script as root."
@@ -52,13 +54,20 @@ echo "Installing base host packages via apt-get..."
 # `nodejs`/`npm` provide the Node runtime that scripts/setup_user.sh needs to
 # install cspell (the keel-dev ci spell-check tool).
 apt-get update -qq
-apt-get install -y ca-certificates curl just shellcheck \
+apt-get install -y ca-certificates curl just xz-utils \
 	xvfb \
 	libasound2t64 libatk1.0-0t64 libatk-bridge2.0-0t64 libatspi2.0-0t64 \
 	libc6 libcairo2 libcups2t64 libdbus-1-3 libexpat1 libgbm1 libgcc-s1 \
 	libglib2.0-0t64 libgtk-3-0t64 libnspr4 libnss3 libpango-1.0-0 \
 	libudev1 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 \
 	libxfixes3 libxkbcommon0 libxrandr2
+
+shellcheck_archive="/tmp/shellcheck-v${EXPECTED_SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+shellcheck_dir="/tmp/shellcheck-v${EXPECTED_SHELLCHECK_VERSION}"
+curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/v${EXPECTED_SHELLCHECK_VERSION}/shellcheck-v${EXPECTED_SHELLCHECK_VERSION}.linux.x86_64.tar.xz" -o "$shellcheck_archive"
+tar -xJf "$shellcheck_archive" -C /tmp
+install -m 0755 "${shellcheck_dir}/shellcheck" /usr/local/bin/shellcheck
+rm -f "$shellcheck_archive"
 
 echo "Installing Node.js major ${NODE_MAJOR} from NodeSource..."
 curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash -
@@ -70,14 +79,7 @@ if [[ "$installed_sc_ver" != "$EXPECTED_SHELLCHECK_VERSION" ]]; then
 	exit 1
 fi
 
-installed_node_version="$(node --version 2>/dev/null || true)"
-installed_node_major="${installed_node_version#v}"
-installed_node_major="${installed_node_major%%.*}"
-if [[ "$installed_node_major" != "$NODE_MAJOR" ]]; then
-	echo "ERROR: node major version mismatch: installed=${installed_node_major:-(none)} expected=${NODE_MAJOR}" >&2
-	exit 1
-fi
-echo "Node installed: ${installed_node_version} (expected major ${NODE_MAJOR})"
+require_node_major "$NODE_MAJOR"
 
 echo ""
 echo "Machine bootstrap complete. Next: run scripts/setup_user.sh as ${DEV_USER}."
