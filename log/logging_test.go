@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1596,13 +1595,8 @@ func TestAttributeColoringDoesNotAffectNonPlainConsoleOrFileSinks(t *testing.T) 
 }
 
 // DHF-TEST: openbrain/requirement-152
-func TestConsoleOutput_WritesRollingHumanFileAtDebugAndRetainsTen(t *testing.T) {
+func TestConsoleOutput_WritesRollingHumanFileAtDebug(t *testing.T) {
 	dir := t.TempDir()
-	for day := 1; day <= 11; day++ {
-		if err := os.WriteFile(filepath.Join(dir, "openbrain-dev-2026-05-"+twoDigit(day)+".log"), []byte("old\n"), 0o600); err != nil {
-			t.Fatalf("seed old log: %v", err)
-		}
-	}
 
 	var console bytes.Buffer
 	logger := mustNewLogger(t, logging.Config{Console: logging.ConsolePlain,
@@ -1618,17 +1612,6 @@ func TestConsoleOutput_WritesRollingHumanFileAtDebugAndRetainsTen(t *testing.T) 
 	if strings.Contains(console.String(), "debug detail") {
 		t.Fatalf("console emitted DEBUG despite INFO threshold: %q", console.String())
 	}
-	matches, err := filepath.Glob(filepath.Join(dir, "openbrain-dev-*.log"))
-	if err != nil {
-		t.Fatalf("glob human logs: %v", err)
-	}
-	if len(matches) != 10 {
-		t.Fatalf("retained %d human logs, want 10: %v", len(matches), matches)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "openbrain-dev-2026-05-01.log")); !os.IsNotExist(err) {
-		t.Fatalf("oldest daily log was not pruned; stat err=%v", err)
-	}
-
 	today := textLogPath(dir, "openbrain-dev")
 	body, err := os.ReadFile(today)
 	if err != nil {
@@ -1643,6 +1626,173 @@ func TestConsoleOutput_WritesRollingHumanFileAtDebugAndRetainsTen(t *testing.T) 
 	}
 	if !regexp.MustCompile(`\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\t(?:DEBUG|INFO)\topenbrain-dev\s+\t`).MatchString(got) {
 		t.Fatalf("file sink does not use full timestamp, level, padded source tabs: %q", got)
+	}
+}
+
+// DHF-TEST: keel/requirement-175
+func TestFileRetentionZeroPreservesDailyTextAndJSONLLogs(t *testing.T) {
+	dir := t.TempDir()
+	seeded := make([]string, 0, 24)
+	for daysAgo := 31; daysAgo < 43; daysAgo++ {
+		for _, extension := range []string{".log", ".jsonl"} {
+			path := dailyLogPath(dir, "retention-zero", daysAgo, extension)
+			if err := os.WriteFile(path, []byte("old\n"), 0o600); err != nil {
+				t.Fatalf("seed %s: %v", path, err)
+			}
+			seeded = append(seeded, path)
+		}
+	}
+
+	logger := mustNewLogger(t, logging.Config{
+		Console:  logging.ConsoleNone,
+		Service:  "retention-zero",
+		TextDir:  dir,
+		JSONLDir: dir,
+	})
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	assertFilesExist(t, seeded)
+}
+
+// DHF-TEST: keel/requirement-175
+func TestFileRetentionPrunesDailyTextLogsByAgeNotCount(t *testing.T) {
+	dir := t.TempDir()
+	ages := append([]int{29, 31, 60}, integersFromOneThrough(15)...)
+	for _, daysAgo := range ages {
+		path := dailyLogPath(dir, "retention-text", daysAgo, ".log")
+		if err := os.WriteFile(path, []byte("old\n"), 0o600); err != nil {
+			t.Fatalf("seed %s: %v", path, err)
+		}
+	}
+
+	logger := mustNewLogger(t, logging.Config{
+		Console:       logging.ConsoleNone,
+		Service:       "retention-text",
+		TextDir:       dir,
+		FileRetention: 30 * 24 * time.Hour,
+	})
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	assertFilesAbsent(t, []string{
+		dailyLogPath(dir, "retention-text", 31, ".log"),
+		dailyLogPath(dir, "retention-text", 60, ".log"),
+	})
+	kept := []string{dailyLogPath(dir, "retention-text", 29, ".log"), textLogPath(dir, "retention-text")}
+	for _, daysAgo := range integersFromOneThrough(15) {
+		kept = append(kept, dailyLogPath(dir, "retention-text", daysAgo, ".log"))
+	}
+	assertFilesExist(t, kept)
+}
+
+// DHF-TEST: keel/requirement-175
+func TestFileRetentionNeverPrunesTodaysActiveDailyLog(t *testing.T) {
+	dir := t.TempDir()
+	today := textLogPath(dir, "retention-today")
+	if err := os.WriteFile(today, []byte("earlier today\n"), 0o600); err != nil {
+		t.Fatalf("seed today's log: %v", err)
+	}
+
+	logger := mustNewLogger(t, logging.Config{
+		Console:       logging.ConsoleNone,
+		Service:       "retention-today",
+		TextDir:       dir,
+		FileRetention: time.Hour,
+	})
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	body, err := os.ReadFile(today)
+	if err != nil {
+		t.Fatalf("read today's log: %v", err)
+	}
+	if !strings.Contains(string(body), "earlier today") {
+		t.Fatalf("today's pre-existing log content was pruned: %q", body)
+	}
+}
+
+// DHF-TEST: keel/requirement-175
+func TestFileRetentionPrunesDailyJSONLLogsByAge(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := dailyLogPath(dir, "retention-jsonl", 60, ".jsonl")
+	recentPath := dailyLogPath(dir, "retention-jsonl", 5, ".jsonl")
+	for _, path := range []string{oldPath, recentPath} {
+		if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
+			t.Fatalf("seed %s: %v", path, err)
+		}
+	}
+
+	logger := mustNewLogger(t, logging.Config{
+		Console:       logging.ConsoleNone,
+		Service:       "retention-jsonl",
+		JSONLDir:      dir,
+		FileRetention: 30 * 24 * time.Hour,
+	})
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	assertFilesAbsent(t, []string{oldPath})
+	assertFilesExist(t, []string{recentPath})
+}
+
+// DHF-TEST: keel/requirement-175
+func TestFileRetentionLeavesFilesOutsideExactServiceDateShape(t *testing.T) {
+	dir := t.TempDir()
+	oldDate := time.Now().AddDate(0, 0, -60).Format("2006-01-02")
+	seeded := []string{
+		filepath.Join(dir, "openbrain-client-"+oldDate+".log"),
+		filepath.Join(dir, "openbrain-client-"+oldDate+".jsonl"),
+		filepath.Join(dir, "openbrain-notes.log"),
+	}
+	for _, path := range seeded {
+		if err := os.WriteFile(path, []byte("old\n"), 0o600); err != nil {
+			t.Fatalf("seed %s: %v", path, err)
+		}
+	}
+
+	logger := mustNewLogger(t, logging.Config{
+		Console:       logging.ConsoleNone,
+		Service:       "openbrain",
+		TextDir:       dir,
+		JSONLDir:      dir,
+		FileRetention: 30 * 24 * time.Hour,
+	})
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	assertFilesExist(t, seeded)
+}
+
+func dailyLogPath(dir, service string, daysAgo int, extension string) string {
+	date := time.Now().AddDate(0, 0, -daysAgo).Format("2006-01-02")
+	return filepath.Join(dir, service+"-"+date+extension)
+}
+
+func integersFromOneThrough(max int) []int {
+	values := make([]int, max)
+	for i := range values {
+		values[i] = i + 1
+	}
+	return values
+}
+
+func assertFilesExist(t testing.TB, paths []string) {
+	t.Helper()
+	for _, path := range paths {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("expected %s to exist: %v", path, err)
+		}
+	}
+}
+
+func assertFilesAbsent(t testing.TB, paths []string) {
+	t.Helper()
+	for _, path := range paths {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("expected %s to be absent; stat err=%v", path, err)
+		}
 	}
 }
 
@@ -1692,13 +1842,6 @@ func TestLoggerFansOutToConsoleHumanFileAndJSONFile(t *testing.T) {
 	if first["msg"] != "debug detail" || first["level"] != "DEBUG" || first["token"] != "[REDACTED]" {
 		t.Fatalf("JSON file did not capture DEBUG structured redacted record: %#v", first)
 	}
-}
-
-func twoDigit(n int) string {
-	if n < 10 {
-		return "0" + strconv.Itoa(n)
-	}
-	return strconv.Itoa(n)
 }
 
 // DHF-TEST: keel/requirement-5

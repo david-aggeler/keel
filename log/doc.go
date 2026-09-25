@@ -39,6 +39,11 @@
 // by severity; Config.ForceColor and Config.DisableColor are the explicit color
 // policy, which keel/term applies, and beat NO_COLOR; Config.ChildOutputLevel
 // sets the severity keel/exec gives a child process's output lines.
+// Config.FileRetention is the consumer-owned retention age for both daily file
+// sinks. Its zero value keeps every file; positive values prune only this
+// service's exact <service>-YYYY-MM-DD.log and .jsonl names. Per-run JSONL files
+// are never pruned by this setting, and the active file for today is always
+// preserved.
 //
 // # Four sinks
 //

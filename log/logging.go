@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -65,6 +64,13 @@ type Config struct {
 	TextDir string
 	// JSONLDir, when non-empty, opens a daily JSON Lines .jsonl file sink.
 	JSONLDir string
+	// FileRetention controls age-based pruning for the daily TextDir and
+	// non-PerRun JSONLDir sinks. A value less than or equal to zero never
+	// deletes files. Positive values apply only to this service's exact
+	// <service>-YYYY-MM-DD.log and .jsonl names; the date is interpreted as
+	// local midnight and compared with the current local-day boundary, so the
+	// active file for today is never pruned.
+	FileRetention time.Duration
 	// PerRun, when true, makes JSONLDir use a per-invocation JSON Lines file
 	// whose path and line counter back RunLogPath and RunLogLine. When false,
 	// JSONLDir uses the daily rolling JSONL file.
@@ -255,7 +261,7 @@ func New(cfg Config) (*Logger, error) {
 	closers := make([]io.Closer, 0, 2)
 	var textLogPath string
 	if cfg.TextDir != "" {
-		h, path, err := newTextFileHandler(cfg.TextDir, cfg.Service, cfg.SourceInFiles, fileVerbosity)
+		h, path, err := newTextFileHandler(cfg.TextDir, cfg.Service, cfg.SourceInFiles, fileVerbosity, cfg.FileRetention)
 		if err != nil {
 			return nil, fmt.Errorf("keel/log: open text sink: %w", err)
 		}
@@ -268,7 +274,7 @@ func New(cfg Config) (*Logger, error) {
 	var runLogPath string
 	var runLog *lineCountingWriteCloser
 	if cfg.JSONLDir != "" {
-		h, path, counter, err := newJSONFileHandler(cfg.JSONLDir, cfg.Service, cfg.PerRun, cfg.SourceInFiles, fileVerbosity)
+		h, path, counter, err := newJSONFileHandler(cfg.JSONLDir, cfg.Service, cfg.PerRun, cfg.SourceInFiles, fileVerbosity, cfg.FileRetention)
 		if err != nil {
 			closeAll(closers)
 			return nil, fmt.Errorf("keel/log: open jsonl sink: %w", err)
@@ -1172,9 +1178,14 @@ type humanFileHandler struct {
 	source bool
 }
 
-func newJSONFileHandler(dir string, service string, perRun bool, source bool, level slog.Leveler) (slog.Handler, string, *lineCountingWriteCloser, error) {
+func newJSONFileHandler(dir string, service string, perRun bool, source bool, level slog.Leveler, retention time.Duration) (slog.Handler, string, *lineCountingWriteCloser, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, "", nil, err
+	}
+	if !perRun {
+		if err := pruneDailyLogs(dir, service, ".jsonl", retention); err != nil {
+			return nil, "", nil, err
+		}
 	}
 	path := jsonLogPath(dir, service)
 	flag := os.O_CREATE | os.O_WRONLY | os.O_APPEND
@@ -1230,20 +1241,16 @@ func (h *jsonFileHandler) Close() error {
 	return h.close()
 }
 
-func newTextFileHandler(dir string, service string, source bool, level slog.Leveler) (slog.Handler, string, error) {
+func newTextFileHandler(dir string, service string, source bool, level slog.Leveler, retention time.Duration) (slog.Handler, string, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, "", err
 	}
-	if err := pruneTextLogs(dir, service, 10); err != nil {
+	if err := pruneDailyLogs(dir, service, ".log", retention); err != nil {
 		return nil, "", err
 	}
 	path := textLogPath(dir, service)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		return nil, "", err
-	}
-	if err := pruneTextLogs(dir, service, 10); err != nil {
-		_ = f.Close()
 		return nil, "", err
 	}
 	return &humanFileHandler{mu: &sync.Mutex{}, w: f, level: level, source: source}, path, nil
@@ -1427,17 +1434,33 @@ func perRunJSONLogPath(dir string) string {
 	return filepath.Join(dir, stamp+"-"+fmt.Sprintf("%d", os.Getpid())+".jsonl")
 }
 
-func pruneTextLogs(dir string, service string, keep int) error {
-	matches, err := filepath.Glob(filepath.Join(dir, safeLogService(service)+"-*.log"))
+// DHF-REQ: keel/requirement-175
+func pruneDailyLogs(dir string, service string, extension string, retention time.Duration) error {
+	if retention <= 0 {
+		return nil
+	}
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
 	}
-	sort.Strings(matches)
-	for len(matches) > keep {
-		if err := os.Remove(matches[0]); err != nil && !os.IsNotExist(err) {
+	prefix := safeLogService(service) + "-"
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	cutoff := today.Add(-retention)
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || len(name) != len(prefix)+len("2006-01-02")+len(extension) ||
+			!strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, extension) {
+			continue
+		}
+		dateText := name[len(prefix) : len(name)-len(extension)]
+		date, err := time.ParseInLocation("2006-01-02", dateText, time.Local)
+		if err != nil || !date.Before(cutoff) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
 			return err
 		}
-		matches = matches[1:]
 	}
 	return nil
 }
