@@ -162,7 +162,7 @@ func TestFormatConsoleValueKinds(t *testing.T) {
 		"n=7",
 		"b=true",
 		"g={inner=x count=2}",
-		"s=postgres://***:***@host/db",
+		"s=postgres://u:***@host/db",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("console rendering missing %q in %q", want, out)

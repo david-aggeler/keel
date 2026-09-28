@@ -313,7 +313,7 @@ func TestOperationalError_LogValue_RedactsRootCause(t *testing.T) {
 	if strings.Contains(rc, "s3cret") {
 		t.Errorf("root_cause still contains DSN password: %s", rc)
 	}
-	if !strings.Contains(rc, "://***:***@") {
+	if !strings.Contains(rc, "postgres://admin:***@db.host:5432/mydb") {
 		t.Errorf("root_cause missing redacted DSN marker, got: %s", rc)
 	}
 

@@ -827,7 +827,7 @@ echo "dsn postgres://user:hunter2@db/x"`)
 		if msg == "hello from child" {
 			sawHello = true
 		}
-		if strings.Contains(msg, "***:***@") {
+		if strings.Contains(msg, "postgres://user:***@db/x") {
 			sawRedacted = true
 		}
 		if strings.Contains(msg, "hunter2") {

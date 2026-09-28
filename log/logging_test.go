@@ -886,7 +886,7 @@ func TestRedactErr_StripsCredentialParams(t *testing.T) {
 			name:       "userinfo form (existing contract)",
 			input:      "connect postgres://admin:s3cret@db.host:5432/mydb: refused",
 			mustHide:   "s3cret",
-			wantMarker: "://***:***@",
+			wantMarker: "postgres://admin:***@db.host:5432/mydb",
 		},
 		{
 			name:       "query-param password",
@@ -1199,7 +1199,7 @@ func TestConsoleOutput_HumanReadableAndRedacted(t *testing.T) {
 	if strings.Contains(raw, "s3cret") {
 		t.Fatalf("console output leaked DSN password: %q", raw)
 	}
-	if !strings.Contains(raw, "postgres://***:***@db.host:5432/openbrain") {
+	if !strings.Contains(raw, "postgres://admin:***@db.host:5432/openbrain") {
 		t.Fatalf("console output missing redacted DSN: %q", raw)
 	}
 }
@@ -1850,8 +1850,8 @@ func TestConsoleAndJSON_RedactAttributeValuesIdentically(t *testing.T) {
 	consoleLogger, consoleCapture := newConsoleCaptureLogger(t, "cli")
 
 	secret := "Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig"
-	jsonLogger.Info("auth failed", "authorization", secret)
-	consoleLogger.Info("auth failed", "authorization", secret)
+	jsonLogger.Info("auth failed", "detail", secret)
+	consoleLogger.Info("auth failed", "detail", secret)
 
 	jsonRaw := jsonCapture.LastRaw()
 	consoleRaw := consoleCapture.LastRaw()

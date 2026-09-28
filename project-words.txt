@@ -218,3 +218,5 @@ truecolor
 winsize
 Xpixel
 Ypixel
+apikey
+glpat
