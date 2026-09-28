@@ -75,7 +75,7 @@ func TestRedactString(t *testing.T) {
 				if strings.Contains(got, "s3cret") {
 					t.Errorf("RedactString output still contains password: %s", got)
 				}
-				if !strings.Contains(got, "://***:***@") {
+				if !strings.Contains(got, "postgres://admin:***@db.host:5432/mydb") {
 					t.Errorf("RedactString missing redacted DSN marker, got: %s", got)
 				}
 				// Non-sensitive parts must be preserved.

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/david-aggeler/keel/term"
 )
@@ -211,13 +212,61 @@ func groupedKey(groups []string, key string) string {
 	return strings.Join(parts, ".")
 }
 
+// isSensitiveAttrKey reports whether an attr key names a credential. The key
+// is classified by its final word, never by substring, so token_kind,
+// tokens_total and password_policy survive while mcp_auth_token, apiToken and
+// X-Auth-Token mask. A bare "key" word is a credential only when qualified
+// (api_key, private_key, …); sort_key and cache_key survive.
+//
+// DHF-REQ: keel/requirement-177
 func isSensitiveAttrKey(key string) bool {
-	k := strings.ToLower(key)
-	return strings.Contains(k, "token") ||
-		strings.Contains(k, "password") ||
-		strings.Contains(k, "secret") ||
-		k == "pat" ||
-		strings.HasSuffix(k, "_pat")
+	words := keyWords(key)
+	if len(words) == 0 {
+		return false
+	}
+	last := words[len(words)-1]
+	switch last {
+	case "token", "password", "passwd", "secret", "authorization", "pat", "apikey":
+		return true
+	case "key":
+		if len(words) < 2 {
+			return false
+		}
+		switch words[len(words)-2] {
+		case "api", "private", "secret", "access", "signing", "encryption":
+			return true
+		}
+	}
+	return false
+}
+
+// keyWords lowercases key and splits it into words on '_', '-', '.', ' ' and
+// lower→upper camelCase boundaries: "X-Auth-Token" → [x auth token],
+// "apiToken" → [api token].
+func keyWords(key string) []string {
+	var words []string
+	var cur []rune
+	flush := func() {
+		if len(cur) > 0 {
+			words = append(words, strings.ToLower(string(cur)))
+			cur = cur[:0]
+		}
+	}
+	var prev rune
+	for _, r := range key {
+		switch {
+		case r == '_' || r == '-' || r == '.' || r == ' ':
+			flush()
+		case unicode.IsUpper(r) && (unicode.IsLower(prev) || unicode.IsDigit(prev)):
+			flush()
+			cur = append(cur, r)
+		default:
+			cur = append(cur, r)
+		}
+		prev = r
+	}
+	flush()
+	return words
 }
 
 // New creates a production logger from the four-sink Config model.
@@ -1663,6 +1712,11 @@ func newConsoleForTesting(service string) (*slog.Logger, *recordCapture) {
 // dsnRegex matches postgres://user:password@host patterns (classic user:pass@host form).
 var dsnRegex = regexp.MustCompile(`://([^:@]+):([^@]+)@`)
 
+// tokenUserRegex matches a userinfo user that is a known token form (GitHub
+// classic/fine-grained PATs and app tokens, GitLab PATs), which redactString
+// masks together with the password.
+var tokenUserRegex = regexp.MustCompile(`^(ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|glpat-)`)
+
 // tokenUserinfoRegex matches token-only userinfo: ://<token>@host where the
 // token contains no colon (finding #11: bare PAT in userinfo without a username).
 // Example: https://ghp_abc123@github.com/org/repo.git
@@ -1686,8 +1740,15 @@ var bearerRegex = regexp.MustCompile(`Bearer\s+[A-Za-z0-9\-_.]+`)
 // redactString strips DSN passwords and bearer tokens from a rendered string.
 // The single shared implementation behind both RedactErr and RedactString. (KD7.)
 func redactString(s string) string {
-	// user:pass@host form — replace with ***:***@.
-	s = dsnRegex.ReplaceAllString(s, "://***:***@")
+	// user:pass@host form — mask the password only; the user survives unless
+	// it is itself a token (ghp_…:x-oauth-basic@). (keel/requirement-177)
+	s = dsnRegex.ReplaceAllStringFunc(s, func(m string) string {
+		user := dsnRegex.FindStringSubmatch(m)[1]
+		if tokenUserRegex.MatchString(user) {
+			user = "***"
+		}
+		return "://" + user + ":***@"
+	})
 	// token-only userinfo (no colon) — must run AFTER dsnRegex which handles user:pass.
 	// After dsnRegex, remaining ://xxx@ patterns have no colon in xxx → PAT.
 	s = tokenUserinfoRegex.ReplaceAllString(s, "://***@")
