@@ -121,6 +121,7 @@ func runMergeBranchScript(t *testing.T, repo, branch string) (string, error) {
 	}
 	cmd := exec.Command("bash", script, branch)
 	cmd.Dir = repo
+	cmd.Env = hermeticShellEnv()
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
