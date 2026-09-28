@@ -158,7 +158,7 @@ func TestNodeMajorMismatchNamesInstalledAndExpectedVersions(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("bash", "-c", `source "$1"; require_node_major 24`, "test", filepath.Join(root, "scripts", "bootstrap_versions.sh"))
-	cmd.Env = append(os.Environ(), "PATH="+stubDir+":/usr/bin:/bin")
+	cmd.Env = hermeticShellEnv("PATH=" + stubDir + ":/usr/bin:/bin")
 	output, runErr := cmd.CombinedOutput()
 	if runErr == nil || !strings.Contains(string(output), "installed=23 expected=24") {
 		t.Fatalf("require_node_major err=%v\n%s", runErr, output)
