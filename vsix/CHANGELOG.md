@@ -4,6 +4,19 @@ Newest first. The Keel Test Bridge extension and the `github.com/david-aggeler/k
 Go module ship on one tag at one version — an entry here describes the extension
 side of that tag.
 
+## v0.11.0
+
+### Breaking
+
+- `cr-299`: the Go module's `keel/cli` names the help-heading label a help
+  category (keel/requirement-179). `CommandSpec.Group` is removed and
+  `CommandSpec.HelpCategory` replaces it; there is no alias. The `--help-json`
+  key `group` is removed and `help_category` replaces it. "Group" now names only
+  a command that has subcommands. Rendering order, heading suppression and the
+  "Other" default are unchanged. Migration: replace `Group:` with
+  `HelpCategory:` in every `cli.CommandSpec` literal, and read `help_category`
+  instead of `group` from `--help-json`. The extension itself is unchanged.
+
 ## v0.8.1
 
 ### Breaking

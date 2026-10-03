@@ -244,8 +244,12 @@ type CommandSpec struct {
 	Long string
 	// Args describes positional arguments when Use is not supplied.
 	Args string
-	// Group is an optional generated-help grouping label.
-	Group string
+	// HelpCategory is an optional display-only label. Generated help lists the
+	// command under a "<HelpCategory>:" heading among its siblings in its
+	// parent's help, and --help-json reports it as help_category. It is not
+	// inherited by the command's own subcommands, is never part of the typed
+	// command path, and has no effect on dispatch or parsing.
+	HelpCategory string
 	// Flags are command-specific flags rendered in command help.
 	Flags []FlagSpec
 	// ExitCodes are optional process exit-code rows rendered in generated help
@@ -299,14 +303,14 @@ type ExitCodeSpec struct {
 	Meaning string `json:"meaning"`
 }
 
-// PositionalSpec describes a named positional operand group. Min and Max define
-// the accepted arity; Max < 0 means unbounded.
+// PositionalSpec describes a named run of positional operands. Min and Max
+// define the accepted arity; Max < 0 means unbounded.
 type PositionalSpec struct {
 	// Name identifies the operand in usage diagnostics.
 	Name string
-	// Min is the minimum accepted count for this operand group.
+	// Min is the minimum accepted count for this operand.
 	Min int
-	// Max is the maximum accepted count for this operand group; Max < 0 is
+	// Max is the maximum accepted count for this operand; Max < 0 is
 	// unbounded.
 	Max int
 }
@@ -919,7 +923,7 @@ func (c *CommandSpec) conciseHelp(path []string) string {
 	var b strings.Builder
 	b.WriteString(c.Usage(path))
 	b.WriteString("\n\nSubcommands:\n")
-	printGroupedCommandRows(&b, c.Subcommands, c.Config.helpWidth)
+	printCategorizedCommandRows(&b, c.Subcommands, c.Config.helpWidth)
 	return strings.TrimRight(b.String(), "\n")
 }
 
@@ -1541,7 +1545,7 @@ func (c *CommandSpec) renderRootHelp(w io.Writer, section helpSection) {
 	if len(c.Subcommands) > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Commands:")
-		printGroupedCommandRows(w, c.Subcommands, c.Config.helpWidth)
+		printCategorizedCommandRows(w, c.Subcommands, c.Config.helpWidth)
 	}
 	if c.Config.Trailing != "" {
 		fmt.Fprintln(w)
@@ -1555,8 +1559,8 @@ func (c *CommandSpec) renderRootHelp(w io.Writer, section helpSection) {
 }
 
 // rootSynopsisParts returns the root usage synopsis as unbreakable parts: the
-// program, one bracketed group per global flag, then the command words. The
-// flag groups derive from GlobalFlagSpecs plus Config.GlobalFlags, so the
+// program, one bracketed segment per global flag, then the command words. The
+// flag segments derive from GlobalFlagSpecs plus Config.GlobalFlags, so the
 // synopsis lists every accepted spelling ("[-q|--quiet]", "[--color
 // auto|always|never]"). The command words are optional when the root is
 // invocable through Config.RootHandler.
@@ -1769,15 +1773,15 @@ func helpJSONFlags(specs []FlagSpec) []helpJSONFlag {
 // helpJSONCommand is the JSON element shape for one command in the structured
 // help inventory. Flags is always a (possibly empty) array, never null.
 type helpJSONCommand struct {
-	Path      string         `json:"path"`
-	Kind      string         `json:"kind"`
-	Group     string         `json:"group"`
-	Summary   string         `json:"summary"`
-	Usage     string         `json:"usage"`
-	Invocable *bool          `json:"invocable,omitempty"`
-	Lines     []string       `json:"lines,omitempty"`
-	Flags     []helpJSONFlag `json:"flags"`
-	ExitCodes []ExitCodeSpec `json:"exit_codes,omitempty"`
+	Path         string         `json:"path"`
+	Kind         string         `json:"kind"`
+	HelpCategory string         `json:"help_category"`
+	Summary      string         `json:"summary"`
+	Usage        string         `json:"usage"`
+	Invocable    *bool          `json:"invocable,omitempty"`
+	Lines        []string       `json:"lines,omitempty"`
+	Flags        []helpJSONFlag `json:"flags"`
+	ExitCodes    []ExitCodeSpec `json:"exit_codes,omitempty"`
 }
 
 // writeHelpJSON writes a single JSON array describing the program root, every
@@ -1807,13 +1811,13 @@ func (c *CommandSpec) writeHelpJSON(w io.Writer) error {
 	}
 	for _, topic := range helpOnlyTopics() {
 		commands = append(commands, helpJSONCommand{
-			Path:    topic.Name,
-			Kind:    "topic",
-			Group:   "Topics",
-			Summary: topic.Summary,
-			Usage:   c.program() + " help " + topic.Name,
-			Lines:   topic.Lines(c.Config),
-			Flags:   []helpJSONFlag{},
+			Path:         topic.Name,
+			Kind:         "topic",
+			HelpCategory: "Topics",
+			Summary:      topic.Summary,
+			Usage:        c.program() + " help " + topic.Name,
+			Lines:        topic.Lines(c.Config),
+			Flags:        []helpJSONFlag{},
 		})
 	}
 	enc := json.NewEncoder(w)
@@ -1823,13 +1827,13 @@ func (c *CommandSpec) writeHelpJSON(w io.Writer) error {
 
 func (c *CommandSpec) appendHelpJSON(out *[]helpJSONCommand, path []string) {
 	*out = append(*out, helpJSONCommand{
-		Path:      strings.Join(path, " "),
-		Kind:      "command",
-		Group:     commandGroup(c),
-		Summary:   c.Short,
-		Usage:     strings.TrimPrefix(c.Usage(path), "usage: "),
-		Flags:     helpJSONFlags(c.Flags),
-		ExitCodes: append([]ExitCodeSpec{}, c.ExitCodes...),
+		Path:         strings.Join(path, " "),
+		Kind:         "command",
+		HelpCategory: commandHelpCategory(c),
+		Summary:      c.Short,
+		Usage:        strings.TrimPrefix(c.Usage(path), "usage: "),
+		Flags:        helpJSONFlags(c.Flags),
+		ExitCodes:    append([]ExitCodeSpec{}, c.ExitCodes...),
 	})
 	for _, child := range c.Subcommands {
 		childPath := append(append([]string{}, path...), child.Name)
@@ -1864,26 +1868,27 @@ func (c *CommandSpec) renderCommandHelp(w io.Writer, section helpSection, path [
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Subcommands:")
-	printGroupedCommandRows(w, c.Subcommands, c.Config.helpWidth)
+	printCategorizedCommandRows(w, c.Subcommands, c.Config.helpWidth)
 }
 
-// printGroupedCommandRows writes command summary rows under group headings.
-// Group order and command order within each group follow declaration order.
-// A list in which no command declares a group resolves to the single
-// synthesized default group and is written with no heading, because a heading
-// there would name a partition the command tree never declared.
+// printCategorizedCommandRows writes command summary rows under help-category
+// headings. Category order and command order within each category follow
+// declaration order. A list in which no command declares a help category
+// resolves to the single synthesized default category and is written with no
+// heading, because a heading there would name a partition the command tree
+// never declared.
 //
 // DHF-REQ: keel/requirement-105
-func printGroupedCommandRows(w io.Writer, commands []*CommandSpec, helpWidth int) {
-	groups := groupCommands(commands)
+func printCategorizedCommandRows(w io.Writer, commands []*CommandSpec, helpWidth int) {
+	categories := commandsByHelpCategory(commands)
 	width := commandNameWidth(commands)
-	if len(groups) == 1 && groups[0].defaulted {
-		printIndentedCommandRows(w, groups[0].commands, 2, width, helpWidth)
+	if len(categories) == 1 && categories[0].defaulted {
+		printIndentedCommandRows(w, categories[0].commands, 2, width, helpWidth)
 		return
 	}
-	for _, group := range groups {
-		fmt.Fprintf(w, "%s:\n", group.name)
-		printIndentedCommandRows(w, group.commands, 2, width, helpWidth)
+	for _, category := range categories {
+		fmt.Fprintf(w, "%s:\n", category.name)
+		printIndentedCommandRows(w, category.commands, 2, width, helpWidth)
 	}
 }
 
@@ -1908,45 +1913,46 @@ func commandNameWidth(commands []*CommandSpec) int {
 	return width
 }
 
-// defaultCommandGroup is the group name synthesized for a command that
+// defaultHelpCategory is the help category synthesized for a command that
 // declares none. It is stated once so the default and the heading-suppression
-// rule in printGroupedCommandRows cannot drift apart.
-const defaultCommandGroup = "Other"
+// rule in printCategorizedCommandRows cannot drift apart.
+const defaultHelpCategory = "Other"
 
-// commandGroupRows is one heading's worth of command rows. defaulted records
+// helpCategoryRows is one heading's worth of command rows. defaulted records
 // whether the name was synthesized rather than declared: it stays true only
-// while every command in the group left Group empty, so a group a consumer
-// deliberately names "Other" keeps its heading regardless of declaration order.
-type commandGroupRows struct {
+// while every command in the category left HelpCategory empty, so a category a
+// consumer deliberately names "Other" keeps its heading regardless of
+// declaration order.
+type helpCategoryRows struct {
 	name      string
 	defaulted bool
 	commands  []*CommandSpec
 }
 
-func groupCommands(commands []*CommandSpec) []commandGroupRows {
-	var groups []commandGroupRows
+func commandsByHelpCategory(commands []*CommandSpec) []helpCategoryRows {
+	var categories []helpCategoryRows
 	index := map[string]int{}
 	for _, cmd := range commands {
-		name := commandGroup(cmd)
+		name := commandHelpCategory(cmd)
 		at, ok := index[name]
 		if !ok {
-			index[name] = len(groups)
-			groups = append(groups, commandGroupRows{name: name, defaulted: true})
-			at = len(groups) - 1
+			index[name] = len(categories)
+			categories = append(categories, helpCategoryRows{name: name, defaulted: true})
+			at = len(categories) - 1
 		}
-		if cmd.Group != "" {
-			groups[at].defaulted = false
+		if cmd.HelpCategory != "" {
+			categories[at].defaulted = false
 		}
-		groups[at].commands = append(groups[at].commands, cmd)
+		categories[at].commands = append(categories[at].commands, cmd)
 	}
-	return groups
+	return categories
 }
 
-func commandGroup(cmd *CommandSpec) string {
-	if cmd.Group != "" {
-		return cmd.Group
+func commandHelpCategory(cmd *CommandSpec) string {
+	if cmd.HelpCategory != "" {
+		return cmd.HelpCategory
 	}
-	return defaultCommandGroup
+	return defaultHelpCategory
 }
 
 func printFlagRows(w io.Writer, flags []FlagSpec, helpWidth int) {

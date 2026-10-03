@@ -194,7 +194,7 @@ func TestRootHelpSynopsisAndGlobalFlagsAdvertiseEveryAcceptedSpelling(t *testing
 // DHF-TEST: keel/requirement-101 (keel/ac-724)
 // The raw rendered lines are asserted, never a re-joined synopsis: joining
 // continuation lines hides the width.
-func TestRootHelpSynopsisWrapsToHelpWidthWithoutSplittingFlagGroups(t *testing.T) {
+func TestRootHelpSynopsisWrapsToHelpWidthWithoutSplittingFlagSegments(t *testing.T) {
 	const width = 40
 	var help bytes.Buffer
 	globalSurfaceTree(width).RenderRootHelp(&help)
@@ -240,7 +240,7 @@ func TestRootHelpSynopsisWrapsToHelpWidthWithoutSplittingFlagGroups(t *testing.T
 			}
 		}
 		if depth != 0 {
-			t.Fatalf("root synopsis line %d = %q splits a bracketed flag group across lines\n%s", i, line, help.String())
+			t.Fatalf("root synopsis line %d = %q splits a bracketed flag segment across lines\n%s", i, line, help.String())
 		}
 	}
 }
