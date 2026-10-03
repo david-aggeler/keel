@@ -53,6 +53,10 @@ CLIs are currently one of the strongest interfaces for LLMs to work with, so
 a structured way to declare commands, flags, and generated help text is
 essential. Consumers describe their CLI as a tree of command specs; dispatch,
 flag validation, and rendered help all come from that single model.
+A command that has subcommands is a group: invoked bare, it shows its help. A
+command can also set `HelpCategory`, a display-only label that lists it under a
+heading among its siblings in its parent's help and appears as `help_category`
+in `--help-json`. It never changes dispatch, parsing, or the command path.
 
 Plain-text help (`keel-demo --help`):
 

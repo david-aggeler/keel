@@ -69,8 +69,8 @@ func TestTestBridgeCommandTreeIsFlatAndUsesCLIBoundFlags(t *testing.T) {
 		if spec == nil {
 			t.Fatalf("missing command %s", strings.Join(tc.path, " "))
 		}
-		if spec.Group != tc.want {
-			t.Fatalf("%s group = %q, want %q", strings.Join(tc.path, " "), spec.Group, tc.want)
+		if spec.HelpCategory != tc.want {
+			t.Fatalf("%s help category = %q, want %q", strings.Join(tc.path, " "), spec.HelpCategory, tc.want)
 		}
 	}
 	helpText, _ := captureProcessStreams(t, func() {
