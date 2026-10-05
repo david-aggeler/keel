@@ -4,6 +4,18 @@ Newest first. The Keel Test Bridge extension and the `github.com/david-aggeler/k
 Go module ship on one tag at one version — an entry here describes the extension
 side of that tag.
 
+## v0.11.1
+
+### Added
+
+- `cr-302`: the Go module's `keel/worktree` exports its replicate-item refusal
+  rule as `ValidateReplicateItem(repoRoot, worktreesDir, item)` and
+  `ValidateReplicateItems(repoRoot, worktreesDir, items)` (keel/requirement-181).
+  They return the same `*worktree.Error` values `Manager.Up` returns (op `up`,
+  `CodeInvalidArgument`, the message quoting the original pattern), and `Up`
+  decides refusal by calling them, so a consumer no longer needs a copy of the
+  rule. The extension itself is unchanged.
+
 ## v0.11.0
 
 ### Breaking
