@@ -34,33 +34,80 @@ func normalizeUpOptions(opts []UpOptions) (UpOptions, error) {
 	return out, nil
 }
 
+// validateReplicateItems applies [ValidateReplicateItem] to each item with the
+// manager's own roots and records the refused_hazard outcome for a hazard
+// refusal. Up decides refusal only here, so its verdict cannot differ from the
+// exported function's.
+//
+// DHF-REQ: keel/requirement-181 (keel/ac-782)
 func (m *Manager) validateReplicateItems(items []ReplicateItem) error {
 	for _, item := range items {
-		pattern := strings.TrimSpace(item.Pattern)
-		if pattern == "" {
-			return newError("up", CodeInvalidArgument, "", "replicate pattern must not be empty")
-		}
-		if filepath.IsAbs(pattern) {
-			m.logReplicateHazard(item)
-			return newError("up", CodeInvalidArgument, "", "replicate pattern %q must be relative to the repository root", item.Pattern)
-		}
-		clean := filepath.Clean(filepath.FromSlash(patternRoot(pattern)))
-		if clean == "." || clean == string(filepath.Separator) || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || clean == ".." {
-			m.logReplicateHazard(item)
-			return newError("up", CodeInvalidArgument, "", "replicate pattern %q escapes the repository root", item.Pattern)
-		}
-		worktreesRel, ok := filepath.Rel(m.repoRoot, m.worktreesDir)
-		if ok != nil {
-			m.logReplicateHazard(item)
-			return newError("up", CodeInvalidArgument, "", "worktrees directory %s is not relative to repository root %s", m.worktreesDir, m.repoRoot)
-		}
-		worktreesRel = filepath.Clean(worktreesRel)
-		if worktreesRel == "." || strings.HasPrefix(worktreesRel, ".."+string(filepath.Separator)) || clean == worktreesRel || strings.HasPrefix(clean, worktreesRel+string(filepath.Separator)) {
-			m.logReplicateHazard(item)
-			return newError("up", CodeInvalidArgument, "", "replicate pattern %q reaches the worktrees parent %s", item.Pattern, worktreesRel)
+		if refusal, hazard := validateReplicateItem(m.repoRoot, m.worktreesDir, item); refusal != nil {
+			if hazard {
+				m.logReplicateHazard(item)
+			}
+			return refusal
 		}
 	}
 	return nil
+}
+
+// ValidateReplicateItems applies [ValidateReplicateItem] to each item in order
+// and returns the first refusal, or nil when every item is accepted.
+//
+// DHF-REQ: keel/requirement-181 (keel/ac-781)
+func ValidateReplicateItems(repoRoot, worktreesDir string, items []ReplicateItem) error {
+	for _, item := range items {
+		if err := ValidateReplicateItem(repoRoot, worktreesDir, item); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ValidateReplicateItem reports whether [Manager.Up] refuses item for a
+// manager built with these repository and worktrees directories. It is the rule
+// Up itself applies: an empty or absolute pattern, a pattern whose literal root
+// escapes the repository root, a worktrees directory that is the repository
+// root or outside it, and a pattern that reaches the worktrees directory are
+// refused before anything is copied. A refusal is an [*Error] with op "up" and
+// [CodeInvalidArgument] whose message quotes the item's original pattern.
+//
+// Both directories are canonicalized the way [New] does it. The function runs
+// no git command, reads no file, and logs nothing.
+//
+// DHF-REQ: keel/requirement-181 (keel/ac-781)
+func ValidateReplicateItem(repoRoot, worktreesDir string, item ReplicateItem) error {
+	if refusal, _ := validateReplicateItem(canonical(repoRoot), canonical(worktreesDir), item); refusal != nil {
+		return refusal
+	}
+	return nil
+}
+
+// validateReplicateItem is the refusal rule over already-canonical roots. hazard
+// reports whether the refusal is a replication hazard the manager records as
+// refused_hazard; an empty pattern is malformed input, not a hazard.
+func validateReplicateItem(repoRoot, worktreesDir string, item ReplicateItem) (refusal *Error, hazard bool) {
+	pattern := strings.TrimSpace(item.Pattern)
+	if pattern == "" {
+		return newError("up", CodeInvalidArgument, "", "replicate pattern must not be empty"), false
+	}
+	if filepath.IsAbs(pattern) {
+		return newError("up", CodeInvalidArgument, "", "replicate pattern %q must be relative to the repository root", item.Pattern), true
+	}
+	clean := filepath.Clean(filepath.FromSlash(patternRoot(pattern)))
+	if clean == "." || clean == string(filepath.Separator) || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || clean == ".." {
+		return newError("up", CodeInvalidArgument, "", "replicate pattern %q escapes the repository root", item.Pattern), true
+	}
+	worktreesRel, relErr := filepath.Rel(repoRoot, worktreesDir)
+	if relErr != nil {
+		return newError("up", CodeInvalidArgument, "", "worktrees directory %s is not relative to repository root %s", worktreesDir, repoRoot), true
+	}
+	worktreesRel = filepath.Clean(worktreesRel)
+	if worktreesRel == "." || strings.HasPrefix(worktreesRel, ".."+string(filepath.Separator)) || clean == worktreesRel || strings.HasPrefix(clean, worktreesRel+string(filepath.Separator)) {
+		return newError("up", CodeInvalidArgument, "", "replicate pattern %q reaches the worktrees parent %s", item.Pattern, worktreesRel), true
+	}
+	return nil, false
 }
 
 func patternRoot(pattern string) string {
