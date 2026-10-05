@@ -267,17 +267,17 @@ func materializeCopy(op, src, dst string, policy ReplicatePolicy) error {
 
 func (m *Manager) classifyReplicateSource(ctx context.Context, op, pattern string) (paths []string, exists, ignored, tracked bool, err error) {
 	pattern = strings.TrimSpace(pattern)
-	trackedOut, err := m.run(ctx, op, m.repoRoot, "ls-files", "--", pattern)
+	trackedOut, err := m.run(ctx, op, m.repoRoot, "ls-files", "-z", "--", pattern)
 	if err != nil {
 		return nil, false, false, false, err
 	}
-	trackedLines := nonEmptyLines(trackedOut)
+	trackedLines := nulSeparatedPaths(trackedOut)
 
-	ignoredOut, err := m.run(ctx, op, m.repoRoot, "ls-files", "--others", "--ignored", "--exclude-standard", "--", pattern)
+	ignoredOut, err := m.run(ctx, op, m.repoRoot, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--", pattern)
 	if err != nil {
 		return nil, false, false, false, err
 	}
-	if ignoredLines := nonEmptyLines(ignoredOut); len(ignoredLines) > 0 {
+	if ignoredLines := nulSeparatedPaths(ignoredOut); len(ignoredLines) > 0 {
 		return ignoredLines, true, true, false, nil
 	}
 
@@ -288,6 +288,22 @@ func (m *Manager) classifyReplicateSource(ctx context.Context, op, pattern strin
 		return nil, false, false, false, wrapError(op, CodeReplicateFailed, rel, statErr, "inspect replicated source %s", rel)
 	}
 	return nil, false, false, len(trackedLines) > 0, nil
+}
+
+// nulSeparatedPaths splits `git ls-files -z` output into its paths. The names
+// are taken byte for byte: no trimming and no unquoting, because -z output is
+// neither padded nor C-quoted, so a name with edge spaces, a quote, a newline or
+// non-ASCII bytes is the exact repository-relative path.
+//
+// DHF-REQ: keel/requirement-157 (keel/ac-783)
+func nulSeparatedPaths(out string) []string {
+	var paths []string
+	for _, path := range strings.Split(out, "\x00") {
+		if path != "" {
+			paths = append(paths, path)
+		}
+	}
+	return paths
 }
 
 // materializationRoot resolves the path an item materializes at from the item's

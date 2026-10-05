@@ -16,6 +16,14 @@ side of that tag.
   decides refusal by calling them, so a consumer no longer needs a copy of the
   rule. The extension itself is unchanged.
 
+### Fixed
+
+- `cr-301`: worktree replication lists its candidates with `git ls-files -z`
+  (keel/issue-263). git C-quotes names with non-ASCII bytes, quotes, backslashes
+  or control characters in its default output, so such a gitignored file was
+  listed under a path that does not exist and `Up` failed with
+  `CodeReplicateFailed`. Names with edge spaces or a newline now replicate too.
+
 ## v0.11.0
 
 ### Breaking
