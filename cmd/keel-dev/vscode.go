@@ -20,6 +20,7 @@ import (
 	"runtime/debug"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -191,6 +192,9 @@ type lanesState struct {
 	effective    map[string]effectiveLane
 	diagnostics  []vscode.TestItem
 	wholeFileErr error
+	// packages is the invocation's Go test-package index. Value copies share
+	// it through the pointer; nil scans directly on every call.
+	packages *goPackageIndex
 }
 
 type lanesListDocument struct {
@@ -238,7 +242,8 @@ type keelTestBridge struct{}
 
 // DHF-REQ: keel/requirement-63
 func (keelTestBridge) Discover(ctx context.Context) (vscode.DiscoveryDocument, error) {
-	return buildVSCodeDiscovery(stateFrom(ctx).root)
+	root := stateFrom(ctx).root
+	return buildVSCodeDiscoveryFrom(root, goPackageIndexFor(ctx, root))
 }
 
 // DHF-REQ: keel/requirement-63, keel/requirement-75
@@ -324,11 +329,11 @@ func (keelTestBridge) Lanes(ctx context.Context) ([]vscode.TestItem, error) {
 			root = rt.Root
 		}
 	}
-	families, err := detectGoFamilies(root)
+	families, err := detectGoFamilies(goPackageIndexFor(ctx, root))
 	if err != nil {
 		return nil, err
 	}
-	generated := generatedLanesFile(root, families)
+	generated := generatedLanesFile(families)
 	items := make([]vscode.TestItem, 0, len(generated.Lanes))
 	for _, lane := range generated.Lanes {
 		items = append(items, laneItem("keel::lane::"+lane.ID, lane.Label))
@@ -344,11 +349,11 @@ func (keelTestBridge) LaneFile(ctx context.Context) (testbridge.LaneFile, error)
 			root = rt.Root
 		}
 	}
-	families, err := detectGoFamilies(root)
+	families, err := detectGoFamilies(goPackageIndexFor(ctx, root))
 	if err != nil {
 		return testbridge.LaneFile{}, err
 	}
-	generated := generatedLanesFile(root, families)
+	generated := generatedLanesFile(families)
 	file := testbridge.LaneFile{Version: generated.Version, Lanes: make([]testbridge.LaneFileLane, 0, len(generated.Lanes))}
 	for _, lane := range generated.Lanes {
 		file.Lanes = append(file.Lanes, testbridge.LaneFileLane{
@@ -379,16 +384,25 @@ func (keelTestBridge) Metadata() vscode.DevtoolMetadata {
 
 // DHF-REQ: keel/requirement-39, keel/requirement-43, keel/requirement-46, keel/requirement-48, keel/requirement-51, keel/requirement-65, keel/requirement-69
 func buildVSCodeDiscovery(root string) (vscode.DiscoveryDocument, error) {
+	return buildVSCodeDiscoveryFrom(root, newGoPackageIndex(root))
+}
+
+// buildVSCodeDiscoveryFrom assembles the discovery document with every Go
+// consumer reading one package index. A nil index scans per consumer.
+//
+// DHF-REQ: keel/requirement-66
+func buildVSCodeDiscoveryFrom(root string, index *goPackageIndex) (vscode.DiscoveryDocument, error) {
 	items := []vscode.TestItem{
 		groupItem(vscodeGroupDesiredState, "", vscodeGroupDesiredStateLabel),
 		groupItem(vscodeGroupLanes, "", "C - Lanes"),
 		groupItem(vscodeGroupFrameworks, "", "D - Frameworks"),
 	}
-	goItems, err := discoverGoTestItems(context.Background(), root)
+	packages, err := index.load(root)
 	if err != nil {
 		return vscode.DiscoveryDocument{}, err
 	}
-	lanes, err := loadLanesState(root)
+	goItems := goTestItems(packages)
+	lanes, err := loadLanesStateWith(root, index)
 	if err != nil {
 		return vscode.DiscoveryDocument{}, err
 	}
@@ -531,16 +545,18 @@ func writeVSCodeLanesList(root string, out io.Writer) error {
 	return testbridge.EncodeDocument(out, doc)
 }
 
-func generatedLanesFile(root string, families map[string]bool) testLanesFile {
+// generatedLanesFile renders the detected lanes file from the per-family
+// test-package counts of one scan (detectGoFamilies).
+func generatedLanesFile(families map[string]int) testLanesFile {
 	updated := testLanesFile{Version: 1}
 	updated.Lanes = append(updated.Lanes, vscodeGateLaneDefs...)
-	for _, family := range sortedKeys(families) {
+	for _, family := range sortedFamilies(families) {
 		id := detectedFamilyLaneID(family)
 		member := detectedFamilyLaneMember(family)
 		updated.Lanes = append(updated.Lanes, testFileLane{
 			ID:          id,
 			Label:       detectedFamilyLaneLabel(family),
-			Description: fmt.Sprintf("detected category - %d packages", familyPackageCount(root, family)),
+			Description: fmt.Sprintf("detected category - %d packages", families[family]),
 			Members:     []laneMember{member},
 		})
 	}
@@ -649,11 +665,20 @@ func ldconfigSharedLibraryCache(ctx context.Context, logger *slog.Logger) (strin
 // DHF-REQ: keel/requirement-51, keel/requirement-54, keel/requirement-65
 // DHF-REQ: keel/requirement-51, keel/requirement-73
 func loadLanesState(root string) (lanesState, error) {
+	return loadLanesStateWith(root, newGoPackageIndex(root))
+}
+
+// loadLanesStateWith loads the lanes file and expands it against index, so one
+// load scans the module's Go test files at most once (keel/ac-800).
+//
+// DHF-REQ: keel/requirement-66
+func loadLanesStateWith(root string, index *goPackageIndex) (lanesState, error) {
 	state := lanesState{
 		root:      root,
 		path:      filepath.Join(root, ".vscode", "test-lanes.json"),
 		byID:      map[string]testFileLane{},
 		effective: map[string]effectiveLane{},
+		packages:  index,
 	}
 	data, err := os.ReadFile(state.path)
 	if err != nil {
@@ -780,7 +805,7 @@ func (s *lanesState) expand(id string, stack []string, depth int) (effectiveLane
 		case len(member.rawKeys) != 1:
 			return effectiveLane{}, fmt.Errorf("unknown member form in lane %q", id)
 		case member.Go != "":
-			packages := packagesForGoPattern(s.path, member.Go)
+			packages := s.packagesForGoPattern(member.Go)
 			for _, pkg := range packages {
 				pkgSet[pkg] = true
 				directPkgSet[pkg] = true
@@ -793,7 +818,7 @@ func (s *lanesState) expand(id string, stack []string, depth int) (effectiveLane
 		case member.Root != "":
 			switch member.Root {
 			case "go":
-				packages := packagesForGoPattern(s.path, "./...")
+				packages := s.packagesForGoPattern("./...")
 				for _, pkg := range packages {
 					pkgSet[pkg] = true
 					directPkgSet[pkg] = true
@@ -956,7 +981,7 @@ func (s lanesState) coverItems(eff effectiveLane) []vscode.TestItem {
 		})
 		return id
 	}
-	packages, _ := parseGoTestPackages(s.root)
+	packages, _ := s.packages.load(s.root)
 	byPkg := map[string]discoveredGoPackage{}
 	for _, pkg := range packages {
 		byPkg[pkg.rel] = pkg
@@ -1025,9 +1050,8 @@ func lanesDiagnosticItem(id, message string) vscode.TestItem {
 	}
 }
 
-func packagesForGoPattern(lanesPath, pattern string) []string {
-	root := filepath.Dir(filepath.Dir(lanesPath))
-	packages, err := parseGoTestPackages(root)
+func (s lanesState) packagesForGoPattern(pattern string) []string {
+	packages, err := s.packages.load(s.root)
 	if err != nil {
 		return nil
 	}
@@ -1127,18 +1151,31 @@ func latestLaneRun(root, laneID string) *laneLastRun {
 	return &laneLastRun{RunID: run.RunID, At: run.At, DurationMS: run.DurationMS, ExitCode: run.ExitCode}
 }
 
-func detectGoFamilies(root string) (map[string]bool, error) {
-	packages, err := parseGoTestPackages(root)
+// detectGoFamilies returns the test-package count of each detected family,
+// read from one scan of index.
+//
+// DHF-REQ: keel/requirement-66
+func detectGoFamilies(index *goPackageIndex) (map[string]int, error) {
+	packages, err := index.load(index.root)
 	if err != nil {
 		return nil, err
 	}
-	families := map[string]bool{}
+	families := map[string]int{}
 	for _, pkg := range packages {
 		if family := goPackageFamily(pkg.rel); family != "" {
-			families[family] = true
+			families[family]++
 		}
 	}
 	return families, nil
+}
+
+func sortedFamilies(families map[string]int) []string {
+	out := make([]string, 0, len(families))
+	for family := range families {
+		out = append(out, family)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func goPackageFamily(pkg string) string {
@@ -1161,20 +1198,6 @@ func detectedFamilyLaneMember(family string) laneMember {
 		return laneMember{Go: "./"}
 	}
 	return laneMember{Go: "./" + family + "/..."}
-}
-
-func familyPackageCount(root, family string) int {
-	packages, err := parseGoTestPackages(root)
-	if err != nil {
-		return 0
-	}
-	count := 0
-	for _, pkg := range packages {
-		if goPackageFamily(pkg.rel) == family {
-			count++
-		}
-	}
-	return count
 }
 
 func sortedKeys(values map[string]bool) []string {
@@ -1235,13 +1258,11 @@ type discoveredGoTest struct {
 	order int
 }
 
+// goTestItems projects scanned Go test packages onto the Go framework tree.
+//
 // DHF-REQ: keel/requirement-49
 // DHF-REQ: keel/requirement-43, keel/requirement-46
-func discoverGoTestItems(_ context.Context, root string) ([]vscode.TestItem, error) {
-	packages, err := parseGoTestPackages(root)
-	if err != nil {
-		return nil, err
-	}
+func goTestItems(packages []discoveredGoPackage) []vscode.TestItem {
 	items := []vscode.TestItem{{
 		ID:                "go::root",
 		ParentID:          vscodeGroupFrameworks,
@@ -1312,10 +1333,65 @@ func discoverGoTestItems(_ context.Context, root string) ([]vscode.TestItem, err
 			}
 		}
 	}
-	return items, nil
+	return items
+}
+
+// goPackageIndex is one invocation's scan of the module's Go test packages. The
+// scan runs on first use and its result (packages or error) is served to every
+// later consumer, so a bridge invocation walks the module at most once
+// (keel/ac-800). It is never package-global: each invocation, and each
+// standalone lanes load, owns its own index, so a later invocation sees file
+// changes.
+//
+// DHF-REQ: keel/requirement-66
+type goPackageIndex struct {
+	root     string
+	once     sync.Once
+	packages []discoveredGoPackage
+	err      error
+}
+
+func newGoPackageIndex(root string) *goPackageIndex {
+	return &goPackageIndex{root: root}
+}
+
+// load returns the index's packages. A nil index has no memory: it scans root
+// on every call, which keeps a zero lanesState usable.
+func (x *goPackageIndex) load(root string) ([]discoveredGoPackage, error) {
+	if x == nil {
+		return parseGoTestPackages(root)
+	}
+	x.once.Do(func() {
+		x.packages, x.err = parseGoTestPackages(x.root)
+	})
+	return x.packages, x.err
+}
+
+// goPackageIndexFor returns the invocation's index when it covers root, and a
+// fresh index otherwise (a run request may name a root other than the
+// invocation's).
+func goPackageIndexFor(ctx context.Context, root string) *goPackageIndex {
+	if index := stateFrom(ctx).packages; index != nil && filepath.Clean(index.root) == filepath.Clean(root) {
+		return index
+	}
+	return newGoPackageIndex(root)
+}
+
+// goTestPackageScans counts parseGoTestPackages walks per root. It is the
+// observation seam for keel/ac-800: one bridge invocation scans at most once.
+var goTestPackageScans = struct {
+	sync.Mutex
+	byRoot map[string]int
+}{byRoot: map[string]int{}}
+
+func countGoTestPackageScan(root string) {
+	goTestPackageScans.Lock()
+	defer goTestPackageScans.Unlock()
+	goTestPackageScans.byRoot[root]++
 }
 
 func parseGoTestPackages(root string) ([]discoveredGoPackage, error) {
+	countGoTestPackageScan(root)
 	byPackage := map[string]*discoveredGoPackage{}
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
@@ -1829,7 +1905,7 @@ func runVSCodeLane(ctx context.Context, logger *slog.Logger, root, laneID, runID
 
 // DHF-REQ: keel/requirement-51
 func runVSCodeFileLane(ctx context.Context, logger *slog.Logger, root, laneID, runID string, maxOutputBytes int, writer vscode.RunEventWriter) error {
-	lanes, err := loadLanesState(root)
+	lanes, err := loadLanesStateWith(root, goPackageIndexFor(ctx, root))
 	if err != nil {
 		return err
 	}

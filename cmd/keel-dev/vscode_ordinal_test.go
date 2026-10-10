@@ -47,7 +47,7 @@ func TestDiscoveryLabelsCarryNoOrdinalPrefix(t *testing.T) {
 //
 // DHF-TEST: keel/requirement-137
 func TestGeneratedLaneFileLabelsCarryNoOrdinalPrefix(t *testing.T) {
-	generated := generatedLanesFile(t.TempDir(), map[string]bool{"log": true})
+	generated := generatedLanesFile(map[string]int{"log": 1})
 	if len(generated.Lanes) == 0 {
 		t.Fatal("generated lanes file is empty")
 	}

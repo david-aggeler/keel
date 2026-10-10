@@ -16,6 +16,9 @@ type runState struct {
 	runLog   *logging.Logger
 	root     string
 	protocol io.Writer
+	// packages is the invocation's Go test-package index: every bridge
+	// consumer in this invocation reads one scan (keel/ac-800).
+	packages *goPackageIndex
 }
 
 type runStateKey struct{}
@@ -49,7 +52,8 @@ func declarePayload(spec *cli.CommandSpec) *cli.CommandSpec {
 		spec.Handler = func(ctx context.Context, args []string) error {
 			state := stateFrom(ctx)
 			if _, undeclared := state.protocol.(undeclaredPayload); undeclared {
-				ctx = withRunStateProtocol(ctx, state.logger, state.runLog, state.root, newPayloadStream())
+				state.protocol = newPayloadStream()
+				ctx = bindRunState(ctx, state)
 			}
 			return h(ctx, args)
 		}
@@ -61,12 +65,16 @@ func declarePayload(spec *cli.CommandSpec) *cli.CommandSpec {
 }
 
 func withRunStateProtocol(ctx context.Context, logger *slog.Logger, runLog *logging.Logger, root string, protocol io.Writer) context.Context {
-	state := runState{logger: logger, runLog: runLog, root: root, protocol: protocol}
+	return bindRunState(ctx, runState{logger: logger, runLog: runLog, root: root, protocol: protocol, packages: newGoPackageIndex(root)})
+}
+
+// bindRunState binds state as the invocation's run state and bridge runtime.
+func bindRunState(ctx context.Context, state runState) context.Context {
 	ctx = context.WithValue(ctx, runStateKey{}, state)
 	return testbridge.WithRuntime(ctx, testbridge.Runtime{
-		Root:     root,
-		Protocol: protocol,
-		Log:      logger,
+		Root:     state.root,
+		Protocol: state.protocol,
+		Log:      state.logger,
 		RunID:    newVSCodeRunID,
 	})
 }
