@@ -3,6 +3,8 @@ package exec
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -158,16 +160,18 @@ type Result struct {
 type Process struct {
 	cmd     *exec.Cmd
 	program string
-	started time.Time
-	stdout  *captureWriter
-	stderr  *captureWriter
-	logger  processLogger
-	tail    *outputTail
-	failure slog.Level
-	waitErr error
-	result  Result
-	waitCh  chan error
-	once    sync.Once
+	// processID correlates every record this process writes (keel/requirement-182).
+	processID string
+	started   time.Time
+	stdout    *captureWriter
+	stderr    *captureWriter
+	logger    processLogger
+	tail      *outputTail
+	failure   slog.Level
+	waitErr   error
+	result    Result
+	waitCh    chan error
+	once      sync.Once
 }
 
 // ProcessStart launches the command described by req and returns a running
@@ -211,12 +215,13 @@ func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 			workingDir = cwd
 		}
 	}
-	logger.InfoContext(ctx, "process start",
+	processID := newProcessID()
+	logger.InfoContext(ctx, "process start", withProcessID([]any{
 		"event_type", "process_start",
 		"program", req.Program,
 		"command_line", renderCommandLine(req.Program, req.Args, req.SensitiveArgs),
 		"working_dir", workingDir,
-	)
+	}, processID)...)
 
 	outputLimit := newOutputLimit(req.MaxOutputBytes, func() {
 		if cmd.Process != nil {
@@ -229,9 +234,9 @@ func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 	// accounting and the line-wise logging read it and must stay unaffected.
 	// DHF-REQ: keel/requirement-150
 	tail := &outputTail{}
-	stdout := &captureWriter{stream: req.Stdout, logger: logger, program: req.Program, streamName: "stdout", limit: outputLimit,
+	stdout := &captureWriter{stream: req.Stdout, logger: logger, program: req.Program, processID: processID, streamName: "stdout", limit: outputLimit,
 		suppressCapture: req.Stdout != nil && !req.CaptureWithTee, classify: req.Classify, tail: tail}
-	stderr := &captureWriter{stream: req.Stderr, logger: logger, program: req.Program, streamName: "stderr", limit: outputLimit,
+	stderr := &captureWriter{stream: req.Stderr, logger: logger, program: req.Program, processID: processID, streamName: "stderr", limit: outputLimit,
 		suppressCapture: req.Stderr != nil && !req.CaptureWithTee, classify: req.Classify, tail: tail}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
@@ -242,15 +247,16 @@ func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 	}
 
 	p := &Process{
-		cmd:     cmd,
-		program: req.Program,
-		started: started,
-		stdout:  stdout,
-		stderr:  stderr,
-		logger:  logger,
-		tail:    tail,
-		failure: slog.LevelError,
-		waitCh:  make(chan error, 1),
+		cmd:       cmd,
+		program:   req.Program,
+		processID: processID,
+		started:   started,
+		stdout:    stdout,
+		stderr:    stderr,
+		logger:    logger,
+		tail:      tail,
+		failure:   slog.LevelError,
+		waitCh:    make(chan error, 1),
 	}
 	if req.FailureLevel != nil {
 		p.failure = req.FailureLevel.Level()
@@ -302,11 +308,11 @@ func (p *Process) Wait() (Result, error) {
 			p.waitErr = limitErr
 		}
 		if p.result.ExitCode == 0 {
-			p.logger.Info("process end",
+			p.logger.Info("process end", withProcessID([]any{
 				"event_type", "process_end",
 				"exit_code", p.result.ExitCode,
 				"elapsed_ms", p.result.Duration.Milliseconds(),
-			)
+			}, p.processID)...)
 			return
 		}
 		tail := p.tail.lines()
@@ -323,14 +329,14 @@ func (p *Process) Wait() (Result, error) {
 				args = append(args, "truncated_bytes", line.truncated)
 			}
 			args = appendProgramAtWarn(args, p.failure, p.program)
-			logAt(p.logger, p.failure, "process output tail", args...)
+			logAt(p.logger, p.failure, "process output tail", withProcessID(args, p.processID)...)
 		}
-		logAt(p.logger, p.failure, "process end",
+		logAt(p.logger, p.failure, "process end", withProcessID([]any{
 			"event_type", "process_end",
 			"exit_code", p.result.ExitCode,
 			"elapsed_ms", p.result.Duration.Milliseconds(),
 			"output_tail_lines", len(tail),
-		)
+		}, p.processID)...)
 	})
 
 	return p.result, p.waitErr
@@ -344,7 +350,10 @@ type captureWriter struct {
 	logger  processLogger
 	// program is the Request's Program; it tags output records at Warn or
 	// higher so a line that reaches the default console names its command.
-	program    string
+	program string
+	// processID is the owning Process's correlation id, stamped on every
+	// output record.
+	processID  string
 	streamName string
 	limit      *outputLimit
 	// suppressCapture withholds the buffered bytes from [Result], leaving the
@@ -446,7 +455,28 @@ func (w *captureWriter) logLine(line string) {
 	// agree even when the logger carries a configured child-output level.
 	level := childOutputLevel(w.logger, class)
 	args = appendProgramAtWarn(args, level, w.program)
-	logAt(w.logger, level, "process output", args...)
+	logAt(w.logger, level, "process output", withProcessID(args, w.processID)...)
+}
+
+// newProcessID returns a fresh correlation id: 8 bytes of crypto/rand,
+// hex-encoded to 16 lowercase characters. It cannot fail: since Go 1.24
+// crypto/rand.Read never returns an error and aborts the program when the OS
+// randomness source fails.
+//
+// DHF-REQ: keel/requirement-182
+func newProcessID() string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
+// withProcessID appends the process_id correlation attribute to one record's
+// args. Every record keel/exec writes for a child — start, output line, output
+// tail, end — goes through it, so no call site can drop the id.
+//
+// DHF-REQ: keel/requirement-182
+func withProcessID(args []any, processID string) []any {
+	return append(args, "process_id", processID)
 }
 
 // appendProgramAtWarn appends the program attribute to a child output record
