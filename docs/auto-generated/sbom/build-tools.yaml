@@ -32,8 +32,8 @@
 
 tools:
   - name: go
-    version: "1.26.6"
-    purpose: Go toolchain used to compile the module and every binary. Pinned in scripts/install_go.sh; moved off 1.26.5 under keel/change_request-177 because govulncheck found four reachable stdlib vulnerabilities there (keel/issue-139).
+    version: "1.26.9"
+    purpose: Go toolchain used to compile the module and every binary. Pinned in scripts/install_go.sh; moved off 1.26.6 under keel/change_request-304 because govulncheck found nine reachable stdlib vulnerabilities there (keel/issue-265).
     license: BSD-3-Clause
     source: https://go.dev
 
