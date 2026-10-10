@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/david-aggeler/keel/exec/internal/logsink"
 	logging "github.com/david-aggeler/keel/log"
 )
 
@@ -197,9 +198,10 @@ func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 	}
 
 	logger := req.Logger
-	if logger == nil {
+	if logsink.Absent(logger) {
 		// A library handed no sink stays silent: reaching for slog.Default()
 		// would emit outside the caller's formatter, file sinks, and redaction.
+		// A typed nil counts as no sink, not as a panic on the first record.
 		// DHF-REQ: keel/requirement-122
 		logger = logging.Discard()
 	}

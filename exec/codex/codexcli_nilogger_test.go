@@ -51,3 +51,23 @@ func TestRunWithNilLoggerWritesNothingToTheDefaultSink(t *testing.T) {
 		t.Fatalf("a Request with no Logger wrote %d bytes to the process-wide default sink; want none:\n%s", len(got), got)
 	}
 }
+
+// DHF-TEST: keel/requirement-122 (keel/ac-795)
+func TestRunWithTypedNilLoggerIsSilentAndDoesNotPanic(t *testing.T) {
+	var captured bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&captured, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	var nilLogger *slog.Logger
+	if _, err := codex.Run(context.Background(), codex.Request{
+		Prompt: "greet me",
+		Bin:    writeProgressStub(t),
+		Logger: nilLogger,
+	}); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if got := captured.String(); got != "" {
+		t.Fatalf("a typed-nil Logger wrote %d bytes to the process-wide default sink; want none:\n%s", len(got), got)
+	}
+}
