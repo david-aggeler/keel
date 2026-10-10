@@ -161,3 +161,70 @@ func TestProcessEndAttributeSetContainsEveryProcessStartAttribute(t *testing.T) 
 		})
 	}
 }
+
+// DHF-TEST: keel/requirement-183 (keel/ac-798)
+func TestProcessStartFailureClosesProcessIDWithOneProcessEndRecord(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		failure   slog.Leveler
+		wantLevel string
+	}{
+		{"default level", nil, "ERROR"},
+		{"failure level override", slog.LevelWarn, "WARN"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var logBuf bytes.Buffer
+			logger := mustLogger(t, logging.Config{
+				ConsoleVerbosity: slog.LevelDebug,
+				Console:          logging.ConsoleJSON,
+				Writer:           &logBuf,
+			})
+			proc, err := procexec.ProcessStart(context.Background(), procexec.Request{
+				Logger:       logger,
+				Program:      "/nonexistent",
+				Args:         []string{"arg-one"},
+				FailureLevel: tc.failure,
+			})
+			if err == nil {
+				t.Fatalf("ProcessStart(/nonexistent) error = nil, process = %#v", proc)
+			}
+			records := parseJSONLogRecords(t, logBuf.String())
+			starts := recordsWithEvent(records, "process_start")
+			if len(starts) != 1 {
+				t.Fatalf("process_start records = %d, want 1: %#v", len(starts), records)
+			}
+			start := starts[0]
+			var ends []map[string]any
+			for _, rec := range recordsWithEvent(records, "process_end") {
+				if rec["process_id"] == start["process_id"] {
+					ends = append(ends, rec)
+				}
+			}
+			if len(ends) != 1 {
+				t.Fatalf("process_end records for process_id %v = %d, want 1: %#v", start["process_id"], len(ends), records)
+			}
+			end := ends[0]
+			if end["level"] != tc.wantLevel {
+				t.Errorf("process_end level = %#v, want %q", end["level"], tc.wantLevel)
+			}
+			for key, want := range start {
+				if startCoreFields[key] {
+					continue
+				}
+				if got, ok := end[key]; !ok || !reflect.DeepEqual(got, want) {
+					t.Errorf("process_end %s = %#v (present %v), want %#v", key, got, ok, want)
+				}
+			}
+			raw, _ := end["started_at"].(string)
+			if _, perr := time.Parse(time.RFC3339Nano, raw); perr != nil || !strings.HasSuffix(raw, "Z") {
+				t.Errorf("process_end started_at = %#v, want RFC 3339 nano UTC", end["started_at"])
+			}
+			if msg, _ := end["error"].(string); !strings.Contains(msg, "no such file or directory") {
+				t.Errorf("process_end error = %#v, want the cmd.Start error text", end["error"])
+			}
+			if _, ok := end["exit_code"]; ok {
+				t.Errorf("process_end has exit_code %#v, want none", end["exit_code"])
+			}
+		})
+	}
+}
