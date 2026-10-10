@@ -7,9 +7,13 @@
 // # START/END lifecycle
 //
 // Every launch through [ProcessStart] emits a "process start" record (program,
-// redacted command line, working directory) before the child runs and a
-// "process end" record (exit code, elapsed ms) when it is reaped by
-// [Process.Wait]. Child stdout and stderr are captured, mirrored to the caller's
+// redacted command line, working directory, process_id) before the child runs
+// and a "process end" record when it is reaped by [Process.Wait]. The end
+// record repeats every start attribute under the same key and value, adds
+// started_at (RFC 3339 nano, UTC), exit code and elapsed ms, so it reads on its
+// own. process_id is a 16-hex crypto/rand id, fresh per launch, stamped on
+// every record of that child — start, output lines, failure tail, end — so the
+// records of parallel children can be joined and told apart. Child stdout and stderr are captured, mirrored to the caller's
 // optional writers, and additionally logged line-wise through keel/log, with
 // every line passed through the same redaction path as the rest of keel's
 // logging. This is what lets a consumer reconstruct exactly what ran and what it

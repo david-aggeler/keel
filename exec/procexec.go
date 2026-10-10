@@ -79,10 +79,11 @@ type Request struct {
 	// stderr bytes for this run. A non-positive value uses
 	// [DefaultMaxOutputBytes]; no value disables the ceiling.
 	MaxOutputBytes int
-	// Logger receives the START/END lifecycle and per-line output records. Nil
-	// produces no output at all — keel/exec never reaches for a sink the caller
-	// did not supply. Inject a logger to get records, or [keel/log.Discard] to
-	// state the silence deliberately.
+	// Logger receives the START/END lifecycle and per-line output records, each
+	// carrying the child's process_id. Nil — including a typed nil such as a nil
+	// *slog.Logger — produces no output at all: keel/exec never reaches for a
+	// sink the caller did not supply. Inject a logger to get records, or
+	// [keel/log.Discard] to state the silence deliberately.
 	Logger processLogger
 	// SensitiveArgs marks argv indices whose values must be masked as [REDACTED]
 	// in the logged command line (e.g. a token passed positionally).
@@ -162,28 +163,37 @@ type Process struct {
 	program string
 	// processID correlates every record this process writes (keel/requirement-182).
 	processID string
-	started   time.Time
-	stdout    *captureWriter
-	stderr    *captureWriter
-	logger    processLogger
-	tail      *outputTail
-	failure   slog.Level
-	waitErr   error
-	result    Result
-	waitCh    chan error
-	once      sync.Once
+	// startAttrs is the process start record's attribute set minus event_type.
+	// The process end record repeats it verbatim (keel/requirement-183).
+	startAttrs []any
+	started    time.Time
+	stdout     *captureWriter
+	stderr     *captureWriter
+	logger     processLogger
+	tail       *outputTail
+	failure    slog.Level
+	waitErr    error
+	result     Result
+	waitCh     chan error
+	once       sync.Once
 }
 
 // ProcessStart launches the command described by req and returns a running
 // [Process] without waiting for it to finish. It emits the "process start"
-// lifecycle record, wires stdout/stderr through the capturing, mirroring,
-// redacting writers, and starts the child; cancelling ctx kills the process.
-// Call [Process.Wait] to block for completion and obtain the [Result].
+// lifecycle record (program, command_line, working_dir, process_id), wires
+// stdout/stderr through the capturing, mirroring, redacting writers, and starts
+// the child; cancelling ctx kills the process. Call [Process.Wait] to block for
+// completion and obtain the [Result].
+//
+// process_id is 16 lowercase hex characters from 8 bytes of crypto/rand, fresh
+// per call. Every record of the child — start, each output line, each failure
+// tail line, end — carries it, so a reader can join one child's records and
+// separate parallel children.
 //
 // It returns an error ("keel/exec: …") when Program is empty or the child fails
 // to start; a non-zero exit is not an error here — it is reported by Wait.
 //
-// DHF-REQ: openbrain/requirement-565, keel/requirement-1, keel/requirement-81, keel/requirement-171
+// DHF-REQ: openbrain/requirement-565, keel/requirement-1, keel/requirement-81, keel/requirement-171, keel/requirement-182
 func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 	if req.Program == "" {
 		return nil, errors.New("keel/exec: program is required")
@@ -216,12 +226,15 @@ func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 		}
 	}
 	processID := newProcessID()
-	logger.InfoContext(ctx, "process start", withProcessID([]any{
-		"event_type", "process_start",
+	// The start attribute set is canonical: built once here, logged on process
+	// start, and repeated on process end, so end is a superset by construction.
+	// DHF-REQ: keel/requirement-183
+	startAttrs := withProcessID([]any{
 		"program", req.Program,
 		"command_line", renderCommandLine(req.Program, req.Args, req.SensitiveArgs),
 		"working_dir", workingDir,
-	}, processID)...)
+	}, processID)
+	logger.InfoContext(ctx, "process start", append([]any{"event_type", "process_start"}, startAttrs...)...)
 
 	outputLimit := newOutputLimit(req.MaxOutputBytes, func() {
 		if cmd.Process != nil {
@@ -247,16 +260,17 @@ func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 	}
 
 	p := &Process{
-		cmd:       cmd,
-		program:   req.Program,
-		processID: processID,
-		started:   started,
-		stdout:    stdout,
-		stderr:    stderr,
-		logger:    logger,
-		tail:      tail,
-		failure:   slog.LevelError,
-		waitCh:    make(chan error, 1),
+		cmd:        cmd,
+		program:    req.Program,
+		processID:  processID,
+		startAttrs: startAttrs,
+		started:    started,
+		stdout:     stdout,
+		stderr:     stderr,
+		logger:     logger,
+		tail:       tail,
+		failure:    slog.LevelError,
+		waitCh:     make(chan error, 1),
 	}
 	if req.FailureLevel != nil {
 		p.failure = req.FailureLevel.Level()
@@ -281,7 +295,13 @@ func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 // names the child in its program attribute, because under --quiet the Info
 // "process start" record that names it is hidden.
 //
-// DHF-REQ: keel/requirement-1, keel/requirement-24, keel/requirement-171
+// The "process end" record describes the whole run on its own: it repeats
+// every "process start" attribute except event_type under the same key with the
+// same value (program, command_line, working_dir, process_id), adds started_at
+// (RFC 3339 with nanoseconds, UTC), and then exit_code and elapsed_ms, plus
+// output_tail_lines on a non-zero exit.
+//
+// DHF-REQ: keel/requirement-1, keel/requirement-24, keel/requirement-171, keel/requirement-183
 func (p *Process) Wait() (Result, error) {
 	if p == nil {
 		return Result{ExitCode: -1}, errors.New("keel/exec: nil process")
@@ -308,11 +328,10 @@ func (p *Process) Wait() (Result, error) {
 			p.waitErr = limitErr
 		}
 		if p.result.ExitCode == 0 {
-			p.logger.Info("process end", withProcessID([]any{
-				"event_type", "process_end",
+			p.logger.Info("process end", p.endArgs(
 				"exit_code", p.result.ExitCode,
 				"elapsed_ms", p.result.Duration.Milliseconds(),
-			}, p.processID)...)
+			)...)
 			return
 		}
 		tail := p.tail.lines()
@@ -331,15 +350,27 @@ func (p *Process) Wait() (Result, error) {
 			args = appendProgramAtWarn(args, p.failure, p.program)
 			logAt(p.logger, p.failure, "process output tail", withProcessID(args, p.processID)...)
 		}
-		logAt(p.logger, p.failure, "process end", withProcessID([]any{
-			"event_type", "process_end",
+		logAt(p.logger, p.failure, "process end", p.endArgs(
 			"exit_code", p.result.ExitCode,
 			"elapsed_ms", p.result.Duration.Milliseconds(),
 			"output_tail_lines", len(tail),
-		}, p.processID)...)
+		)...)
 	})
 
 	return p.result, p.waitErr
+}
+
+// endArgs builds the process end record's args: event_type, then every start
+// attribute under its own key and value, then started_at (RFC 3339 nano, UTC),
+// then the outcome attributes in extra.
+//
+// DHF-REQ: keel/requirement-183
+func (p *Process) endArgs(extra ...any) []any {
+	args := make([]any, 0, 2+len(p.startAttrs)+2+len(extra))
+	args = append(args, "event_type", "process_end")
+	args = append(args, p.startAttrs...)
+	args = append(args, "started_at", p.started.UTC().Format(time.RFC3339Nano))
+	return append(args, extra...)
 }
 
 type captureWriter struct {
