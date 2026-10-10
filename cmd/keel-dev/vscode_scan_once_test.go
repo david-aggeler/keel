@@ -28,7 +28,7 @@ func writeScanOnceFixture(t *testing.T) string {
 			t.Fatal(err)
 		}
 		writeFile(t, root, filepath.Join(pkg.dir, pkg.name+"_test.go"),
-			"package "+pkg.name+"\n\nimport \"testing\"\n\nfunc TestRuns(t *testing.T) {}\n")
+			"package "+pkg.name+"\n\nimport \"testing\"\n\nfunc Test_runs(t *testing.T) {}\n")
 	}
 	if err := os.MkdirAll(filepath.Join(root, ".vscode"), 0o755); err != nil {
 		t.Fatal(err)
@@ -109,7 +109,7 @@ func TestDiscoveryWithSharedPackageIndexMatchesScanPerCall(t *testing.T) {
 	// agree on an empty lane expansion.
 	for _, id := range []string{
 		"keel::lane::core::covers::go--pkg--exec-codex",
-		"keel::lane::core::covers::go--test--log--testruns",
+		"keel::lane::core::covers::go--test--log--test-runs",
 		"keel::lane::cli::covers::go--pkg--cli",
 		"keel::lane::all::covers::go--pkg--log",
 		"keel::lane::all::covers::go--root",
