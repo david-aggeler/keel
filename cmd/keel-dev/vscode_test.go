@@ -280,7 +280,7 @@ func TestBridgeDetectLanesPreservesKeelDevLaneFileFidelity(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("decode detected lanes file: %v\n%s", err, data)
 	}
-	want := generatedLanesFile(root, map[string]bool{"exec": true})
+	want := generatedLanesFile(map[string]int{"exec": 1})
 	wantData, err := json.MarshalIndent(want, "", "  ")
 	if err != nil {
 		t.Fatalf("marshal expected lanes file: %v", err)
@@ -306,7 +306,7 @@ func TestKeelTestBridgeLaneProvidersUseBridgeRuntimeRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LaneFile: %v", err)
 	}
-	want := generatedLanesFile(root, map[string]bool{"exec": true})
+	want := generatedLanesFile(map[string]int{"exec": 1})
 	wantData, err := json.Marshal(want)
 	if err != nil {
 		t.Fatalf("marshal expected lanes file: %v", err)
