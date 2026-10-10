@@ -14,6 +14,7 @@ import (
 	"time"
 
 	procexec "github.com/david-aggeler/keel/exec"
+	"github.com/david-aggeler/keel/exec/internal/logsink"
 	logging "github.com/david-aggeler/keel/log"
 )
 
@@ -434,7 +435,7 @@ func (w *eventStreamWriter) consumeLine(line []byte) {
 func (w *eventStreamWriter) logProgress(ev Event, line []byte) {
 	if detail := codexProgressDetail(line); detail != "" {
 		log := w.logger
-		if log == nil {
+		if logsink.Absent(log) {
 			// A library handed no sink stays silent: reaching for slog.Default()
 			// would emit outside the caller's formatter, file sinks, and redaction.
 			// DHF-REQ: keel/requirement-122

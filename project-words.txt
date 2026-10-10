@@ -66,6 +66,7 @@ GOTOOLCHAIN
 govulncheck
 homelab
 idempotently
+Iface
 ilities
 ineffassign
 inspectable
@@ -108,6 +109,7 @@ libxfixes
 libxkbcommon
 libxrandr
 logotel
+logsink
 logtest
 misattributed
 mvdan
@@ -119,6 +121,7 @@ npx
 objectname
 openbrain
 operror
+osexec
 otelslog
 otlplog
 otlploghttp
