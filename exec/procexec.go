@@ -257,8 +257,12 @@ func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 
+	// A typed-nil Leveler counts as no override, the same rule as Logger above:
+	// a plain "!= nil" check passes it and Level then panics after the start
+	// record, leaving its process_id unclosed.
+	// DHF-REQ: keel/requirement-24 (keel/ac-799)
 	failure := slog.LevelError
-	if req.FailureLevel != nil {
+	if !logsink.Absent(req.FailureLevel) {
 		failure = req.FailureLevel.Level()
 	}
 	started := time.Now()
