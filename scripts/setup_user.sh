@@ -24,7 +24,7 @@
 set -euo pipefail
 
 # pin-block: begin
-GO_VERSION=1.26.6             # pin: go pinned
+GO_VERSION=1.26.9             # pin: go pinned
 NODE_MAJOR=24                 # pin: node pinned
 PNPM_VERSION=12.4.2           # pin: pnpm pinned
 CSPELL_VERSION=10.0.1         # pin: cspell pinned
