@@ -191,9 +191,12 @@ type Process struct {
 // separate parallel children.
 //
 // It returns an error ("keel/exec: …") when Program is empty or the child fails
-// to start; a non-zero exit is not an error here — it is reported by Wait.
+// to start; a non-zero exit is not an error here — it is reported by Wait. A
+// child that fails to start is closed by one "process end" record at the
+// failure level (Error unless [Request.FailureLevel] says otherwise): every
+// start attribute, started_at, and error, but no exit_code.
 //
-// DHF-REQ: openbrain/requirement-565, keel/requirement-1, keel/requirement-81, keel/requirement-171, keel/requirement-182
+// DHF-REQ: openbrain/requirement-565, keel/requirement-1, keel/requirement-81, keel/requirement-171, keel/requirement-182, keel/requirement-183
 func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 	if req.Program == "" {
 		return nil, errors.New("keel/exec: program is required")
@@ -254,8 +257,16 @@ func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 
+	failure := slog.LevelError
+	if req.FailureLevel != nil {
+		failure = req.FailureLevel.Level()
+	}
 	started := time.Now()
 	if err := cmd.Start(); err != nil {
+		// The start record already holds a process_id; close it with one end
+		// record. No exit_code: no process exists to have one.
+		// DHF-REQ: keel/requirement-183
+		logAt(logger, failure, "process end", endArgs(startAttrs, started, "error", err.Error())...)
 		return nil, fmt.Errorf("keel/exec: start %s: %w", req.Program, err)
 	}
 
@@ -269,11 +280,8 @@ func ProcessStart(ctx context.Context, req Request) (*Process, error) {
 		stderr:     stderr,
 		logger:     logger,
 		tail:       tail,
-		failure:    slog.LevelError,
+		failure:    failure,
 		waitCh:     make(chan error, 1),
-	}
-	if req.FailureLevel != nil {
-		p.failure = req.FailureLevel.Level()
 	}
 	go func() {
 		p.waitCh <- cmd.Wait()
@@ -360,16 +368,24 @@ func (p *Process) Wait() (Result, error) {
 	return p.result, p.waitErr
 }
 
-// endArgs builds the process end record's args: event_type, then every start
-// attribute under its own key and value, then started_at (RFC 3339 nano, UTC),
-// then the outcome attributes in extra.
+// endArgs builds the process end record's args for a started process.
 //
 // DHF-REQ: keel/requirement-183
 func (p *Process) endArgs(extra ...any) []any {
-	args := make([]any, 0, 2+len(p.startAttrs)+2+len(extra))
+	return endArgs(p.startAttrs, p.started, extra...)
+}
+
+// endArgs builds a process end record's args: event_type, then every start
+// attribute under its own key and value, then started_at (RFC 3339 nano, UTC),
+// then the outcome attributes in extra. ProcessStart uses it directly on a
+// start failure, before a [Process] exists.
+//
+// DHF-REQ: keel/requirement-183
+func endArgs(startAttrs []any, started time.Time, extra ...any) []any {
+	args := make([]any, 0, 2+len(startAttrs)+2+len(extra))
 	args = append(args, "event_type", "process_end")
-	args = append(args, p.startAttrs...)
-	args = append(args, "started_at", p.started.UTC().Format(time.RFC3339Nano))
+	args = append(args, startAttrs...)
+	args = append(args, "started_at", started.UTC().Format(time.RFC3339Nano))
 	return append(args, extra...)
 }
 
