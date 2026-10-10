@@ -216,7 +216,7 @@ func TestProcessStartFailureClosesProcessIDWithOneProcessEndRecord(t *testing.T)
 				}
 			}
 			raw, _ := end["started_at"].(string)
-			if _, perr := time.Parse(time.RFC3339Nano, raw); perr != nil || !strings.HasSuffix(raw, "Z") {
+			if _, parseErr := time.Parse(time.RFC3339Nano, raw); parseErr != nil || !strings.HasSuffix(raw, "Z") {
 				t.Errorf("process_end started_at = %#v, want RFC 3339 nano UTC", end["started_at"])
 			}
 			if msg, _ := end["error"].(string); !strings.Contains(msg, "no such file or directory") {
