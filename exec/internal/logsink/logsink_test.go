@@ -4,6 +4,8 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+
+	logging "github.com/david-aggeler/keel/log"
 )
 
 type valueLogger struct{}
@@ -22,7 +24,7 @@ func TestAbsentTreatsNilAndTypedNilAsAbsent(t *testing.T) {
 		{"typed-nil pointer", nilSlog, true},
 		{"nil interface value", nilIface, true},
 		{"nil map", nilMap, true},
-		{"live pointer", slog.New(slog.DiscardHandler), false},
+		{"live pointer", logging.Discard(), false},
 		{"non-pointer value", valueLogger{}, false},
 	} {
 		if got := Absent(tc.logger); got != tc.want {
