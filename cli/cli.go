@@ -284,7 +284,9 @@ type FlagSpec struct {
 	Enum []string
 	// Required marks a value flag as mandatory.
 	Required bool
-	// Repeatable allows a string-list flag to be supplied more than once.
+	// Repeatable allows a string-list flag to be supplied more than once. A
+	// bound flag that is not Repeatable and occurs more than once is a
+	// UsageError, whether the values differ or not.
 	Repeatable bool
 	// StringTarget receives a parsed string flag value.
 	StringTarget *string
@@ -583,6 +585,9 @@ func parseGlobalConfig(argv []string, node *CommandSpec, consumer consumerGlobal
 type consumerGlobalLookup struct {
 	byName  map[string]FlagSpec
 	byAlias map[string]FlagSpec
+	// seen records each consumer global parsed so far in this argv, so a
+	// repeat of a non-Repeatable flag is refused (keel/requirement-185).
+	seen map[string]bool
 }
 
 func newConsumerGlobalLookup(extra []FlagSpec) consumerGlobalLookup {
@@ -596,6 +601,7 @@ func newConsumerGlobalLookup(extra []FlagSpec) consumerGlobalLookup {
 	lookup := consumerGlobalLookup{
 		byName:  make(map[string]FlagSpec),
 		byAlias: make(map[string]FlagSpec),
+		seen:    make(map[string]bool),
 	}
 	for _, flag := range extra {
 		if flag.Name == "" || owned[flag.Name] {
@@ -623,6 +629,9 @@ func (l consumerGlobalLookup) parse(arg string, argv []string, index *int) (bool
 		flag, ok := l.byName[name]
 		if !ok {
 			return false, nil
+		}
+		if err := l.markSeen(flag); err != nil {
+			return true, err
 		}
 		if flag.Value == "" {
 			if hasValue {
@@ -653,6 +662,9 @@ func (l consumerGlobalLookup) parse(arg string, argv []string, index *int) (bool
 		if !ok {
 			return false, nil
 		}
+		if err := l.markSeen(flag); err != nil {
+			return true, err
+		}
 		if flag.Value == "" {
 			if flag.BoolTarget != nil {
 				*flag.BoolTarget = true
@@ -666,6 +678,18 @@ func (l consumerGlobalLookup) parse(arg string, argv []string, index *int) (bool
 		return true, setConsumerGlobalValue(flag, argv[*index])
 	}
 	return false, nil
+}
+
+// markSeen records one occurrence of a consumer global and refuses a second
+// occurrence of a non-Repeatable one.
+//
+// DHF-REQ: keel/requirement-185
+func (l consumerGlobalLookup) markSeen(flag FlagSpec) error {
+	if l.seen[flag.Name] && !flag.Repeatable {
+		return repeatedFlagError(flag)
+	}
+	l.seen[flag.Name] = true
+	return nil
 }
 
 func setConsumerGlobalValue(flag FlagSpec, value string) error {
@@ -1014,6 +1038,9 @@ func (c *CommandSpec) parseLongFlag(arg string, remaining []string, index *int, 
 	if !flag.hasTarget() {
 		return false, []string{arg}, nil
 	}
+	if seen[flag.Name] && !flag.Repeatable {
+		return false, nil, repeatedFlagError(flag)
+	}
 	if flag.BoolTarget != nil {
 		if hasValue {
 			parsed, err := parseBoolFlagValue(value)
@@ -1055,6 +1082,9 @@ func (c *CommandSpec) parseShortFlags(arg string, remaining []string, index *int
 		if !flag.hasTarget() {
 			return false, []string{arg}, nil
 		}
+		if seen[flag.Name] && !flag.Repeatable {
+			return false, nil, repeatedFlagError(flag)
+		}
 		if flag.BoolTarget != nil {
 			*flag.BoolTarget = true
 			seen[flag.Name] = true
@@ -1073,6 +1103,14 @@ func (c *CommandSpec) parseShortFlags(arg string, remaining []string, index *int
 		seen[flag.Name] = true
 	}
 	return true, nil, nil
+}
+
+// repeatedFlagError is the UsageError for a second occurrence of a bound flag
+// that is not Repeatable.
+//
+// DHF-REQ: keel/requirement-185
+func repeatedFlagError(flag FlagSpec) error {
+	return NewUsageError("--%s given more than once", flag.Name)
 }
 
 func (c *CommandSpec) checkRequiredFlags(seen map[string]bool, matched []string) error {
