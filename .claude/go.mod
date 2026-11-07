@@ -20,4 +20,4 @@
 // keel/issue-236.
 module keel.local/claude-config
 
-go 1.26.9
+go 1.26.10
