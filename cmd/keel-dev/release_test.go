@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -733,6 +734,59 @@ func TestPublishSkillSyncsGoldProductVersionViaGoldAdminTools(t *testing.T) {
 	} {
 		if strings.Contains(text, banned) {
 			t.Fatalf("publish skill still prescribes %q:\n%s", banned, text)
+		}
+	}
+}
+
+// productVersionSyncProblems lists what a product_version sync text is missing
+// against keel/ac-807: the deprecate step for an unused row, the permanence
+// rule, the case-B create, and the absence of any rename instruction.
+func productVersionSyncProblems(text string) []string {
+	var problems []string
+	for _, want := range []string{
+		"product_version name is permanent",
+		"**Case B**",
+		"`deprecated`",
+		"Do not change the row's version name",
+	} {
+		if !strings.Contains(text, want) {
+			problems = append(problems, "missing "+strconv.Quote(want))
+		}
+	}
+	for _, banned := range []string{
+		"new_version",
+		"rename the row",
+		"rename it",
+	} {
+		if strings.Contains(text, banned) {
+			problems = append(problems, "prescribes "+strconv.Quote(banned))
+		}
+	}
+	return problems
+}
+
+// DHF-TEST: keel/requirement-112 (keel/ac-807)
+func TestProductVersionSyncNeverRenamesAndDeprecatesUnusedRow(t *testing.T) {
+	// Positive control: the pre-issue-271 step 4 wording must fail the check,
+	// so a pass below proves the rewrite and not a check that matches nothing.
+	old := "4. Ensure exactly one later row is `in_development` for follow-up work —\n" +
+		"   create it with `admin_create_product_version` when opening the next line.\n"
+	if len(productVersionSyncProblems(old)) == 0 {
+		t.Fatal("check accepts the old step 4 wording; it proves nothing")
+	}
+	if len(productVersionSyncProblems(old+"admin_update_product_version new_version=0.13.0")) == 0 {
+		t.Fatal("check accepts a rename instruction")
+	}
+	for _, path := range []string{
+		filepath.Join("..", "..", "docs", "release.md"),
+		filepath.Join("..", "..", ".claude", "skills", "publish", "SKILL.md"),
+	} {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if problems := productVersionSyncProblems(string(body)); len(problems) > 0 {
+			t.Errorf("%s product_version sync: %s", path, strings.Join(problems, "; "))
 		}
 	}
 }
