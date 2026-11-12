@@ -762,10 +762,30 @@ func productVersionSyncProblems(text string) []string {
 			problems = append(problems, "prescribes "+strconv.Quote(banned))
 		}
 	}
-	return problems
+	return append(problems, caseBOrderProblems(text)...)
 }
 
-// DHF-TEST: keel/requirement-112 (keel/ac-807)
+// caseBOrderProblems checks that case B deprecates the unused row before it
+// creates the release row: gold allows one in_development row, so the reverse
+// order fails with in_development_exists (keel/issue-273).
+func caseBOrderProblems(text string) []string {
+	start := strings.Index(text, "**Case B**")
+	if start < 0 {
+		return nil // reported as missing by the caller
+	}
+	segment := text[start:]
+	if end := strings.Index(segment, "\n2. "); end >= 0 {
+		segment = segment[:end]
+	}
+	deprecate := strings.Index(segment, "`deprecated`")
+	create := strings.Index(segment, "admin_create_product_version")
+	if deprecate < 0 || create < 0 || deprecate > create {
+		return []string{"case B must deprecate the unused row before admin_create_product_version"}
+	}
+	return nil
+}
+
+// DHF-TEST: keel/requirement-112 (keel/ac-807; keel/issue-273)
 func TestProductVersionSyncNeverRenamesAndDeprecatesUnusedRow(t *testing.T) {
 	// Positive control: the pre-issue-271 step 4 wording must fail the check,
 	// so a pass below proves the rewrite and not a check that matches nothing.
@@ -776,6 +796,15 @@ func TestProductVersionSyncNeverRenamesAndDeprecatesUnusedRow(t *testing.T) {
 	}
 	if len(productVersionSyncProblems(old+"admin_update_product_version new_version=0.13.0")) == 0 {
 		t.Fatal("check accepts a rename instruction")
+	}
+	// Positive control for keel/issue-273: the v0.13.0 case B created first and
+	// deprecated in step 3.
+	createFirst := "   - **Case B** — the open row is a different version. Create the `X.Y.Z` row with\n" +
+		"     `admin_create_product_version` and use it. The open row is now unused.\n" +
+		"2. `admin_update_product_version` — write the evidence.\n" +
+		"3. In case B, also set the unused row to `deprecated`.\n"
+	if len(caseBOrderProblems(createFirst)) == 0 {
+		t.Fatal("order check accepts create-before-deprecate")
 	}
 	for _, path := range []string{
 		filepath.Join("..", "..", "docs", "release.md"),

@@ -80,15 +80,18 @@ row orphans every record written against it (keel/issue-271).
    `in_development` row and compare it with the release version `X.Y.Z`:
    - **Case A** — the open row is `X.Y.Z`. Use it.
    - **Case B** — the open row is a different version (for example the open
-     row is `0.12.1` and the release is `0.13.0`). Create the `X.Y.Z` row with
-     `admin_create_product_version` and use it. The open row is now unused.
+     row is `0.12.1` and the release is `0.13.0`). First set the unused open
+     row to `deprecated` with `admin_advance_product_version_status`. Then
+     create the `X.Y.Z` row with `admin_create_product_version` and use it.
+     Keep this order: gold allows only one `in_development` row, so the create
+     fails with `in_development_exists` while the open row is still in
+     development (keel/issue-273).
 2. `admin_update_product_version` — write the release evidence onto the
    `X.Y.Z` row: tag `vX.Y.Z`, stamp commit, VSIX asset name, the anonymous
    `go get` result, and the `release_notes` ref when one exists (fields `Body`
    and `ReleaseNotes`). Do not change the row's version name.
 3. `admin_advance_product_version_status` — advance the `X.Y.Z` row to
-   `released`. In case B, also set the unused row to `deprecated` with
-   `admin_advance_product_version_status`.
+   `released`.
 4. Open the next development line: create the `X.Y.(Z+1)` row with
    `admin_create_product_version`. It is the one `in_development` row. If the
    next release turns out to be a minor or major, that release takes case B.
