@@ -25,16 +25,23 @@ placeholders:
   # Primary implementation language for generated skill context.
   primary_language: "Go"
 
-# Optional autonomous-tail executor turn budgets by verb; blank uses the compiled default.
+# Optional autonomous-tail executor turn budgets by verb; null uses the compiled
+# default. Write null explicitly: openbrain-client 1.7.8 rejects a blank value
+# (keel/issue-274).
 turn_budgets:
   # Optional max turns for post-merge verify sessions.
-  verify:
+  verify: null
   # Optional max turns for dev sessions.
-  dev:
+  dev: null
   # Optional max turns for review sessions.
-  review:
+  review: null
   # Optional max turns for merge sessions.
-  merge:
+  merge: null
+
+# openbrain-client log file retention. Required since openbrain-client 1.7.8;
+# 365 matches openbrain's committed config.
+log:
+  retention_days: 365
 
 transition_gates:
   prose:
