@@ -72,18 +72,29 @@ through the gold MCP admin product-plane tools (a release is driven from a
 session that has the gold MCP; no export/import round-trip, no hand-edited
 JSON bundle):
 
-1. `admin_list_product_versions(product: "keel")` — locate the row for `X.Y.Z`
-   (its status should be `in_development`).
-2. `admin_update_product_version` — write the release evidence onto that row:
-   tag `vX.Y.Z`, stamp commit, VSIX asset name, the anonymous `go get` result,
-   and the `release_notes` ref when one exists (fields `Body` and
-   `ReleaseNotes`).
-3. `admin_advance_product_version_status` — advance the row to `released`.
-4. Ensure exactly one later row is `in_development` for follow-up work —
-   create it with `admin_create_product_version` when opening the next line.
+A product_version name is permanent once created. Never change a row's
+version name: records stamp the name at write time and keep it, so a renamed
+row orphans every record written against it (keel/issue-271).
+
+1. `admin_list_product_versions(product: "keel")` — find the one
+   `in_development` row and compare it with the release version `X.Y.Z`:
+   - **Case A** — the open row is `X.Y.Z`. Use it.
+   - **Case B** — the open row is a different version (for example the open
+     row is `0.12.1` and the release is `0.13.0`). Create the `X.Y.Z` row with
+     `admin_create_product_version` and use it. The open row is now unused.
+2. `admin_update_product_version` — write the release evidence onto the
+   `X.Y.Z` row: tag `vX.Y.Z`, stamp commit, VSIX asset name, the anonymous
+   `go get` result, and the `release_notes` ref when one exists (fields `Body`
+   and `ReleaseNotes`). Do not change the row's version name.
+3. `admin_advance_product_version_status` — advance the `X.Y.Z` row to
+   `released`. In case B, also set the unused row to `deprecated` with
+   `admin_advance_product_version_status`.
+4. Open the next development line: create the `X.Y.(Z+1)` row with
+   `admin_create_product_version`. It is the one `in_development` row. If the
+   next release turns out to be a minor or major, that release takes case B.
 5. Re-run `admin_list_product_versions(product: "keel")` and confirm the
-   `X.Y.Z` row reads `released` and the invariant of exactly one open
-   development line holds.
+   `X.Y.Z` row reads `released`, any unused row reads `deprecated`, and
+   exactly one row is `in_development`.
 
 The surface writes `Status`, `Body`, `ReleaseNotes`, `GitTag`, and
 `ReleaseDate`; row IDs and timestamps are server-owned. Executing the
