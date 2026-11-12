@@ -40,6 +40,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 
@@ -284,6 +285,15 @@ type FlagSpec struct {
 	Enum []string
 	// Required marks a value flag as mandatory.
 	Required bool
+	// RequiredWhen marks the flag as mandatory when ANY condition holds. A
+	// condition holds when the effective value of its Flag is in its In set.
+	// The effective value is the value supplied on the command line or, when
+	// the condition flag is not supplied, its Default; a condition flag that is
+	// absent and has an empty Default matches nothing. Conditions name sibling
+	// flags of the same CommandSpec that declare an Enum, and every In value
+	// must be in that Enum; ValidateTree enforces this. Required and
+	// RequiredWhen are mutually exclusive.
+	RequiredWhen []FlagCondition
 	// Repeatable allows a string-list flag to be supplied more than once. A
 	// bound flag that is not Repeatable and occurs more than once is a
 	// UsageError, whether the values differ or not.
@@ -294,6 +304,15 @@ type FlagSpec struct {
 	BoolTarget *bool
 	// StringSliceTarget receives parsed repeatable string flag values.
 	StringSliceTarget *[]string
+}
+
+// FlagCondition is one RequiredWhen condition: it holds when the effective
+// value of the sibling flag named Flag (without leading dashes) is one of In.
+type FlagCondition struct {
+	// Flag is the condition flag name without leading dashes.
+	Flag string
+	// In is the set of condition-flag values that make the condition hold.
+	In []string
 }
 
 // ExitCodeSpec describes one generated-help row in a command's public exit-code
@@ -970,6 +989,7 @@ func helpRequestedByDispatcher(node *CommandSpec, remaining []string) bool {
 func (c *CommandSpec) parseCommandArgs(matched, remaining []string) ([]string, error) {
 	c.applyFlagDefaults()
 	seen := map[string]bool{}
+	supplied := map[string][]string{}
 	var handlerArgs []string
 	stopOptions := false
 	for i := 0; i < len(remaining); i++ {
@@ -983,7 +1003,7 @@ func (c *CommandSpec) parseCommandArgs(matched, remaining []string) ([]string, e
 			continue
 		}
 		if strings.HasPrefix(arg, "--") {
-			consumed, passthrough, err := c.parseLongFlag(arg, remaining, &i, seen)
+			consumed, passthrough, err := c.parseLongFlag(arg, remaining, &i, seen, supplied)
 			if err != nil {
 				return nil, err
 			}
@@ -992,7 +1012,7 @@ func (c *CommandSpec) parseCommandArgs(matched, remaining []string) ([]string, e
 			}
 			continue
 		}
-		consumed, passthrough, err := c.parseShortFlags(arg, remaining, &i, seen)
+		consumed, passthrough, err := c.parseShortFlags(arg, remaining, &i, seen, supplied)
 		if err != nil {
 			return nil, err
 		}
@@ -1000,7 +1020,7 @@ func (c *CommandSpec) parseCommandArgs(matched, remaining []string) ([]string, e
 			handlerArgs = append(handlerArgs, passthrough...)
 		}
 	}
-	if err := c.checkRequiredFlags(seen, matched); err != nil {
+	if err := c.checkRequiredFlags(seen, supplied, matched); err != nil {
 		return nil, err
 	}
 	if err := c.validatePositionals(matched, handlerArgs); err != nil {
@@ -1025,7 +1045,7 @@ func (c *CommandSpec) applyFlagDefaults() {
 	}
 }
 
-func (c *CommandSpec) parseLongFlag(arg string, remaining []string, index *int, seen map[string]bool) (bool, []string, error) {
+func (c *CommandSpec) parseLongFlag(arg string, remaining []string, index *int, seen map[string]bool, supplied map[string][]string) (bool, []string, error) {
 	body := strings.TrimPrefix(arg, "--")
 	name, value, hasValue := body, "", false
 	if eq := strings.IndexByte(body, '='); eq >= 0 {
@@ -1065,10 +1085,11 @@ func (c *CommandSpec) parseLongFlag(arg string, remaining []string, index *int, 
 		return false, nil, err
 	}
 	seen[flag.Name] = true
+	supplied[flag.Name] = append(supplied[flag.Name], value)
 	return true, nil, nil
 }
 
-func (c *CommandSpec) parseShortFlags(arg string, remaining []string, index *int, seen map[string]bool) (bool, []string, error) {
+func (c *CommandSpec) parseShortFlags(arg string, remaining []string, index *int, seen map[string]bool, supplied map[string][]string) (bool, []string, error) {
 	body := strings.TrimPrefix(arg, "-")
 	if body == "" {
 		return false, []string{arg}, nil
@@ -1101,6 +1122,7 @@ func (c *CommandSpec) parseShortFlags(arg string, remaining []string, index *int
 			return false, nil, err
 		}
 		seen[flag.Name] = true
+		supplied[flag.Name] = append(supplied[flag.Name], remaining[*index])
 	}
 	return true, nil, nil
 }
@@ -1113,13 +1135,45 @@ func repeatedFlagError(flag FlagSpec) error {
 	return NewUsageError("--%s given more than once", flag.Name)
 }
 
-func (c *CommandSpec) checkRequiredFlags(seen map[string]bool, matched []string) error {
+// checkRequiredFlags enforces Required and RequiredWhen. supplied holds the
+// command-line values of each supplied value flag; an absent condition flag
+// falls back to its Default, never to its target, which a consumer may preset.
+//
+// DHF-REQ: keel/requirement-187
+func (c *CommandSpec) checkRequiredFlags(seen map[string]bool, supplied map[string][]string, matched []string) error {
 	for _, f := range c.Flags {
-		if f.Required && !seen[f.Name] {
+		if seen[f.Name] {
+			continue
+		}
+		if f.Required {
 			return UsageError{Err: fmt.Errorf("required flag --%s missing\n%s", f.Name, c.Usage(matched))}
+		}
+		for _, cond := range f.RequiredWhen {
+			if value, ok := c.conditionMatch(cond, supplied); ok {
+				return UsageError{Err: fmt.Errorf("required flag --%s missing (required when --%s is %s)\n%s", f.Name, cond.Flag, value, c.Usage(matched))}
+			}
 		}
 	}
 	return nil
+}
+
+// conditionMatch reports whether cond holds and, when it does, the effective
+// condition-flag value that matched.
+func (c *CommandSpec) conditionMatch(cond FlagCondition, supplied map[string][]string) (string, bool) {
+	values, ok := supplied[cond.Flag]
+	if !ok {
+		flag, declared := c.flagByName(cond.Flag)
+		if !declared || flag.Default == "" {
+			return "", false
+		}
+		values = []string{flag.Default}
+	}
+	for _, v := range values {
+		if slices.Contains(cond.In, v) {
+			return v, true
+		}
+	}
+	return "", false
 }
 
 func (c *CommandSpec) validatePositionals(matched, args []string) error {
@@ -1280,6 +1334,9 @@ func (c *CommandSpec) validateTree(path []string, root bool) error {
 	if err := c.validateUseEnumeratedVerbNodes(path); err != nil {
 		return err
 	}
+	if err := c.validateFlagConditions(path); err != nil {
+		return err
+	}
 	for _, child := range c.Subcommands {
 		childPath := append(append([]string{}, path...), child.Name)
 		if err := child.validateTree(childPath, false); err != nil {
@@ -1316,6 +1373,43 @@ func (c *CommandSpec) validateUseEnumeratedVerbNodes(path []string) error {
 		}
 		if !ok {
 			return fmt.Errorf("command %q Use enumerates verb %q that is not a child command", strings.Join(path, " "), verb)
+		}
+	}
+	return nil
+}
+
+// validateFlagConditions checks every RequiredWhen condition against the flags
+// this same CommandSpec declares; global flags are out of scope.
+//
+// DHF-REQ: keel/requirement-187
+func (c *CommandSpec) validateFlagConditions(path []string) error {
+	cmd := commandPath(path, c.Name)
+	for _, f := range c.Flags {
+		if len(f.RequiredWhen) == 0 {
+			continue
+		}
+		if f.Required {
+			return fmt.Errorf("command %q flag --%s sets both Required and RequiredWhen", cmd, f.Name)
+		}
+		for _, cond := range f.RequiredWhen {
+			if cond.Flag == f.Name {
+				return fmt.Errorf("command %q flag --%s RequiredWhen names the flag itself", cmd, f.Name)
+			}
+			target, ok := c.flagByName(cond.Flag)
+			if !ok {
+				return fmt.Errorf("command %q flag --%s RequiredWhen names undeclared flag %q", cmd, f.Name, cond.Flag)
+			}
+			if len(target.Enum) == 0 {
+				return fmt.Errorf("command %q flag --%s RequiredWhen names --%s, which declares no Enum", cmd, f.Name, cond.Flag)
+			}
+			if len(cond.In) == 0 {
+				return fmt.Errorf("command %q flag --%s RequiredWhen on --%s has an empty In set", cmd, f.Name, cond.Flag)
+			}
+			for _, v := range cond.In {
+				if !slices.Contains(target.Enum, v) {
+					return fmt.Errorf("command %q flag --%s RequiredWhen on --%s names value %q outside its Enum", cmd, f.Name, cond.Flag, v)
+				}
+			}
 		}
 	}
 	return nil
@@ -1777,14 +1871,25 @@ func (c *CommandSpec) renderAllCommandHelp(w io.Writer, path []string) {
 }
 
 // helpJSONFlag is the JSON element shape for one flag row in the structured
-// help inventory.
+// help inventory. required is always present; required_when is present only
+// when the flag declares RequiredWhen conditions.
+//
+// DHF-REQ: keel/requirement-186
 type helpJSONFlag struct {
-	Name        string   `json:"name"`
-	Aliases     []string `json:"aliases,omitempty"`
-	Value       string   `json:"value"`
-	Enum        []string `json:"enum,omitempty"`
-	Default     string   `json:"default"`
-	Description string   `json:"description"`
+	Name         string              `json:"name"`
+	Aliases      []string            `json:"aliases,omitempty"`
+	Value        string              `json:"value"`
+	Enum         []string            `json:"enum,omitempty"`
+	Default      string              `json:"default"`
+	Description  string              `json:"description"`
+	Required     bool                `json:"required"`
+	RequiredWhen []helpJSONCondition `json:"required_when,omitempty"`
+}
+
+// helpJSONCondition is the JSON shape of one RequiredWhen condition.
+type helpJSONCondition struct {
+	Flag string   `json:"flag"`
+	In   []string `json:"in"`
 }
 
 // helpJSONFlags converts flag specs to their inventory shape. Aliases carries
@@ -1797,15 +1902,32 @@ func helpJSONFlags(specs []FlagSpec) []helpJSONFlag {
 			aliases = []string{f.Alias}
 		}
 		flags = append(flags, helpJSONFlag{
-			Name:        f.Name,
-			Aliases:     aliases,
-			Value:       f.Value,
-			Enum:        append([]string(nil), f.Enum...),
-			Default:     f.Default,
-			Description: f.Short,
+			Name:         f.Name,
+			Aliases:      aliases,
+			Value:        f.Value,
+			Enum:         append([]string(nil), f.Enum...),
+			Default:      f.Default,
+			Description:  f.Short,
+			Required:     f.Required,
+			RequiredWhen: helpJSONConditions(f.RequiredWhen),
 		})
 	}
 	return flags
+}
+
+// helpJSONConditions copies conditions into their inventory shape; nil when
+// there are none so the key is omitted.
+//
+// DHF-REQ: keel/requirement-186
+func helpJSONConditions(conditions []FlagCondition) []helpJSONCondition {
+	if len(conditions) == 0 {
+		return nil
+	}
+	out := make([]helpJSONCondition, 0, len(conditions))
+	for _, cond := range conditions {
+		out = append(out, helpJSONCondition{Flag: cond.Flag, In: append([]string{}, cond.In...)})
+	}
+	return out
 }
 
 // helpJSONCommand is the JSON element shape for one command in the structured
@@ -2008,8 +2130,28 @@ func printFlagRows(w io.Writer, flags []FlagSpec, helpWidth int) {
 			alias = "-" + f.Alias + ", "
 		}
 		fmt.Fprintf(w, "  %s--%s%s\n", alias, f.Name, value)
-		printWrapped(w, "      ", "      ", f.Short+def, helpWidth)
+		printWrapped(w, "      ", "      ", f.Short+def+requirementSuffix(f), helpWidth)
 	}
+}
+
+// requirementSuffix is the help-row suffix that states a flag's requirement,
+// placed after any default suffix: " (required)" for Required, and for
+// RequiredWhen " (required when --b is x or y)", with further conditions
+// appended as " or when --c is p". Empty when the flag is optional.
+//
+// DHF-REQ: keel/requirement-187
+func requirementSuffix(f FlagSpec) string {
+	if f.Required {
+		return " (required)"
+	}
+	if len(f.RequiredWhen) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(f.RequiredWhen))
+	for _, cond := range f.RequiredWhen {
+		parts = append(parts, "--"+cond.Flag+" is "+strings.Join(cond.In, " or "))
+	}
+	return " (required when " + strings.Join(parts, " or when ") + ")"
 }
 
 // printWrapped writes text as one or more lines. The first line starts with

@@ -55,6 +55,30 @@ func TestKeelDevHelpJSONCarriesGlobalFlagsAndRoot(t *testing.T) {
 	}
 }
 
+// DHF-TEST: keel/requirement-186 (keel/ac-809)
+func TestKeelDevHelpJSONEveryFlagCarriesRequired(t *testing.T) {
+	out := captureHelpSurface(t, "--help-json")
+	var inventory []struct {
+		Path  string           `json:"path"`
+		Flags []map[string]any `json:"flags"`
+	}
+	if err := json.Unmarshal([]byte(out), &inventory); err != nil {
+		t.Fatalf("--help-json stdout is not a JSON array: %v\n%s", err, out)
+	}
+	checked := 0
+	for _, e := range inventory {
+		for _, f := range e.Flags {
+			if _, ok := f["required"].(bool); !ok {
+				t.Fatalf("%q flag %v: required = %#v, want a JSON bool", e.Path, f["name"], f["required"])
+			}
+			checked++
+		}
+	}
+	if checked == 0 {
+		t.Fatalf("--help-json carries no flag elements:\n%s", out)
+	}
+}
+
 // DHF-TEST: keel/requirement-101 (keel/ac-716)
 func TestKeelDevHelpAdvertisesEveryAcceptedGlobalSpelling(t *testing.T) {
 	out := captureHelpSurface(t, "--help")
