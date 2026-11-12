@@ -21,7 +21,7 @@
 set -euo pipefail
 
 # Pinned latest stable. Bump in lockstep with go.mod's `go <version>` line.
-GO_VERSION="1.26.10"
+GO_VERSION="1.26.11"
 ARCH="amd64"
 TARBALL="go${GO_VERSION}.linux-${ARCH}.tar.gz"
 DOWNLOAD_URL="https://dl.google.com/go/${TARBALL}"
