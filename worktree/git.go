@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	procexec "github.com/david-aggeler/keel/exec"
 )
@@ -24,6 +25,10 @@ type Logger interface {
 	// InfoContext records the lifecycle start of a git invocation.
 	InfoContext(ctx context.Context, msg string, args ...any)
 }
+
+// gitWaitDelay bounds how long a canceled git call waits for its output pipes
+// to close after the process group is killed.
+const gitWaitDelay = 5 * time.Second
 
 // run executes one git command in dir (empty means the manager's repository
 // root) and returns its trimmed stdout. A non-zero exit becomes an [*Error]
@@ -44,6 +49,10 @@ func (m *Manager) runAt(ctx context.Context, op, dir string, failureLevel slog.L
 		Dir:          dir,
 		Env:          m.env,
 		FailureLevel: failureLevel,
+		// A cancel must reach git's descendants too (hooks, credential helpers),
+		// or one holding the capture pipes keeps the call past its deadline.
+		// DHF-REQ: keel/requirement-190
+		Configure: procexec.KillProcessGroupOnCancel(gitWaitDelay),
 	}
 	if m.logger != nil {
 		req.Logger = m.logger
