@@ -8,9 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
-	"syscall"
 	"time"
 
 	procexec "github.com/david-aggeler/keel/exec"
@@ -169,18 +167,10 @@ func Run(ctx context.Context, req Request) (*Result, error) {
 		Stdout:         stdout,
 		MaxOutputBytes: req.MaxOutputBytes,
 		Logger:         req.Logger,
-		Configure: func(cmd *exec.Cmd) {
-			// Put the child in its own process group so a cancel/timeout kill reaches
-			// codex's whole subprocess tree, not just the direct child.
-			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-			cmd.Cancel = func() error {
-				if cmd.Process != nil {
-					_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-				}
-				return nil
-			}
-			cmd.WaitDelay = 5 * time.Second
-		},
+		// Put the child in its own process group so a cancel/timeout kill reaches
+		// codex's whole subprocess tree, not just the direct child.
+		// DHF-REQ: keel/requirement-190
+		Configure: procexec.KillProcessGroupOnCancel(5 * time.Second),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("keel/exec/codex: start %s: %w", bin, err)
