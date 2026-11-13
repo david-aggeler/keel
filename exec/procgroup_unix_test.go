@@ -43,7 +43,7 @@ func TestKillProcessGroupOnCancelKillsGrandchild(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
 		t.Fatalf("wait returned %v after cancel; want < 500ms", elapsed)
 	}
-	// The killed grandchild is reparented and reaped by init; allow that
+	// The killed grandchild passes to init, which reaps it; allow that
 	// reap a moment before calling it a survivor.
 	gone := time.Now().Add(time.Second)
 	for syscall.Kill(pid, 0) == nil {
